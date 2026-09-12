@@ -291,7 +291,7 @@ class ImageWAMTorchFrontendThor:
 
 ## Phase 1 — Weight declaration with a random-init path
 
-Phase Status: pending
+Phase Status: completed
 
 ### Goal
 
@@ -371,6 +371,16 @@ standalone check random-fills each one and confirms the total
 allocated byte count matches the sum of declared shapes/dtypes. This
 runs on plain numpy, no GPU or compiled `flash_rt_kernels` extension
 required — the actual GPU upload happens in Phase 5.
+
+Ran: 145 tensors declared, no duplicate keys, every random-filled
+array's shape matches its declaration. Total ~3.47B parameters
+(backbone ~2.95B across 5 double-stream + 20 single-stream layers,
+ActionDiT ~525M across the same layer split at `action_hidden_dim`
+width) — the right order of magnitude for the real "FLUX.2-4B"
+checkpoint's stated size, a sanity check that the declared shapes are
+architecturally plausible, not a claim of exact match with the real
+checkpoint (see this file's own docstring on tensor-name/shape
+confidence).
 
 ## Phase 2 — Joint attention kernel
 
