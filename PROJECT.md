@@ -52,15 +52,35 @@ this fork covers Jetson AGX Thor (sm_110).
   https://github.com/NVIDIA/cutlass.git third_party/cutlass`, `uv pip
   install -e ".[torch]"` into a venv with a working torch+CUDA (the
   `third_party/openpi/.venv` venv from the sibling pi0.5 project
-  worked), then `cmake -B build -S . -DGPU_ARCH=89
-  -DFA2_ARCH_NATIVE_ONLY=ON -DPython3_EXECUTABLE=<venv python>` +
-  `cmake --build build`. The system pybind11 (2.9.1, `/usr/include`)
-  is too old for this venv's Python 3.11.13 (`PyFrameObject` is an
-  incomplete type in newer CPython headers; pybind11 2.9.x's error-
-  formatting code needs it complete) — install pybind11>=2.13 into
-  the same venv and pass `-Dpybind11_DIR=$(python3 -c "import
-  pybind11; print(pybind11.get_cmake_dir())")` to cmake to force it to
-  use the venv's newer copy instead of falling back to the system one.
+  worked), then configure with the slim recipe below +
+  `cmake --build build -j4 --target flash_rt_kernels`. The system
+  pybind11 (2.9.1, `/usr/include`) is too old for this venv's Python
+  3.11.13 (`PyFrameObject` is an incomplete type in newer CPython
+  headers; pybind11 2.9.x's error-formatting code needs it complete) —
+  install pybind11>=2.13 into the same venv and pass
+  `-Dpybind11_DIR=$(python3 -c "import pybind11;
+  print(pybind11.get_cmake_dir())")` to cmake to force it to use the
+  venv's newer copy instead of falling back to the system one.
+- Slim build (recommended default for this project): this fork only
+  ever needs `flash_rt_kernels` — never `flash_rt_fa2`'s separate
+  vendored-kernel build, and never the Motus/Qwen3.6/NVFP4-specific
+  kernel groups meant for other models on other hardware. `CMakeLists.txt`
+  forces `ENABLE_FA2` on unconditionally for `GPU_ARCH=89`
+  (`flash_rt_kernels` hard-links `$<TARGET_OBJECTS:fa2_vendor_obj>`, so
+  FA2 itself cannot be skipped on this arch), but its instantiation
+  matrix can be shrunk, and `FLASHRT_SLIM_BUILD` drops the unrelated
+  model-specific kernel groups entirely. Configure with:
+  ```
+  cmake -B build -S . -DGPU_ARCH=89 \
+    -DFA2_ARCH_NATIVE_ONLY=ON -DFA2_HDIMS="64" -DFA2_DTYPES="fp16" \
+    -DFLASHRT_SLIM_BUILD=ON \
+    -DPython3_EXECUTABLE=<venv python> -Dpybind11_DIR=<venv pybind11 cmake dir>
+  ```
+  Confirmed this still builds `flash_rt_kernels` correctly and produces
+  a `.so` that passes `tests/test_imagewam_mot_joint_kernel.py`
+  unchanged (`cosine=1.000000, rel_l2=0.000441`) — the slim flags only
+  drop unrelated kernel groups and shrink FA2's instantiation count,
+  they never touch kernel math.
 - Memory is a real constraint on this machine (23GB total RAM,
   already had 635MB in swap before any build started) — a full
   `cmake --build build -j$(nproc)` (nproc=20) OOM-killed partway
