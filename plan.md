@@ -1,6 +1,6 @@
 # Plan
 
-Plan Status: proposed
+Plan Status: approved
 
 # Problem
 
@@ -117,11 +117,29 @@ def make_imagewam_attention_spec(...) -> AttentionSpec:
     SiteSpec(name="mot", ..., kernel="mot_joint", extra={...})
 ```
 
-`kernel="mot_joint"` is a new `SiteSpec.kernel` value. Its dispatch
-branch in `attn_backend.py` concatenates the two experts' Q/K/V,
-computes one shared softmax, and splits the output back into the two
-streams — the direct implementation of `mot.py::_mixed_attention`'s
-math in FlashRT's own attention backend.
+`kernel="mot_joint"` is a new `SiteSpec.kernel` value, confirmed
+necessary: `flash_rt/hardware/thor/attn_backend.py::run()` dispatches
+only `"standard"` (`fvk.attention_qkv_fp16`, plain/GQA self-attention,
+no mask argument at all) and `"state_masked"`
+(`fvk.attention_qkv_fp16_state_masked`, a single leading-visibility
+boundary specific to Pi0's decoder). Neither accepts an arbitrary mask
+or matches ImageWAM's block structure. (`"mha"`, listed in
+`docs/adding_new_model.md`'s kernel table, does not exist anywhere in
+this Thor backend or in `flash_rt/hardware/backend.py` — that table
+entry does not apply here.)
+
+ImageWAM's real mask (`mot.py::_mixed_attention`, plain masked
+`F.scaled_dot_product_attention`; mask built by
+`imagewam.py::_build_mot_attention_mask_flux2`) is a fixed four-block
+pattern over `[text/ref | target-image | action]` with boundaries
+`t0, r0, x0, a0`: text/ref attends only to itself; target-image
+attends to text/ref and itself; action attends to text/ref and itself
+but NOT to target-image. The boundaries are scalars fixed per call,
+not a full `[total, total]` boolean tensor — `kernel="mot_joint"`'s
+dispatch takes them as small device-side scalars, the same pattern
+`"state_masked"` already uses for its own single boundary
+(`state_nk`), rather than materializing and uploading a full mask
+every call.
 
 ```python
 # flash_rt/models/imagewam/pipeline_thor.py
@@ -235,11 +253,37 @@ a state-dict lookup.
 ### Structures
 
 `WeightSpec.torch_key: Optional[str]`; `None` triggers allocation and
-random fill in the loader instead of a state-dict lookup. Real
-tensor shapes come from
-`configs/model/imagewam_flux2_klein_4b_base.yaml` and the upstream
-FLUX.2/Qwen3-4B configs — reading those configs is part of this
-phase's own work, not a precondition for approving it.
+random fill in the loader instead of a state-dict lookup.
+
+Real dimensions (architecture configs only — no weight download,
+consistent with the random-init goal):
+
+FLUX.2-klein-4B backbone (`transformer/config.json`, upstream
+`black-forest-labs/FLUX.2-klein-4B`, not vendored in this repository):
+`num_attention_heads=24`, `attention_head_dim=128`, `num_layers=5`
+(double-stream), `num_single_layers=20`, `in_channels=128`,
+`patch_size=1`, `mlp_ratio=3.0`, `joint_attention_dim=7680`.
+`joint_attention_dim` is 3x Qwen3-4B's own `hidden_size` (2560) —
+likely a multi-layer concatenation of Qwen3 hidden states used as text
+conditioning; confirming the exact construction is part of this
+phase's work, not assumed here.
+
+Qwen3-4B text encoder (`config.json`, upstream `Qwen/Qwen3-4B`, not
+vendored): `hidden_size=2560`, `num_hidden_layers=36`,
+`num_attention_heads=32`, `num_key_value_heads=8`, `head_dim=128`,
+`intermediate_size=9728`, `vocab_size=151936`.
+`qwen_context_len=512` (`configs/model/imagewam_flux2_klein_4b_base.yaml`).
+
+ActionDiT, FLUX.2 variant (same YAML): `hidden_dim=1024`,
+`num_heads=24`, `attn_head_dim=128`, `num_layers_double=5`,
+`num_layers_single=20`, `mlp_ratio=4.0`, `max_action_horizon=64`.
+`num_heads`/`attn_head_dim` match the FLUX.2 backbone exactly — this
+is what makes the `mot_joint` attention (Phase 2) valid: the two
+experts keep separate residual widths (1024 vs. 24x128=3072) but
+share the same per-head attention geometry. `action_dim` is resolved
+from the training data config at runtime (`${data.train.processor.action_output_dim}`);
+this plan picks a placeholder LIBERO-shaped value if the real one
+cannot be resolved from `configs/` alone.
 
 ### Affected Modules
 
@@ -258,7 +302,10 @@ Phase Status: pending
 ### Goal
 
 A `mot_joint` attention kernel implementing
-`mot.py::_mixed_attention`'s concatenated-QKV joint softmax.
+`mot.py::_mixed_attention`'s concatenated-QKV joint softmax over the
+four-block `[text/ref | target-image | action]` mask described in
+Interface, with the block boundaries (`t0, r0, x0, a0`) passed as
+device-side scalars rather than a materialized mask tensor.
 
 ### Files
 
@@ -267,7 +314,11 @@ dispatch branch and its implementation).
 
 ### Structures
 
-New `SiteSpec.kernel` value `"mot_joint"`.
+New `SiteSpec.kernel` value `"mot_joint"`, dispatching to a new kernel
+taking the same pointer/seq-len/head-dim/scale/stream arguments every
+existing kernel in `run()` takes, plus the four block-boundary
+scalars — matching `"state_masked"`'s own `state_nk` scalar pattern,
+not a new argument shape for this backend.
 
 ### Affected Modules
 
