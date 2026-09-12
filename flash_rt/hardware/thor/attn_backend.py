@@ -770,6 +770,24 @@ class ImageWAMAttnBackend(AttentionBackendBase):
 
         kernel = site_spec.extra.get("kernel", "standard")
         if kernel == "standard":
+            # attention_qkv_fp16's own softmax reinterprets each logits
+            # row as __half2 (csrc/kernels/softmax.cu::softmax_fp16_kernel)
+            # with no internal even-padding (unlike mot_joint/state_masked,
+            # which both compute their own *_pad = n + (n & 1)) -- an odd
+            # kv_seq makes every odd-indexed row start at a 2-byte-aligned,
+            # not 4-byte-aligned, address, which crashes with a CUDA
+            # "misaligned address" error at kernel launch. Found by running
+            # the Phase 3 wiring test with an odd a0, not by inspection.
+            # Pi0.5's own "standard" sites apparently never hit this
+            # because their enc_seq_max/kv_seq happen to always be even in
+            # practice; ImageWAM's do not have that guarantee, so this
+            # class checks explicitly instead of inheriting the same luck.
+            if kv_seq % 2 != 0:
+                raise ValueError(
+                    f"site {site!r} kernel='standard' requires an even "
+                    f"kv_seq (attention_qkv_fp16's softmax is __half2-"
+                    f"vectorized per row with no internal padding); got "
+                    f"kv_seq={kv_seq}")
             fvk.attention_qkv_fp16(
                 self._ctx_cpp,
                 int(s["Q_O"]), K_ptr, V_ptr,

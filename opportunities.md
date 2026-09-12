@@ -39,3 +39,51 @@ weights to calibrate.
 
 Promote to a plan once real ImageWAM weights are available on the
 target machine and the current structural plan's phases are complete.
+
+# OPT-002
+
+Status: not promoted
+
+Area: ImageWAM backbone/action-expert attention — real per-head K/V
+
+## Observation
+
+The Thor kernels this plan's backbone forward calls through
+`ImageWAMAttnBackend` (`attention_qkv_fp16`, `attention_qkv_fp16_mot_joint`)
+both take K/V as a single `(seq, HD)` buffer broadcast across all `NH`
+query heads — confirmed by reading `csrc/kernels/attention_cublas.cu`
+directly (plan.md Phase 2). Real FLUX.2/DiT attention uses full
+per-head K/V (`num_kv_heads == num_q_heads`, each head with its own
+K/V, not shared). This plan's own K/V projection weights are declared
+at `HD` width (128) rather than `hidden` width (3072) as a direct
+consequence — a genuine architectural simplification of ImageWAM's
+real attention mechanism, separate from (and in addition to) the
+random-vs-real-weight difference tracked in OPT-001.
+
+## Opportunity
+
+Write a real per-head-K/V masked attention kernel (K/V shaped
+`(seq, NH, HD)` like Q, not `(seq, HD)`) for both the plain self-attention
+site ("backbone") and the three-region masked joint site ("mot"), and
+switch `_imagewam_thor_spec.py`'s K/V projection shapes back to full
+`hidden` width to match the real checkpoint's fused QKV tensor exactly.
+
+## Expected Mechanism
+
+Same cuBLAS-composed pattern already used (QK^T GEMM -> fused masked
+softmax -> PV GEMM), extended to batch over `NH` independent K/V sets
+instead of broadcasting one shared set — likely a batched/strided
+cuBLAS GEMM (`cublasGemmStridedBatchedEx`) rather than a single big GEMM,
+since each head now has its own K/V.
+
+## Required Evidence
+
+Only matters once real checkpoint weights are being loaded (OPT-001)
+— a random-weight structural dry run does not need real per-head
+fidelity to test wiring, pointer contracts, or shapes.
+
+## Promotion Condition
+
+Promote alongside OPT-001, when real-weight accuracy validation
+begins and a broadcast-K/V approximation is shown to diverge from the
+reference implementation.

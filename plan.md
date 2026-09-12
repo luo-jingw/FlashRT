@@ -526,7 +526,7 @@ above against the PyTorch reference).
 
 ## Phase 3 — Encode-once and backbone prefill
 
-Phase Status: pending
+Phase Status: completed
 
 ### Goal
 
@@ -535,11 +535,80 @@ KV cache buffer from random weights without NaN/Inf.
 
 ### Files
 
-`flash_rt/models/imagewam/pipeline_thor.py` (new).
+- `flash_rt/models/imagewam/pipeline_thor.py` (new) — `imagewam_encode_once`
+  (explicit no-op, see its own docstring: the real encode step is a VAE
+  forward, out of scope, no VAE weights declared), `imagewam_prefill`
+  (5 double-stream + 20 single-stream layers), and private
+  `_double_stream_layer`/`_single_stream_layer` helpers.
+- `flash_rt/models/imagewam/__init__.py` (new).
+- `flash_rt/hardware/thor/attn_backend.py` — added an even-`kv_seq`
+  guard to `ImageWAMAttnBackend.run()`'s `"standard"` branch (see
+  Structures correction below).
+- `tests/test_imagewam_prefill.py` (new).
 
 ### Structures
 
-None new; consumes Phase 1's buffers and Phase 2's attention site.
+Consumes Phase 1's declared shapes and Phase 2's `ImageWAMAttnBackend`,
+but **not** Phase 1's checkpoint-shaped `WEIGHT_SPEC` tensors directly.
+`pipeline_thor.py`'s own docstring defines a second, pipeline-facing
+weight-key convention (already-split Q/K/V, already transposed to
+`(K,N)` for `GemmRunner.fp16_nn`) that Phase 5's frontend must produce
+— splitting a fused checkpoint tensor and transposing it are one-time
+operations that belong at weight-load time, not inside a
+graph-capturable forward (same precedent as `CosmosEdgeThor.__init__`'s
+own `.t().contiguous()`).
+
+Three real corrections, found by running the phase's own test, not by
+inspection:
+
+1. **`GemmRunner` must be constructed once, outside the forward.** An
+   earlier draft created a fresh `fvk.GemmRunner()` inside each
+   per-layer helper (25 times per `imagewam_prefill` call). Besides
+   being wasteful, `GemmRunner()` does `cudaMalloc` for a 256MB
+   workspace at construction — doing that repeatedly inside what must
+   become a CUDA-graph-capturable region is invalid, and it produced a
+   real `cublasLtMatmul` internal error at runtime on this machine's
+   8GB GPU. Fixed by adding `gemm` as an explicit parameter to
+   `imagewam_encode_once`/`imagewam_prefill` (matching
+   `docs/adding_new_model.md`'s own pointer-interface contract example,
+   which threads `gemm: fvk.GemmRunner` the same way) — constructed
+   once by the caller.
+
+2. **`attention_qkv_fp16` (the `"standard"` kernel) requires an even
+   `kv_seq`.** Its softmax (`softmax_fp16_kernel`,
+   `csrc/kernels/softmax.cu`) reinterprets each logits row as
+   `__half2` with no internal even-padding, unlike `mot_joint`/
+   `state_masked` (both compute their own `*_pad = n + (n & 1)`). An
+   odd `kv_seq` makes odd-indexed rows start at a 2-byte-, not 4-byte-,
+   aligned address — a real CUDA "misaligned address" crash, not a
+   FlashRT bug specific to this project (Pi0.5's own `"standard"`
+   sites apparently never hit it because their `enc_seq_max` happens to
+   always be even in practice). Fixed by adding an explicit check in
+   `ImageWAMAttnBackend.run()`'s `"standard"` branch rather than
+   silently relying on the caller to know this; `a0` (the "backbone"
+   site's `kv_seq`) must be even.
+
+3. **Zero normalization anywhere caused real NaN/Inf**, not a
+   pointer-interface bug. Random-weight GEMM chains without any
+   normalization overflow FP16 within a handful of unnormalized
+   residual layers, independent of random-vs-real weights. Fixed by
+   calling `fvk.rms_norm_fp16` before every attention and MLP
+   sub-block, passing a shared all-ones "weight" buffer
+   (`bufs["norm_ones"]`) instead of a learned scale — real
+   normalization with an always-1.0 elementwise gain, since Phase 1
+   declared no learnable norm weights. This is a *better* description
+   of this phase's own scope than the original plan's "no normalization
+   at all," not a new limitation: `pipeline_thor.py`'s docstring
+   simplification list was rewritten accordingly (unweighted RMS norm
+   only, no AdaLN modulation — AdaLN is still not modeled).
+
+Also documented (not fixed, tracked in `opportunities.md`): the
+`attention_qkv_fp16`/`attention_qkv_fp16_mot_joint` kernels this
+pipeline calls take K/V as a single `(seq, HD)` buffer broadcast across
+all `NH` query heads (confirmed in Phase 2), not real per-head MHA —
+this pipeline's own K/V projection weights are declared at `HD` width,
+not `hidden` width, a genuine architectural simplification versus real
+FLUX/DiT attention, separate from the random-vs-real-weight difference.
 
 ### Affected Modules
 
@@ -547,10 +616,20 @@ ImageWAM pipeline forward only.
 
 ### Observation
 
-Given random weights, the two functions run without NaN/Inf and
-without violating the pointer-interface contract (no `.cpu()`,
-`.numpy()`, or `torch.empty()` inside either function); output tensor
-shapes match the declared dims.
+Ran `tests/test_imagewam_prefill.py` (small dims: `hidden=96, HD=16,
+NH=6, mlp_hidden=192, joint_attention_dim=64, x0=4, a0=8`, 2
+double-stream + 3 single-stream layers — not real FLUX.2-4B size, this
+only checks the wiring) with fully random FP16 weights and inputs.
+Result: `imagewam_prefill` runs to completion, `backbone_hidden` and
+the per-layer K/V cache are all finite, and the K/V cache is
+confirmed actually written (nonzero). Also fixed a real bug in the
+test itself while getting here: several buffers were allocated as
+bare `torch.zeros(...).data_ptr()` expressions with no surviving
+Python reference — PyTorch's caching allocator is free to reuse that
+memory for the next allocation the instant the tensor's refcount hits
+zero, silently corrupting an already-stored pointer. Fixed by keeping
+every buffer/weight tensor alive in a `_keepalive` list for the test's
+duration.
 
 ## Phase 4 — Denoise loop and CUDA Graph capture
 
