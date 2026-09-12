@@ -342,7 +342,8 @@ class ThorFlashAttnBackend(AttentionBackendBase):
     # ────────────────────────────────────────────────────────────────
     def run(self, site: str, layer_idx: int, q_seq: int,
             *, kv_seq: Optional[int] = None, stream: int = 0,
-            state_nk: Optional[int] = None) -> int:
+            state_nk: Optional[int] = None,
+            x0: Optional[int] = None, a0: Optional[int] = None) -> int:
         """Dispatch the fvk attention kernel for (site, layer_idx).
 
         Returns the output device pointer int. For Thor the output
@@ -354,6 +355,13 @@ class ThorFlashAttnBackend(AttentionBackendBase):
           * absent / ``"standard"`` → ``fvk.attention_qkv_fp16``
           * ``"state_masked"``      → ``fvk.attention_qkv_fp16_state_masked``
                                       (Pi0 decoder; requires ``state_nk``).
+          * ``"mot_joint"``         → ``fvk.attention_qkv_fp16_mot_joint``
+                                      (ImageWAM MoT; requires ``x0``/``a0``,
+                                      the block boundaries of the combined
+                                      [prefix | target-image | action]
+                                      sequence -- see
+                                      ``csrc/kernels/attention_cublas.cuh``
+                                      for the exact visibility rule).
         """
         if site not in self._slots:
             raise KeyError(f"unknown site {site!r}")
@@ -470,10 +478,36 @@ class ThorFlashAttnBackend(AttentionBackendBase):
                     site_spec.num_q_heads, site_spec.head_dim,
                     float(s["scale"]), stream,
                 )
+        elif kernel == "mot_joint":
+            # ImageWAM MoT joint attention (see docs/adding_new_model.md /
+            # this project's plan.md "ImageWAM inference support on Thor").
+            # Self-attention over one combined [prefix | target-image |
+            # action] sequence -- the pipeline forward writes all three
+            # experts' Q/K/V into this site's own pre-allocated slot
+            # before calling run(); this branch does not combine
+            # anything itself, matching every other site's own division
+            # of labor (attn.run() reads a slot, the pipeline fills it).
+            if x0 is None or a0 is None:
+                raise ValueError(
+                    f"site {site!r} uses mot_joint kernel but x0/a0 "
+                    f"block boundaries were not provided to run()")
+            if not (0 < int(x0) <= int(a0) <= q_seq):
+                raise ValueError(
+                    f"invalid block boundaries x0={x0}, a0={a0} for "
+                    f"total sequence length q_seq={q_seq} (require "
+                    f"0 < x0 <= a0 <= q_seq)")
+            fvk.attention_qkv_fp16_mot_joint(
+                self._ctx_cpp,
+                int(s["Q_O"]), K_ptr, V_ptr,
+                int(s["logits"]), int(s["Q_O"]),
+                q_seq, site_spec.num_q_heads, site_spec.head_dim,
+                int(x0), int(a0),
+                float(s["scale"]), stream,
+            )
         else:
             raise ValueError(
                 f"unknown kernel {kernel!r} for site {site!r} "
-                f"(supported: 'standard', 'state_masked')")
+                f"(supported: 'standard', 'state_masked', 'mot_joint')")
         return int(s["Q_O"])
 
 
@@ -555,5 +589,49 @@ def make_pi0_attention_spec(*, num_views: int, enc_seq_max: int,
         max_q_seq=int(S_dec),
         max_kv_seq=int(enc_seq_max) + int(S_dec),
         extra={"kernel": "state_masked"},
+    )
+    return spec
+
+
+# ════════════════════════════════════════════════════════════════════
+# Spec builder for ImageWAM (FLUX.2-4B variant)
+# ════════════════════════════════════════════════════════════════════
+
+def make_imagewam_attention_spec(*, max_total_seq: int) -> AttentionSpec:
+    """Build the ImageWAM AttentionSpec (one "mot" site).
+
+    Unlike Pi0.5/Pi0 (separate siglip/encoder/decoder sites, each with
+    its own K/V), ImageWAM's backbone and action expert share ONE
+    joint attention over a single combined [prefix | target-image |
+    action] sequence -- one site is the correct shape here, not three.
+    The pipeline forward (``flash_rt/models/imagewam/pipeline_thor.py``)
+    writes both experts' Q/K/V into this site's own pre-allocated slot
+    before calling ``attn.run("mot", layer_idx, q_seq=total, x0=x0,
+    a0=a0, stream=stream)`` -- this function only sizes the slot; it
+    does not know about the two-expert split itself.
+
+    ``num_q_heads``/``head_dim`` (24/128) are shared by the FLUX.2-4B
+    backbone and ActionDiT by construction (see
+    ``flash_rt/frontends/torch/_imagewam_thor_spec.py`` -- this is
+    what makes ``mot_joint`` attention valid: both experts' Q/K/V land
+    in the same per-head geometry after their own separate projections).
+
+    Args:
+        max_total_seq: upper bound on the combined
+            [prefix | target-image | action] sequence length this site
+            will ever run with. Not yet confirmed against a real
+            deployment image resolution -- see the >=1024-column
+            caveat on ``softmax_mot_joint_fp16``
+            (``csrc/kernels/softmax.cuh``); this must also respect
+            that ceiling until a block-level (not warp-level) softmax
+            variant exists.
+    """
+    spec = AttentionSpec()
+    spec.add_site(
+        "mot",
+        num_layers=25,  # backbone_num_layers_double + backbone_num_layers_single (5+20)
+        num_q_heads=24, num_kv_heads=24, head_dim=128,
+        max_q_seq=int(max_total_seq), max_kv_seq=int(max_total_seq),
+        extra={"kernel": "mot_joint"},
     )
     return spec

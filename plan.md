@@ -161,16 +161,18 @@ entry does not apply here.)
 
 ImageWAM's real mask (`mot.py::_mixed_attention`, plain masked
 `F.scaled_dot_product_attention`; mask built by
-`imagewam.py::_build_mot_attention_mask_flux2`) is a fixed four-block
-pattern over `[text/ref | target-image | action]` with boundaries
-`t0, r0, x0, a0`: text/ref attends only to itself; target-image
-attends to text/ref and itself; action attends to text/ref and itself
-but NOT to target-image. The boundaries are scalars fixed per call,
-not a full `[total, total]` boolean tensor — `kernel="mot_joint"`'s
-dispatch takes them as small device-side scalars, the same pattern
+`imagewam.py::_build_mot_attention_mask_flux2`) is a fixed three-block
+pattern over `[prefix (text+ref) | target-image | action]`. Only TWO
+boundaries actually affect visibility, `x0` and `a0` — `t0`/`r0` (the
+text/ref internal split) never matter for the mask, since prefix is
+always visible or invisible as one unit: prefix sees `[0,x0)`;
+target-image sees `[0,a0)`; action sees `[0,x0) U [a0,total)` — NOT
+target-image. The boundaries are scalars fixed per call, not a full
+`[total, total]` boolean tensor — `kernel="mot_joint"`'s dispatch
+takes them as small device-side scalars, the same pattern
 `"state_masked"` already uses for its own single boundary
 (`state_nk`), rather than materializing and uploading a full mask
-every call.
+every call. Implemented and verified in Phase 2 (see below).
 
 ```python
 # flash_rt/models/imagewam/pipeline_thor.py
@@ -384,28 +386,53 @@ confidence).
 
 ## Phase 2 — Joint attention kernel
 
-Phase Status: pending
+Phase Status: completed
 
 ### Goal
 
 A `mot_joint` attention kernel implementing
 `mot.py::_mixed_attention`'s concatenated-QKV joint softmax over the
-four-block `[text/ref | target-image | action]` mask described in
-Interface, with the block boundaries (`t0, r0, x0, a0`) passed as
-device-side scalars rather than a materialized mask tensor.
+`[prefix | target-image | action]` mask described in Interface.
+
+Refined during implementation: the mask only depends on TWO real
+boundaries, `x0` and `a0` — `t0`/`r0` (the text/ref internal split)
+never affect attention visibility, since prefix (text+ref together)
+is always visible or invisible as one unit. `state_masked` (Pi0's own
+existing masked kernel) turned out to be the closer real precedent
+than assumed: reading `csrc/kernels/attention_cublas.cu` directly
+showed Thor's masked-attention kernels are cuBLAS QK^T -> a small
+fused mask+softmax kernel -> cuBLAS PV, not a hand-fused
+flash-attention-style kernel from scratch. `mot_joint` follows the
+exact same three-step shape; only the masking rule inside the fused
+softmax kernel differs (three row-groups instead of one threshold,
+with the action group's visibility being two disjoint ranges instead
+of one contiguous range).
 
 ### Files
 
-`flash_rt/hardware/thor/attn_backend.py` (append `kernel="mot_joint"`
-dispatch branch and its implementation).
+- `csrc/kernels/softmax.cu`/`.cuh` — new `softmax_mot_joint_fp16`,
+  modeled directly on the existing `softmax_state_masked_fp16`.
+- `csrc/kernels/attention_cublas.cu`/`.cuh` — new
+  `attention_qkv_fp16_mot_joint` (QK^T -> masked softmax -> PV),
+  modeled directly on `attention_qkv_fp16_state_masked`.
+- `csrc/bindings.cpp` — pybind entry `attention_qkv_fp16_mot_joint`.
+- `flash_rt/hardware/thor/attn_backend.py` — `run()` gains `x0`/`a0`
+  keyword arguments and a `kernel == "mot_joint"` dispatch branch;
+  new `make_imagewam_attention_spec()` (one `"mot"` site, 25 layers —
+  `backbone_num_layers_double + backbone_num_layers_single`,
+  `num_q_heads=24`/`head_dim=128` shared with both experts).
 
 ### Structures
 
-New `SiteSpec.kernel` value `"mot_joint"`, dispatching to a new kernel
-taking the same pointer/seq-len/head-dim/scale/stream arguments every
-existing kernel in `run()` takes, plus the four block-boundary
-scalars — matching `"state_masked"`'s own `state_nk` scalar pattern,
-not a new argument shape for this backend.
+New `SiteSpec.kernel` value `"mot_joint"`; `run()`'s new `x0`/`a0`
+keyword arguments follow the exact same optional-scalar pattern
+`state_nk` already uses — no new argument shape for this backend.
+The two experts' Q/K/V are combined into ONE buffer by the pipeline
+forward (Phase 3/4) before calling `run()`; this site's own slot
+allocation just needs to be sized for the combined sequence length
+(`max_q_seq` already supports this — no new slot-allocation mechanism
+needed, resolving a complexity this plan's Interface section had
+flagged as an open question).
 
 ### Affected Modules
 
@@ -413,12 +440,28 @@ ImageWAM attention declaration only.
 
 ### Observation
 
-A standalone test compares the new kernel's output against a
-plain-PyTorch concatenated-softmax reference, on random inputs at
-ImageWAM's real attention shape. This checks the kernel against its
-own mathematical definition; it is not a calibration or accuracy
-check against a trained model, and stays in scope even though
-calibration itself does not.
+Ran a standalone test (`test_mot_joint.py`) comparing the new kernel
+against a plain-PyTorch `F.scaled_dot_product_attention` reference
+with an explicit boolean mask matching the same three-region rule, at
+ImageWAM's real per-head geometry (`NH=24`, `HD=128`), on a small
+(`total=24`: 8 prefix + 8 target-image + 8 action tokens) but complete
+example covering all three row-groups including the non-contiguous
+action-row case. Built `flash_rt_kernels` locally (Ada sm_89, this
+machine's own GPU — correctness only, not a Thor timing claim) via
+`cmake -B build -S . -DGPU_ARCH=89 -DFA2_ARCH_NATIVE_ONLY=ON` (see
+`PROJECT.md` for the exact build fix needed: the system pybind11 was
+too old for this venv's Python 3.11). Result: `cosine=1.000000,
+rel_l2=0.000441` — the small residual is fp16-rounding-scale, not a
+correctness gap. This checks the kernel against its own mathematical
+definition; it is not a calibration or accuracy check against a
+trained model, and stays in scope even though calibration itself does
+not.
+
+Not yet verified: the `>=1024`-column ceiling on this single-warp-per-
+row softmax kernel style, against ImageWAM's real total sequence
+length at a real deployment image resolution (see
+`softmax_mot_joint_fp16`'s own docstring) — recorded as an open item,
+not blocking this phase's own completion.
 
 ## Phase 3 — Encode-once and backbone prefill
 

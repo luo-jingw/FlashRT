@@ -42,6 +42,38 @@ this fork covers Jetson AGX Thor (sm_110).
   on CPU, or the VAE/patch-tokenization path alone); end-to-end
   verification of the full pipeline happens on separate, larger
   hardware.
+- Local FlashRT build: usable for kernel-correctness testing on this
+  machine's Ada (sm_89) GPU, not for Thor-specific performance
+  (correctness only — new kernels here are not FP8-specific, so this
+  is not the same class of Ada/Thor portability problem the sibling
+  pi0.5_ggml project's ISSUE-018 found for native FP8 PTX, but Thor
+  timing still needs the real target either way).
+  Build steps: `git clone --depth 1 --branch v4.4.2
+  https://github.com/NVIDIA/cutlass.git third_party/cutlass`, `uv pip
+  install -e ".[torch]"` into a venv with a working torch+CUDA (the
+  `third_party/openpi/.venv` venv from the sibling pi0.5 project
+  worked), then `cmake -B build -S . -DGPU_ARCH=89
+  -DFA2_ARCH_NATIVE_ONLY=ON -DPython3_EXECUTABLE=<venv python>` +
+  `cmake --build build`. The system pybind11 (2.9.1, `/usr/include`)
+  is too old for this venv's Python 3.11.13 (`PyFrameObject` is an
+  incomplete type in newer CPython headers; pybind11 2.9.x's error-
+  formatting code needs it complete) — install pybind11>=2.13 into
+  the same venv and pass `-Dpybind11_DIR=$(python3 -c "import
+  pybind11; print(pybind11.get_cmake_dir())")` to cmake to force it to
+  use the venv's newer copy instead of falling back to the system one.
+- Memory is a real constraint on this machine (23GB total RAM,
+  already had 635MB in swap before any build started) — a full
+  `cmake --build build -j$(nproc)` (nproc=20) OOM-killed partway
+  through the unrelated `fa2_vendor_obj`/`flash_rt_fa2` target (large
+  FA2 attention kernel instantiations) even though the actually-needed
+  `flash_rt_kernels` target (everything this plan's own kernel work
+  lives in) finished and linked successfully first. Do not re-run a
+  full `-j$(nproc)` build without a real reason — a much lower `-j`
+  (e.g. 4) is safer, and this plan's own pipeline/frontend files
+  (Phases 3-5) are pure Python, needing no C++/CUDA rebuild at all
+  once `flash_rt_kernels` itself is built once. Clean up scratch build
+  logs and any redundant build directories promptly; disk itself has
+  headroom (729GB free) but is not a reason to be careless about it.
 
 ## Credentials
 

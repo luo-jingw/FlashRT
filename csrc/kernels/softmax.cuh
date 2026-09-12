@@ -27,3 +27,30 @@ void softmax_causal_fp16(__half* data, int rows, int cols,
 void softmax_state_masked_fp16(__half* data, int rows, int cols,
                                 int mask_rows, int mask_start, int pad_start,
                                 cudaStream_t stream = 0);
+
+// Softmax with ImageWAM's MoT joint-attention block mask: three row
+// groups over [0, total) — prefix [0, x0), target-image [x0, a0),
+// action [a0, total) — with visibility:
+//   prefix row:       visible cols = [0, x0)
+//   target-image row: visible cols = [0, a0)              (contiguous)
+//   action row:       visible cols = [0, x0) U [a0, total) (NOT contiguous —
+//                      action attends to prefix and itself but never to
+//                      target-image)
+// `total` is the real (unpadded) key count; `cols` is the padded
+// column count the logits buffer was allocated/written with (same
+// even-padding convention as softmax_state_masked_fp16 — columns in
+// [total, cols) are masked on every row regardless of group).
+// Rows are grouped by `NH` (heads) exactly like softmax_state_masked_fp16's
+// own `mask_rows` convention: row index r belongs to query token
+// q = r / NH, and q's group is determined by comparing q against x0/a0.
+//
+// NOTE: like every other kernel in this file, this is a single-warp-
+// per-row reduction (SM_MAX_COLS = 1024 columns max, see softmax.cu).
+// ImageWAM's real total sequence length (prefix + target-image patches
+// + action tokens) has not yet been confirmed to fit under that limit
+// for a real deployment image resolution — verify before relying on
+// this kernel at production scale; a full image-patch count exceeding
+// 1024 needs a block-level (not warp-level) reduction instead.
+void softmax_mot_joint_fp16(__half* data, int rows, int cols,
+                             int NH, int x0, int a0, int total,
+                             cudaStream_t stream = 0);

@@ -313,3 +313,57 @@ void attention_qkv_fp16_state_masked(
         out, CUDA_R_16F, HD,
         CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
 }
+
+
+// ImageWAM MoT joint-attention: self-attention over one combined
+// [prefix | target-image | action] sequence with the block mask
+// described in attention_cublas.cuh / softmax_mot_joint_fp16.
+// Structurally identical to attention_qkv_fp16_state_masked above
+// (QK^T -> masked softmax -> PV, one extra kernel launch for the
+// mask+softmax fusion, same odd-length padding convention) --
+// only the masking rule differs.
+void attention_qkv_fp16_mot_joint(
+    cublasHandle_t handle,
+    const __half* Q,
+    const __half* K,
+    const __half* V,
+    __half* logits,
+    __half* out,
+    int total, int NH, int HD,
+    int x0, int a0,
+    float attn_scale,
+    cudaStream_t stream)
+{
+    cublasSetStream(handle, stream);
+
+    int total_pad = total + (total & 1);
+
+    // Step 1: QK^T for ALL queries (total*NH) against ALL keys (total)
+    float zero = 0.0f;
+    cublasGemmEx(handle,
+        CUBLAS_OP_T, CUBLAS_OP_N,
+        total, total * NH, HD,
+        &attn_scale,
+        K, CUDA_R_16F, HD,
+        Q, CUDA_R_16F, HD,
+        &zero,
+        logits, CUDA_R_16F, total_pad,
+        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+
+    // Step 2: fused block-masked softmax (also masks the pad column
+    // via the `total` parameter, same as state_masked's pad_start).
+    softmax_mot_joint_fp16(logits, total * NH, total_pad,
+                            NH, x0, a0, total, stream);
+
+    // Step 3: PV
+    float one = 1.0f;
+    cublasGemmEx(handle,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        HD, total * NH, total,
+        &one,
+        V, CUDA_R_16F, HD,
+        logits, CUDA_R_16F, total_pad,
+        &zero,
+        out, CUDA_R_16F, HD,
+        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+}

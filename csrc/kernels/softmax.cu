@@ -168,6 +168,106 @@ void softmax_state_masked_fp16(__half* data, int rows, int cols,
 }
 
 
+// MoT joint-attention block mask (ImageWAM). Same one-warp-per-row
+// structure as softmax_state_masked_fp16_kernel above; the only
+// difference is column visibility per row-group (see softmax.cuh for
+// the full block-mask description). `total` masks the padded tail
+// columns [total, cols) on every row, exactly like softmax_state_masked's
+// own pad_start.
+__global__ void softmax_mot_joint_fp16_kernel(__half* data, int rows, int cols,
+                                               int NH, int x0, int a0, int total) {
+    int lane = threadIdx.x % SM_WARP_SIZE;
+    int row = blockIdx.x;
+    if (row >= rows) return;
+
+    int q = row / NH;  // query token index this row's head belongs to
+    bool is_prefix = q < x0;
+    bool is_image  = (q >= x0) && (q < a0);
+    // is_action = q >= a0 (the remaining case)
+
+    __half* src = data + row * cols;
+    int cols2 = cols / 2;
+    __half2* src2 = reinterpret_cast<__half2*>(src);
+
+    // visible(c): whether column c is NOT masked for this row's group.
+    // Written as a small lambda-like inline check per element below
+    // rather than a real device lambda, to match this file's existing
+    // (C-style, no closures) kernel style.
+#define MOT_JOINT_VISIBLE(c) \
+    (is_prefix ? ((c) < x0) : (is_image ? ((c) < a0) : (((c) < x0) || ((c) >= a0))))
+
+    // Pass 1: load + find max (with masking)
+    float reg[SM_ITERS];
+    float mx = -1e30f;
+
+    #pragma unroll
+    for (int it = 0; it < SM_ITERS / 2; it++) {
+        int c2 = it * SM_WARP_SIZE + lane;
+        if (c2 < cols2) {
+            int c_base = c2 * 2;
+            __half2 v2 = src2[c2];
+            float v0 = __half2float(v2.x);
+            float v1 = __half2float(v2.y);
+            if (c_base >= total || !MOT_JOINT_VISIBLE(c_base)) v0 = -1e30f;
+            if (c_base + 1 >= total || !MOT_JOINT_VISIBLE(c_base + 1)) v1 = -1e30f;
+            reg[it*2] = v0;
+            reg[it*2+1] = v1;
+            mx = fmaxf(mx, fmaxf(v0, v1));
+        } else {
+            reg[it*2] = -1e30f;
+            reg[it*2+1] = -1e30f;
+        }
+    }
+    if ((cols & 1) && lane == 0) {
+        int c = cols - 1;
+        float v = __half2float(src[c]);
+        if (c >= total || !MOT_JOINT_VISIBLE(c)) v = -1e30f;
+        reg[SM_ITERS-1] = v;
+        mx = fmaxf(mx, v);
+    }
+#undef MOT_JOINT_VISIBLE
+
+    // Warp reduce max
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1)
+        mx = fmaxf(mx, __shfl_xor_sync(0xffffffff, mx, o));
+
+    // Pass 2: exp + sum
+    float sm = 0;
+    #pragma unroll
+    for (int it = 0; it < SM_ITERS; it++) {
+        reg[it] = __expf(reg[it] - mx);
+        sm += reg[it];
+    }
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1)
+        sm += __shfl_xor_sync(0xffffffff, sm, o);
+
+    // Pass 3: normalize + store
+    float inv = 1.f / (sm + 1e-8f);
+    #pragma unroll
+    for (int it = 0; it < SM_ITERS / 2; it++) {
+        int c2 = it * SM_WARP_SIZE + lane;
+        if (c2 < cols2) {
+            __half2 v2;
+            v2.x = __float2half(reg[it*2] * inv);
+            v2.y = __float2half(reg[it*2+1] * inv);
+            src2[c2] = v2;
+        }
+    }
+    if ((cols & 1) && lane == 0) {
+        src[cols-1] = __float2half(reg[SM_ITERS-1] * inv);
+    }
+}
+
+void softmax_mot_joint_fp16(__half* data, int rows, int cols,
+                             int NH, int x0, int a0, int total,
+                             cudaStream_t stream) {
+    softmax_mot_joint_fp16_kernel<<<rows, SM_WARP_SIZE, 0, stream>>>(
+        data, rows, cols, NH, x0, a0, total);
+}
+
+
 // Causal softmax — strict upper-triangular masking per-head.
 // Layout: (NH * S_q, cols) row-major. For row r, head-local Q index
 // q = r % S_q; mask cols j > q AND j >= pad_start.

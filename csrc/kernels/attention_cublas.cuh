@@ -67,3 +67,25 @@ void attention_qkv_fp16_state_masked(
     int state_nk,            // number of keys visible to state token (typically enc_seq+1)
     float attn_scale,
     cudaStream_t stream = 0);
+
+// Single-call self-attention with ImageWAM's MoT joint block mask.
+// Q/K/V already represent ONE combined sequence
+// [prefix (text+ref) | target-image | action], laid out by the
+// caller (this function does not concatenate anything) -- self-
+// attention, so S == S_kv == total (the combined sequence length).
+// Row group visibility (see softmax_mot_joint_fp16 for the exact
+// rule): prefix sees [0,x0); target-image sees [0,a0); action sees
+// [0,x0) U [a0,total) -- action never attends to target-image.
+// Handles odd total via padded lda (same convention as
+// attention_qkv_fp16_state_masked).
+void attention_qkv_fp16_mot_joint(
+    cublasHandle_t handle,
+    const __half* Q,         // (total*NH, HD)
+    const __half* K,         // (total, HD)
+    const __half* V,         // (total, HD)
+    __half* logits,          // scratch: (total*NH, total_padded)
+    __half* out,             // (total*NH, HD)
+    int total, int NH, int HD,
+    int x0, int a0,          // block boundaries, see softmax_mot_joint_fp16
+    float attn_scale,
+    cudaStream_t stream = 0);
