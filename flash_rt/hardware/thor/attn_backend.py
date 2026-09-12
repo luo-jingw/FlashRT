@@ -597,18 +597,31 @@ def make_pi0_attention_spec(*, num_views: int, enc_seq_max: int,
 # Spec builder for ImageWAM (FLUX.2-4B variant)
 # ════════════════════════════════════════════════════════════════════
 
-def make_imagewam_attention_spec(*, max_total_seq: int) -> AttentionSpec:
-    """Build the ImageWAM AttentionSpec (one "mot" site).
+def make_imagewam_attention_spec(*, max_prefix_seq: int,
+                                  max_total_seq: int) -> AttentionSpec:
+    """Build the ImageWAM AttentionSpec (two sites: "backbone", "mot").
 
-    Unlike Pi0.5/Pi0 (separate siglip/encoder/decoder sites, each with
-    its own K/V), ImageWAM's backbone and action expert share ONE
-    joint attention over a single combined [prefix | target-image |
-    action] sequence -- one site is the correct shape here, not three.
-    The pipeline forward (``flash_rt/models/imagewam/pipeline_thor.py``)
-    writes both experts' Q/K/V into this site's own pre-allocated slot
-    before calling ``attn.run("mot", layer_idx, q_seq=total, x0=x0,
-    a0=a0, stream=stream)`` -- this function only sizes the slot; it
-    does not know about the two-expert split itself.
+    Two sites, not one -- corrected after tracing ``infer_action_flux2``
+    (``imagewam.py``) closely: `self.video_expert.pre_dit(...)` runs
+    ONCE, before the denoise loop, and IS the backbone's own 25-layer
+    double/single-stream forward -- self-attention over just its own
+    [prefix | target-image] tokens (action tokens do not exist yet at
+    this point, so there is nothing to jointly attend to). Only
+    `mot.prefill_flux2_video_cache`'s OUTPUT (this forward's own K/V)
+    feeds the LATER `mot.forward_action_with_video_cache` calls inside
+    the denoise loop, where each step's action-expert Q joins that
+    cached K/V through the joint (`mot_joint`) attention. An earlier
+    version of this function assumed one shared site was correct for
+    both phases; it was not.
+
+        "backbone": plain self-attention (``kernel="standard"``), used
+            by ``imagewam_prefill`` (Phase 3) over the
+            [prefix | target-image] sequence only.
+        "mot": joint attention (``kernel="mot_joint"``), used by
+            ``imagewam_denoise_step`` (Phase 4) once per action step,
+            reading the "backbone" site's own K/V cache (written during
+            prefill) plus this step's action-expert Q/K/V, over the
+            FULL [prefix | target-image | action] sequence.
 
     ``num_q_heads``/``head_dim`` (24/128) are shared by the FLUX.2-4B
     backbone and ActionDiT by construction (see
@@ -617,9 +630,11 @@ def make_imagewam_attention_spec(*, max_total_seq: int) -> AttentionSpec:
     in the same per-head geometry after their own separate projections).
 
     Args:
-        max_total_seq: upper bound on the combined
-            [prefix | target-image | action] sequence length this site
-            will ever run with. Not yet confirmed against a real
+        max_prefix_seq: upper bound on the backbone's own
+            [prefix | target-image] sequence length (no action tokens).
+        max_total_seq: upper bound on the full combined
+            [prefix | target-image | action] sequence length the "mot"
+            site will ever run with. Not yet confirmed against a real
             deployment image resolution -- see the >=1024-column
             caveat on ``softmax_mot_joint_fp16``
             (``csrc/kernels/softmax.cuh``); this must also respect
@@ -628,8 +643,14 @@ def make_imagewam_attention_spec(*, max_total_seq: int) -> AttentionSpec:
     """
     spec = AttentionSpec()
     spec.add_site(
-        "mot",
+        "backbone",
         num_layers=25,  # backbone_num_layers_double + backbone_num_layers_single (5+20)
+        num_q_heads=24, num_kv_heads=24, head_dim=128,
+        max_q_seq=int(max_prefix_seq), max_kv_seq=int(max_prefix_seq),
+    )
+    spec.add_site(
+        "mot",
+        num_layers=25,
         num_q_heads=24, num_kv_heads=24, head_dim=128,
         max_q_seq=int(max_total_seq), max_kv_seq=int(max_total_seq),
         extra={"kernel": "mot_joint"},

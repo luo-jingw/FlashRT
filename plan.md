@@ -418,9 +418,11 @@ of one contiguous range).
 - `csrc/bindings.cpp` — pybind entry `attention_qkv_fp16_mot_joint`.
 - `flash_rt/hardware/thor/attn_backend.py` — `run()` gains `x0`/`a0`
   keyword arguments and a `kernel == "mot_joint"` dispatch branch;
-  new `make_imagewam_attention_spec()` (one `"mot"` site, 25 layers —
-  `backbone_num_layers_double + backbone_num_layers_single`,
-  `num_q_heads=24`/`head_dim=128` shared with both experts).
+  new `make_imagewam_attention_spec()` — two sites, `"backbone"`
+  (`kernel="standard"`) and `"mot"` (`kernel="mot_joint"`), see the
+  Structures correction below for why one site was not enough; both
+  25 layers (`backbone_num_layers_double + backbone_num_layers_single`),
+  `num_q_heads=24`/`head_dim=128` shared with both experts.
 
 ### Structures
 
@@ -433,6 +435,23 @@ allocation just needs to be sized for the combined sequence length
 (`max_q_seq` already supports this — no new slot-allocation mechanism
 needed, resolving a complexity this plan's Interface section had
 flagged as an open question).
+
+**Correction (found while starting Phase 3): TWO attention sites are
+needed, not one.** Re-tracing `infer_action_flux2` closely:
+`self.video_expert.pre_dit(...)` runs ONCE, before the denoise loop,
+and IS the backbone's own 25-layer forward — self-attention over just
+its own `[prefix | target-image]` tokens (action tokens do not exist
+yet at that point, so `mot_joint`'s three-region mask does not apply
+there at all). Only `mot.prefill_flux2_video_cache`'s OUTPUT (that
+forward's own K/V) feeds the LATER `mot.forward_action_with_video_cache`
+calls inside the denoise loop, where `mot_joint` is actually used.
+`make_imagewam_attention_spec()` now declares two sites: `"backbone"`
+(`kernel="standard"`, `imagewam_prefill`'s own self-attention) and
+`"mot"` (`kernel="mot_joint"`, `imagewam_denoise_step`'s joint
+attention against the backbone's cached K/V). Both share
+`num_q_heads=24`/`head_dim=128`; `num_layers=25` on both since every
+backbone layer has a corresponding action-expert layer at the same
+index.
 
 ### Affected Modules
 
