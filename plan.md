@@ -482,6 +482,48 @@ length at a real deployment image resolution (see
 `softmax_mot_joint_fp16`'s own docstring) — recorded as an open item,
 not blocking this phase's own completion.
 
+**Correction (found while starting Phase 3): `run()`'s `mot_joint`
+branch was added to the wrong class and was unreachable dead code.**
+`docs/adding_new_model.md` says to "extend the dispatch branches in
+`ThorFlashAttnBackend.run`" for a new kernel value, which is what the
+first version of this phase did. But `ThorFlashAttnBackend`'s own
+constructor unconditionally rejects any site set other than Pi0.5's
+fixed `{"siglip", "encoder", "decoder"}` (its module docstring says so
+explicitly: "Currently supports Pi0.5's three sites... Pi0/GROOT out
+of scope for Stage 1") — so a `ThorFlashAttnBackend` instance can never
+actually be constructed for ImageWAM's `{"backbone", "mot"}` sites, and
+the added branch could never run. Fixed by removing that branch from
+`ThorFlashAttnBackend.run()` (reverting it to `'standard'`/
+`'state_masked'` only, Pi0.5 untouched) and adding a new, separate
+`ImageWAMAttnBackend(AttentionBackendBase)` class in the same file,
+implementing the same `get_slot_ptrs`/`run()` protocol for just
+`"backbone"`/`"mot"`. This is deliberately a standalone class rather
+than a generalization of `ThorFlashAttnBackend`'s own site validation
+— touching Pi0.5's already-shipped, feature-heavy class (FA4 wiring,
+fixed-shape state-prompt masking, siglip-specific checks, none of
+which ImageWAM needs) to serve a second, unrelated model would be a
+large, unnecessary risk for a personal fork not going upstream.
+
+Also discovered while investigating this: FlashRT already has an
+unrelated, RTX-only, G1-stage model called **Motus**
+(`flash_rt/models/motus/`, `flash_rt/hardware/rtx/attn_backend_motus.py`)
+that also does joint video+action+text attention and happens to name
+its own *site* `"mot_joint"` — a naming coincidence with this plan's
+*kernel value* `"mot_joint"`, not a functional overlap (different
+files, different hardware, different mask: Motus's own `"mot_joint"`
+site is a full, unmasked joint MHA per its own docstring, unlike
+ImageWAM's three-region masked attention). No code changed as a result
+of this check; noted here only so a future reader searching for
+`"mot_joint"` does not conflate the two.
+
+Verified the fix with a new wiring smoke test,
+`tests/test_imagewam_attn_backend.py`: constructs `ImageWAMAttnBackend`
+for both sites with real per-layer K/V pointer arithmetic, runs
+`"backbone"` (`kernel="standard"`) and `"mot"` (`kernel="mot_joint"`,
+`x0=4, a0=8, total=12`) end-to-end, asserts finite output. This is a
+plumbing check, not a re-verification of attention math (already done
+above against the PyTorch reference).
+
 ## Phase 3 — Encode-once and backbone prefill
 
 Phase Status: pending

@@ -342,8 +342,7 @@ class ThorFlashAttnBackend(AttentionBackendBase):
     # ────────────────────────────────────────────────────────────────
     def run(self, site: str, layer_idx: int, q_seq: int,
             *, kv_seq: Optional[int] = None, stream: int = 0,
-            state_nk: Optional[int] = None,
-            x0: Optional[int] = None, a0: Optional[int] = None) -> int:
+            state_nk: Optional[int] = None) -> int:
         """Dispatch the fvk attention kernel for (site, layer_idx).
 
         Returns the output device pointer int. For Thor the output
@@ -355,13 +354,10 @@ class ThorFlashAttnBackend(AttentionBackendBase):
           * absent / ``"standard"`` → ``fvk.attention_qkv_fp16``
           * ``"state_masked"``      → ``fvk.attention_qkv_fp16_state_masked``
                                       (Pi0 decoder; requires ``state_nk``).
-          * ``"mot_joint"``         → ``fvk.attention_qkv_fp16_mot_joint``
-                                      (ImageWAM MoT; requires ``x0``/``a0``,
-                                      the block boundaries of the combined
-                                      [prefix | target-image | action]
-                                      sequence -- see
-                                      ``csrc/kernels/attention_cublas.cuh``
-                                      for the exact visibility rule).
+
+        This class supports only Pi0.5's fixed site set (see the module
+        docstring); ``ImageWAMAttnBackend`` below implements the same
+        protocol for ImageWAM's own sites.
         """
         if site not in self._slots:
             raise KeyError(f"unknown site {site!r}")
@@ -478,36 +474,10 @@ class ThorFlashAttnBackend(AttentionBackendBase):
                     site_spec.num_q_heads, site_spec.head_dim,
                     float(s["scale"]), stream,
                 )
-        elif kernel == "mot_joint":
-            # ImageWAM MoT joint attention (see docs/adding_new_model.md /
-            # this project's plan.md "ImageWAM inference support on Thor").
-            # Self-attention over one combined [prefix | target-image |
-            # action] sequence -- the pipeline forward writes all three
-            # experts' Q/K/V into this site's own pre-allocated slot
-            # before calling run(); this branch does not combine
-            # anything itself, matching every other site's own division
-            # of labor (attn.run() reads a slot, the pipeline fills it).
-            if x0 is None or a0 is None:
-                raise ValueError(
-                    f"site {site!r} uses mot_joint kernel but x0/a0 "
-                    f"block boundaries were not provided to run()")
-            if not (0 < int(x0) <= int(a0) <= q_seq):
-                raise ValueError(
-                    f"invalid block boundaries x0={x0}, a0={a0} for "
-                    f"total sequence length q_seq={q_seq} (require "
-                    f"0 < x0 <= a0 <= q_seq)")
-            fvk.attention_qkv_fp16_mot_joint(
-                self._ctx_cpp,
-                int(s["Q_O"]), K_ptr, V_ptr,
-                int(s["logits"]), int(s["Q_O"]),
-                q_seq, site_spec.num_q_heads, site_spec.head_dim,
-                int(x0), int(a0),
-                float(s["scale"]), stream,
-            )
         else:
             raise ValueError(
                 f"unknown kernel {kernel!r} for site {site!r} "
-                f"(supported: 'standard', 'state_masked', 'mot_joint')")
+                f"(supported: 'standard', 'state_masked')")
         return int(s["Q_O"])
 
 
@@ -656,3 +626,178 @@ def make_imagewam_attention_spec(*, max_prefix_seq: int,
         extra={"kernel": "mot_joint"},
     )
     return spec
+
+
+# ════════════════════════════════════════════════════════════════════
+# Backend for ImageWAM (FLUX.2-4B variant)
+# ════════════════════════════════════════════════════════════════════
+
+class ImageWAMAttnBackend(AttentionBackendBase):
+    """Implements the AttentionBackend protocol for ImageWAM's two sites.
+
+    Correction (found while starting Phase 3): an earlier draft of this
+    plan added a ``mot_joint`` dispatch branch directly to
+    ``ThorFlashAttnBackend.run()`` above, following
+    ``docs/adding_new_model.md``'s generic instruction to "extend the
+    dispatch branches" for a new kernel value. That class's own
+    constructor unconditionally rejects any site set other than
+    Pi0.5's fixed ``{"siglip", "encoder", "decoder"}`` (see its module
+    docstring: "Currently supports Pi0.5's three sites... Pi0/GROOT out
+    of scope for Stage 1") -- so a ``ThorFlashAttnBackend`` can never
+    actually be constructed for ImageWAM's ``{"backbone", "mot"}``
+    sites, and the added branch was unreachable dead code. Removed and
+    replaced with this separate class instead of loosening Pi0.5's own
+    constructor validation, to keep zero risk of a regression on the
+    model this fork does not otherwise touch.
+
+    Pipeline-owned memory model, same convention as
+    ``ThorFlashAttnBackend``: the pipeline (``imagewam/pipeline_thor.py``)
+    allocates every Q/K/V/O/logits buffer and passes pointers in at
+    construction time; this class only dispatches kernels.
+
+    Both sites share ONE physical per-layer K/V buffer pair (see
+    ``imagewam_prefill`` / ``imagewam_denoise_step`` in
+    ``flash_rt/models/imagewam/pipeline_thor.py``): rows
+    ``[0, a0)`` (prefix + target-image) are written once by
+    ``imagewam_prefill``'s "backbone" self-attention and never
+    rewritten again; rows ``[a0, total)`` (action tokens) are
+    overwritten every denoise step by that step's fresh ActionDiT K/V
+    before the "mot" site's joint attention call. K/V here are a single
+    shared set per position, not one set per head (see
+    ``attention_qkv_fp16_mot_joint``'s own Q/K/V layout: Q is
+    ``(seq*NH, HD)``, K/V are ``(seq, HD)``, broadcast across heads --
+    confirmed by reading ``csrc/kernels/attention_cublas.cu`` directly,
+    not assumed).
+    """
+
+    def __init__(self, spec: AttentionSpec, ctx, *,
+                 backbone_slots: dict, mot_slots: dict):
+        """
+        Args:
+            spec: built by ``make_imagewam_attention_spec``.
+            ctx: FvkContext (raw or ``.cpp``-wrapped, same convention
+                as ``ThorFlashAttnBackend``).
+            backbone_slots: {"Q_O": ptr, "K": ptr, "V": ptr,
+                "logits": ptr, "scale": float}. K/V point at the same
+                per-layer buffers as ``mot_slots`` -- the pipeline owns
+                one KV cache, not two.
+            mot_slots: same shape as ``backbone_slots``, plus
+                ``"layer_stride"`` (bytes between consecutive layers'
+                K/V, used to derive per-layer pointers exactly like
+                ``ThorFlashAttnBackend`` does for encoder/decoder).
+        """
+        super().__init__(spec)
+        expected_sites = {"backbone", "mot"}
+        got = set(spec.sites.keys())
+        if got != expected_sites:
+            raise ValueError(
+                f"ImageWAMAttnBackend expects sites {expected_sites}, "
+                f"got {got}")
+
+        self._ctx_cpp = ctx.cpp if hasattr(ctx, "cpp") else ctx
+        self._slots = {"backbone": dict(backbone_slots), "mot": dict(mot_slots)}
+        for site_name in ("backbone", "mot"):
+            slot = self._slots[site_name]
+            for key in ("Q_O", "K", "V", "logits"):
+                if key not in slot:
+                    raise ValueError(f"{site_name}_slots missing required key {key!r}")
+                if int(slot[key]) == 0:
+                    raise ValueError(f"{site_name}_slots[{key!r}] is a null device pointer")
+
+        # Both sites index into the same per-layer K/V buffers -- one
+        # cache, not two. layer_stride comes from "mot" (the site with
+        # the full 25-layer forward that owns the buffer's lifetime).
+        stride = int(mot_slots["layer_stride"])
+        K_base = int(mot_slots["K"])
+        V_base = int(mot_slots["V"])
+        self._per_layer_kv = [
+            (K_base + l * stride, V_base + l * stride)
+            for l in range(spec.site("mot").num_layers)
+        ]
+
+        self._fvk = None
+
+    def _fvk_mod(self):
+        if self._fvk is None:
+            import flash_rt.flash_rt_kernels as fvk
+            self._fvk = fvk
+        return self._fvk
+
+    def get_slot_ptrs(self, site: str, layer_idx: int) -> dict[str, int]:
+        if site not in self._slots:
+            raise KeyError(f"unknown site {site!r}")
+        nL = self._spec.site(site).num_layers
+        if not (0 <= layer_idx < nL):
+            raise IndexError(
+                f"layer_idx {layer_idx} out of range for site {site!r} "
+                f"(num_layers={nL})")
+        K_ptr, V_ptr = self._per_layer_kv[layer_idx]
+        q_o = int(self._slots[site]["Q_O"])
+        return {"Q": q_o, "K": K_ptr, "V": V_ptr, "O": q_o}
+
+    def run(self, site: str, layer_idx: int, q_seq: int,
+            *, kv_seq: Optional[int] = None, stream: int = 0,
+            state_nk: Optional[int] = None,
+            x0: Optional[int] = None, a0: Optional[int] = None) -> int:
+        """Dispatch attention for ImageWAM's "backbone" or "mot" site.
+
+        "backbone" (``imagewam_prefill``): plain self-attention,
+        ``kernel="standard"`` -> ``fvk.attention_qkv_fp16``, ``x0``/``a0``
+        ignored.
+
+        "mot" (``imagewam_denoise_step``): joint attention,
+        ``kernel="mot_joint"`` -> ``fvk.attention_qkv_fp16_mot_joint``,
+        requires ``x0``/``a0`` (the block boundaries of the combined
+        [prefix | target-image | action] sequence -- see
+        ``csrc/kernels/attention_cublas.cuh`` for the exact visibility
+        rule). ``state_nk`` is accepted for protocol-signature parity
+        with ``ThorFlashAttnBackend.run`` but unused by either site.
+        """
+        if site not in self._slots:
+            raise KeyError(f"unknown site {site!r}")
+
+        fvk = self._fvk_mod()
+        site_spec = self._spec.site(site)
+        nL = site_spec.num_layers
+        if not (0 <= layer_idx < nL):
+            raise IndexError(
+                f"layer_idx {layer_idx} out of range for site {site!r} "
+                f"(num_layers={nL})")
+        s = self._slots[site]
+        K_ptr, V_ptr = self._per_layer_kv[layer_idx]
+        if kv_seq is None:
+            kv_seq = q_seq
+
+        kernel = site_spec.extra.get("kernel", "standard")
+        if kernel == "standard":
+            fvk.attention_qkv_fp16(
+                self._ctx_cpp,
+                int(s["Q_O"]), K_ptr, V_ptr,
+                int(s["logits"]), int(s["Q_O"]),
+                q_seq, kv_seq,
+                site_spec.num_q_heads, site_spec.head_dim,
+                float(s["scale"]), stream,
+            )
+        elif kernel == "mot_joint":
+            if x0 is None or a0 is None:
+                raise ValueError(
+                    f"site {site!r} uses mot_joint kernel but x0/a0 "
+                    f"block boundaries were not provided to run()")
+            if not (0 < int(x0) <= int(a0) <= q_seq):
+                raise ValueError(
+                    f"invalid block boundaries x0={x0}, a0={a0} for "
+                    f"total sequence length q_seq={q_seq} (require "
+                    f"0 < x0 <= a0 <= q_seq)")
+            fvk.attention_qkv_fp16_mot_joint(
+                self._ctx_cpp,
+                int(s["Q_O"]), K_ptr, V_ptr,
+                int(s["logits"]), int(s["Q_O"]),
+                q_seq, site_spec.num_q_heads, site_spec.head_dim,
+                int(x0), int(a0),
+                float(s["scale"]), stream,
+            )
+        else:
+            raise ValueError(
+                f"unknown kernel {kernel!r} for site {site!r} "
+                f"(supported: 'standard', 'mot_joint')")
+        return int(s["Q_O"])
