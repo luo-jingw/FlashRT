@@ -98,23 +98,42 @@ neither of which this plan uses.
 
 ```python
 # flash_rt/frontends/torch/_imagewam_thor_spec.py
-@dataclass
-class WeightSpec:
-    name: str
-    torch_key: Optional[str]   # None -> allocate + randomly fill, skip state-dict lookup
-    shape: tuple[int, ...]
-    dtype: str
-    quant: Optional[QuantSpec] # unused while precision work is out of scope
+# Real template shape (flash_rt/frontends/torch/_template/weights_spec.py),
+# not the dataclass-list shape an earlier draft of this plan assumed:
+# WEIGHT_SPEC is a dict; each value is (loader, quant_decision), where
+# loader(state_dict) -> np.ndarray.
+WEIGHT_SPEC: dict[tuple[str, Optional[int], str], tuple[Callable, tuple]]
 
-WEIGHT_SPEC: list[WeightSpec]
+def _random_loader(shape: tuple[int, ...], dtype: str) -> Callable:
+    """Returns a loader that ignores its `state_dict` argument and
+    returns random data of the given shape/dtype instead -- the
+    random-init path plugs into the existing loader-callable
+    mechanism directly; no new field on the spec itself is needed."""
+    def _load(state_dict):
+        return np.random.default_rng().standard_normal(shape).astype(dtype)
+    return _load
 ```
 
 ```python
 # flash_rt/hardware/thor/attn_backend.py
-@register_attention_spec("imagewam")
+# Real shape (flash_rt/hardware/backend.py): AttentionSpec.add_site is
+# a plain method, not a decorator-registered function -- there is no
+# @register_attention_spec mechanism in this codebase (an earlier draft
+# of this plan assumed one; it does not exist). make_imagewam_attention_spec
+# is a plain function placed next to the existing make_pi05_attention_spec,
+# called directly by the frontend, following that file's own convention.
 def make_imagewam_attention_spec(...) -> AttentionSpec:
-    ...
-    SiteSpec(name="mot", ..., kernel="mot_joint", extra={...})
+    spec = AttentionSpec()
+    spec.add_site(
+        "mot",
+        num_layers=...,
+        num_q_heads=24,       # shared with the FLUX.2 backbone, see Phase 1
+        num_kv_heads=24,      # ImageWAM's MoT attention is not GQA
+        head_dim=128,
+        max_q_seq=...,        # total concatenated sequence length
+        extra={"kernel": "mot_joint", "block_boundaries": ("t0", "r0", "x0", "a0")},
+    )
+    return spec
 ```
 
 `kernel="mot_joint"` is a new `SiteSpec.kernel` value, confirmed
@@ -143,27 +162,45 @@ every call.
 
 ```python
 # flash_rt/models/imagewam/pipeline_thor.py
-def imagewam_encode_once(gemm, fvk_module, bufs: dict[str, int],
-                          weights: dict[str, int], dims: dict[str, int],
-                          *, stream: int = 0) -> None: ...
+# Real signature (flash_rt/frontends/torch/_template/pipeline.py):
+# (ctx, fvk, bufs, weights, dims, stream=0, *, attn=None) -- an earlier
+# draft of this plan omitted `ctx` (the FvkContext / cuBLAS-handle
+# object, positional) and used non-matching param names.
+def imagewam_encode_once(ctx, fvk, bufs: dict, weights: dict, dims: dict,
+                          stream: int = 0) -> None: ...
 
-def imagewam_prefill(gemm, fvk_module, bufs: dict[str, int],
-                      weights: dict[str, int], dims: dict[str, int],
-                      *, attn=None, stream: int = 0) -> None: ...
+def imagewam_prefill(ctx, fvk, bufs: dict, weights: dict, dims: dict,
+                      stream: int = 0, *, attn=None) -> None: ...
 
-def imagewam_denoise_step(gemm, fvk_module, bufs: dict[str, int],
-                           weights: dict[str, int], dims: dict[str, int],
-                           *, attn=None, stream: int = 0) -> None: ...
+def imagewam_denoise_step(ctx, fvk, bufs: dict, weights: dict, dims: dict,
+                           stream: int = 0, *, attn=None) -> None: ...
 ```
 
-`bufs` and `weights` are `dict[str, int]` (raw `.data_ptr()` values);
-`dims` is `dict[str, int]`. No tensor object crosses a forward
-function boundary, matching every existing FlashRT pipeline.
+`bufs` values are raw `.data_ptr()` integers (allocated once by the
+frontend via `CudaBuffer`, per the template). `weights` is keyed by
+the same `(site, layer_idx, slot_name)` tuples as `WEIGHT_SPEC`, each
+value a pointer. `dims` is `dict[str, int]`. No tensor object crosses
+a forward function boundary, matching every existing FlashRT
+pipeline. No `quantize_fp8_static`/`gemm_fp8_fp16`/alpha-scale calls
+appear in these three functions — this plan's forward is BF16-only
+(plain `gemm_bf16_nn`-style GEMMs), matching the template's
+`*_forward_calibrate` compute shape but without its
+`_measure_scale_gpu` calls, since no calibration happens either.
 
 ```python
 # flash_rt/frontends/torch/imagewam_thor.py
-class ImageWAMTorchFrontendThor(FrontendBase):
-    def set_prompt(self, prompt: str) -> None: ...
+# Real shape (flash_rt/frontends/torch/_template/frontend.py): a plain
+# class, no base class -- an earlier draft of this plan assumed a
+# FrontendBase that does not appear in the template.
+class ImageWAMTorchFrontendThor:
+    def __init__(self, checkpoint_dir=None, **kwargs) -> None: ...
+        # checkpoint_dir is accepted for interface parity with every
+        # other frontend but unused while this plan uses
+        # load_weights_random() instead of a real checkpoint.
+    def set_prompt(self, prompt_text: str) -> None: ...
+        # No calibration-cache lookup, no _recalibrate_with_real_data:
+        # this plan has no calibration step. Runs the Qwen3-4B encode
+        # once, captures the CUDA Graph directly afterward.
     def infer(self, observation: dict) -> dict:  # {"actions": np.ndarray}
         ...
 ```
@@ -223,7 +260,7 @@ class ImageWAMTorchFrontendThor(FrontendBase):
 
 | Interface | File |
 |---|---|
-| `WeightSpec`, `WEIGHT_SPEC` | `flash_rt/frontends/torch/_imagewam_thor_spec.py` |
+| `WEIGHT_SPEC`, `_random_loader`, `load_weights_random` | `flash_rt/frontends/torch/_imagewam_thor_spec.py` |
 | `make_imagewam_attention_spec`, `kernel="mot_joint"` dispatch | `flash_rt/hardware/thor/attn_backend.py` |
 | `imagewam_encode_once`, `imagewam_prefill`, `imagewam_denoise_step` | `flash_rt/models/imagewam/pipeline_thor.py` |
 | `ImageWAMTorchFrontendThor` | `flash_rt/frontends/torch/imagewam_thor.py` |
@@ -252,8 +289,16 @@ a state-dict lookup.
 
 ### Structures
 
-`WeightSpec.torch_key: Optional[str]`; `None` triggers allocation and
-random fill in the loader instead of a state-dict lookup.
+`WEIGHT_SPEC` follows the template's real shape: a dict keyed by
+`(site, layer_idx, slot_name)`, valued `(loader, quant_decision)` where
+`loader(state_dict) -> np.ndarray`. The random-init path is a
+`_random_loader(shape, dtype)` helper that returns a loader ignoring
+its `state_dict` argument and generating random data instead — this
+plugs into the existing loader-callable mechanism directly, no new
+field needed on the spec itself. `load_weights_random()` calls every
+`WEIGHT_SPEC` entry's loader with `state_dict=None`, in place of the
+template's own `load_weights(checkpoint_path)` which reads a real
+safetensors file first.
 
 Real dimensions (architecture configs only — no weight download,
 consistent with the random-init goal):
