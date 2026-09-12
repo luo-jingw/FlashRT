@@ -59,7 +59,10 @@ neither of which this plan uses.
 
 - **ImageWAM weight declaration** — owns every weight tensor's shape,
   dtype, and initialization source (random, for this plan) for the
-  FLUX.2-4B backbone, the Qwen3-4B text encoder, and ActionDiT.
+  FLUX.2-4B backbone and ActionDiT. Does not include the Qwen3-4B text
+  encoder: every ImageWAM config sets `load_text_encoder: false`, so
+  text conditioning is always an input (`context`/`context_mask`),
+  never a weight this integration owns.
 - **ImageWAM attention declaration** — owns the per-site attention
   shapes and the new joint-attention kernel dispatch.
 - **ImageWAM pipeline forward** — owns the pointer-interface forward
@@ -98,20 +101,29 @@ neither of which this plan uses.
 
 ```python
 # flash_rt/frontends/torch/_imagewam_thor_spec.py
-# Real template shape (flash_rt/frontends/torch/_template/weights_spec.py),
-# not the dataclass-list shape an earlier draft of this plan assumed:
-# WEIGHT_SPEC is a dict; each value is (loader, quant_decision), where
-# loader(state_dict) -> np.ndarray.
-WEIGHT_SPEC: dict[tuple[str, Optional[int], str], tuple[Callable, tuple]]
+# Modeled on the real _cosmos3_edge_thor_spec.py, not the generic
+# template: shape declaration is separate from data loading, no
+# loader callables live in this file at all.
+@dataclass(frozen=True)
+class ImageWAMThorSpec:
+    backbone_num_heads: int = 24
+    backbone_head_dim: int = 128
+    backbone_num_layers_double: int = 5
+    backbone_num_layers_single: int = 20
+    backbone_in_channels: int = 128
+    joint_attention_dim: int = 7680      # context input width, not a weight
+    action_hidden_dim: int = 1024
+    action_num_heads: int = 24           # == backbone_num_heads, required for mot_joint
+    action_head_dim: int = 128           # == backbone_head_dim, required for mot_joint
+    action_num_layers_double: int = 5    # == backbone_num_layers_double
+    action_num_layers_single: int = 20   # == backbone_num_layers_single
+    max_action_horizon: int = 64
 
-def _random_loader(shape: tuple[int, ...], dtype: str) -> Callable:
-    """Returns a loader that ignores its `state_dict` argument and
-    returns random data of the given shape/dtype instead -- the
-    random-init path plugs into the existing loader-callable
-    mechanism directly; no new field on the spec itself is needed."""
-    def _load(state_dict):
-        return np.random.default_rng().standard_normal(shape).astype(dtype)
-    return _load
+SPEC = ImageWAMThorSpec()
+BACKBONE_LAYER_SHAPES: dict[str, tuple[int, ...]]
+ACTION_DIT_LAYER_SHAPES: dict[str, tuple[int, ...]]
+
+def iter_expected_shapes() -> Iterable[tuple[str, tuple[int, ...]]]: ...
 ```
 
 ```python
@@ -195,12 +207,16 @@ appear in these three functions — this plan's forward is BF16-only
 class ImageWAMTorchFrontendThor:
     def __init__(self, checkpoint_dir=None, **kwargs) -> None: ...
         # checkpoint_dir is accepted for interface parity with every
-        # other frontend but unused while this plan uses
-        # load_weights_random() instead of a real checkpoint.
+        # other frontend but unused while this plan random-fills every
+        # shape from _imagewam_thor_spec.iter_expected_shapes() instead
+        # of loading a real checkpoint.
     def set_prompt(self, prompt_text: str) -> None: ...
-        # No calibration-cache lookup, no _recalibrate_with_real_data:
-        # this plan has no calibration step. Runs the Qwen3-4B encode
-        # once, captures the CUDA Graph directly afterward.
+        # No calibration-cache lookup, no _recalibrate_with_real_data,
+        # and no real Qwen3-4B forward: ImageWAM's own config always
+        # sets load_text_encoder=false, so `context`/`context_mask` are
+        # inputs this integration never computes -- set_prompt random-
+        # fills the context input buffer to the expected shape, then
+        # captures the CUDA Graph directly.
     def infer(self, observation: dict) -> dict:  # {"actions": np.ndarray}
         ...
 ```
@@ -227,8 +243,8 @@ class ImageWAMTorchFrontendThor:
 # Flow
 
 1. `set_prompt(prompt)` (first call, or whenever the instruction
-   changes): runs the Qwen3-4B encoder once, writes `context`/
-   `context_mask` into cached buffers on the frontend.
+   changes): random-fills the `context`/`context_mask` input buffers
+   to their expected shape (no real Qwen3-4B forward — see Interface).
 2. `infer(observation)`:
    - `imagewam_encode_once`: encodes the current observation image into
      patch tokens; reads the cached text context, does not recompute it.
@@ -260,7 +276,7 @@ class ImageWAMTorchFrontendThor:
 
 | Interface | File |
 |---|---|
-| `WEIGHT_SPEC`, `_random_loader`, `load_weights_random` | `flash_rt/frontends/torch/_imagewam_thor_spec.py` |
+| `ImageWAMThorSpec`, `BACKBONE_LAYER_SHAPES`, `ACTION_DIT_LAYER_SHAPES`, `iter_expected_shapes` | `flash_rt/frontends/torch/_imagewam_thor_spec.py` |
 | `make_imagewam_attention_spec`, `kernel="mot_joint"` dispatch | `flash_rt/hardware/thor/attn_backend.py` |
 | `imagewam_encode_once`, `imagewam_prefill`, `imagewam_denoise_step` | `flash_rt/models/imagewam/pipeline_thor.py` |
 | `ImageWAMTorchFrontendThor` | `flash_rt/frontends/torch/imagewam_thor.py` |
@@ -280,8 +296,8 @@ Phase Status: pending
 ### Goal
 
 Declare every weight tensor FLUX.2-4B-shaped ImageWAM needs (backbone,
-Qwen3-4B text encoder, ActionDiT), with a random-fill path in place of
-a state-dict lookup.
+ActionDiT — not the Qwen3-4B text encoder, see Structure), with a
+random-fill path in place of a state-dict lookup.
 
 ### Files
 
@@ -289,16 +305,25 @@ a state-dict lookup.
 
 ### Structures
 
-`WEIGHT_SPEC` follows the template's real shape: a dict keyed by
-`(site, layer_idx, slot_name)`, valued `(loader, quant_decision)` where
-`loader(state_dict) -> np.ndarray`. The random-init path is a
-`_random_loader(shape, dtype)` helper that returns a loader ignoring
-its `state_dict` argument and generating random data instead — this
-plugs into the existing loader-callable mechanism directly, no new
-field needed on the spec itself. `load_weights_random()` calls every
-`WEIGHT_SPEC` entry's loader with `state_dict=None`, in place of the
-template's own `load_weights(checkpoint_path)` which reads a real
-safetensors file first.
+Modeled on `flash_rt/frontends/torch/_cosmos3_edge_thor_spec.py` (a
+real, production spec for another diffusion-transformer model, not the
+generic `_template/weights_spec.py`) rather than the dataclass-list or
+loader-dict shapes earlier drafts of this plan assumed. That file
+separates shape declaration from data loading cleanly: a frozen
+dataclass of real dimensions, `GLOBAL_SHAPES`/`LAYER_SHAPES` dicts
+mapping tensor name to shape (no loader callables, no checkpoint
+reading at all in the spec file itself), and an `iter_expected_shapes()`
+generator. Checkpoint loading and shape validation
+(`load_transformer_weight_map`/`validate_transformer_shapes`) live in
+the same file but are separate functions, not required for this plan.
+
+This plan's `_imagewam_thor_spec.py` follows the same split:
+`ImageWAMThorSpec` (frozen dataclass), `BACKBONE_LAYER_SHAPES`/
+`ACTION_DIT_LAYER_SHAPES` dicts, `iter_expected_shapes()`. The
+random-init path needs no new mechanism on the spec side at all — the
+frontend (Phase 5) fills every shape from `iter_expected_shapes()`
+with random data instead of calling a checkpoint loader function; the
+spec file is identical either way.
 
 Real dimensions (architecture configs only — no weight download,
 consistent with the random-init goal):
@@ -313,11 +338,16 @@ likely a multi-layer concatenation of Qwen3 hidden states used as text
 conditioning; confirming the exact construction is part of this
 phase's work, not assumed here.
 
-Qwen3-4B text encoder (`config.json`, upstream `Qwen/Qwen3-4B`, not
-vendored): `hidden_size=2560`, `num_hidden_layers=36`,
-`num_attention_heads=32`, `num_key_value_heads=8`, `head_dim=128`,
-`intermediate_size=9728`, `vocab_size=151936`.
-`qwen_context_len=512` (`configs/model/imagewam_flux2_klein_4b_base.yaml`).
+Qwen3-4B is not part of this weight declaration. Every ImageWAM model
+config, including the FLUX.2-4B one, sets `load_text_encoder: false`:
+ImageWAM itself never loads or runs the text encoder as part of the
+model — `infer_action_flux2` always receives a precomputed `context`/
+`context_mask`. This integration follows the same contract: `context`
+is an INPUT buffer (`[qwen_context_len=512, joint_attention_dim=7680]`,
+per `configs/model/imagewam_flux2_klein_4b_base.yaml`), not a weight,
+and is random-filled the same way any other input is for this plan —
+no Qwen3-4B weight (hidden_size=2560, 36 layers, etc.) is declared or
+loaded anywhere in this integration.
 
 ActionDiT, FLUX.2 variant (same YAML): `hidden_dim=1024`,
 `num_heads=24`, `attn_head_dim=128`, `num_layers_double=5`,
@@ -336,9 +366,11 @@ ImageWAM weight declaration only.
 
 ### Observation
 
-The loader allocates every declared buffer and fills it with random
-values without a state-dict present; total allocated byte count is
-logged and checked against the sum of declared shapes/dtypes.
+`iter_expected_shapes()` enumerates every declared tensor; a
+standalone check random-fills each one and confirms the total
+allocated byte count matches the sum of declared shapes/dtypes. This
+runs on plain numpy, no GPU or compiled `flash_rt_kernels` extension
+required — the actual GPU upload happens in Phase 5.
 
 ## Phase 2 — Joint attention kernel
 
