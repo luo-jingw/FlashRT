@@ -15,8 +15,24 @@ and plan.md's own recorded finding. Ada Lovelace has real FP8 tensor
 core hardware in general; this is a version/environment-specific gap in
 THIS venv, not a hardware limitation -- the user's own Thor run already
 got real FP8 numbers (61.0ms/34.7ms/407.5ms), so the same
-quantize_fp8_static_fp16 + fp8_gemm_descale_fp16 API pair used here
+quantize_fp8_device_fp16 + fp8_gemm_descale_fp16 API pair used here
 is real and known to work there.
+
+**Scale strategy (per user instruction, no real checkpoint/calibration
+available)**: both weight and activation scales are computed live via
+`quantize_fp8_device_fp16` -- the same GPU-only "absmax -> compute_scale
+-> quantize" kernel `shared_primitives.py`'s own `_measure_scale_gpu`
+names as the real (non-calibration-path) dynamic-FP8 primitive used
+elsewhere in this codebase (cudaMemsetAsync + 2 kernel launches, no host
+sync, CUDA-Graph-safe). This replaces an earlier version of this script
+that used a hardcoded placeholder scale (1/448) via
+`quantize_fp8_static_fp16` -- that skipped the scale-measurement kernels
+entirely, understating real inference cost. Using the dynamic kernel on
+random weights/activations naturally produces a scale value that varies
+run to run (there being no real calibrated constant to reproduce), and,
+more importantly, makes the activation-side amax measurement a real
+per-call cost included in the timed loop, matching what an actual
+uncalibrated deployment would have to pay every forward pass.
 
 The per-layer orchestration (loop counts, weight-dict-equivalent
 structure, pointer offsets, attn.run() calls) is IDENTICAL to
@@ -73,11 +89,14 @@ def _zeros_fp16(*shape):
 class _Fp8Linear:
     """out[M,N] (fp16) = x[M,K] (fp16, quantized to fp8 on the fly) @ W[K,N] (fp8).
 
-    Weight quantized once at construction (static per-tensor scale,
-    placeholder value -- see module docstring, this measures GEMM
-    latency only). Activation quantized fresh every call via
-    quantize_fp8_static_fp16 into a scratch buffer sized on first call,
-    matching _Fp4Linear's own steady-state allocation convention.
+    Weight quantized once at construction; activation quantized fresh
+    every call -- both via `quantize_fp8_device_fp16` (GPU-only
+    absmax -> compute_scale -> quantize, no calibration, no host sync),
+    so both scales are real values derived from the actual (random)
+    data rather than a fixed placeholder, and the activation-side
+    measurement cost is paid every call just like real uncalibrated
+    inference would. See module docstring for why this replaced the
+    earlier `quantize_fp8_static_fp16` + hardcoded-scale version.
     """
     F8 = torch.float8_e4m3fn
 
@@ -85,9 +104,9 @@ class _Fp8Linear:
         self.n, self.k = n, k
         w = torch.randn(k, n, dtype=FP16, device=DEV)
         self.w_f8 = torch.empty(k, n, dtype=self.F8, device=DEV)
-        self.w_scale = torch.tensor([1.0 / 448.0], dtype=torch.float32, device=DEV)
-        fvk.quantize_fp8_static_fp16(w.data_ptr(), self.w_f8.data_ptr(), self.w_scale.data_ptr(), k * n, 0)
-        self.act_scale = torch.tensor([1.0 / 448.0], dtype=torch.float32, device=DEV)
+        self.w_scale = torch.zeros(1, dtype=torch.float32, device=DEV)
+        fvk.quantize_fp8_device_fp16(w.data_ptr(), self.w_f8.data_ptr(), self.w_scale.data_ptr(), k * n, 0)
+        self.act_scale = torch.zeros(1, dtype=torch.float32, device=DEV)
         self.act_f8 = None
         _keepalive.append(w)
         _keepalive.append(self.w_f8)
@@ -98,7 +117,7 @@ class _Fp8Linear:
         if self.act_f8 is None:
             self.act_f8 = torch.empty(m, self.k, dtype=self.F8, device=DEV)
             _keepalive.append(self.act_f8)
-        fvk.quantize_fp8_static_fp16(x.data_ptr(), self.act_f8.data_ptr(), self.act_scale.data_ptr(), m * self.k, stream)
+        fvk.quantize_fp8_device_fp16(x.data_ptr(), self.act_f8.data_ptr(), self.act_scale.data_ptr(), m * self.k, stream)
         fvk.fp8_gemm_descale_fp16(self.act_f8.data_ptr(), self.w_f8.data_ptr(), out.data_ptr(),
                                    m, self.n, self.k, self.act_scale.data_ptr(), self.w_scale.data_ptr(), stream)
 

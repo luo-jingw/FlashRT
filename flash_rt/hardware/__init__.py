@@ -229,6 +229,14 @@ _PIPELINE_MAP: dict[tuple[str, str, str], tuple[str, str]] = {
     ("cosmos3_edge", "torch", "thor"):
         ("flash_rt.frontends.torch.cosmos3_edge_thor", "Cosmos3EdgeTorchFrontendThor"),
 
+    # ImageWAM (FLUX.2-4B variant), Thor only. Structural dry-run scope:
+    # random-initialized weights, no real checkpoint, no calibration --
+    # see PROJECT.md and flash_rt/models/imagewam/pipeline_thor.py's own
+    # docstring in this fork. `checkpoint_dir` is accepted for interface
+    # parity but unused.
+    ("imagewam", "torch", "thor"):
+        ("flash_rt.frontends.torch.imagewam_thor", "ImageWAMTorchFrontendThor"),
+
     # ── Nex-N2-mini / Qwen3.6-35B-A3B (qwen3_5_moe) ──
     # Text LLM, not a VLA: GDN linear-attn + full-attn-every-4th + 256-expert
     # NVFP4 MoE. Registered here for discoverability / resolve_pipeline_class,

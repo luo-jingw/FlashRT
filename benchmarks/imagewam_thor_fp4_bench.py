@@ -40,6 +40,19 @@ already (flash_rt.executors.fp4_utils.fp4_gemm's docstring: "out[M,N]
 (fp16)"), so it drops directly into the same Q_O/K_cache/V_cache buffers
 the attention kernels already expect -- no BF16<->FP16 cast layer needed
 anywhere in this script.
+
+Already includes real quantize + dequantize cost in the timed loop, no
+change needed for that (checked when the FP8 sibling script was updated
+to do the same): `quant_act_nvfp4`/`quant_weight_nvfp4` call
+`quantize_fp4_dynamic_sfa_fp16`, which computes genuine per-16-block
+scale factors from the actual (random) tensor data every time it's
+called -- there is no fixed/placeholder-scale code path in this kernel
+to begin with, unlike FP8's `quantize_fp8_static_fp16` (which the FP8
+script used to use before switching to the dynamic
+`quantize_fp8_device_fp16`). `fp4_gemm` decodes those block scales
+inside the CUTLASS kernel itself and writes fp16 output directly, so
+dequantization is likewise already fused into the timed GEMM call, not
+a separate step that could be missing.
 """
 from __future__ import annotations
 
