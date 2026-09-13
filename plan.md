@@ -868,3 +868,64 @@ layer's own time, consistent with that. `attn.run` inside a real layer
 also carries the `get_slot_ptrs`/dispatch Python overhead this
 micro-benchmark's own direct kernel calls skip, so the "kernel only"
 row is a lower bound, not the attention share of a real layer.
+
+## FP4 (NVFP4) Full-Scale Benchmark — Written for Thor, Not Run Here
+
+`benchmarks/imagewam_thor_fp4_bench.py`: the user asked to actually run
+FP4 (not derive it from a BF16 estimate) and see full-scale (all 25
+backbone + 25 ActionDiT layers) steady-state latency. Two real,
+hardware-level facts made that impossible on this dev machine, found
+before writing anything (not attempted-then-failed):
+
+1. **FP4 tensor cores are Blackwell-only.** `CMakeLists.txt` gates
+   `ENABLE_NVFP4` (SM120, RTX 50-series) and
+   `ENABLE_CUTLASS_SM100_NVFP4_W4A16` (SM100/Thor SM110) both strictly
+   on `GPU_ARCH`, printing `"DISABLED (requires Blackwell
+   sm_120a/sm_121a, current: sm_${GPU_ARCH})"` for anything else. This
+   machine is Ada (sm_89) — no rebuild unlocks this, the hardware has
+   no FP4 tensor core unit.
+2. **Full 25-layer BF16/FP16 was also judged too risky**: ~6.95GB of
+   weights alone (see the estimate above) against ~6.7GB actually free
+   on this 8GB shared laptop GPU.
+
+The user chose (via `AskUserQuestion`): write the FP4 benchmark code
+for them to run on Thor, rather than attempt BF16 here or stop.
+
+**Written from real, existing FlashRT code, not guessed**:
+`flash_rt.executors.fp4_utils` (documented as the "Pi0.5 FP4 frontend,
+Phase 4.3" NVFP4 wrapper — `quant_weight_nvfp4`, `FP4ActScratch`,
+`quant_act_nvfp4`, `fp4_gemm`) and the real Thor SM100 NVFP4 W4A16
+GEMM build block (`csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm100.cu`,
+gated on `GPU_ARCH STREQUAL "110"` independent of the SM120 flag,
+already production-used by `qwen36_thor.py`). `fp4_gemm`'s own output
+is FP16 already, so FP4 GEMMs write directly into the same
+`Q_O`/`K_cache`/`V_cache` buffers this plan's real (FP16) attention
+kernels already expect — no BF16↔FP16 cast layer anywhere. Attention
+itself is completely unchanged (still the FP16 kernels from Phase 2-4,
+OPT-002's broadcast-K/V simplification still applies, the 1024-column
+softmax ceiling still applies and the same `total=960` sequence choice
+avoids it).
+
+**Verified the ORCHESTRATION, not the FP4 kernels themselves**: wrote a
+throwaway dry run (not committed) substituting plain `fp16_nn` for the
+real FP4 GEMM inside `_Fp4Linear.__call__`, keeping every loop, weight
+lookup, and pointer-offset call identical. It ran clean on this Ada
+machine and reproduced the earlier per-layer-extrapolated FP16 numbers
+almost exactly (backbone 145.8ms vs. the 147.1ms extrapolation above;
+one denoise step 27.8ms vs. 26.7ms) — real cross-validation that the
+25+25-layer loop structure, weight dict keys, and attention dispatch
+are correct. What this does NOT validate: the actual `fp4_gemm`/
+`quant_weight_nvfp4`/`quant_act_nvfp4` calls' argument shapes, dtypes,
+or the `alpha=1.0`/`variant_idx=-1` placeholders against the real
+compiled Blackwell kernels — genuinely untestable without Blackwell
+hardware. The script's own docstring says this plainly: "UNTESTED ON
+REAL HARDWARE... has never executed successfully anywhere," and fails
+with a clear, actionable message (not a raw traceback — confirmed on
+this machine) if `flash_rt.flash_rt_fp4` isn't built in.
+
+Also found and fixed while checking this: importing
+`flash_rt.executors.fp4_utils` itself raises `ModuleNotFoundError`
+without a Blackwell build (it does `import flash_rt.flash_rt_fp4` at
+module level unconditionally) — confirmed directly on this machine.
+The script's import guard covers both imports in one `try/except`, not
+just the more obvious `flash_rt.flash_rt_fp4` one.
