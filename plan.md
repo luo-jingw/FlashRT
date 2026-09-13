@@ -929,3 +929,92 @@ without a Blackwell build (it does `import flash_rt.flash_rt_fp4` at
 module level unconditionally) — confirmed directly on this machine.
 The script's import guard covers both imports in one `try/except`, not
 just the more obvious `flash_rt.flash_rt_fp4` one.
+
+## Real Thor (SM110) Results — First Real-Hardware Run
+
+Run by the user on actual Jetson AGX Thor hardware, random weights (no
+checkpoint download), `benchmarks/imagewam_thor_fp4_bench.py` for FP4
+and the equivalent FP16/BF16/FP8 variants of the same graph-free
+per-layer-type structure. Same dims as the Ada estimates above
+(`hidden=3072`, 5 double + 20 single, `x0=128, a0=896, num_action=64,
+total=960`). `has_cutlass_sm100=True`, `has_nvfp4=True` — the FP4 path
+this plan wrote untested actually ran successfully on its first real
+try.
+
+| Precision | backbone prefill (25L) | one denoise step (25L) | prefill + 10-step |
+|---|---|---|---|
+| FP16 | 81.5 ms | 35.3 ms | 433.9 ms |
+| BF16 | 85.5 ms | 36.8 ms | 452.9 ms |
+| FP8 | 61.0 ms | 34.7 ms | 407.5 ms |
+| FP4 (NVFP4) | 55.8 ms | 35.6 ms | 411.1 ms |
+
+Notable, and diagnosable from this plan's own known design, not a
+mystery:
+
+- **Quantization only helps prefill, barely touches the denoise step.**
+  FP4 prefill is 1.46x FP16; FP4 denoise step is statistically flat
+  (35.6ms vs. FP16's 35.3ms). This is `attn.run("mot", ...)`'s own
+  documented inefficiency (Phase 4's Structures section, OPT-002):
+  every denoise step computes `mot_joint` attention over ALL `total=960`
+  rows even though only the `num_action=64` action rows' output is ever
+  read — `total*NH=23,040` query rows computed for `num_action*NH=1,536`
+  useful ones, roughly **15x overcompute**. Quantizing the surrounding
+  GEMMs cannot speed up a step that is attention-bound by construction;
+  this real measurement is the first hard evidence of how much that
+  costs, not just a theoretical concern.
+- **BF16 is slower than FP16, consistently** (85.5 vs 81.5ms prefill;
+  452.9 vs 433.9ms full). This pipeline's attention kernels
+  (`attention_qkv_fp16`/`attention_qkv_fp16_mot_joint`) are FP16-only
+  (`__half`) — a BF16 GEMM path would need a cast at the attention
+  boundary that a pure-FP16 path skips. (This benchmark's own FP4/FP8
+  variants avoid this because their GEMM output is FP16 already, same
+  as `fp4_gemm`'s documented contract used in the FP4 script.)
+- **None of FlashRT's real kernel-fusion or autotuning machinery is in
+  this pipeline yet** — see "What This Confirms" below.
+
+### What This Confirms: No FlashRT "Core Optimizations" Are In This Path Yet
+
+Direct answer to "是不是还没迁移flashRT的核心优化": correct, essentially
+none are. This was in scope from the start as deferred, not an
+oversight found now — Phase 1-5's own stated goal was wiring
+correctness on random weights, explicitly deferring precision AND
+performance work (`opportunities.md` OPT-001/OPT-002 already existed
+before this real-hardware run; this run is the first hard evidence of
+their actual cost, not a new discovery of missing scope). Concretely,
+compared to a real FlashRT model like `cosmos3_edge`:
+
+1. **No CUDA Graph capture in this benchmark** (the user's own note:
+   "graph-free 路径"). Every kernel call pays Python/pybind11 dispatch
+   overhead and a host-device round trip; a captured graph's `.replay()`
+   has near-zero CPU overhead and lets the GPU execute back-to-back.
+   Phase 5's `ImageWAMTorchFrontendThor` DOES capture a graph, but this
+   speed benchmark (both the Ada script and its FP4 Thor counterpart)
+   deliberately runs graph-free per-layer-type, to isolate per-layer
+   cost — the real, graph-captured, whole-pipeline number is not yet
+   measured on Thor.
+2. **Zero kernel fusion.** Every double/single-stream block here is
+   norm → GEMM → GEMM → GEMM (separate calls) → attention → GEMM →
+   residual_add → norm → GEMM → gelu → GEMM → residual_add — one kernel
+   launch per math op. Real FlashRT models fuse aggressively:
+   `residual_add_rms_norm_fp8` (residual + norm + quantize in one
+   launch), fused QKV projections (one wide GEMM instead of three),
+   `bias_gate_mul_residual_bf16`. None of that exists in
+   `pipeline_thor.py` yet — Phase 3/4's own goal was a correct 1:1
+   translation of the math, not a fused one.
+3. **`GemmRunner` never autotunes for these shapes.** `get_or_create_cached`
+   only ever requests cuBLASLt's top-1 heuristic result
+   (`cublasLtMatmulAlgoGetHeuristic(..., 1, &heuristic, ...)` in
+   `csrc/gemm/gemm_runner.cu`) — it never calls the same file's own
+   `autotune_cached` (multi-algorithm benchmark, used elsewhere in this
+   codebase) for ImageWAM's specific shapes.
+4. **Real per-head K/V attention (OPT-002) and real FP8/FP4 calibration
+   (OPT-001) are still not implemented** — this run reused the same
+   broadcast-K/V simplification and untuned `alpha=1.0`/auto-picked
+   GEMM variant this plan already flagged as placeholders.
+
+None of this is a regression from the plan's own stated scope — it is
+exactly what "extend FlashRT's Thor pipeline machinery to ImageWAM's
+structural shape... deferring precision" (and, implicitly, performance)
+committed to delivering. The performance work is real, scoped,
+concrete follow-up, not a vague "make it faster" — see OPT-003/OPT-004
+below.
