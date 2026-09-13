@@ -401,29 +401,63 @@ it wanted to.
 ## Full-Pipeline Result (Ada, GEMM-only, no activation quantization)
 
 `benchmarks/imagewam_thor_int4_bench.py`: same 25+25-layer structure as
-the FP16/FP8/FP4 scripts, ran clean end to end on this machine:
+the FP16/FP8/FP4 scripts, ran clean end to end on this machine. Numbers
+below are AFTER the OPT-003 fix (mot_joint restricted to action
+queries) — see OPT-003 for the before/after breakdown:
 
 | | backbone prefill (25L) | one denoise step (25L) | prefill + 10-step |
 |---|---|---|---|
-| INT4 (GEMM-only) | 42.4 ms | 24.2 ms | 283.3 ms |
-| FP16 (this machine) | 152.1 ms | 29.5 ms | 447.8 ms |
+| INT4 (GEMM-only) | 43.7 ms | 4.37 ms | 91.1 ms |
+| FP16 (this machine) | 143.5 ms | 5.68 ms | 203.2 ms |
 
-3.6x faster prefill, only ~1.2x faster denoise step (consistent with
-OPT-003's diagnosis: denoise is attention-bound, not GEMM-bound, so
-GEMM quantization alone caps out around the same ceiling FP8/FP4 also
-hit). This is an optimistic upper bound, not a real deployment number —
-see the activation-quantization caveat above.
+~3.3x faster prefill, ~2.2x faster overall now that OPT-003 removed
+the attention-bound ceiling that used to cap the denoise step's own
+speedup regardless of GEMM precision. This is still an optimistic
+upper bound, not a real deployment number — see the activation-
+quantization caveat above.
+
+## Follow-up: does zero-padding K to a power of 2 unblock the FHT crash?
+
+`benchmarks/imagewam_int4_hadamard_padding_probe.py` (new): real
+math, not a guess — padding both activation and weight with zeros
+before an orthogonal (Hadamard) rotation exactly preserves their inner
+product (`<H@x_pad, H@w_pad> = <x,w>`, verified numerically, max abs
+error ~1e-4). Tested whether this lets `fht_int4_quant_fp16` +
+`cutlass_int4_rowwise_fp16out` run correctly at ImageWAM's real K
+values once padded to the next power of 2 (weight-side rotation
+implemented in plain torch for this probe only, since FlashRT itself
+has no kernel for it — see the crash note above).
+
+**Result is genuinely mixed, and inconsistent between two otherwise-
+identical runs of the same logic** — worth stating plainly rather than
+picking the more flattering number: K=3072→4096 works reliably
+(cosine=0.983, reproduced identically across the exploratory run and 3
+repeats of the formalized script). K=7680→8192 and K=9216→16384 both
+FAIL in the formalized script (reproducibly, 3/3 runs) — but the
+FIRST, less careful exploratory run of the identical logic had
+K=7680→8192 WORKING (cosine=0.977). This exact SM80 INT4/INT8 CUTLASS
+family has now shown unexplained run-to-run instability three separate
+times in this project (here, and twice already in this entry's own
+mlp2 findings) — treat any single "it works" result from it as
+provisional until independently reproduced.
+
+Net effect: only K=3072 (q/k/v/proj, mlp0's own input width) is
+currently a reliable target for real QuaRot-rotated INT4. txt_in
+(K=7680) and mlp2/mlp_down (K=9216) remain blocked — not only by the
+already-known FHT crash, but now also by this padding workaround's own
+unreliability at those larger sizes.
 
 ## Opportunity
 
-A fourth precision tier alongside FP16/FP8/FP4, IF the FHT power-of-2
-requirement is resolved (either generalize the kernel, or pad
-ImageWAM's activations to the next power of 2 before quantizing — 4096
-for hidden=3072, 16384 for mlp_hidden=9216, 8192 for
-joint_attention_dim=7680, changing GEMM shapes throughout) AND the
-QuaRot rotation is validated for ImageWAM's own activation
+A fourth precision tier alongside FP16/FP8/FP4 for q/k/v/proj/mlp0
+specifically (K=3072 only, per the padding probe above), IF someone
+implements the weight-side offline rotation (this project has none)
+AND the QuaRot rotation is validated for ImageWAM's own activation
 distributions (a real correctness project, not yet started — this
 would need real weights to even evaluate, same dependency as OPT-001).
+txt_in/mlp2/mlp_down (K=7680/9216) need the padding workaround's own
+instability understood first, separate from and in addition to
+OPT-001's dependency.
 
 ## Expected Mechanism
 
