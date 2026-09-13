@@ -633,7 +633,7 @@ duration.
 
 ## Phase 4 — Denoise loop and CUDA Graph capture
 
-Phase Status: pending
+Phase Status: completed
 
 ### Goal
 
@@ -642,17 +642,96 @@ as a single CUDA Graph, replayed on every `infer` call.
 
 ### Files
 
-`flash_rt/models/imagewam/pipeline_thor.py` (same file as Phase 3).
+- `flash_rt/models/imagewam/pipeline_thor.py` — `_action_double_layer`,
+  `_action_single_layer` (ActionDiT's own 5+20 layer split, structurally
+  identical to the backbone's "img"/"single" halves, single-stream
+  only), `imagewam_denoise_step` (one Euler step), `imagewam_denoise_loop`
+  (the whole N-step loop — what Phase 5's frontend captures as one
+  CUDA Graph, not this phase itself: no `torch.cuda.graph(...)` call
+  lives in `pipeline_thor.py`, matching every other file split in this
+  codebase between compute (`models/`) and IO/graph-capture (`frontends/`)).
+- `tests/test_imagewam_denoise.py` (new).
 
 ### Structures
 
-Reuses `flash_rt/models/cosmos3_edge/static_engine.py`'s capture-once/
-replay-many pattern; whether `StaticEngine` itself is reusable as-is or
-needs an ImageWAM-specific subclass is resolved during this phase, not
-assumed here. The flow-matching step schedule is ImageWAM's own
-(`src/imagewam/models/backbones/schedulers/scheduler_continuous.py`),
-not cosmos3_edge's UniPC scheduler — only the capture/replay/device-
-scalar pattern is reused, not the scheduler class.
+**Correction: `static_engine.py`'s `EdgeStaticBufferEngine` is not the
+capture/replay pattern** — an earlier draft of this plan named it as
+such without having read `models/cosmos3_edge/pipeline_thor.py` in
+full. `EdgeStaticBufferEngine` is a one-time bring-up/reference helper
+used *inside* `CosmosEdgeThor.__init__`; the real capture-once/
+replay-many pattern is `CosmosEdgeThor.capture()`/`.denoise()`
+(`self.graph = torch.cuda.CUDAGraph(); with torch.cuda.graph(self.graph):
+self.run_loop()`, then `denoise()` does one `self.graph.replay()`
+covering the whole N-step loop). This plan reuses that real pattern:
+`imagewam_denoise_loop` is this project's `run_loop()` analog (called
+once per capture, called via `.replay()` thereafter by Phase 5's
+frontend) — but as a free pointer-interface function here rather than
+a method, since Phase 5 (unlike cosmos3_edge) keeps compute and
+IO/graph-capture in separate files per this codebase's own file-split
+rule (`docs/adding_new_model.md` §0).
+
+Also corrected: **the per-step timestep is a Python int, not a
+device-side scalar** — this plan's own Interface/Flow sections had
+assumed a device-scalar-before-each-replay pattern without verifying
+it against real code. Reading `CosmosEdgeThor.run_loop()`/`capture()`
+in full shows the opposite: the entire N-step loop, `step` included, is
+captured as ONE graph with `step` unrolled at *capture* time into N
+constant-indexed kernel sequences (`self.t_emb[step:step+1]`), not read
+from a device scalar written before each replay. This plan's own
+`dt` follows the same shape: a fixed uniform `1.0 / num_denoise_steps`
+Python float in `dims`, not a buffer.
+
+**ActionDiT's own attention-facing width differs from its residual
+width** — found by running this phase's own test with deliberately
+different `action_hidden_dim`/`hidden` values (32 vs 96) after an
+initial version silently used `action_hidden_dim` for both and passed
+anyway with a same-valued placeholder. `_imagewam_thor_spec.py`
+(Phase 1) already declares `action_attn_width` as a *distinct*,
+computed property precisely equal to `backbone_hidden` for
+`mot_joint` validity, but the first draft of this phase's pipeline code
+used `action_hidden_dim` for the Q/proj GEMM widths (and hence for the
+row width of the shared `Q_O`/K/V-cache offset arithmetic) instead —
+wrong for any case where `action_hidden_dim != action_attn_width` (true
+for the real model: 1024 vs 3072). Fixed by adding `dims["action_attn_width"]`
+and threading it through `_action_double_layer`/`_action_single_layer`'s
+own Q/proj GEMMs and pointer offsets, keeping `action_hidden_dim` scoped
+to only the residual/MLP width (`q`/`k`/`v` input dim, `mlp0`/`mlp_in`
+input dim, `mlp2`/`mlp_down` output dim) and `action_attn_width` scoped
+to only the attention-facing GEMMs (`q`/`proj` output/input width, the
+`Q_O` row-offset arithmetic).
+
+**Per-step attention correctness relies on row-independence, not
+correct backbone-row Q.** Only the action rows have a live query during
+a denoise step (the backbone/image rows' own Q was already consumed
+during prefill and is never read again) — `_action_*_layer` writes
+fresh Q/K/V into rows `[a0, total)` of the shared `Q_O`/K/V-cache every
+step but leaves rows `[0, a0)` of `Q_O` exactly as prefill last wrote
+them (stale/meaningless). `attn.run("mot", ...)` still computes
+attention over the WHOLE `total` sequence — wasted compute for the
+backbone/image rows (tracked as part of OPT-002), but not a correctness
+bug: attention is row-independent (each row's output depends only on
+its own Q and the shared K/V), so a stale Q on a row whose output is
+never read cannot corrupt the action rows' own, correctly-computed
+output.
+
+**ActionDiT has no declared output-projection head.** Phase 1 declares
+only q/k/v/proj/mlp0/mlp2 and linear1/linear2, ending at
+`action_hidden_dim` width, not a real (typically much smaller) action
+dimension. This phase treats ActionDiT's own final hidden state as the
+velocity directly (`bufs["action_hidden"]`, same shape as
+`bufs["action_latent"]`) — a documented placeholder, not a bug,
+grouped with OPT-001/OPT-002 as real-checkpoint-dependent follow-up
+work.
+
+The flow-matching Euler update itself uses two already-existing,
+previously-unused-by-this-plan kernels rather than a new one:
+`fvk.gpu_cast_fp32_to_fp16` (seeds `action_hidden` from the F32
+`action_latent` at the start of each step) and `fvk.gpu_euler_step`
+(`actions[i] += dt * velocity[i]`, F32 actions / FP16 velocity — the
+same real convention Pi0's own diffusion decoder uses, confirmed by
+its call-site placement in `csrc/bindings.cpp` next to Pi0-specific
+kernels). `action_latent` is F32 for this reason, not FP16 like every
+other buffer in this pipeline.
 
 ### Affected Modules
 
@@ -660,7 +739,18 @@ ImageWAM pipeline forward only.
 
 ### Observation
 
-The captured graph replays repeatedly without recapture; P50 latency
+Ran `tests/test_imagewam_denoise.py`: extends Phase 3's test setup
+(same small dims) with ActionDiT weights (`action_hidden_dim=32`,
+`action_attn_width=96=hidden`, `action_mlp_hidden=64`, 3 action
+tokens, `total=11`), runs a real `imagewam_prefill` first, then
+`imagewam_denoise_loop` over 2 steps. Result: `action_latent` stays
+finite and is confirmed actually advanced (not equal to its
+pre-loop value); the backbone's own K/V cache rows `[0, a0)` remain
+finite and are not the ones the denoise loop rewrites, checked
+explicitly. This is a wiring check (no NaN/Inf, correct shapes, the
+loop actually mutates state) — not a Thor performance measurement
+(CUDA Graph capture itself belongs to Phase 5's frontend, not
+`pipeline_thor.py`) and not accuracy against a trained model.
 over repeated replays is measured and recorded.
 
 ## Phase 5 — Frontend and text-context caching
