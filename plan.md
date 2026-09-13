@@ -1205,5 +1205,27 @@ re-confirmed on Thor, where the launch-vs-compute balance could differ
 (faster GEMMs there could make it relatively MORE launch-bound, not
 less) — recorded as an open item in `opportunities.md` OPT-004.
 
-Next per the agreed priority order: OPT-005 (evaluate FA2/FA4 for
-backbone's plain self-attention).
+## OPT-004 Step 4: GemmRunner Autotuning — Real but Modest
+
+`benchmarks/imagewam_thor_fp16_autotuned_bench.py` (new): each linear
+op autotunes once (real cuBLASLt algorithm benchmarking, mutating the
+same cache `fp16_nn` reads from — cannot regress correctness). Result:
+backbone prefill 143.5ms → 138.8ms (~3%), full 203.2ms → 195.1ms (~4%).
+Small because cuBLASLt's default heuristic already picks close to the
+best available algorithm for these shapes on this hardware — most
+shapes had only 1 candidate algorithm to begin with. Real, safe,
+worth keeping, but not the big remaining lever. Full detail in
+`opportunities.md` OPT-004.
+
+The user went to sleep after asking for local-only follow-up work
+(OPT-005/FA4 needs Thor, deferred). Per their own direction ("本机可以
+用int4尝试替换"), the rest of this session's autonomous work explored
+whether OPT-007's INT4 path could be extended (see the Hadamard-padding
+probe recorded in `opportunities.md` OPT-004/OPT-007) rather than
+continuing into OPT-005's Thor-only, locally-unverifiable territory.
+
+Remaining, deferred until Thor access returns: OPT-005 (FA2/FA4 for
+backbone), OPT-004 steps 2-3 (fuse QKV, fuse residual+norm — real
+engineering work best not done blind without being able to verify
+correctness against a running comparison), and re-confirming OPT-003's
+graph-vs-graph-free and autotune findings on real Thor hardware.

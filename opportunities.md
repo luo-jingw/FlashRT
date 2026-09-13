@@ -228,6 +228,32 @@ there rather than assuming the same conclusion transfers).
 4. Call `GemmRunner.autotune_cached` for ImageWAM's own real shapes
    instead of relying on cuBLASLt's default heuristic.
 
+## Step 4 done: autotuning tried — real but modest, not the big lever
+
+`benchmarks/imagewam_thor_fp16_autotuned_bench.py` (new): each
+`_Fp16Linear` calls `GemmRunner.autotune_fp16_nn` once (lazily, on
+first real call, using the real weight + a representative activation)
+before falling back to plain `fp16_nn` for the timed loop —
+`autotune_fp16_nn` mutates the same cached cuBLASLt entry `fp16_nn`
+itself reads (confirmed by reading `gemm_runner.cu` directly:
+`entry.algo = heuristics[best_idx].algo` writes into the identical
+`CachedGemm&` both functions share), so this can only match or beat
+the default heuristic, never regress correctness.
+
+Result at ImageWAM's real dims, this machine: backbone prefill 143.5ms
+→ **138.8ms (~3% faster)**, full prefill+10-step 203.2ms → **195.1ms
+(~4% faster)**. The autotune log itself explains why the win is small,
+not a guess: most shapes only had 1 candidate algorithm available from
+`cublasLtMatmulAlgoGetHeuristic` in the first place (nothing to pick
+between), and where multiple candidates existed (4-6), the "best" one
+was frequently the SAME as the default heuristic's own top-1 pick, or
+only a few percent faster. cuBLASLt's default heuristic is already
+close to optimal for these specific shapes on this hardware — real,
+safe, essentially free to keep, but not where the remaining time is
+going. Not yet re-measured on Thor, where a different cuBLASLt version/
+hardware could plausibly have a wider gap between heuristic and best-
+found algorithm.
+
 ## Expected Mechanism
 
 Steps 2-4 reduce REAL compute/memory-bandwidth cost (fewer, larger,
