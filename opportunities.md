@@ -90,7 +90,7 @@ reference implementation.
 
 # OPT-003
 
-Status: RESOLVED (fixed and verified on Ada; Thor re-measurement still pending)
+Status: RESOLVED (fixed and verified on both Ada and real Thor hardware)
 
 Area: ImageWAM denoise step — mot_joint attention computed ~15x more than needed
 
@@ -142,31 +142,32 @@ Existing tests (`test_imagewam_denoise.py`, `test_imagewam_frontend.py`,
 `test_imagewam_attn_backend.py` — the last one updated for the new
 `q_seq`/`kv_seq`/output-offset contract) all still pass.
 
-## Real Measured Speedup (Ada, this machine)
+## Real Measured Speedup (Ada AND real Thor hardware)
 
 | | one denoise step (25L) | prefill + 10-step |
 |---|---|---|
-| FP16, before fix | 29.5 ms | 447.8 ms |
-| FP16, after fix | **5.68 ms (5.2x)** | **203.2 ms (2.2x)** |
-| INT4 (GEMM-only), before fix | 24.2 ms | 283.3 ms |
-| INT4 (GEMM-only), after fix | **4.37 ms (5.5x)** | **91.1 ms (3.1x)** |
+| Ada FP16, before fix | 29.5 ms | 447.8 ms |
+| Ada FP16, after fix | **5.68 ms (5.2x)** | **203.2 ms (2.2x)** |
+| Ada INT4 (GEMM-only), before fix | 24.2 ms | 283.3 ms |
+| Ada INT4 (GEMM-only), after fix | **4.37 ms (5.5x)** | **91.1 ms (3.1x)** |
+| Thor FP16, before fix | 35.3 ms | ~434 ms |
+| Thor FP16, after fix | **5.89 ms (6.0x)** | **140.4 ms (3.1x)** |
 
 Matches the ~15x theoretical query-row reduction reasonably well once
 GEMM cost (which does not shrink) is accounted for — the denoise step
 was almost entirely attention time before the fix, so a ~15x cheaper
-attention call yields roughly the 5x step-level speedup measured.
+attention call yields roughly a 5-6x step-level speedup on both GPUs.
+Real, practically important consequence confirmed on Thor: prefill is
+now 58% of the full path (was the minority share before this fix) —
+the optimization center of gravity has moved from denoise attention to
+backbone GEMM. See plan.md's "Real Thor Results — Post-OPT-003 Run"
+for the full breakdown (FP8/FP4/autotune/graph numbers, all re-measured
+on Thor with this fix in place).
 
-## Required Evidence — still open
+## Promotion Condition — met
 
-This is Ada, not Thor. The real Thor re-measurement (repeating the
-"Real Thor Results" table with this fix in place) has not been done —
-the FP4/FP8/INT4 benchmark scripts are updated and ready for that, but
-require the user's own Thor access to run.
-
-## Promotion Condition
-
-Promote to `docs/` (verified fact) once re-measured on real Thor
-hardware and the number holds up there too.
+Verified on real Thor hardware with the exact fix in place (not just
+re-derived): promoted, this is now a verified fact, not a hypothesis.
 
 # OPT-004
 
@@ -211,11 +212,17 @@ Graph capture is still worth keeping (it is real, already built, and
 free), but it is not where the remaining ~200ms is going to be found.
 This redirects priority toward steps 2-4 below (real compute
 reduction: fewer/larger GEMMs, better algorithms), not further
-launch-overhead elimination. Not yet re-confirmed on Thor — the
-launch-vs-compute balance could differ there (faster GEMMs relative to
-a similar fixed per-launch overhead would make Thor relatively MORE
-launch-overhead-bound than Ada, not less, so this is worth re-checking
-there rather than assuming the same conclusion transfers).
+launch-overhead elimination.
+
+**Re-confirmed on real Thor hardware, post-OPT-003**: graph-captured
+129.9ms vs graph-free 140.4ms — a **7.5%** gain, bigger than Ada's ~2%
+as predicted (faster GEMMs on Thor do make launch overhead a somewhat
+larger relative factor), but still the SMALLER of the two available
+levers — **autotune alone (126.1ms, no graph capture) already beats
+graph-capture-with-default-heuristic (129.9ms)** on Thor. Direction
+("compute-bound, algorithm choice matters more than launch count")
+holds on both GPUs; the magnitude difference is real and worth keeping
+in mind, but doesn't change the priority conclusion.
 
 ## Opportunity (steps 2-4, in priority order)
 
@@ -240,40 +247,45 @@ itself reads (confirmed by reading `gemm_runner.cu` directly:
 `CachedGemm&` both functions share), so this can only match or beat
 the default heuristic, never regress correctness.
 
-Result at ImageWAM's real dims, this machine: backbone prefill 143.5ms
-→ **138.8ms (~3% faster)**, full prefill+10-step 203.2ms → **195.1ms
-(~4% faster)**. The autotune log itself explains why the win is small,
-not a guess: most shapes only had 1 candidate algorithm available from
-`cublasLtMatmulAlgoGetHeuristic` in the first place (nothing to pick
-between), and where multiple candidates existed (4-6), the "best" one
-was frequently the SAME as the default heuristic's own top-1 pick, or
-only a few percent faster. cuBLASLt's default heuristic is already
-close to optimal for these specific shapes on this hardware — real,
-safe, essentially free to keep, but not where the remaining time is
-going. Not yet re-measured on Thor, where a different cuBLASLt version/
-hardware could plausibly have a wider gap between heuristic and best-
-found algorithm.
+Result at ImageWAM's real dims, this machine (Ada): backbone prefill
+143.5ms → **138.8ms (~3% faster)**, full prefill+10-step 203.2ms →
+**195.1ms (~4% faster)**. The autotune log itself explains why the win
+is small, not a guess: most shapes only had 1 candidate algorithm
+available from `cublasLtMatmulAlgoGetHeuristic` in the first place
+(nothing to pick between), and where multiple candidates existed
+(4-6), the "best" one was frequently the SAME as the default
+heuristic's own top-1 pick, or only a few percent faster.
+
+**Re-confirmed on real Thor hardware, post-OPT-003, and the gain is
+bigger there**: full pipeline 140.4ms → **126.1ms (+10%)** — versus
+Ada's own +4%. Thor's cuBLASLt evidently has a wider gap between its
+default heuristic and the best available algorithm for these shapes
+than Ada's does. This is now the single best-verified lever tried so
+far: autotune alone beats graph-capture (126.1ms vs 129.9ms) on Thor.
 
 ## Expected Mechanism
 
 Steps 2-4 reduce REAL compute/memory-bandwidth cost (fewer, larger,
 better-tuned GEMMs), not launch overhead — the right target now that
-step 1 showed this pipeline is compute-bound on Ada.
+step 1 showed this pipeline is compute-bound on both Ada and Thor.
 
-## Required Evidence
+## Suggested Next Step
 
-Re-run step 1's graph-vs-graph-free comparison on real Thor hardware
-before assuming the same "compute-bound, not launch-bound" conclusion
-holds there.
+Combine graph-capture WITH pre-autotuned GEMMs (capture the graph
+AFTER each shape's `autotune_fp16_nn` has already run once) — not yet
+tried on either GPU. If the two gains are roughly additive, that alone
+could land close to prefill+10-step ~115ms on Thor before any fusion
+work or real quantization calibration.
 
 ## Promotion Condition
 
-Promote once real checkpoint accuracy work (OPT-001) is underway and
-Thor performance is an active concern, not before — this plan's own
-stated goal (structural wiring, deferring precision) did not commit to
-performance work, and premature fusion work risks needing to be redone
-once real per-head K/V attention (OPT-002) changes the kernel shapes
-it would fuse around.
+Step 1 (graph-vs-graph-free) and step 4 (autotune) are both now
+verified on real Thor hardware — promoted for those two findings.
+Steps 2-3 (QKV fusion, residual+norm fusion) remain unpromoted: still
+require real checkpoint accuracy work (OPT-001) to be underway and
+Thor performance to be an active concern, and their expected value is
+now judged lower given the "combine autotune+graph" next step above is
+cheaper and already has stronger individual evidence.
 
 # OPT-005
 
@@ -370,9 +382,9 @@ to determine which steps are safe to skip.
 
 # OPT-007
 
-Status: not promoted
+Status: CLOSED for Thor (real, measured ~8.6x slower than FP16 there); remains open/unpromoted for a hypothetical true Orin/Ampere deployment
 
-Area: INT4 (QuaRot W4A4, SM80 CUTLASS) as an additional precision option — confirmed buildable and runnable on Ada, not just Thor
+Area: INT4 (QuaRot W4A4, SM80 CUTLASS) as an additional precision option — confirmed buildable on Ada and Thor, but a real speed dead end on Thor specifically
 
 ## Observation
 
@@ -473,37 +485,81 @@ currently a reliable target for real QuaRot-rotated INT4. txt_in
 already-known FHT crash, but now also by this padding workaround's own
 unreliability at those larger sizes.
 
+## Real Thor Hardware Result — Dead End on Thor Specifically
+
+The user rebuilt with the same flags on real Thor (SM110) hardware:
+`ENABLE_SM80_INT8_CUTLASS`/`FLASHRT_ENABLE_CHAMELEON` compile and link
+fine there too, and every GEMM shape returns success (rc=0) — but
+"succeeds" only means no error thrown, not numerically verified. The
+real, decisive finding is speed: **this SM80-templated kernel is
+dramatically SLOWER than FP16 on Thor**, not faster:
+
+| shape | FP16 | INT8 (SM80) | INT4 (SM80) |
+|---|---|---|---|
+| q/proj (896×3072×3072) | 0.127 ms | 0.172 ms | **3.30 ms** |
+| k/v (896×128×3072) | 0.019 ms | 0.027 ms | 0.46 ms |
+| mlp0 (896×9216×3072) | 0.835 ms | 0.500 ms | **9.39 ms** |
+| mlp2 (896×3072×9216) | 0.526 ms | 0.527 ms | **9.86 ms** |
+
+Full pipeline (GEMM-only, same convention as the Ada number):
+**1214ms** — versus FP16's 140.4ms on the same hardware. **~8.6x
+SLOWER**, not faster. This SM80-templated CUTLASS kernel almost
+certainly falls back to a compatibility instruction path that does not
+use Thor's native (Blackwell) tensor cores at all — real tensor-core
+INT4 throughput on Blackwell should be much faster than FP16, not
+6-19x slower per-shape. Also re-ran the Hadamard-padding probe on Thor:
+`K=3072→4096` matches Ada exactly (cosine=0.983); `K=7680→8192` this
+time WORKS on Thor (cosine=0.977, matching Ada's very first
+exploratory run rather than Ada's later reproducible failures — the
+instability itself is now confirmed cross-hardware, not an
+Ada-specific quirk); `K=9216→16384` fails again, with yet another
+different symptom ("CUDA invalid argument" on Thor vs. Ada's
+all-zero-scale-with-no-error).
+
+**Conclusion: this SM80 INT4/INT8 path is a dead end on Thor
+specifically, confirmed by real measurement, not a slower-but-usable
+fallback.** Thor's own native NVFP4 (SM100) path
+(`benchmarks/imagewam_thor_fp4_bench.py`) is the correct low-precision
+target there. The Thor build was reset back to the default slim config
+(Chameleon/INT4 off) afterward specifically to avoid this slow path
+being used by accident later. This kernel family remains a legitimate
+(if still K-limited and flaky above K=4096) option on the true
+Ampere/Orin-class hardware it was actually built for — the negative
+result here is Thor-specific, not universal.
+
 ## Opportunity
 
-A fourth precision tier alongside FP16/FP8/FP4 for q/k/v/proj/mlp0
-specifically (K=3072 only, per the padding probe above), IF someone
-implements the weight-side offline rotation (this project has none)
-AND the QuaRot rotation is validated for ImageWAM's own activation
-distributions (a real correctness project, not yet started — this
-would need real weights to even evaluate, same dependency as OPT-001).
-txt_in/mlp2/mlp_down (K=7680/9216) need the padding workaround's own
-instability understood first, separate from and in addition to
-OPT-001's dependency.
+Given the Thor result above, this is now scoped OUT for Thor
+deployment entirely. Remaining scope, if anyone pursues it: a fourth
+precision tier on true Ampere/Orin hardware (not Thor) for
+q/k/v/proj/mlp0 specifically (K=3072 only, per the padding probe
+above), IF someone implements the weight-side offline rotation (this
+project has none) AND the QuaRot rotation is validated for ImageWAM's
+own activation distributions (a real correctness project, not yet
+started — this would need real weights to even evaluate, same
+dependency as OPT-001).
 
 ## Expected Mechanism
 
-Same mechanism the Chameleon-7B path already uses in production
-(assumed, not independently re-verified here): FHT-rotated activations
-+ offline-rotated weights survive int4's dynamic range at measured
-cosine 0.9914 (per the kernel file's own header comment, for
-Chameleon's own model and data — not yet re-measured for ImageWAM).
+Same mechanism the Chameleon-7B path already uses in production on its
+own (Orin-class) hardware (assumed, not independently re-verified
+here): FHT-rotated activations + offline-rotated weights survive
+int4's dynamic range at measured cosine 0.9914 (per the kernel file's
+own header comment, for Chameleon's own model and data — not
+re-measured for ImageWAM, and now confirmed NOT to translate to a
+speed win on Thor even where it runs).
 
 ## Required Evidence
 
-Resolve the FHT power-of-2 blocker above before treating INT4 as
-viable for ImageWAM at all (not just the down-projection — every real
-hidden dimension in this model is a non-power-of-2 multiple of 1024).
-Real-weight accuracy work (OPT-001) is a hard prerequisite for any
-correctness claim regardless.
+For Thor: none needed further — closed, real negative result in hand.
+For a hypothetical true-Orin deployment: resolve the FHT power-of-2
+blocker (every real ImageWAM hidden dimension is a non-power-of-2
+multiple of 1024) and its own reliability above K=4096, plus
+real-weight accuracy work (OPT-001).
 
 ## Promotion Condition
 
-Promote only after both the FHT power-of-2 blocker and the QuaRot
-rotation's real-weight accuracy validation have real answers — this is
-presently a confirmed-fast, confirmed-buildable option with a real
-correctness blocker, not a working precision tier.
+Closed for Thor (real, measured, ~8.6x slower — promoted as a verified
+negative result, not pursued further there). Would need a real
+Orin/Ampere deployment target and the required evidence above to be
+worth reopening elsewhere.

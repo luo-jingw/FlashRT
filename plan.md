@@ -1229,3 +1229,99 @@ backbone), OPT-004 steps 2-3 (fuse QKV, fuse residual+norm — real
 engineering work best not done blind without being able to verify
 correctness against a running comparison), and re-confirming OPT-003's
 graph-vs-graph-free and autotune findings on real Thor hardware.
+
+## Real Thor (SM110) Results — Post-OPT-003 Run
+
+The user ran the full checklist above on real Thor hardware. All 6
+correctness tests PASS (`test_imagewam_mot_joint_kernel.py`,
+`test_imagewam_mot_joint_action_kernel.py` — both sub-tests,
+`test_imagewam_attn_backend.py`, `test_imagewam_prefill.py`,
+`test_imagewam_denoise.py`, `test_imagewam_frontend.py`).
+
+**Speed, Ada vs Thor (prefill / one denoise step / full 10-step), all
+post-OPT-003**:
+
+| | Ada | Thor | Thor vs Ada (full) |
+|---|---|---|---|
+| FP16, graph-free | 143.5 / 5.68 / 203.2 | 81.6 / 5.89 / 140.4 | 1.45x faster |
+| FP16 + autotune | — / — / 195.1 (+4%) | 67.9 / 5.80 / 126.1 (+10%) | bigger relative gain on Thor |
+| FP16, graph-captured | — / — / 198.5 (+2%) | — / — / 129.9 (+7.5%) | bigger relative gain on Thor, but autotune (126.1) beats it |
+| FP8 | not runnable (env gap) | **60.0 / 4.65 / 106.6** | first real run — best full number |
+| FP4 (NVFP4) | never run (no Blackwell) | 55.8 / 5.52 / 111.1 | first real run |
+| INT4 (SM80 CUTLASS) | 45.2 / 4.31 / 88.0 (GEMM-only optimistic) | 721 / 49.4 / **1214** | **~8.6x SLOWER than FP16 on Thor** |
+
+**OPT-003 confirmed on Thor, and is the dominant fix end to end.**
+Before the fix, Thor's own denoise step was ~35.3ms (matching the
+"Real Thor Results" baseline table above); after, 5.89ms — **6.0x**
+(slightly better than Ada's 5.2x). Full 10-step: ~434ms → 140.4ms.
+Query rows shrank 15x (960→64) but the measured speedup is only 6x
+because the remaining denoise cost is GEMM-bound, not
+attention-bound, once the attention overcompute is gone — matches the
+mechanism exactly, no surprise. **Real consequence for where to look
+next**: prefill is now 58% of the full path (was the minority share
+before the fix) — the optimization center of gravity has moved from
+denoise attention to backbone GEMM.
+
+**Graph-vs-graph-free direction holds on Thor, but the gap is bigger
+than Ada's (~2%) — 7.5% (140.4→129.9ms, saving 10.5ms)**. Faster GEMMs
+on Thor do make launch overhead a somewhat bigger relative factor,
+exactly the direction predicted when this was flagged as unconfirmed.
+Still not the biggest lever, though: **autotune alone (126.1ms) already
+beats graph-capture-with-default-heuristic (129.9ms)** — real evidence
+that better GEMM algorithm selection matters more here than reducing
+launch count, at least at this shape mix.
+
+**FP8/FP4 now show a real, meaningful full-pipeline win, because
+OPT-003 removed the fixed ~35ms/step floor that used to cap them
+regardless of GEMM precision.** FP8 106.6ms (1.32x vs FP16's 140.4ms),
+FP4 111.1ms (1.26x). FP8 edges out FP4 again, consistent with the
+pre-OPT-003 baseline's own finding. Both only requantize the big
+GEMMs; attention stays FP16 throughout (OPT-002 still open).
+
+**INT4 (SM80 CUTLASS, Orin-targeted) is a real, clear negative result
+on Thor — confirms the user's own standing caution not to use it
+there.** The build (`-DENABLE_SM80_INT8_CUTLASS=ON
+-DFLASHRT_ENABLE_CHAMELEON=ON`) compiles, links, and every GEMM shape
+returns success (rc=0) — but "succeeds" only means no error thrown,
+not numerically correct (untested) — and it is dramatically slower
+than FP16 on Thor's own tensor cores (e.g. `q/proj`: 3.30ms INT4 vs
+0.127ms FP16 — ~26x slower; full pipeline 1214ms vs 140ms — ~8.6x
+slower). This SM80-templated kernel almost certainly falls back to a
+compatibility path that does not use Thor's native (Blackwell)
+tensor-core instructions at all. **Conclusion: Thor's own native NVFP4
+(SM100) path is the right low-precision target there — the SM80
+INT4/Orin path is a dead end on Thor, not a slower-but-usable
+alternative.** The Thor build was reset back to the default slim
+config (Chameleon/INT4 off) afterward specifically to avoid this slow
+path being used by accident later.
+
+**Hadamard-padding probe re-run on Thor**: `K=3072→4096` cosine=0.983
+(matches Ada exactly). `K=7680→8192` cosine=0.977 this time (matches
+Ada's very first exploratory run, not Ada's later — and reproducible —
+failures at this size: the instability itself reproduces across
+hardware, not just its specific symptom). `K=9216→16384` fails with a
+different symptom again ("CUDA invalid argument" on Thor vs an
+all-zero scale with no thrown error on Ada). Net: this kernel family's
+real instability at large K is now confirmed on two different GPUs,
+not an Ada-specific quirk — treat OPT-007's own INT4 path as unreliable
+at K>4096 regardless of hardware, on top of it now also being
+confirmed a poor fit for Thor's tensor cores specifically.
+
+### What This Changes About Priority
+
+1. **FP8 is currently the best real, verified full-pipeline number
+   (106.6ms)** — and unlike before OPT-003, this is now a genuinely
+   meaningful win over FP16, not one capped by a fixed attention floor.
+   Getting FP8 (or FP4) real calibration and accuracy validation
+   working (OPT-001) is now higher-value than it was pre-OPT-003, since
+   there is a real speed prize waiting behind it.
+2. **Autotune beating graph-capture on Thor** suggests the next
+   concrete, low-risk step is combining both (graph-capture an
+   already-autotuned pipeline) — not yet tried — before investing in
+   OPT-004's remaining fusion steps (2-3), whose value is still
+   unconfirmed and was already judged likely-modest under a
+   compute-bound regime.
+3. **OPT-007 (SM80 INT4) should be considered closed/shelved for Thor**
+   specifically — real, measured, dramatically negative — while
+   remaining a legitimate (if still K-limited) option on true Ampere/
+   Orin-class hardware, which is what it was built for.
