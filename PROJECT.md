@@ -110,6 +110,19 @@ this fork covers Jetson AGX Thor (sm_110).
   once `flash_rt_kernels` itself is built once. Clean up scratch build
   logs and any redundant build directories promptly; disk itself has
   headroom (729GB free) but is not a reason to be careless about it.
+- **Precision-testing division of labor (user's explicit standing
+  instruction, given this machine's limited memory/VRAM)**: this local
+  machine (Ada sm_89) does INT4/INT8 (SM80 CUTLASS) inference speed
+  work only — that's the precision tier this hardware can actually
+  execute. FP8 and FP4 (NVFP4) testing belongs on Thor, not here: FP8
+  fails on this venv's cuBLASLt with `CUBLAS_STATUS_NOT_SUPPORTED` at
+  every shape tried (a confirmed environment gap, not fixable by more
+  local effort — see `opportunities.md`), and FP4 needs Blackwell
+  hardware this machine does not have at all. Do not spend local time
+  trying to make FP8/FP4 work here; do not ask Thor to test INT4/INT8
+  (SM80) either — that path is a confirmed, measured dead end there
+  (~8.6x slower than FP16, see `opportunities.md` OPT-007) precisely
+  because it doesn't use Thor's own native tensor cores.
 
 ## Credentials
 
