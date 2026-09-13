@@ -269,13 +269,29 @@ Steps 2-4 reduce REAL compute/memory-bandwidth cost (fewer, larger,
 better-tuned GEMMs), not launch overhead — the right target now that
 step 1 showed this pipeline is compute-bound on both Ada and Thor.
 
-## Suggested Next Step
+## Suggested Next Step — attempted, hung, shelved
 
-Combine graph-capture WITH pre-autotuned GEMMs (capture the graph
-AFTER each shape's `autotune_fp16_nn` has already run once) — not yet
-tried on either GPU. If the two gains are roughly additive, that alone
-could land close to prefill+10-step ~115ms on Thor before any fusion
-work or real quantization calibration.
+Tried combining graph-capture WITH pre-autotuned GEMMs
+(`benchmarks/imagewam_thor_fp16_autotuned_graph_bench.py`, on Ada):
+warm up on a side stream (to trigger every `_Fp16Linear`'s one-time
+`autotune_fp16_nn` call), then capture one more full run into a
+`CUDAGraph`. **Result: hung — 66+ minutes of CPU/GPU time with zero
+new output, killed rather than let it run further.** Suspected but not
+confirmed cause: `autotune_cached`'s own C++ implementation hardcodes
+stream 0 for its internal benchmark loop
+(`cublasLtMatmul(..., workspace_, workspace_size_, 0)` — the stream
+argument passed to `autotune_fp16_nn` itself is not even accepted, let
+alone threaded through), while the warmup in this script ran on an
+explicit non-default side stream (needed so the same stream could be
+used for graph capture) — combining the two may have deadlocked in
+`cudaEventSynchronize`/`cudaDeviceSynchronize`. Not root-caused further
+User's own call: not worth continuing to debug given autotune-alone
+(+4%/+10%) and graph-alone (+2%/+7.5%) are both already confirmed,
+independently useful, real wins — the combined win, if the hang were
+fixed, would likely be smaller than the sum of both anyway. Shelved,
+not attempted again without a specific reason to revisit (e.g., autotuning
+on the default stream first, THEN switching to a side stream purely for
+capture, never running autotune itself on a non-default stream).
 
 ## Promotion Condition
 
