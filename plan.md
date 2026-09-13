@@ -1325,3 +1325,32 @@ confirmed a poor fit for Thor's tensor cores specifically.
    specifically — real, measured, dramatically negative — while
    remaining a legitimate (if still K-limited) option on true Ampere/
    Orin-class hardware, which is what it was built for.
+
+## OPT-005: FA4 for Backbone Self-Attention — Implemented, Untested Here
+
+Per the original priority order (OPT-003 → OPT-004 step 1 → OPT-002/
+OPT-005 → OPT-001 → OPT-004 steps 2-3/OPT-006), and now that the user
+has an active Thor testing loop, OPT-005 was implemented: opt-in
+`use_fa4=True` on `ImageWAMAttnBackend`, dispatching the "backbone"
+site's plain self-attention through FA4 instead of the cuBLAS-composed
+`attention_qkv_fp16`, modeled directly on `ThorFlashAttnBackend`'s own
+already-verified Pi0.5 "encoder"-site FA4 call pattern.
+
+**Correction to the original OPT-005 hypothesis, found while reading
+the real Pi0.5 pattern closely (not re-derived from the earlier SigLIP-
+based survey)**: Pi0.5's own GQA/single-KV-head sites use FA4 with
+`pack_gqa=True` and a SINGLE shared K/V head — the SAME broadcast-K/V
+convention OPT-002 is about, not real per-head MHA. FA4 does not fix
+OPT-002 "for free" as first hoped; it is a faster kernel for the exact
+same math this pipeline already computes. Still worth having — real
+speed, zero risk to existing behavior (opt-in, default off, full
+regression suite passes unchanged) — just doesn't double as an OPT-002
+fix.
+
+Default `use_fa4=False` — every existing test and call site is
+unaffected. Confirmed `use_fa4=True` raises a clean `RuntimeError` on
+this non-Thor machine, matching the FP4 script's own error-handling
+discipline. `tests/test_imagewam_fa4_backbone.py` and
+`benchmarks/imagewam_fa4_vs_cublas_bench.py` are ready for the user's
+Thor agent — full detail, including what to check first if the
+correctness test fails, in `opportunities.md` OPT-005.

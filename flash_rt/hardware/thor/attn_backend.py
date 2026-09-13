@@ -671,7 +671,7 @@ class ImageWAMAttnBackend(AttentionBackendBase):
     """
 
     def __init__(self, spec: AttentionSpec, ctx, *,
-                 backbone_slots: dict, mot_slots: dict):
+                 backbone_slots: dict, mot_slots: dict, use_fa4: bool = False):
         """
         Args:
             spec: built by ``make_imagewam_attention_spec``.
@@ -685,6 +685,24 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                 ``"layer_stride"`` (bytes between consecutive layers'
                 K/V, used to derive per-layer pointers exactly like
                 ``ThorFlashAttnBackend`` does for encoder/decoder).
+            use_fa4: OPT-005 (opportunities.md). Dispatch the "backbone"
+                site's plain self-attention through FA4 instead of the
+                cuBLAS-composed ``attention_qkv_fp16`` kernel, following
+                the EXACT tensor-view/call pattern
+                ``ThorFlashAttnBackend`` already uses (and has verified)
+                for Pi0.5's own "encoder" site -- same
+                single-shared-KV-head convention (``pack_gqa=True``), so
+                no buffer-format change is needed. Does NOT change
+                "mot" (the three-region masked joint attention still
+                uses the custom cuBLAS kernel; FA4's plain
+                causal/non-causal API has no equivalent for that mask,
+                not evaluated here). Default False so every existing
+                caller is unaffected; UNTESTED beyond this class's own
+                construction-time checks -- this project has no
+                Blackwell/Thor hardware to run FA4 on directly (see
+                PROJECT.md), so this was written by mirroring the
+                already-proven Pi0.5 pattern as closely as possible,
+                not independently verified end-to-end.
         """
         super().__init__(spec)
         expected_sites = {"backbone", "mot"}
@@ -695,6 +713,16 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                 f"got {got}")
 
         self._ctx_cpp = ctx.cpp if hasattr(ctx, "cpp") else ctx
+        self._use_fa4 = bool(use_fa4)
+        self._fa4_fwd = None
+        if self._use_fa4:
+            from flash_rt.hardware.thor import fa4_backend
+
+            self._fa4_fwd = fa4_backend.fa4_fwd()
+            if self._fa4_fwd is None:
+                raise RuntimeError(
+                    "ImageWAMAttnBackend use_fa4=True requires an active "
+                    f"Thor FA4 runtime: {fa4_backend.status()}")
         self._slots = {"backbone": dict(backbone_slots), "mot": dict(mot_slots)}
         for site_name in ("backbone", "mot"):
             slot = self._slots[site_name]
@@ -722,6 +750,27 @@ class ImageWAMAttnBackend(AttentionBackendBase):
             import flash_rt.flash_rt_kernels as fvk
             self._fvk = fvk
         return self._fvk
+
+    def _fa4_stream_context(self, stream: int):
+        """Identical to ThorFlashAttnBackend's own helper (not shared via
+        a common base -- these two classes are independent). See there
+        for the docstring: FA4 follows PyTorch's current-stream
+        convention while the fvk API carries a raw ``cudaStream_t``;
+        this binds both to the same stream for the duration of the FA4
+        call and its output copy."""
+        stream = int(stream)
+        import torch
+
+        current = int(torch.cuda.current_stream().cuda_stream)
+        if stream == 0:
+            target = int(torch.cuda.default_stream().cuda_stream)
+        else:
+            target = stream
+        if current == target:
+            return nullcontext()
+        if stream == 0:
+            return torch.cuda.stream(torch.cuda.default_stream())
+        return torch.cuda.stream(torch.cuda.ExternalStream(target))
 
     def get_slot_ptrs(self, site: str, layer_idx: int) -> dict[str, int]:
         if site not in self._slots:
@@ -770,6 +819,34 @@ class ImageWAMAttnBackend(AttentionBackendBase):
 
         kernel = site_spec.extra.get("kernel", "standard")
         if kernel == "standard":
+            if self._use_fa4:
+                # OPT-005: same tensor-view/call pattern
+                # ThorFlashAttnBackend already uses (and has verified)
+                # for Pi0.5's own "encoder" site -- K/V as a single
+                # shared head (pack_gqa=True lets FA4 broadcast it
+                # across all NH query heads internally), matching this
+                # class's own existing K/V storage convention exactly
+                # (OPT-002's broadcast-K/V simplification), so no
+                # buffer-format change is needed here. `logits` is
+                # reused as FA4's own output scratch (FA4 cannot alias
+                # its Q input as output); the result is then copied
+                # into Q_O, matching Pi0.5's own pattern and this
+                # class's own pointer-stability contract (callers read
+                # the attention result from Q_O, not from `logits`).
+                q_tensor = _fp16_tensor_from_ptr(
+                    int(s["Q_O"]), (1, q_seq, site_spec.num_q_heads, site_spec.head_dim))
+                k_tensor = _fp16_tensor_from_ptr(
+                    K_ptr, (1, kv_seq, 1, site_spec.head_dim))
+                v_tensor = _fp16_tensor_from_ptr(
+                    V_ptr, (1, kv_seq, 1, site_spec.head_dim))
+                output = _fp16_tensor_from_ptr(
+                    int(s["logits"]), (1, q_seq, site_spec.num_q_heads, site_spec.head_dim))
+                with self._fa4_stream_context(stream):
+                    self._fa4_fwd(
+                        q_tensor, k_tensor, v_tensor, causal=False,
+                        num_splits=1, pack_gqa=True, out=output)
+                    q_tensor.copy_(output)
+                return int(s["Q_O"])
             # attention_qkv_fp16's own softmax reinterprets each logits
             # row as __half2 (csrc/kernels/softmax.cu::softmax_fp16_kernel)
             # with no internal even-padding (unlike mot_joint/state_masked,
@@ -782,6 +859,8 @@ class ImageWAMAttnBackend(AttentionBackendBase):
             # because their enc_seq_max/kv_seq happen to always be even in
             # practice; ImageWAM's do not have that guarantee, so this
             # class checks explicitly instead of inheriting the same luck.
+            # (FA4, above, has no such restriction -- this guard only
+            # applies to the cuBLAS-composed fallback path.)
             if kv_seq % 2 != 0:
                 raise ValueError(
                     f"site {site!r} kernel='standard' requires an even "

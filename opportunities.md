@@ -305,9 +305,9 @@ cheaper and already has stronger individual evidence.
 
 # OPT-005
 
-Status: not promoted
+Status: implemented (opt-in `use_fa4=True`), UNTESTED — no Blackwell/Thor hardware to run FA4 on directly; ready for the user's Thor agent
 
-Area: Real per-head MHA via FA2/FA4, not a new custom masked cuBLAS kernel
+Area: FA4 for the "backbone" site's plain self-attention (faster kernel; does NOT independently fix OPT-002's broadcast-K/V, see correction below)
 
 ## Observation
 
@@ -315,39 +315,79 @@ OPT-002 proposed writing a new batched/strided cuBLAS masked-attention
 kernel to fix the broadcast-K/V simplification. Found while surveying
 FlashRT's own existing mechanisms: the vendored FA2 (`flash_rt_fa2.so`,
 RTX) and FA4 (`flash_rt/hardware/thor/fa4_backend.py`, Thor sm_110)
-flash-attention backends already support real per-head Q/K/V (confirmed
-via `ThorFlashAttnBackend`'s own siglip usage:
-`q_tensor/k_tensor/v_tensor` all shaped `(nv, q_seq, NH, HD)`, no
-broadcast), GQA (`pack_gqa`), and are CUDA-graph-capture-safe.
+flash-attention backends are CUDA-graph-capture-safe and
 `fa4_backend.py`'s own docstring records a real measured win at a
 comparable VLA denoise shape ("Sq=51, Skv~891, GQA 16/2, HD=128... ~17%
 faster than the vendored fmha kernel, cos=1.0").
 
-## Opportunity
+**Correction, found while reading `ThorFlashAttnBackend.run()`'s own
+FA4 dispatch branch directly (not re-derived from the SigLIP usage this
+entry originally cited)**: Pi0.5's "encoder" site — the actually
+relevant precedent, since it's a GQA/single-KV-head site like
+ImageWAM's own sites, not SigLIP's real-per-head vision attention —
+calls FA4 with `k_tensor`/`v_tensor` shaped `(1, kv_seq, 1, head_dim)`
+(ONE shared head) and `pack_gqa=True`, i.e. the SAME broadcast-K/V
+convention OPT-002 is about, not real per-head K/V. **FA4 does not fix
+OPT-002 "for free" as originally hypothesized — it is a faster
+kernel for the SAME math this pipeline's own cuBLAS-composed kernel
+already computes**, still useful, but OPT-002 (real per-head K/V)
+remains a fully separate, unaddressed item.
 
-For the "backbone" site's plain self-attention (no custom mask needed),
-switch from the hand-written `attention_qkv_fp16` cuBLAS-composed kernel
-to FA4 (Thor) / FA2 (RTX) directly — likely both faster AND gets real
-per-head K/V for free, fixing part of OPT-002 with zero new kernel code.
-For the "mot" site's three-region masked joint attention, check whether
-FA2/FA4's forward accepts an arbitrary additive attention bias/mask
-tensor (not yet confirmed in this survey — would need reading the
-vendored FA2/FA4 source directly, out of scope for this pass) before
-assuming the custom masked kernel is still required there.
+## Implemented
+
+`ImageWAMAttnBackend.__init__` gained an opt-in `use_fa4: bool = False`
+parameter (default False — every existing test and caller is
+unaffected, confirmed by the full regression suite passing unchanged
+after this change). When `True`, the "backbone" site's `"standard"`
+kernel branch dispatches through FA4 instead of `attention_qkv_fp16`,
+using the EXACT tensor-view/call pattern (`k_tensor`/`v_tensor` at
+`(1, kv_seq, 1, head_dim)`, `pack_gqa=True`, output via a scratch
+buffer then copied into `Q_O`) that `ThorFlashAttnBackend` already uses
+and has verified for Pi0.5's own "encoder" site — chosen specifically
+because ImageWAM's own K/V storage is already in this exact single-
+shared-head layout, so no buffer-format change was needed. Confirmed
+`use_fa4=True` raises a clean, actionable `RuntimeError` on this
+non-Thor machine (`ModuleNotFoundError: No module named 'cutlass'`),
+matching the same import-guard discipline used for the FP4 benchmark
+script. The "mot" site (three-region masked joint attention) is
+untouched — FA4's plain causal/non-causal API has no evaluated
+equivalent for that mask, not attempted.
+
+`tests/test_imagewam_fa4_backbone.py` (new): compares FA4's output
+against `attention_qkv_fp16`'s own already-reference-verified output on
+identical random Q/K/V — skips cleanly (not a failure) when FA4 isn't
+available, confirmed on this machine. The non-FA4 half of the test
+harness was run directly here and produces finite, correctly-shaped
+output; the FA4-specific code path itself has never executed anywhere.
+
+`benchmarks/imagewam_fa4_vs_cublas_bench.py` (new): speed comparison at
+real ImageWAM backbone dims (`NH=24, HD=128, a0=896`). The cuBLAS-only
+half was run here: 0.853ms P50, matching this project's earlier
+per-shape kernel-only measurements. The FA4 half is Thor-only.
 
 ## Expected Mechanism
 
-Same mechanism already measured real: FA2/FA4's own fused, highly
-tuned flash-attention kernels replace the cuBLAS QK^T -> softmax -> PV
-three-launch composition for sites where the masking need fits their
-API.
+Same mechanism already measured real for Pi0.5: FA4's own fused,
+highly tuned flash-attention kernel replaces the cuBLAS QK^T -> softmax
+-> PV three-launch composition, for the SAME broadcast-K/V math this
+pipeline already computes (not a numerically different result, a
+faster implementation of the identical math).
 
 ## Required Evidence
 
-Confirm whether FA2/FA4 support an arbitrary/block mask (not just
-causal) before committing scope here for the "mot" site specifically;
-the "backbone" site (plain self-attention, no mask) is a much lower-risk
-first target regardless.
+Run `tests/test_imagewam_fa4_backbone.py` on Thor FIRST and confirm it
+passes before trusting `benchmarks/imagewam_fa4_vs_cublas_bench.py`'s
+speed number — a fast-but-wrong kernel is not a win. If it fails,
+likely causes to check first: `pack_gqa`/tensor-shape mismatches
+between this integration and the proven Pi0.5 pattern it was modeled
+on, or an FA4 runtime version/availability issue on the test machine
+(`fa4_backend.status()` gives the reason).
+
+## Promotion Condition
+
+Promote once `test_imagewam_fa4_backbone.py` passes on real Thor
+hardware and the speed benchmark shows a real win worth keeping
+`use_fa4=True` on by default for the "backbone" site.
 
 ## Promotion Condition
 
