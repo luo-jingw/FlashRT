@@ -643,3 +643,110 @@ Closed for Thor (real, measured, ~8.6x slower — promoted as a verified
 negative result, not pursued further there). Would need a real
 Orin/Ampere deployment target and the required evidence above to be
 worth reopening elsewhere.
+
+# OPT-008
+
+Status: real VAE-encode cost added to all local/Thor full-pipeline benchmarks; exposed a real gap in `pipeline_thor.py` itself (no `img_in` weight modeled)
+
+Area: VAE encoder (input-image tokenization) — previously excluded from every full-pipeline speed number with no clear justification; now included
+
+## Observation
+
+Earlier framing treated the VAE the same as the text encoder ("both
+can be precomputed, so excluding both from per-step speed numbers is
+fine"). User correction: this is wrong for the VAE specifically — a
+fixed task instruction can be encoded once per episode, but the camera
+observation changes every control-loop iteration, so VAE encode must
+run once per real inference call (once per new observation), not once
+per episode. It is a real, recurring, resident cost that belongs in a
+"real machine full inference steady-state speed" number.
+
+Read ImageWAM's actual upstream source (`imagewam.py`) to confirm
+scope precisely before implementing anything: `infer_action_flux2`
+(the real action-only inference entry point this project's pipeline
+mirrors) calls `_encode_flux2_image_tokens` (VAE **encode** only) once
+at the start, denoises only the action latent, and returns
+`{"action": ...}` — no `vae.decode` call anywhere in that path. The
+video-editing branch that would need decode (`infer_video_flux2`) is a
+separate, unused method. So only VAE **encode** is in scope here,
+never decode — confirmed from source, not assumed.
+
+## Implementation
+
+`benchmarks/_imagewam_vae_stub.py` (new, shared by all `imagewam_thor_*_bench.py`
+scripts): a standard SD/FLUX-family latent-diffusion VAE encoder
+(`ch=128`, `ch_mult=(1,2,4,4)`, 2 ResnetBlocks/stage, one mid-block
+self-attention, 8x spatial downsample, 16 latent channels) implemented
+in plain PyTorch/cuDNN (Conv2d/GroupNorm/SiLU/`scaled_dot_product_attention`)
+— **not the real FLUX.2 AE**, which lives in `black-forest-labs/flux2`
+on GitHub and is not vendored anywhere on this machine (confirmed via
+ImageWAM's own `docs/dependencies.md`: "user clones upstream, not
+vendored") and not fetchable here. This is a representative, real
+(non-trivial, real cuDNN conv) workload of the right computational
+order, consistent with this project's whole "random weights, no real
+checkpoint" scope — not a claim of bit-exact match to the real
+architecture. Input resolution `384x512` chosen to produce exactly 768
+tokens, matching `A0-X0` already used by every bench script's image
+token span.
+
+**Real gap found and exposed, not previously visible**: `pipeline_thor.py`'s
+own docstring already states explicitly that only `txt_in` (text
+projection) is modeled, with "the img_* analogs of all but txt_in" —
+i.e. there has never been an `img_in` weight in this project's modeled
+math anywhere; image tokens were always assumed to already arrive at
+HIDDEN width. That was a reasonable simplification while image tokens
+were pure random placeholders, but a real VAE's raw patch output is
+64-dim (`16 latent channels * 2x2 patch merge`), not 3072-dim — an
+`img_in: Linear(64, HIDDEN)` projection is structurally required to
+connect the two, matching every real DiT-style architecture's own
+input embedder. Added ONLY inside the benchmark scripts (`_Int4Linear`/
+`_Fp16Linear`/`_Fp8Linear`/`_Fp4Linear`(HIDDEN, 64), matching each
+script's own precision) — **not yet added to `pipeline_thor.py`
+itself**, which remains a real, open gap for whenever this project
+does real VAE integration in the actual pipeline, not just in speed
+benchmarks.
+
+Wired into `run_prefill()` (called once per call, before the double/
+single layer loop) in `imagewam_thor_int4_bench.py`, `_fp16_bench.py`,
+`_fp8_bench.py`, `_fp4_bench.py` — not `_int8_bench.py`, since that one
+already fails to complete a full pipeline run for an unrelated reason
+(OPT-007's own K=9216 finding) and the user's own stated policy is
+"INT8 only if it fits, otherwise INT4 only" for this machine.
+
+## Real Local Result (Ada, INT4 and FP16 — both fully run here)
+
+Standalone VAE encode (unfused, naive plain-PyTorch implementation,
+not optimized): ~55-56ms on this machine, regardless of downstream
+GEMM precision (same VAE, same input, every script).
+
+| | vae_encode (standalone) | backbone_prefill (25L + VAE) | one denoise step | full (prefill + 10-step denoise) |
+|---|---|---|---|---|
+| INT4 | 55.4 ms | 96.9 ms | 4.78-4.96 ms | 136.6 ms (single run) / 144.7 ms (cross-check sum) |
+| FP16 | 56.4 ms | 200.4-200.5 ms | 6.15-6.22 ms | 260.2 ms |
+
+VAE cost is a large, fixed addition independent of backbone precision
+(~55ms regardless of INT4 vs FP16) — it roughly DOUBLES the INT4
+prefill number (42.6ms -> 96.9ms) since INT4's own GEMM cost is small,
+while it's a much smaller relative addition to FP16's own already-large
+prefill (152ms range without it). This means **VAE cost matters more,
+relatively, the faster the backbone gets** — a real consideration for
+whether backbone-only precision work (INT4/FP8/FP4) alone is enough to
+reach a target full-inference latency, or whether the VAE itself will
+need optimization (fusing GroupNorm+SiLU, cuDNN autotuning, or a faster
+architecture) to actually see the backbone's speedup reflected in the
+full number.
+
+FP8/FP4 scripts confirmed to run the new VAE step cleanly on this
+machine before hitting their own already-known, unrelated failure
+points (FP8: cuBLASLt env gap; FP4: Blackwell-only `SystemExit`) — not
+verified end-to-end anywhere, same status as before this change.
+
+## Promotion Condition
+
+Not itself promotable further without either (a) fetching FLUX.2's
+real AE source/config to replace this representative architecture with
+the real one, or (b) real weights/calibration (OPT-001) making VAE
+accuracy relevant, not just its speed. The `img_in` gap in
+`pipeline_thor.py` itself is a separate, smaller follow-up worth its
+own promotion once real VAE integration (not just a speed stub) is
+in scope.

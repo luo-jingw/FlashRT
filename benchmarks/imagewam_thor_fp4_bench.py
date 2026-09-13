@@ -53,6 +53,16 @@ script used to use before switching to the dynamic
 inside the CUTLASS kernel itself and writes fp16 output directly, so
 dequantization is likewise already fused into the timed GEMM call, not
 a separate step that could be missing.
+
+**Now also includes a real VAE encode step**, same addition made to
+the INT4 sibling script -- see that script's own docstring for the
+full rationale (the input image changes every control-loop iteration
+and cannot be precomputed once per episode like a fixed text prompt)
+and for the `img_in` caveat (not modeled in `pipeline_thor.py` today).
+Untested here for the same Blackwell-only reason as the rest of this
+script; the VAE itself is plain PyTorch/cuDNN and has no such
+restriction, so it should run on Thor regardless of whether the FP4
+GEMM path below it does.
 """
 from __future__ import annotations
 
@@ -62,6 +72,7 @@ import torch
 
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
+from _imagewam_vae_stub import build_vae_encoder, pack_latents, VAE_IMG_H, VAE_IMG_W, VAE_PATCH_TOKEN_DIM, VAE_NUM_TOKENS
 
 try:
     # fp4_utils.py itself does `import flash_rt.flash_rt_fp4` at module
@@ -106,6 +117,9 @@ TOTAL = A0 + NUM_ACTION  # 960, kept under softmax_mot_joint_fp16's 1024-column
                           # ceiling -- see imagewam_thor_bench.py's own docstring;
                           # that FP16 attention kernel limitation is unchanged
                           # by weight precision and applies on Thor too.
+assert VAE_NUM_TOKENS == A0 - X0, (
+    f"VAE stub produces {VAE_NUM_TOKENS} image tokens but this script's own "
+    f"A0-X0={A0-X0} image-token span expects that many -- keep them in sync.")
 
 WARMUP, ITERS = 15, 50
 
@@ -222,6 +236,10 @@ class FullImageWAMFP4:
         _keepalive.append(self.ones)
         self.context = _rand_fp16(X0, JOINT_ATTN_DIM)
 
+        self.vae = build_vae_encoder(DEV, FP16)
+        self.vae_input = _rand_fp16(1, 3, VAE_IMG_H, VAE_IMG_W)
+        self.img_in = _Fp4Linear(HIDDEN, VAE_PATCH_TOKEN_DIM)
+
         self.double_layers = []
         for _ in range(NUM_DOUBLE):
             self.double_layers.append(dict(
@@ -314,7 +332,18 @@ class FullImageWAMFP4:
         w["mlp_down"](self.single_mlp, proj, a0, stream)
         fvk.residual_add_fp16(combined.data_ptr(), proj.data_ptr(), a0 * HIDDEN, stream)
 
+    def run_vae_encode(self, stream: int = 0):
+        """Real VAE encode + patchify + img_in projection, once per call --
+        matches the real cadence (once per new observation), not once per
+        denoise step. See imagewam_thor_int4_bench.py's own docstring for
+        the img_in caveat."""
+        with torch.no_grad():
+            latents = self.vae(self.vae_input)
+        tokens = pack_latents(latents).view(VAE_NUM_TOKENS, VAE_PATCH_TOKEN_DIM)
+        self.img_in(tokens, self.hidden_buf[X0:A0], VAE_NUM_TOKENS, stream)
+
     def run_prefill(self, stream: int = 0):
+        self.run_vae_encode(stream)
         for li in range(NUM_DOUBLE):
             self._double_layer(li, stream)
         for i in range(NUM_SINGLE):
@@ -452,8 +481,11 @@ def main():
 
     num_denoise_steps = 10
 
+    p50v, p90v, meanv = _time_ms(lambda: model.run_vae_encode(0))
+    print(f"vae_encode (standalone, incl. img_in) P50={p50v:8.3f} ms  P90={p90v:8.3f} ms  mean={meanv:8.3f} ms")
+
     p50, p90, mean = _time_ms(lambda: model.run_prefill(0))
-    print(f"backbone_prefill_fp4 (25 layers)    P50={p50:8.3f} ms  P90={p90:8.3f} ms  mean={mean:8.3f} ms")
+    print(f"backbone_prefill_fp4 (25L + VAE)    P50={p50:8.3f} ms  P90={p90:8.3f} ms  mean={mean:8.3f} ms")
 
     p50d, p90d, meand = _time_ms(lambda: model.run_denoise_step(1.0 / num_denoise_steps, 0))
     print(f"one_denoise_step_fp4 (25 layers)    P50={p50d:8.3f} ms  P90={p90d:8.3f} ms  mean={meand:8.3f} ms")
