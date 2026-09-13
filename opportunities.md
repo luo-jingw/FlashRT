@@ -305,7 +305,7 @@ cheaper and already has stronger individual evidence.
 
 # OPT-005
 
-Status: implemented (opt-in `use_fa4=True`), UNTESTED — no Blackwell/Thor hardware to run FA4 on directly; ready for the user's Thor agent
+Status: RESOLVED — verified on real Thor hardware (cosine=1.000000, rel_l2=0.000412), real 4.05x standalone speedup on the "backbone" site; NOT YET wired into the real 25-layer prefill benchmarks (still opt-in, off by default everywhere)
 
 Area: FA4 for the "backbone" site's plain self-attention (faster kernel; does NOT independently fix OPT-002's broadcast-K/V, see correction below)
 
@@ -373,25 +373,55 @@ highly tuned flash-attention kernel replaces the cuBLAS QK^T -> softmax
 pipeline already computes (not a numerically different result, a
 faster implementation of the identical math).
 
-## Required Evidence
+## Required Evidence — satisfied
 
 Run `tests/test_imagewam_fa4_backbone.py` on Thor FIRST and confirm it
 passes before trusting `benchmarks/imagewam_fa4_vs_cublas_bench.py`'s
-speed number — a fast-but-wrong kernel is not a win. If it fails,
-likely causes to check first: `pack_gqa`/tensor-shape mismatches
-between this integration and the proven Pi0.5 pattern it was modeled
-on, or an FA4 runtime version/availability issue on the test machine
-(`fa4_backend.status()` gives the reason).
+speed number — a fast-but-wrong kernel is not a win.
 
-## Promotion Condition
+## Real Thor Hardware Result
 
-Promote once `test_imagewam_fa4_backbone.py` passes on real Thor
-hardware and the speed benchmark shows a real win worth keeping
-`use_fa4=True` on by default for the "backbone" site.
+`tests/test_imagewam_fa4_backbone.py`: PASS, `cosine=1.000000,
+rel_l2=0.000412` — FA4 output matches `attention_qkv_fp16`'s own
+reference-verified output at real dims, confirming this is a pure
+speed swap, not a numerically different computation.
 
-## Promotion Condition
+`benchmarks/imagewam_fa4_vs_cublas_bench.py` (real ImageWAM backbone
+dims, `NH=24, HD=128, a0=896`):
 
-Promote alongside OPT-002/OPT-004 once Thor performance work begins.
+| path | P50 |
+|---|---|
+| cuBLAS `attention_qkv_fp16` | 0.821 ms |
+| FA4 | 0.203 ms |
+| speedup | **4.05x** |
+
+Environment note for reproducing this: this venv's FlashRT reuses the
+sibling openpi project's jax 0.5.3 via a `.pth` file; `nvidia-cutlass-dsl`
+4.5.1's `cutlass.jax` submodule imports `jnp.float8_e8m0fnu`, which that
+jax version doesn't have, crashing `import cutlass` entirely even
+though FA4 only needs `cutlass.cute`. Fixed locally by wrapping that
+jax submodule import in a try/except inside the venv's own
+`cutlass/__init__.py` (a venv-local fix, not a change to any vendored
+or repository source) — confirmed `fa4_backend.status() == "active"`
+afterward.
+
+Not yet done: this is a standalone, isolated single-call measurement
+(one attention call at one shape), not wired into any of the full
+25-layer prefill benchmarks (`imagewam_thor_*_bench.py` construct
+`ImageWAMAttnBackend` without `use_fa4=True` anywhere) — the real
+full-pipeline win from turning this on for all 25 backbone layers'
+"backbone" self-attention calls has not been measured yet. Rough
+estimate from the per-call number: 25 layers x roughly (0.821-0.203)ms
+saved per self-attention call ≈ 15ms off the ~80-125ms prefill number,
+depending on precision tier — a real but secondary win compared to
+OPT-008's VAE finding below.
+
+## Promotion Condition — met for the isolated kernel; open for pipeline integration
+
+Kernel itself promoted: verified correct and fast on real Thor
+hardware, safe to turn on. Remaining work is threading `use_fa4=True`
+through the real benchmark scripts' backend construction and measuring
+the actual full-prefill delta, not just the isolated per-call number.
 
 # OPT-006
 
@@ -741,12 +771,54 @@ machine before hitting their own already-known, unrelated failure
 points (FP8: cuBLASLt env gap; FP4: Blackwell-only `SystemExit`) — not
 verified end-to-end anywhere, same status as before this change.
 
+## Real Thor Hardware Result — VAE Is the Single Biggest Remaining Cost
+
+User ran all three full-scale scripts (`fp16`/`fp8`/`fp4`) on real Thor
+with this change in place:
+
+| | vae_encode | prefill (25L + VAE) | one denoise step | full (prefill + 10-step) | full, no VAE (prior measurement) |
+|---|---|---|---|---|---|
+| FP16 | 43.9 ms | 124.5 ms | 5.87 ms | 183.3 ms | 140.4 ms |
+| FP8 (dynamic scale) | 43.7 ms | 107.8 ms | 6.17 ms | 169.5 ms | 106.6 ms (old fixed-scale, no VAE) |
+| FP4 (NVFP4) | 43.8 ms | 98.7 ms | 5.51 ms | 153.7 ms | 111.1 ms |
+
+Backbone-only numbers (VAE subtracted back out) still match the
+earlier no-VAE measurements closely — FP16 ≈80.6ms vs the earlier
+81.6ms, FP4 ≈54.9ms vs 55.8ms — confirming this change added a real
+new cost without disturbing anything already measured. FP8's own
+backbone-only prefill grew by ~4ms and its denoise step by
+4.65ms->6.17ms specifically because of switching to genuine per-call
+dynamic scale measurement (`quantize_fp8_device_fp16`'s real amax
+kernel, see the FP8 bench script's own commit) — a real, expected cost
+of not having real calibration, not a regression.
+
+**The VAE is ~24-28% of full pipeline latency on Thor** — bigger than
+the entire 10-step denoise loop post-OPT-003, and bigger than every
+win OPT-004 (graph capture + autotune combined, ~10ms) found. Re-run
+with this in mind: graph capture still doesn't include the VAE step
+(the frontend's own `_capture_graph` only captures `imagewam_prefill`/
+`imagewam_denoise_loop`, and the graph/autotune benchmark scripts still
+fill image tokens with random data, matching their own pre-existing,
+unaffected scope) — captured graph (129.3ms) + VAE outside the graph
+(43.9ms) ≈ 173ms, vs. graph-free FP16 with VAE (183ms): graph capture
+now saves only ~10ms out of a ~44ms-larger VAE cost sitting right next
+to it. **This sharpens OPT-004's own "compute-bound, not launch-bound"
+conclusion**: reducing real compute (the VAE, or the backbone's own
+GEMMs) is worth more than shaving launch overhead, and now there's a
+concrete, large, first-priority target (VAE) that dwarfs the graph/
+autotune win entirely.
+
 ## Promotion Condition
 
-Not itself promotable further without either (a) fetching FLUX.2's
-real AE source/config to replace this representative architecture with
-the real one, or (b) real weights/calibration (OPT-001) making VAE
-accuracy relevant, not just its speed. The `img_in` gap in
+VAE STUB itself not further promotable without either (a) fetching
+FLUX.2's real AE source/config to replace this representative
+architecture with the real one, or (b) real weights/calibration
+(OPT-001) making VAE accuracy relevant, not just its speed. **VAE
+OPTIMIZATION (fusing GroupNorm+SiLU, cuDNN autotuning/channels_last, or
+a faster architecture) is promoted as the new top-priority performance
+item** given the real Thor result above — ahead of OPT-005's own
+pipeline-integration follow-up and any further backbone GEMM work. The
+`img_in` gap in
 `pipeline_thor.py` itself is a separate, smaller follow-up worth its
 own promotion once real VAE integration (not just a speed stub) is
 in scope.

@@ -1354,3 +1354,58 @@ discipline. `tests/test_imagewam_fa4_backbone.py` and
 `benchmarks/imagewam_fa4_vs_cublas_bench.py` are ready for the user's
 Thor agent — full detail, including what to check first if the
 correctness test fails, in `opportunities.md` OPT-005.
+
+## Real Thor Hardware Result — FA4, VAE Encode, and Graph/Autotune Re-Confirmed
+
+User ran the full Thor checklist against commit `a0702b7` (`has_nvfp4()
+== True`). All 6 ImageWAM correctness tests still PASS (no OPT-003
+regression); `resolve_pipeline_class('imagewam','torch','thor')`
+resolves correctly (the new `_PIPELINE_MAP` entry works on Thor too).
+
+**OPT-005 (FA4), first real-hardware run**: `test_imagewam_fa4_backbone.py`
+PASS, `cosine=1.000000, rel_l2=0.000412`. Speed
+(`imagewam_fa4_vs_cublas_bench.py`, real `NH=24,HD=128,a0=896` shape):
+cuBLAS 0.821ms vs FA4 0.203ms — **4.05x** on the isolated backbone
+self-attention call. Not yet wired into the full 25-layer prefill
+benchmarks (still opt-in, off everywhere) — see opportunities.md
+OPT-005 for the pipeline-integration follow-up this implies.
+
+Environment note the user recorded: this Thor venv's FlashRT reuses
+the sibling openpi project's jax 0.5.3 via a `.pth` file;
+`nvidia-cutlass-dsl` 4.5.1's `cutlass.jax` submodule needs
+`jnp.float8_e8m0fnu`, which that jax version lacks, crashing `import
+cutlass` outright even though FA4 only needs `cutlass.cute`. Fixed with
+a venv-local try/except around that jax import inside the venv's own
+`cutlass/__init__.py` — not a change to any vendored or repository
+source. `fa4_backend.status() == "active"` afterward.
+
+**OPT-008 (VAE encode), first real-hardware run** — the standout
+finding this round:
+
+| | vae_encode | prefill (25L+VAE) | one denoise step | full (10-step) | full, no VAE (earlier) |
+|---|---|---|---|---|---|
+| FP16 | 43.9 ms | 124.5 ms | 5.87 ms | 183.3 ms | 140.4 ms |
+| FP8 (dynamic scale) | 43.7 ms | 107.8 ms | 6.17 ms | 169.5 ms | 106.6 ms (old fixed-scale, no VAE) |
+| FP4 (NVFP4) | 43.8 ms | 98.7 ms | 5.51 ms | 153.7 ms | 111.1 ms |
+
+VAE cost (~44ms) is essentially fixed regardless of GEMM precision, as
+expected (same VAE module in every script). Backing it back out
+reproduces the earlier no-VAE numbers closely (FP16 ≈80.6 vs 81.6ms,
+FP4 ≈54.9 vs 55.8ms) — confirms no regression, just a real addition.
+FP8's own backbone cost grew a bit (prefill +~4ms, denoise
+4.65->6.17ms) specifically from switching to genuine dynamic
+`quantize_fp8_device_fp16` scale measurement (see plan.md's earlier FP8
+scale-strategy entry) — expected, not a bug.
+
+**VAE is ~24-28% of full pipeline latency** — bigger than the entire
+post-OPT-003 denoise loop, and bigger than OPT-004's graph+autotune win
+combined (~10ms). Re-checked graph/autotune with this in view: those
+two scripts still don't include the VAE (random image tokens, as
+designed) — graph-captured (129.3ms) + VAE outside the graph (43.9ms)
+≈ 173ms vs. graph-free+VAE (183ms): graph capture now saves only ~10ms
+against a VAE cost 4x that size sitting right next to it. This
+sharpens OPT-004's "compute-bound, not launch-bound" conclusion and
+gives a concrete next target: **VAE optimization is now the single
+highest-value remaining performance item**, promoted ahead of both
+OPT-005's pipeline-integration follow-up and further backbone GEMM
+work — see opportunities.md OPT-008's updated Promotion Condition.
