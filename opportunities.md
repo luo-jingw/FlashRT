@@ -176,29 +176,49 @@ Area: ImageWAM pipeline has none of FlashRT's real kernel-fusion or GEMM-autotun
 
 ## Observation
 
-Real Thor (SM110) measurement (plan.md "Real Thor Results"): full
-prefill+10-step-denoise steady-state is 407-453ms across all four
-precisions tested — this is the first real-hardware confirmation that
-this plan's own pipeline (Phase 3/4) is a direct, unfused 1:1
-translation of the math (one kernel launch per op: norm, then each
-GEMM separately, then attention, then residual_add, then norm, then
-GEMM, then gelu, then GEMM, then residual_add), unlike real FlashRT
-models such as `cosmos3_edge` which fuse aggressively
+Real Thor (SM110) measurement (plan.md "Real Thor Results"), BEFORE
+the OPT-003 fix: full prefill+10-step-denoise steady-state is 407-453ms
+across all four precisions tested — the first real-hardware
+confirmation that this plan's own pipeline (Phase 3/4) is a direct,
+unfused 1:1 translation of the math (one kernel launch per op: norm,
+then each GEMM separately, then attention, then residual_add, then
+norm, then GEMM, then gelu, then GEMM, then residual_add), unlike real
+FlashRT models such as `cosmos3_edge` which fuse aggressively
 (`residual_add_rms_norm_fp8`, fused QKV projections, `bias_gate_mul_residual_bf16`)
 and autotune `GemmRunner` shapes via `autotune_cached` rather than
-accepting cuBLASLt's default top-1 heuristic. The benchmark that
-produced this number is also graph-free (no `torch.cuda.graph(...)`
-capture), unlike Phase 5's own `ImageWAMTorchFrontendThor`, which does
-capture a graph — the graph-captured, whole-pipeline number on Thor is
-not yet measured.
+accepting cuBLASLt's default top-1 heuristic. (OPT-003's fix since
+brought the graph-free Ada number down to 203.2ms — the remaining gap
+this entry is about is now smaller than these original Thor numbers
+suggest; re-measure on Thor before treating 407-453ms as current.)
 
-## Opportunity
+## Step 1 done: graph capture measured — launch overhead is NOT the bottleneck here
 
-In priority order (highest expected win first, per this project's own
-established fusion precedent in `cosmos3_edge`/`pi05`):
-1. Measure the graph-captured (not graph-free) whole-pipeline number on
-   Thor via `ImageWAMTorchFrontendThor` itself, to isolate how much of
-   the current number is Python/launch overhead vs. real GPU work.
+`benchmarks/imagewam_thor_graph_bench.py` (new): built the real
+`ImageWAMTorchFrontendThor` at real dims (post-OPT-003 fix), captured
+its CUDA Graph via `set_prompt()`, measured steady-state `infer()`
+(prefill + 10-step denoise, replay only) on this machine (Ada):
+**198.5ms P50** — versus the graph-FREE number at the identical dims
+and post-OPT-003 fix, **203.2ms P50**
+(`benchmarks/imagewam_thor_fp16_bench.py`). Only a ~2% difference.
+
+This is a real, somewhat unexpected finding, not the large win
+originally hoped for: at these shapes, individual GEMMs are large
+enough (hundreds of µs to a few ms each, confirmed in the earlier
+GEMM-only comparison table) that per-launch dispatch overhead (typically
+single-digit µs) is a small fraction of the total — this pipeline is
+solidly **compute-bound, not launch-bound**, at least on Ada. CUDA
+Graph capture is still worth keeping (it is real, already built, and
+free), but it is not where the remaining ~200ms is going to be found.
+This redirects priority toward steps 2-4 below (real compute
+reduction: fewer/larger GEMMs, better algorithms), not further
+launch-overhead elimination. Not yet re-confirmed on Thor — the
+launch-vs-compute balance could differ there (faster GEMMs relative to
+a similar fixed per-launch overhead would make Thor relatively MORE
+launch-overhead-bound than Ada, not less, so this is worth re-checking
+there rather than assuming the same conclusion transfers).
+
+## Opportunity (steps 2-4, in priority order)
+
 2. Fuse QKV into one wide GEMM per stream (matches the real checkpoint's
    own fused tensor shape from Phase 1 — currently split into 3 GEMMs
    only because of this pipeline's own reduced-KV-width convention,
@@ -210,17 +230,15 @@ established fusion precedent in `cosmos3_edge`/`pi05`):
 
 ## Expected Mechanism
 
-Same mechanism already proven in `cosmos3_edge`/`pi05`: fewer kernel
-launches per layer (less Python/pybind11 dispatch + host-device
-round-trip overhead) and CUDA Graph capture (near-zero per-call CPU
-overhead on replay).
+Steps 2-4 reduce REAL compute/memory-bandwidth cost (fewer, larger,
+better-tuned GEMMs), not launch overhead — the right target now that
+step 1 showed this pipeline is compute-bound on Ada.
 
 ## Required Evidence
 
-Step 1 above (measure the graph-captured number) should happen first —
-it is cheap (no new kernel work) and tells us how much of the 407-453ms
-is even reachable by kernel-level optimization versus launch overhead
-already eliminated by graph capture.
+Re-run step 1's graph-vs-graph-free comparison on real Thor hardware
+before assuming the same "compute-bound, not launch-bound" conclusion
+holds there.
 
 ## Promotion Condition
 

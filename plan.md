@@ -1182,6 +1182,28 @@ RESOLVED on Ada; Thor confirmation still pending — the user's own
 Thor-side FP16/BF16/FP8/FP4 numbers from before this fix are the
 baseline to re-run against).
 
-Next per the agreed priority order: OPT-004 step 1 (measure the
-CUDA-graph-captured, not graph-free, whole-pipeline number), then
-OPT-005 (FA2/FA4 for backbone's plain self-attention).
+## OPT-004 Step 1: Graph Capture Measured — Compute-Bound, Not Launch-Bound (Ada)
+
+`benchmarks/imagewam_thor_graph_bench.py` (new): built the real
+`ImageWAMTorchFrontendThor` at real dims (post-OPT-003 fix), captured
+its CUDA Graph, measured steady-state `infer()`.
+
+| | prefill + 10-step denoise |
+|---|---|
+| Graph-free (post-OPT-003) | 203.2 ms |
+| CUDA-graph-captured | **198.5 ms** (~2% faster) |
+
+A real, somewhat unexpected finding: at these shapes, individual GEMMs
+are large enough (hundreds of µs to a few ms each) that per-launch
+dispatch overhead is a small fraction of the total — this pipeline is
+solidly compute-bound, not launch-bound, on Ada. CUDA Graph capture is
+real and already built (Phase 5) but is not where further gains are
+hiding here. Redirects priority toward OPT-004's remaining steps (fuse
+QKV into one wide GEMM, fuse residual+norm, `GemmRunner.autotune_cached`)
+— real compute reduction, not launch-overhead elimination. NOT yet
+re-confirmed on Thor, where the launch-vs-compute balance could differ
+(faster GEMMs there could make it relatively MORE launch-bound, not
+less) — recorded as an open item in `opportunities.md` OPT-004.
+
+Next per the agreed priority order: OPT-005 (evaluate FA2/FA4 for
+backbone's plain self-attention).
