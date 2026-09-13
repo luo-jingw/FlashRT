@@ -808,17 +808,58 @@ GEMMs) is worth more than shaving launch overhead, and now there's a
 concrete, large, first-priority target (VAE) that dwarfs the graph/
 autotune win entirely.
 
+## VAE Stub Optimization Attempt (Ada, this dev machine) — Real Gain, Reverted to Off by Default for Reliability
+
+Profiled with `torch.profiler` first rather than guessing: convolution
+itself dominates (~66% of GPU time), with the rest split across
+GroupNorm/SiLU and cuDNN's own NCHW<->NHWC layout-conversion kernels
+(inserted automatically when its fastest conv algorithm for a given
+shape prefers the other layout). Tried, in order:
+
+1. `channels_last` memory format + `cudnn.benchmark=True`: made things
+   WORSE (55ms baseline -> 63ms), most likely because the mid-block
+   attention's own `.reshape()`/`.permute()` calls silently force a
+   layout conversion back to contiguous NCHW, adding overhead without
+   removing the conversions this was meant to avoid.
+2. `torch.compile(mode="max-autotune")`: real gain in isolation
+   (~55ms -> ~44ms) and confirmed end-to-end in the INT4/FP16 full-
+   pipeline scripts. But running the SAME change inside the FP8 script
+   made the GPU sit at 100% util / ~7.9-7.92GB of this machine's 8GB
+   total (near-OOM) for 45+ seconds with zero forward progress logged
+   — required a hard kill.
+3. `torch.compile(mode="default")`: still a real gain (~55-61ms ->
+   ~48ms), and fixed INT4/FP16 (both confirmed clean). But the SAME
+   FP8 script then stalled AGAIN — 65+ seconds stuck inside
+   `FullImageWAMFP8.__init__` itself (before "Built." even prints,
+   i.e. before any VAE forward call happens at all), GPU pinned at
+   100% util, memory again near ~7.9GB. No lingering compile-worker
+   process found; INT4/FP16 use the identical `build_vae_encoder` call
+   and never reproduced it. Not root-caused.
+
+**Decision: kept `torch.compile` as an explicit opt-in
+(`compile=True`), reverted the default back to `compile=False`.** The
+real, measured gain (~13-20% off the VAE's own cost) is not worth an
+unpredictable, unexplained path to a near-OOM multi-minute stall on a
+machine whose 8GB budget is already tight — this project's own
+standing memory-safety discipline says no. Worth revisiting on Thor,
+which has far more memory headroom and may simply not reproduce this;
+not investigated further here per the effort/risk tradeoff.
+
 ## Promotion Condition
 
-VAE STUB itself not further promotable without either (a) fetching
-FLUX.2's real AE source/config to replace this representative
+VAE STUB's own architecture not further promotable without either (a)
+fetching FLUX.2's real AE source/config to replace this representative
 architecture with the real one, or (b) real weights/calibration
 (OPT-001) making VAE accuracy relevant, not just its speed. **VAE
-OPTIMIZATION (fusing GroupNorm+SiLU, cuDNN autotuning/channels_last, or
-a faster architecture) is promoted as the new top-priority performance
-item** given the real Thor result above — ahead of OPT-005's own
-pipeline-integration follow-up and any further backbone GEMM work. The
-`img_in` gap in
+OPTIMIZATION remains the top-priority performance item** given the real
+Thor latency-share result above — ahead of OPT-005's own pipeline-
+integration follow-up and any further backbone GEMM work — but
+`torch.compile` specifically is not itself promoted to default given
+the reliability finding just above; the next attempt should either
+root-cause the FP8-specific stall (ideally on Thor, where memory
+pressure may not be a confound) or pursue the custom-fused-kernel path
+(mirroring `cosmos3_edge/vae_native.py`'s own GroupNorm+SiLU fusion
+precedent) instead of `torch.compile`. The `img_in` gap in
 `pipeline_thor.py` itself is a separate, smaller follow-up worth its
 own promotion once real VAE integration (not just a speed stub) is
 in scope.

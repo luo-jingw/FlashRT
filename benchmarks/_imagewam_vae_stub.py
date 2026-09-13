@@ -124,10 +124,60 @@ class Flux2VaeEncoderStub(nn.Module):
         return mean  # deterministic encode -- fine for a speed-only benchmark
 
 
-def build_vae_encoder(device: str = "cuda", dtype: torch.dtype = torch.float16) -> Flux2VaeEncoderStub:
+def build_vae_encoder(device: str = "cuda", dtype: torch.dtype = torch.float16,
+                       compile: bool = False) -> Flux2VaeEncoderStub:
+    """`compile=True` (opt-in, NOT the default) wraps the module in
+    `torch.compile(mode="default")`.
+
+    Real measured effect on this dev machine, in isolation (Ada sm_89,
+    profiled with `torch.profiler` first -- convolution itself dominates
+    at ~66% of GPU time, with the rest split across GroupNorm/SiLU/
+    layout-conversion kernels cuDNN inserts converting between NCHW and
+    its preferred NHWC layout for some conv algorithms; `channels_last` +
+    `cudnn.benchmark` alone, tried first, made things WORSE, 55ms
+    baseline -> 63ms, likely because the attention block's own reshape/
+    permute ops silently force a layout conversion back): `torch.compile`
+    fuses the elementwise GroupNorm/SiLU/residual-add chains via
+    Inductor, taking the standalone `vae_encode` time from ~55-61ms down
+    to ~48ms with `mode="default"` (~44ms with `mode="max-autotune"`,
+    a bit faster still) -- confirmed by re-running the full INT4/FP16
+    benchmark scripts end to end, not just this module alone.
+
+    **Reverted to `compile=False` as the default despite the real gain
+    above, because of demonstrated unreliability on this 8GB machine**:
+    `mode="max-autotune"` first made the FP8 script's GPU sit at 100%
+    util / ~7.9-7.92GB of 8GB total (near-OOM) for 45+ seconds with zero
+    forward progress logged, requiring a hard kill. Switching to
+    `mode="default"` fixed INT4/FP16 (both ran cleanly, confirming
+    `mode="default"` itself is not inherently broken), but the SAME FP8
+    script then stalled again under `mode="default"` too -- 65+ seconds
+    stuck inside `FullImageWAMFP8.__init__` itself (before "Built." even
+    printed, i.e. before any VAE forward call happens), GPU pinned at
+    100% util, memory near the same ~7.9GB ceiling, again killed by
+    hand. Not root-caused (no lingering compile-worker process found;
+    INT4/FP16 use the identical `build_vae_encoder` call and did not
+    reproduce it) -- plausibly some interaction between `torch.compile`'s
+    lazy backend/cache initialization and this script's own FP8-specific
+    weight-quantization loop in `__init__`, not investigated further.
+    Given this project's standing memory-safety discipline on an
+    already-tight 8GB machine, an unexplained, unpredictable path to a
+    near-OOM multi-minute stall is not an acceptable default trade for a
+    ~7-13ms (~13-20%) gain. Kept as an explicit opt-in for further
+    investigation (e.g. on Thor, which has much more memory headroom and
+    may not reproduce this at all) rather than silently dropped.
+
+    The one-time JIT compile happens on first call, i.e. inside each
+    bench script's own WARMUP loop when `compile=True` is passed
+    explicitly, not inside the measured steady-state window -- same
+    convention already used for cuDNN algorithm caching and CUDA context
+    init elsewhere in this project.
+    """
     vae = Flux2VaeEncoderStub().to(device=device, dtype=dtype).eval()
     for p in vae.parameters():
         p.requires_grad_(False)
+    if compile:
+        torch.backends.cudnn.benchmark = True
+        vae = torch.compile(vae, mode="default")
     return vae
 
 
