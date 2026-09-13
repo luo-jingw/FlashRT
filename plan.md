@@ -1,6 +1,6 @@
 # Plan
 
-Plan Status: approved
+Plan Status: completed
 
 # Problem
 
@@ -755,7 +755,7 @@ over repeated replays is measured and recorded.
 
 ## Phase 5 — Frontend and text-context caching
 
-Phase Status: pending
+Phase Status: completed
 
 ### Goal
 
@@ -764,11 +764,33 @@ Phase Status: pending
 
 ### Files
 
-`flash_rt/frontends/torch/imagewam_thor.py` (new).
+- `flash_rt/frontends/torch/imagewam_thor.py` (new).
+- `tests/test_imagewam_frontend.py` (new).
 
 ### Structures
 
-None new; owns the state listed in Structure's State Ownership table.
+Owns the state listed in Structure's State Ownership table (weight
+buffers, KV cache buffer, cached text context, CUDA Graph object), as
+already assigned. One structural deviation from the generic template,
+made deliberately rather than found as a bug: buffer allocation uses
+plain `torch.cuda.Tensor` + `.data_ptr()` throughout, not
+`_template/frontend.py`'s `CudaBuffer` ctypes wrapper — matching the
+real, working `CosmosEdgeThor` precedent and everything this plan's
+own Phases 2-4 have already used, rather than introducing a second,
+inconsistent buffer-ownership convention into the same project.
+
+The whole `imagewam_prefill` + `imagewam_denoise_loop` sequence is
+captured as ONE CUDA Graph in `_capture_graph()` (two warm-up calls on
+a side stream, then one more inside `torch.cuda.graph(...)`), following
+`CosmosEdgeThor.capture()`'s real pattern (Phase 4's own corrected
+understanding of it) rather than the generic template's separate
+encoder/decoder capture. `set_prompt()` triggers capture on the first
+call only (`context_mask`, per its own module-docstring note, is
+accepted but never consumed by the pipeline; `context` is random-filled
+in place — a real, in-place `.normal_()` write to a buffer whose
+address the graph already captured, not a reallocation); `infer()`
+random-fills the observation-derived rows of `backbone_hidden` and a
+fresh noise seed into `action_latent`, then replays.
 
 ### Affected Modules
 
@@ -776,6 +798,28 @@ ImageWAM frontend only.
 
 ### Observation
 
-`set_prompt()` followed by repeated `infer()` calls (fixed prompt,
-varying random observations) succeeds on Thor with random weights,
-returns non-NaN actions, and reports P50 `infer()` latency.
+Ran `tests/test_imagewam_frontend.py`: `set_prompt()` once, a second
+`set_prompt()` call with the same prompt string confirmed to skip
+recapture (same graph object), then 5x `infer()` with varying random
+observations. Result: every call returns a finite `(num_action,
+action_hidden_dim)` actions array, no two consecutive calls return
+identical output (confirming graph replay actually reads the
+freshly-written buffers rather than stale ones from capture time), P50
+latency 0.77ms — this machine's own small structural-dry-run dims
+(`_DEFAULT_DIMS`), not a Thor number and not comparable to a real
+FLUX.2-4B-scale latency.
+
+## Plan Completion
+
+All 5 phases completed. `imagewam_prefill` + `imagewam_denoise_loop`
+run end-to-end through `ImageWAMTorchFrontendThor.set_prompt()`/
+`infer()`, captured as one CUDA Graph, on random weights at a small
+structural-dry-run scale, verified on this project's own Ada (sm_89)
+GPU. What this does NOT establish, tracked in `opportunities.md`:
+accuracy against a trained checkpoint (OPT-001), real per-head K/V
+attention (OPT-002), Thor-specific (sm_110) performance or even
+correctness at Thor scale (this machine has no Thor hardware), and
+real-resolution sequence lengths against the `softmax_mot_joint_fp16`
+`>=1024`-column ceiling flagged in Phase 2. This plan's own stated
+goal — extend FlashRT's Thor pipeline machinery to cover ImageWAM's
+structural shape with random weights, deferring precision — is met.
