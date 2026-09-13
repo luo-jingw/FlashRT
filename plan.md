@@ -1104,3 +1104,39 @@ own open item). This is a GEMM-only measurement — no correctness claim
 applied, which this specific kernel's own file header says is required
 for real activations to survive int4's dynamic range) and no full-
 pipeline integration.
+
+## Full-Pipeline INT4 (Ada, GEMM-only) — Real Steady-State Number
+
+Follow-up to the above, once the user asked specifically for the
+*whole inference pipeline's* INT4 steady state, not just isolated
+GEMMs. `benchmarks/imagewam_thor_int4_bench.py` (new): same 25+25-layer
+structure as the FP16/FP8/FP4 scripts, real weight packing, ran clean
+end to end on this machine (the `mlp2`/`K=9216` failure recorded above
+did NOT reproduce here — see OPT-007's correction: it turned out to be
+a flaky artifact specific to `imagewam_gemm_precision_compare.py`'s own
+mixed-precision-in-one-process sequence, not a hard `K` limit; separate
+targeted repro attempts ruled out shape order, the preceding fp8/int8
+failures, and the timing loop pattern as the cause — root cause
+unresolved but the real full-pipeline run is unaffected by it):
+
+| | backbone prefill (25L) | one denoise step (25L) | prefill + 10-step |
+|---|---|---|---|
+| INT4 (GEMM-only, this machine) | 42.4 ms | 24.2 ms | 283.3 ms |
+| FP16 (this machine) | 152.1 ms | 29.5 ms | 447.8 ms |
+
+**The critical caveat, found while trying to make this number honest
+rather than just fast**: this is GEMM-only, with NO per-call activation
+quantization — weights and activations are both random already-packed
+int4 bytes, reused across every replay. Tried to include the real
+quantization step (`fht_int4_quant_fp16`, the only real activation
+quantizer for this specific QuaRot-family INT4 scheme) and it CRASHES
+with an illegal memory access at ImageWAM's real hidden dims (3072,
+9216, 7680 — confirmed one shape per fresh process to avoid the crash
+corrupting further tests): it works cleanly at 128/1024/4096 (all
+powers of 2) and crashes at 3072 (not a power of 2). This FHT kernel
+needs a power-of-2 transform size; none of ImageWAM's real hidden
+dimensions are powers of 2. So this number is a genuine "how fast could
+the GEMMs be" signal, not a number a real INT4 deployment could
+actually achieve without first resolving this — recorded in full in
+`opportunities.md` OPT-007, which this finding meaningfully updates
+(both the mlp2-flakiness correction and the FHT crash).

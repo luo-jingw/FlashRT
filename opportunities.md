@@ -323,27 +323,63 @@ INT8 (SM80, same family) also works. Both are meaningfully faster than
 FP16 at the shapes that work: INT4 ~9x, INT8 ~4x on the `q/proj`
 (3072x3072) shape.
 
-Real, confirmed limitation, not a guess: `cutlass_int4_rowwise_fp16out`
-and `cutlass_int8_rowwise_fp16out` both fail (non-zero return code,
-not a crash) at the `mlp2` shape (`M=896, N=3072, K=9216`) while
-succeeding at the smaller-K shapes (`K=3072`) — this specific CUTLASS
-kernel instantiation was built for Chameleon-7B's own shapes and has
-not been verified for ImageWAM's larger `K=9216` MLP down-projection.
+**Correction, found while building the full-pipeline benchmark**: the
+`mlp2` (`K=9216`) failure reported above for `cutlass_int4_rowwise_fp16out`
+does NOT reproduce in isolation or inside a real full-pipeline run
+(`benchmarks/imagewam_thor_int4_bench.py`, all 25+25 layers including
+20 calls at this exact shape, ran clean end to end). It only reproduced
+inside `imagewam_gemm_precision_compare.py`'s specific call sequence
+(fp16 → fp8[fails] → int8[fails] → int4, repeated per shape across 4
+shapes) — isolating the exact trigger was not pursued further (several
+targeted repros ruled out simple explanations: shape order, the
+preceding fp8/int8 failures, and the warmup/iteration loop pattern
+itself all failed to reproduce it alone). Treat this as a real but
+poorly-understood flakiness in `imagewam_gemm_precision_compare.py`'s
+own specific mixed-precision-in-one-process pattern, not a hard `K`
+limit on the kernel — **`cutlass_int8_rowwise_fp16out` (INT8, not
+INT4) does reliably fail at `K=9216`** in every reproduction attempted,
+confirmed independent of the flaky int4 behavior; that one appears to
+be a real, consistent INT8-specific limitation.
 
 Also real and not yet addressed: this GEMM's own correctness contract
 (per its file header) requires a QuaRot Hadamard rotation on both
 activation (online FHT) and weight (offline) before quantizing to
 int4 — plain per-row symmetric quantization without it is documented
-in that same file as insufficient for real model activations. This
-benchmark measured throughput only, with random already-packed bytes,
-explicitly skipping the rotation step.
+in that same file as insufficient for real model activations.
+**Confirmed blocking, not theoretical**: the real activation quantizer,
+`fht_int4_quant_fp16`, CRASHES with an illegal memory access at
+ImageWAM's real hidden dims (3072, 9216, 7680 — none are powers of 2),
+while working cleanly at 128/1024/4096 (all powers of 2). This FHT
+kernel needs a power-of-2 transform size; ImageWAM's real dims are not
+powers of 2. `benchmarks/imagewam_thor_int4_bench.py`'s own full-
+pipeline number (below) is GEMM-only for exactly this reason — it
+could not include a real per-call activation quantization step even if
+it wanted to.
+
+## Full-Pipeline Result (Ada, GEMM-only, no activation quantization)
+
+`benchmarks/imagewam_thor_int4_bench.py`: same 25+25-layer structure as
+the FP16/FP8/FP4 scripts, ran clean end to end on this machine:
+
+| | backbone prefill (25L) | one denoise step (25L) | prefill + 10-step |
+|---|---|---|---|
+| INT4 (GEMM-only) | 42.4 ms | 24.2 ms | 283.3 ms |
+| FP16 (this machine) | 152.1 ms | 29.5 ms | 447.8 ms |
+
+3.6x faster prefill, only ~1.2x faster denoise step (consistent with
+OPT-003's diagnosis: denoise is attention-bound, not GEMM-bound, so
+GEMM quantization alone caps out around the same ceiling FP8/FP4 also
+hit). This is an optimistic upper bound, not a real deployment number —
+see the activation-quantization caveat above.
 
 ## Opportunity
 
-A fourth precision tier alongside FP16/FP8/FP4, IF the K=9216 shape
-issue is root-caused and fixed (or the down-projection is tiled/split
-to stay within whatever K limit this kernel actually has) AND the
-QuaRot Hadamard rotation is implemented for ImageWAM's own activation
+A fourth precision tier alongside FP16/FP8/FP4, IF the FHT power-of-2
+requirement is resolved (either generalize the kernel, or pad
+ImageWAM's activations to the next power of 2 before quantizing — 4096
+for hidden=3072, 16384 for mlp_hidden=9216, 8192 for
+joint_attention_dim=7680, changing GEMM shapes throughout) AND the
+QuaRot rotation is validated for ImageWAM's own activation
 distributions (a real correctness project, not yet started — this
 would need real weights to even evaluate, same dependency as OPT-001).
 
@@ -357,15 +393,15 @@ Chameleon's own model and data — not yet re-measured for ImageWAM).
 
 ## Required Evidence
 
-Root-cause the K=9216 failure (likely a fixed tile/workspace assumption
-in this specific CUTLASS instantiation, not investigated further in
-this pass) before treating INT4 as viable for the MLP down-projection
-specifically; the QK/V/up-projection-shaped GEMMs (K=3072) already
-work. Real-weight accuracy work (OPT-001) is a hard prerequisite for
-any correctness claim regardless of the K=9216 fix.
+Resolve the FHT power-of-2 blocker above before treating INT4 as
+viable for ImageWAM at all (not just the down-projection — every real
+hidden dimension in this model is a non-power-of-2 multiple of 1024).
+Real-weight accuracy work (OPT-001) is a hard prerequisite for any
+correctness claim regardless.
 
 ## Promotion Condition
 
-Promote only after both the K=9216 shape issue and the QuaRot rotation
-requirement have real answers — this is presently an interesting,
-confirmed-buildable option, not a working precision tier.
+Promote only after both the FHT power-of-2 blocker and the QuaRot
+rotation's real-weight accuracy validation have real answers — this is
+presently a confirmed-fast, confirmed-buildable option with a real
+correctness blocker, not a working precision tier.
