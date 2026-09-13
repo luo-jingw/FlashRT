@@ -81,6 +81,22 @@ this fork covers Jetson AGX Thor (sm_110).
   unchanged (`cosine=1.000000, rel_l2=0.000441`) — the slim flags only
   drop unrelated kernel groups and shrink FA2's instantiation count,
   they never touch kernel math.
+- INT4/INT8 exploration build: add `-DENABLE_SM80_INT8_CUTLASS=ON
+  -DFLASHRT_ENABLE_CHAMELEON=ON` to the slim-build command above to
+  additionally build the SM80-family CUTLASS INT8/INT4 rowwise GEMM
+  kernels (`cutlass_int4_rowwise_fp16out`, `cutlass_int8_rowwise_fp16out`
+  etc.) — these are gated only by these two flags, not by `GPU_ARCH`,
+  and confirmed to build and run correctly on this machine's Ada
+  (sm_89) despite being written for Jetson Orin SM87 (see
+  `opportunities.md` OPT-007 and `plan.md`'s GEMM-only comparison).
+  Not needed for this project's own pipeline (`pipeline_thor.py` uses
+  none of these); kept as a documented option for future INT4
+  exploration, not part of the default recommended build above.
+  The current local `build/` directory has these two flags ON (from
+  the INT4 exploration) — additive only, so it is still a valid
+  superset of the default recommended build (`tests/test_imagewam_mot_joint_kernel.py`
+  still passes unchanged); rebuild without them only if the extra
+  compile time/kernels are unwanted.
 - Memory is a real constraint on this machine (23GB total RAM,
   already had 635MB in swap before any build started) — a full
   `cmake --build build -j$(nproc)` (nproc=20) OOM-killed partway

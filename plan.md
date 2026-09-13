@@ -1018,3 +1018,89 @@ structural shape... deferring precision" (and, implicitly, performance)
 committed to delivering. The performance work is real, scoped,
 concrete follow-up, not a vague "make it faster" — see OPT-003/OPT-004
 below.
+
+## Full-Pipeline FP16 — Real Local Confirmation, and a VRAM Estimate Correction
+
+`benchmarks/imagewam_thor_fp16_bench.py` (new): the exact same 25+25
+layer structure as `imagewam_thor_fp4_bench.py`, but plain `fp16_nn`
+for every projection — fully run on this dev machine (Ada sm_89), not
+just isolated-per-layer-extrapolated:
+
+| | backbone prefill (25L) | one denoise step (25L) | prefill + 10-step |
+|---|---|---|---|
+| Ada, this machine | 152.1 ms | 29.5 ms | 447.8 ms |
+| Thor, user-reported | 81.5 ms | 35.3 ms | 433.9 ms |
+
+Close enough on the "full" number to be a useful cross-check (Thor
+faster on the GEMM-heavy prefill as expected of newer hardware; the two
+are closer on the attention-bound denoise step, consistent with
+OPT-003's diagnosis that denoise cost is dominated by `mot_joint`'s own
+overcompute rather than raw GEMM throughput, which would otherwise
+scale more with hardware generation).
+
+**Correction to the earlier VRAM estimate**: this successful local run
+(real weight footprint ~5.56GB — recomputed from what actually gets
+allocated: backbone 2.406B params + ActionDiT 0.374B params = 2.78B,
+this pipeline's own reduced-K/V-width convention) is SMALLER than the
+~6.95GB figure quoted earlier for "the declared subset" — that earlier
+number used the CHECKPOINT-shaped (full K/V width) parameter count
+(3.473B, from `_imagewam_thor_spec.py`'s own declared shapes), not what
+this pipeline's own pointer-interface functions actually allocate.
+Both numbers are real and correctly computed for what they each
+describe — they just describe two different things (real-checkpoint-
+compatible declaration vs. this project's own reduced-K/V pipeline
+convention) that were not clearly distinguished when first quoted.
+
+`benchmarks/imagewam_thor_fp8_bench.py` (new): identical structure,
+`_Fp8Linear` in place of `_Fp16Linear`. NOT verified end-to-end here —
+see "Ada FP8 Environment Gap" below — but its orchestration was
+verified with the same fp16-substitution dry-run technique used for
+FP4, reproducing near-identical numbers to the FP16 script (150.0ms /
+28.8ms / 435.3ms) as expected (same loop structure, same weight
+layout, only the linear op differs).
+
+## Ada FP8 Environment Gap — Confirmed, Not This Project's Bug
+
+Attempting `benchmarks/imagewam_thor_fp8_bench.py` for real on this
+machine fails at the very first GEMM call (`txt_in`, after all 65+
+weight matrices quantized successfully): `cublasLtMatmulAlgoGetHeuristic
+failed with cuBLAS status 15` (`CUBLAS_STATUS_NOT_SUPPORTED`). Isolated
+with `benchmarks/imagewam_gemm_precision_compare.py`: this venv's
+cuBLASLt (12.8.04, CUDA 12.8, compute capability (8,9)) returns this
+same failure for FP8 (E4M3) matmul at EVERY shape tried, including a
+trivial 64x64x64, via two independent code paths
+(`GemmRunner.fp8_nn_dev_fp16` and the standalone `fp8_gemm_descale_fp16`).
+Ada Lovelace has real FP8 tensor core hardware in general — this is a
+confirmed environment/library-version gap in this specific venv, not a
+FlashRT bug or a hardware limitation: the user's own Thor run already
+produced real FP8 numbers with the exact same `quantize_fp8_static_fp16`
++ `fp8_gemm_descale_fp16` API pair this project's FP8 script uses.
+
+## GEMM-Only Precision Comparison, Including INT4 (Ada, Real Numbers)
+
+`benchmarks/imagewam_gemm_precision_compare.py`: isolated GEMM-only
+timing (no attention, no norm, no pipeline loop) at ImageWAM's real
+backbone projection shapes, comparing plain `fp16_nn` against the
+SEPARATE SM80-family CUTLASS INT8/INT4 rowwise GEMM path
+(`csrc/gemm/cutlass_sm80_int4_rowwise.cu`, built for Jetson Orin SM87's
+QuaRot path, `cutlass::arch::Sm80` — confirmed to build and run on Ada
+sm_89 after reconfiguring with `-DENABLE_SM80_INT8_CUTLASS=ON
+-DFLASHRT_ENABLE_CHAMELEON=ON` — see OPT-007). Warmup=20, iters=100,
+CUDA-event P50, this machine:
+
+| shape | fp16 | fp8 | int8 (SM80) | int4 (SM80) |
+|---|---|---|---|---|
+| q/proj [M=896,N=3072,K=3072] | 0.810ms | FAIL (env) | 0.213ms | 0.088ms |
+| k/v [M=896,N=128,K=3072] | 0.045ms | FAIL (env) | 0.025ms | 0.015ms |
+| mlp0 [M=896,N=9216,K=3072] | 1.937ms | FAIL (env) | 0.534ms | 0.288ms |
+| mlp2 [M=896,N=3072,K=9216] | 1.872ms | FAIL (env) | FAIL (shape) | FAIL (shape) |
+
+INT4/INT8 (where they work) are genuinely fast — ~9x and ~4x over
+FP16 respectively at the `q/proj` shape — but the `mlp2` failure
+(`K=9216`, non-zero CUTLASS return code, not a crash) is real and
+unexplained (not investigated further this pass; recorded as OPT-007's
+own open item). This is a GEMM-only measurement — no correctness claim
+(random already-packed int4/int8 bytes, no QuaRot Hadamard rotation
+applied, which this specific kernel's own file header says is required
+for real activations to survive int4's dynamic range) and no full-
+pipeline integration.

@@ -206,3 +206,166 @@ stated goal (structural wiring, deferring precision) did not commit to
 performance work, and premature fusion work risks needing to be redone
 once real per-head K/V attention (OPT-002) changes the kernel shapes
 it would fuse around.
+
+# OPT-005
+
+Status: not promoted
+
+Area: Real per-head MHA via FA2/FA4, not a new custom masked cuBLAS kernel
+
+## Observation
+
+OPT-002 proposed writing a new batched/strided cuBLAS masked-attention
+kernel to fix the broadcast-K/V simplification. Found while surveying
+FlashRT's own existing mechanisms: the vendored FA2 (`flash_rt_fa2.so`,
+RTX) and FA4 (`flash_rt/hardware/thor/fa4_backend.py`, Thor sm_110)
+flash-attention backends already support real per-head Q/K/V (confirmed
+via `ThorFlashAttnBackend`'s own siglip usage:
+`q_tensor/k_tensor/v_tensor` all shaped `(nv, q_seq, NH, HD)`, no
+broadcast), GQA (`pack_gqa`), and are CUDA-graph-capture-safe.
+`fa4_backend.py`'s own docstring records a real measured win at a
+comparable VLA denoise shape ("Sq=51, Skv~891, GQA 16/2, HD=128... ~17%
+faster than the vendored fmha kernel, cos=1.0").
+
+## Opportunity
+
+For the "backbone" site's plain self-attention (no custom mask needed),
+switch from the hand-written `attention_qkv_fp16` cuBLAS-composed kernel
+to FA4 (Thor) / FA2 (RTX) directly — likely both faster AND gets real
+per-head K/V for free, fixing part of OPT-002 with zero new kernel code.
+For the "mot" site's three-region masked joint attention, check whether
+FA2/FA4's forward accepts an arbitrary additive attention bias/mask
+tensor (not yet confirmed in this survey — would need reading the
+vendored FA2/FA4 source directly, out of scope for this pass) before
+assuming the custom masked kernel is still required there.
+
+## Expected Mechanism
+
+Same mechanism already measured real: FA2/FA4's own fused, highly
+tuned flash-attention kernels replace the cuBLAS QK^T -> softmax -> PV
+three-launch composition for sites where the masking need fits their
+API.
+
+## Required Evidence
+
+Confirm whether FA2/FA4 support an arbitrary/block mask (not just
+causal) before committing scope here for the "mot" site specifically;
+the "backbone" site (plain self-attention, no mask) is a much lower-risk
+first target regardless.
+
+## Promotion Condition
+
+Promote alongside OPT-002/OPT-004 once Thor performance work begins.
+
+# OPT-006
+
+Status: not promoted
+
+Area: TeaCache-style step-skipping for the flow-matching denoise loop
+
+## Observation
+
+`flash_rt/models/cosmos3_edge/pipeline_thor.py`'s `CosmosEdgeThor` has a
+real, already-implemented `set_teacache(compute_steps)` mechanism: a
+fixed subset of denoise steps actually compute a fresh velocity, the
+rest reuse the last computed velocity while the scheduler still
+advances every step. This exploits the same redundancy diffusion/flow-
+matching literature calls TeaCache — consecutive denoising steps often
+produce very similar velocity predictions.
+
+## Opportunity
+
+ImageWAM's own flow-matching denoise loop (`imagewam_denoise_loop`,
+Phase 4) is structurally the same shape (N fixed steps, each a full
+ActionDiT forward) — a `set_teacache`-equivalent compute-step schedule
+could skip a fraction of ActionDiT forwards entirely, directly reducing
+the ~35ms/step cost this project has now measured twice (Ada dry-run
+and real Thor hardware).
+
+## Expected Mechanism
+
+Same mechanism already implemented and presumably validated for
+cosmos3_edge: skip N-k of N steps' full forward, reuse the last
+velocity, accept whatever accuracy cost that implies (needs real-weight
+validation, not assessable with random weights).
+
+## Required Evidence
+
+Needs real weights and an accuracy budget to determine a safe
+compute-step schedule — meaningless to tune against random weights.
+Should follow, not precede, OPT-001.
+
+## Promotion Condition
+
+Promote alongside OPT-001, once real-weight accuracy validation exists
+to determine which steps are safe to skip.
+
+# OPT-007
+
+Status: not promoted
+
+Area: INT4 (QuaRot W4A4, SM80 CUTLASS) as an additional precision option — confirmed buildable and runnable on Ada, not just Thor
+
+## Observation
+
+`csrc/gemm/cutlass_sm80_int4_rowwise.cu` — a real INT4 W4A4 rowwise
+GEMM family, built for Jetson Orin SM87's QuaRot path but templated on
+`cutlass::arch::Sm80` — is gated only by `ENABLE_SM80_INT8_CUTLASS`
+(default ON only for `GPU_ARCH=87`, but overridable) and
+`FLASHRT_ENABLE_CHAMELEON` (default OFF, opt-in), NOT by any
+Blackwell-only check like NVFP4. Confirmed by actually reconfiguring
+and rebuilding on this dev machine (`-DENABLE_SM80_INT8_CUTLASS=ON
+-DFLASHRT_ENABLE_CHAMELEON=ON`, `GPU_ARCH=89`) and running
+`cutlass_int4_rowwise_fp16out` successfully at real ImageWAM projection
+shapes (`benchmarks/imagewam_gemm_precision_compare.py`) — see
+plan.md's own recorded GEMM-only comparison table for the real numbers.
+INT8 (SM80, same family) also works. Both are meaningfully faster than
+FP16 at the shapes that work: INT4 ~9x, INT8 ~4x on the `q/proj`
+(3072x3072) shape.
+
+Real, confirmed limitation, not a guess: `cutlass_int4_rowwise_fp16out`
+and `cutlass_int8_rowwise_fp16out` both fail (non-zero return code,
+not a crash) at the `mlp2` shape (`M=896, N=3072, K=9216`) while
+succeeding at the smaller-K shapes (`K=3072`) — this specific CUTLASS
+kernel instantiation was built for Chameleon-7B's own shapes and has
+not been verified for ImageWAM's larger `K=9216` MLP down-projection.
+
+Also real and not yet addressed: this GEMM's own correctness contract
+(per its file header) requires a QuaRot Hadamard rotation on both
+activation (online FHT) and weight (offline) before quantizing to
+int4 — plain per-row symmetric quantization without it is documented
+in that same file as insufficient for real model activations. This
+benchmark measured throughput only, with random already-packed bytes,
+explicitly skipping the rotation step.
+
+## Opportunity
+
+A fourth precision tier alongside FP16/FP8/FP4, IF the K=9216 shape
+issue is root-caused and fixed (or the down-projection is tiled/split
+to stay within whatever K limit this kernel actually has) AND the
+QuaRot Hadamard rotation is implemented for ImageWAM's own activation
+distributions (a real correctness project, not yet started — this
+would need real weights to even evaluate, same dependency as OPT-001).
+
+## Expected Mechanism
+
+Same mechanism the Chameleon-7B path already uses in production
+(assumed, not independently re-verified here): FHT-rotated activations
++ offline-rotated weights survive int4's dynamic range at measured
+cosine 0.9914 (per the kernel file's own header comment, for
+Chameleon's own model and data — not yet re-measured for ImageWAM).
+
+## Required Evidence
+
+Root-cause the K=9216 failure (likely a fixed tile/workspace assumption
+in this specific CUTLASS instantiation, not investigated further in
+this pass) before treating INT4 as viable for the MLP down-projection
+specifically; the QK/V/up-projection-shaped GEMMs (K=3072) already
+work. Real-weight accuracy work (OPT-001) is a hard prerequisite for
+any correctness claim regardless of the K=9216 fix.
+
+## Promotion Condition
+
+Promote only after both the K=9216 shape issue and the QuaRot rotation
+requirement have real answers — this is presently an interesting,
+confirmed-buildable option, not a working precision tier.
