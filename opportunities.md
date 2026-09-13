@@ -510,6 +510,30 @@ speedup regardless of GEMM precision. This is still an optimistic
 upper bound, not a real deployment number — see the activation-
 quantization caveat above.
 
+## INT8 Full-Pipeline Attempt (Ada) — Confirms the K=9216 Failure Is Not Just an Isolated-Shape Artifact
+
+`benchmarks/imagewam_thor_int8_bench.py` (new, mirrors the INT4 script's
+exact structure): built the full 25+25-layer INT8 pipeline successfully
+(weight allocation, backend construction all fine), but `run_prefill()`
+throws on the very first prefill call, inside the first double layer,
+at `img_mlp2` (`cutlass_int8_rowwise_fp16out`, shape `M=768,N=3072,K=9216`,
+`rc=131079`). Notably, `txt_mlp2` — the *same* K=9216 shape, called
+immediately before it in the same layer, only differing in M (128 vs
+768) — succeeded. This is consistent with the flakiness already
+documented above for this kernel family (not purely a hard `K` gate,
+since it doesn't fail on every K=9216 call), but it does settle the
+question this benchmark was built to answer: the K=9216 instability is
+not an artifact specific to `imagewam_gemm_precision_compare.py`'s own
+mixed-precision-per-shape sequence — it reproduces immediately in a
+realistic full-pipeline call pattern too, on the very first layer.
+Given every one of the 25 backbone layers' `mlp2`/`mlp_down` calls uses
+this exact shape, a full 25-layer prefill has effectively no chance of
+completing cleanly. No further attempt made to get a full-pipeline INT8
+timing number — the kernel is not currently usable end-to-end at
+ImageWAM's real dims, independent of the Thor speed question (which is
+moot here anyway, since OPT-007's Thor result already closed this
+kernel family for Thor on speed grounds alone).
+
 ## Follow-up: does zero-padding K to a power of 2 unblock the FHT crash?
 
 `benchmarks/imagewam_int4_hadamard_padding_probe.py` (new): real
