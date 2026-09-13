@@ -797,23 +797,41 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                 float(s["scale"]), stream,
             )
         elif kernel == "mot_joint":
+            # OPT-003 fix (opportunities.md): Q covers only the action
+            # rows (q_seq = num_action), not the whole combined sequence
+            # -- during the real denoise loop the prefix/image rows never
+            # have a live query (their own Q was consumed once during
+            # prefill and never read again), so computing attention for
+            # them was pure waste, confirmed on real Thor hardware to
+            # leave the denoise step's cost flat across every precision
+            # tested. K/V still cover the whole combined sequence
+            # (kv_seq = total), since action rows attend into the frozen
+            # prefix K/V. Q/out live at row-offset `a0` within the shared
+            # Q_O buffer (computed here from `a0`, which every mot_joint
+            # caller already supplies for the mask) -- not at row 0 --
+            # since the pipeline writes the action rows' fresh Q there,
+            # not at the buffer's base.
             if x0 is None or a0 is None:
                 raise ValueError(
                     f"site {site!r} uses mot_joint kernel but x0/a0 "
                     f"block boundaries were not provided to run()")
-            if not (0 < int(x0) <= int(a0) <= q_seq):
+            if not (0 < int(x0) <= int(a0) <= kv_seq):
                 raise ValueError(
                     f"invalid block boundaries x0={x0}, a0={a0} for "
-                    f"total sequence length q_seq={q_seq} (require "
-                    f"0 < x0 <= a0 <= q_seq)")
-            fvk.attention_qkv_fp16_mot_joint(
+                    f"combined sequence length kv_seq={kv_seq} (require "
+                    f"0 < x0 <= a0 <= kv_seq)")
+            num_action = q_seq
+            row_width = site_spec.num_q_heads * site_spec.head_dim
+            q_out_ptr = int(s["Q_O"]) + int(a0) * row_width * 2  # fp16 = 2 bytes/elem
+            fvk.attention_qkv_fp16_mot_joint_action(
                 self._ctx_cpp,
-                int(s["Q_O"]), K_ptr, V_ptr,
-                int(s["logits"]), int(s["Q_O"]),
-                q_seq, site_spec.num_q_heads, site_spec.head_dim,
+                q_out_ptr, K_ptr, V_ptr,
+                int(s["logits"]), q_out_ptr,
+                num_action, kv_seq, site_spec.num_q_heads, site_spec.head_dim,
                 int(x0), int(a0),
                 float(s["scale"]), stream,
             )
+            return q_out_ptr
         else:
             raise ValueError(
                 f"unknown kernel {kernel!r} for site {site!r} "

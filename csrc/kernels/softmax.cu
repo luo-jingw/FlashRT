@@ -268,6 +268,105 @@ void softmax_mot_joint_fp16(__half* data, int rows, int cols,
 }
 
 
+// MoT joint-attention block mask, ACTION QUERIES ONLY (OPT-003 fix).
+//
+// softmax_mot_joint_fp16_kernel above assumes queries cover the WHOLE
+// [prefix|image|action] sequence, branching per row on which of the
+// three groups it belongs to. During the actual ImageWAM denoise loop
+// only the action rows ever have a live query -- the prefix/image
+// rows' own Q was already consumed once during prefill and its output
+// is never read again (plan.md Phase 4's own documented note). Calling
+// the three-region kernel there anyway means computing `total*NH`
+// query rows to obtain only `num_action*NH` useful ones -- confirmed
+// on real Thor hardware to leave the denoise step's cost totally flat
+// across FP16/BF16/FP8/FP4 (opportunities.md OPT-003): quantizing the
+// surrounding GEMMs cannot help a step that is attention-bound by this
+// overcompute.
+//
+// Restricting Q to the action rows collapses the three-region branch
+// into ONE rule for every row (no more `row / NH` group lookup): an
+// action row sees `[0, x0) U [a0, total)` -- never `[x0, a0)`. `rows`
+// here is `num_action * NH`, not `total * NH`.
+__global__ void softmax_mot_joint_action_fp16_kernel(__half* data, int rows, int cols,
+                                                      int x0, int a0, int total) {
+    int lane = threadIdx.x % SM_WARP_SIZE;
+    int row = blockIdx.x;
+    if (row >= rows) return;
+
+#define MOT_JOINT_ACTION_VISIBLE(c) (((c) < x0) || ((c) >= a0))
+
+    __half* src = data + row * cols;
+    int cols2 = cols / 2;
+    __half2* src2 = reinterpret_cast<__half2*>(src);
+
+    float reg[SM_ITERS];
+    float mx = -1e30f;
+
+    #pragma unroll
+    for (int it = 0; it < SM_ITERS / 2; it++) {
+        int c2 = it * SM_WARP_SIZE + lane;
+        if (c2 < cols2) {
+            int c_base = c2 * 2;
+            __half2 v2 = src2[c2];
+            float v0 = __half2float(v2.x);
+            float v1 = __half2float(v2.y);
+            if (c_base >= total || !MOT_JOINT_ACTION_VISIBLE(c_base)) v0 = -1e30f;
+            if (c_base + 1 >= total || !MOT_JOINT_ACTION_VISIBLE(c_base + 1)) v1 = -1e30f;
+            reg[it*2] = v0;
+            reg[it*2+1] = v1;
+            mx = fmaxf(mx, fmaxf(v0, v1));
+        } else {
+            reg[it*2] = -1e30f;
+            reg[it*2+1] = -1e30f;
+        }
+    }
+    if ((cols & 1) && lane == 0) {
+        int c = cols - 1;
+        float v = __half2float(src[c]);
+        if (c >= total || !MOT_JOINT_ACTION_VISIBLE(c)) v = -1e30f;
+        reg[SM_ITERS-1] = v;
+        mx = fmaxf(mx, v);
+    }
+#undef MOT_JOINT_ACTION_VISIBLE
+
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1)
+        mx = fmaxf(mx, __shfl_xor_sync(0xffffffff, mx, o));
+
+    float sm = 0;
+    #pragma unroll
+    for (int it = 0; it < SM_ITERS; it++) {
+        reg[it] = __expf(reg[it] - mx);
+        sm += reg[it];
+    }
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1)
+        sm += __shfl_xor_sync(0xffffffff, sm, o);
+
+    float inv = 1.f / (sm + 1e-8f);
+    #pragma unroll
+    for (int it = 0; it < SM_ITERS / 2; it++) {
+        int c2 = it * SM_WARP_SIZE + lane;
+        if (c2 < cols2) {
+            __half2 v2;
+            v2.x = __float2half(reg[it*2] * inv);
+            v2.y = __float2half(reg[it*2+1] * inv);
+            src2[c2] = v2;
+        }
+    }
+    if ((cols & 1) && lane == 0) {
+        src[cols-1] = __float2half(reg[SM_ITERS-1] * inv);
+    }
+}
+
+void softmax_mot_joint_action_fp16(__half* data, int rows, int cols,
+                                    int x0, int a0, int total,
+                                    cudaStream_t stream) {
+    softmax_mot_joint_action_fp16_kernel<<<rows, SM_WARP_SIZE, 0, stream>>>(
+        data, rows, cols, x0, a0, total);
+}
+
+
 // Causal softmax — strict upper-triangular masking per-head.
 // Layout: (NH * S_q, cols) row-major. For row r, head-local Q index
 // q = r % S_q; mask cols j > q AND j >= pad_start.

@@ -367,3 +367,56 @@ void attention_qkv_fp16_mot_joint(
         out, CUDA_R_16F, HD,
         CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
 }
+
+
+// ImageWAM MoT joint-attention, ACTION QUERIES ONLY (OPT-003 fix).
+// Structurally identical to attention_qkv_fp16_mot_joint above --
+// same QK^T -> masked softmax -> PV composition -- except Q covers
+// only num_action rows instead of total, and correspondingly this is
+// NOT self-attention (S=num_action != S_kv=total): K/V still cover the
+// full combined sequence.
+void attention_qkv_fp16_mot_joint_action(
+    cublasHandle_t handle,
+    const __half* Q,
+    const __half* K,
+    const __half* V,
+    __half* logits,
+    __half* out,
+    int num_action, int total, int NH, int HD,
+    int x0, int a0,
+    float attn_scale,
+    cudaStream_t stream)
+{
+    cublasSetStream(handle, stream);
+
+    int total_pad = total + (total & 1);
+
+    // Step 1: QK^T for action queries (num_action*NH) against ALL keys (total)
+    float zero = 0.0f;
+    cublasGemmEx(handle,
+        CUBLAS_OP_T, CUBLAS_OP_N,
+        total, num_action * NH, HD,
+        &attn_scale,
+        K, CUDA_R_16F, HD,
+        Q, CUDA_R_16F, HD,
+        &zero,
+        logits, CUDA_R_16F, total_pad,
+        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+
+    // Step 2: fused mask+softmax, single collapsed rule for every row
+    // (see softmax_mot_joint_action_fp16).
+    softmax_mot_joint_action_fp16(logits, num_action * NH, total_pad,
+                                   x0, a0, total, stream);
+
+    // Step 3: PV
+    float one = 1.0f;
+    cublasGemmEx(handle,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        HD, num_action * NH, total,
+        &one,
+        V, CUDA_R_16F, HD,
+        logits, CUDA_R_16F, total_pad,
+        &zero,
+        out, CUDA_R_16F, HD,
+        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+}

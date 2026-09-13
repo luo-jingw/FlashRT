@@ -63,11 +63,14 @@ def test_backbone_and_mot_sites_run_without_nan():
     assert out_ptr == backbone_Q_O.data_ptr()
     assert torch.isfinite(backbone_Q_O).all()
 
-    # Mot: joint attention over the full sequence, action queries mixed in.
+    # Mot: joint attention, action queries ONLY (OPT-003 fix) -- q_seq is
+    # num_action, kv_seq is the full combined sequence; output lands at
+    # row-offset a0 within mot_Q_O, not at row 0.
+    num_action = total - a0
     torch.randn(total * NH, HD, dtype=torch.float16, device=device, out=mot_Q_O)
-    out_ptr = backend.run("mot", 0, q_seq=total, stream=0, x0=x0, a0=a0)
+    out_ptr = backend.run("mot", 0, q_seq=num_action, kv_seq=total, stream=0, x0=x0, a0=a0)
     torch.cuda.synchronize()
-    assert out_ptr == mot_Q_O.data_ptr()
+    assert out_ptr == mot_Q_O.data_ptr() + a0 * NH * HD * 2  # row width is NH*HD, not HD
     assert torch.isfinite(mot_Q_O).all()
 
     print("PASS: both sites dispatch and produce finite output")

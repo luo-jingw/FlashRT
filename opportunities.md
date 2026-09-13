@@ -90,59 +90,83 @@ reference implementation.
 
 # OPT-003
 
-Status: not promoted
+Status: RESOLVED (fixed and verified on Ada; Thor re-measurement still pending)
 
-Area: ImageWAM denoise step — mot_joint attention computes ~15x more than needed
+Area: ImageWAM denoise step — mot_joint attention computed ~15x more than needed
 
-## Observation
+## Observation (original)
 
 Real Thor (SM110) measurement (plan.md "Real Thor Results"): FP4/FP8
 GEMM quantization speeds up backbone prefill by 1.3-1.5x but leaves the
 ActionDiT denoise step essentially unchanged across all four precisions
-tested (~35ms regardless of FP16/BF16/FP8/FP4). Root cause is
-`attn.run("mot", ...)`'s own documented design (Phase 4's Structures
-section): every denoise step computes joint attention over the WHOLE
-`total` sequence (`total*NH` query rows), even though only the
-`num_action` action rows' output is ever read afterward — at this
-plan's own benchmark dims (`total=960, num_action=64`), that is
-roughly 15x more query rows computed than needed. GEMM quantization
-cannot help a step that is attention-bound by this overcompute.
+tested (~35ms regardless of FP16/BF16/FP8/FP4). Root cause was
+`attn.run("mot", ...)`'s own design (Phase 4's Structures section):
+every denoise step computed joint attention over the WHOLE `total`
+sequence (`total*NH` query rows), even though only the `num_action`
+action rows' output is ever read afterward — at this plan's own
+benchmark dims (`total=960, num_action=64`), that is roughly 15x more
+query rows computed than needed.
 
-## Opportunity
+## Fix (implemented and verified)
 
-Either (a) slice `attn.run`'s Q input to only the action rows before
-calling `attention_qkv_fp16_mot_joint` (requires confirming the kernel
-accepts a Q row count different from the K/V row count — currently it
-assumes `S == S_kv == total`, so this needs a kernel signature change,
-not just a call-site change), or (b) accept the overcompute but batch
-multiple denoise steps' worth of action-row attention into fewer,
-larger kernel launches if that changes the profile favorably. Needs
-real profiling on Thor to know which (or something else) actually
-moves the number — this is a hypothesis grounded in a real
-measurement, not yet a verified fix.
+New kernel `attention_qkv_fp16_mot_joint_action`
+(`csrc/kernels/attention_cublas.cu`/`.cuh`) + softmax variant
+`softmax_mot_joint_action_fp16` (`csrc/kernels/softmax.cu`/`.cuh`):
+same cuBLAS-composed QK^T → masked-softmax → PV structure as the
+original `mot_joint` kernel, but Q covers only `num_action*NH` rows
+(not `total*NH`) — K/V still cover the whole `total` sequence, since
+action rows attend into the frozen prefix K/V. Collapsing Q to action
+rows only also collapses the softmax mask from three row-groups down
+to ONE uniform rule for every row (`[0,x0) U [a0,total)`), since every
+remaining row is an action row.
 
-## Expected Mechanism
+`ImageWAMAttnBackend.run()`'s `"mot_joint"` branch now requires
+`q_seq=num_action` and an explicit `kv_seq=total` (previously
+`kv_seq` defaulted from `q_seq=total`, i.e. they were the same value);
+it computes the Q/output pointer offset (`Q_O + a0*row_width`)
+internally from `a0`, which every caller already supplies for the
+mask, so the pipeline call sites only needed their `q_seq`/`kv_seq`
+arguments updated, not their own pointer arithmetic (they already
+compute and read from `action_Q_ptr` at that same offset both before
+and after the call). Updated: `pipeline_thor.py`'s
+`_action_double_layer`/`_action_single_layer`, and all four
+`benchmarks/imagewam_thor_*_bench.py` scripts.
 
-Reducing the mot_joint kernel's own Q row count from `total*NH` to
-`num_action*NH` should reduce both the QK^T and PV cuBLAS GEMM cost
-roughly proportionally (~15x fewer rows in this plan's own benchmark
-dims), and shrink the softmax kernel's own row count analogously.
+**Correctness verified two ways** (`tests/test_imagewam_mot_joint_action_kernel.py`):
+against a PyTorch reference (`cosine=1.000000`), and — the contract
+that actually matters — bit-for-bit equivalence with what the ORIGINAL
+`mot_joint` kernel produces for the same action rows when run over the
+whole sequence (`cosine=1.000000` there too): this is a pure speed
+optimization with zero behavior change for the rows that matter.
+Existing tests (`test_imagewam_denoise.py`, `test_imagewam_frontend.py`,
+`test_imagewam_attn_backend.py` — the last one updated for the new
+`q_seq`/`kv_seq`/output-offset contract) all still pass.
 
-## Required Evidence
+## Real Measured Speedup (Ada, this machine)
 
-Profile the denoise step on Thor with `nsight`/`nvprof`-equivalent
-tooling to confirm `mot_joint`'s own kernels (not something else) are
-actually the dominant cost before changing the kernel signature —
-Phase 4's plan.md documentation predicted this cost but this is the
-first real measurement showing it does not respond to GEMM
-quantization, which is consistent with (but does not by itself prove)
-the attention-bound hypothesis.
+| | one denoise step (25L) | prefill + 10-step |
+|---|---|---|
+| FP16, before fix | 29.5 ms | 447.8 ms |
+| FP16, after fix | **5.68 ms (5.2x)** | **203.2 ms (2.2x)** |
+| INT4 (GEMM-only), before fix | 24.2 ms | 283.3 ms |
+| INT4 (GEMM-only), after fix | **4.37 ms (5.5x)** | **91.1 ms (3.1x)** |
+
+Matches the ~15x theoretical query-row reduction reasonably well once
+GEMM cost (which does not shrink) is accounted for — the denoise step
+was almost entirely attention time before the fix, so a ~15x cheaper
+attention call yields roughly the 5x step-level speedup measured.
+
+## Required Evidence — still open
+
+This is Ada, not Thor. The real Thor re-measurement (repeating the
+"Real Thor Results" table with this fix in place) has not been done —
+the FP4/FP8/INT4 benchmark scripts are updated and ready for that, but
+require the user's own Thor access to run.
 
 ## Promotion Condition
 
-Promote once Thor profiling confirms mot_joint is the dominant
-denoise-step cost and a specific kernel-signature change is proposed
-and reviewed.
+Promote to `docs/` (verified fact) once re-measured on real Thor
+hardware and the number holds up there too.
 
 # OPT-004
 

@@ -89,3 +89,25 @@ void attention_qkv_fp16_mot_joint(
     int x0, int a0,          // block boundaries, see softmax_mot_joint_fp16
     float attn_scale,
     cudaStream_t stream = 0);
+
+// Same joint attention, ACTION QUERIES ONLY (OPT-003, opportunities.md).
+// Q covers just the action rows (num_action*NH), not the whole
+// combined sequence -- during the real ImageWAM denoise loop the
+// prefix/image rows never have a live query (their own Q was already
+// consumed once during prefill), so attention_qkv_fp16_mot_joint above
+// computes total*NH query rows to obtain only num_action*NH useful
+// ones. K/V still cover the WHOLE [0, total) combined sequence (the
+// action rows' visibility spans [0,x0) U [a0,total), which needs the
+// full K/V resident either way) -- only Q shrinks. S != S_kv here:
+// S = num_action, S_kv = total.
+void attention_qkv_fp16_mot_joint_action(
+    cublasHandle_t handle,
+    const __half* Q,         // (num_action*NH, HD) -- action rows only
+    const __half* K,         // (total, HD) -- full combined K
+    const __half* V,         // (total, HD) -- full combined V
+    __half* logits,          // scratch: (num_action*NH, total_padded)
+    __half* out,             // (num_action*NH, HD)
+    int num_action, int total, int NH, int HD,
+    int x0, int a0,          // block boundaries, see softmax_mot_joint_action_fp16
+    float attn_scale,
+    cudaStream_t stream = 0);

@@ -1140,3 +1140,48 @@ the GEMMs be" signal, not a number a real INT4 deployment could
 actually achieve without first resolving this — recorded in full in
 `opportunities.md` OPT-007, which this finding meaningfully updates
 (both the mlp2-flakiness correction and the FHT crash).
+
+## OPT-003 Fixed: mot_joint Attention Restricted to Action Queries
+
+Following the priority order agreed after the "为什么慢" discussion:
+OPT-003 (the biggest, best-understood win) implemented and verified
+first, ahead of OPT-004/OPT-002/OPT-001.
+
+New kernel pair (`attention_qkv_fp16_mot_joint_action` +
+`softmax_mot_joint_action_fp16`, `csrc/kernels/attention_cublas.cu`/`.cuh`
+and `softmax.cu`/`.cuh`): identical cuBLAS-composed structure to the
+original `mot_joint` kernel, but Q covers only the `num_action` action
+rows instead of the whole `total` sequence — K/V still cover `total`
+(action rows attend into the frozen prefix K/V). Collapses the
+softmax's three-row-group mask into one uniform rule per row, since
+every remaining row is an action row. `ImageWAMAttnBackend.run()`'s
+`"mot_joint"` branch now takes `q_seq=num_action` + explicit
+`kv_seq=total` and computes the Q/output pointer offset internally
+from `a0`; `pipeline_thor.py` and all four benchmark scripts updated
+to the new call contract (two-line change each — the pointer
+arithmetic the pipeline already did before/after the call did not need
+to change, since the new kernel writes to the same offset).
+
+Verified two ways (`tests/test_imagewam_mot_joint_action_kernel.py`):
+against a PyTorch reference (cosine=1.000000), and bit-for-bit
+equivalence with the ORIGINAL `mot_joint` kernel's own output for the
+same action rows (cosine=1.000000) — the contract that actually
+matters: zero behavior change for the rows anything reads, pure speed.
+All existing tests still pass.
+
+**Real measured speedup, this machine (Ada)**:
+
+| | one denoise step (25L) | prefill + 10-step |
+|---|---|---|
+| FP16 before → after | 29.5 ms → **5.68 ms (5.2x)** | 447.8 ms → **203.2 ms (2.2x)** |
+| INT4 (GEMM-only) before → after | 24.2 ms → **4.37 ms (5.5x)** | 283.3 ms → **91.1 ms (3.1x)** |
+
+Full details, including the exact mechanism and remaining Thor
+re-measurement gap, recorded in `opportunities.md` OPT-003 (now marked
+RESOLVED on Ada; Thor confirmation still pending — the user's own
+Thor-side FP16/BF16/FP8/FP4 numbers from before this fix are the
+baseline to re-run against).
+
+Next per the agreed priority order: OPT-004 step 1 (measure the
+CUDA-graph-captured, not graph-free, whole-pipeline number), then
+OPT-005 (FA2/FA4 for backbone's plain self-attention).

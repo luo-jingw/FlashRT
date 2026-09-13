@@ -2198,6 +2198,22 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
        py::arg("total"), py::arg("NH"), py::arg("HD"),
        py::arg("x0"), py::arg("a0"), py::arg("attn_scale") = 1.0f, py::arg("stream") = 0);
 
+    m.def("attention_qkv_fp16_mot_joint_action", [](FvkContext& ctx, uintptr_t Q, uintptr_t K, uintptr_t V,
+                                    uintptr_t logits, uintptr_t out,
+                                    int num_action, int total, int NH, int HD,
+                                    int x0, int a0, float attn_scale, uintptr_t stream) {
+        attention_qkv_fp16_mot_joint_action(ctx.cublas_handle,
+                            reinterpret_cast<const __half*>(Q),
+                            reinterpret_cast<const __half*>(K),
+                            reinterpret_cast<const __half*>(V),
+                            reinterpret_cast<__half*>(logits),
+                            reinterpret_cast<__half*>(out),
+                            num_action, total, NH, HD, x0, a0, attn_scale, to_stream(stream));
+    }, py::arg("ctx"), py::arg("Q"), py::arg("K"), py::arg("V"),
+       py::arg("logits"), py::arg("out"),
+       py::arg("num_action"), py::arg("total"), py::arg("NH"), py::arg("HD"),
+       py::arg("x0"), py::arg("a0"), py::arg("attn_scale") = 1.0f, py::arg("stream") = 0);
+
     m.def("softmax_fp16", [](uintptr_t data, int rows, int cols, uintptr_t stream) {
         softmax_fp16(reinterpret_cast<__half*>(data), rows, cols, to_stream(stream));
     }, py::arg("data"), py::arg("rows"), py::arg("cols"), py::arg("stream") = 0);

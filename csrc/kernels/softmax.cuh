@@ -54,3 +54,18 @@ void softmax_state_masked_fp16(__half* data, int rows, int cols,
 void softmax_mot_joint_fp16(__half* data, int rows, int cols,
                              int NH, int x0, int a0, int total,
                              cudaStream_t stream = 0);
+
+// Same block mask, restricted to ACTION QUERIES ONLY (OPT-003 fix,
+// opportunities.md). During the real ImageWAM denoise loop, only the
+// action rows ever have a live query — the prefix/image rows' own Q
+// was already consumed once during prefill and its output is never
+// read again. `softmax_mot_joint_fp16` above computes `total*NH` query
+// rows to get only `num_action*NH` useful ones; this variant takes
+// exactly `num_action*NH` rows and applies the single collapsed rule
+// every one of them shares: visible cols = [0, x0) U [a0, total).
+// `rows` is `num_action * NH`, not `total * NH` — the caller (pipeline)
+// is responsible for having written only the action rows' Q into the
+// GEMM input this feeds.
+void softmax_mot_joint_action_fp16(__half* data, int rows, int cols,
+                                    int x0, int a0, int total,
+                                    cudaStream_t stream = 0);

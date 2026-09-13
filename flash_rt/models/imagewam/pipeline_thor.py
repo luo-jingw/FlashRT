@@ -295,14 +295,16 @@ def imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None
 #
 # Per-step attention: only the action rows have a live query this
 # step -- the backbone/image rows' own Q was already consumed during
-# prefill (Phase 3) and is never read again. `attn.run("mot", ...)`
-# still computes attention for the WHOLE `total` sequence (a compute
-# inefficiency tracked in opportunities.md, not a correctness issue:
-# attention is row-independent, so the backbone/image rows' own
-# meaningless output from stale Q is simply never read). Rows
-# `[a0, total)` of the shared Q_O/K_cache/V_cache are overwritten with
-# this step's fresh ActionDiT Q/K/V before every `attn.run` call; rows
-# `[0, a0)` are left exactly as prefill last wrote them.
+# prefill (Phase 3) and is never read again. `attn.run("mot", ...,
+# q_seq=num_action, kv_seq=total, ...)` computes attention for ONLY the
+# action rows (OPT-003 fix, opportunities.md -- an earlier version
+# computed the whole `total` sequence here, confirmed on real Thor
+# hardware to leave the denoise step's cost flat across every precision
+# tested since it was purely attention-bound overcompute, not a
+# correctness issue). K/V still cover the whole combined sequence.
+# Rows `[a0, total)` of the shared Q_O/K_cache/V_cache are overwritten
+# with this step's fresh ActionDiT Q/K/V before every `attn.run` call;
+# rows `[0, a0)` are left exactly as prefill last wrote them.
 #
 # ActionDiT has no declared output-projection weight (Phase 1 declares
 # only q/k/v/proj/mlp0/mlp2 and linear1/linear2, ending at
@@ -343,7 +345,7 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
     gemm.fp16_nn(normed, key("k"), action_K_ptr, num_action, HD, action_hidden_dim, stream)
     gemm.fp16_nn(normed, key("v"), action_V_ptr, num_action, HD, action_hidden_dim, stream)
 
-    attn.run("mot", site_layer_idx, q_seq=dims["total"], stream=stream, x0=x0, a0=a0)
+    attn.run("mot", site_layer_idx, q_seq=num_action, kv_seq=dims["total"], stream=stream, x0=x0, a0=a0)
 
     proj = bufs["action_proj_scratch"]
     gemm.fp16_nn(action_Q_ptr, key("proj"), proj, num_action, action_hidden_dim, action_attn_width, stream)
@@ -388,7 +390,7 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     gemm.fp16_nn(normed, key("mlp_in"), mlp, num_action, action_mlp_hidden, action_hidden_dim, stream)
     fvk.gelu_inplace_fp16(mlp, num_action * action_mlp_hidden, stream)
 
-    attn.run("mot", site_layer_idx, q_seq=dims["total"], stream=stream, x0=x0, a0=a0)
+    attn.run("mot", site_layer_idx, q_seq=num_action, kv_seq=dims["total"], stream=stream, x0=x0, a0=a0)
 
     proj = bufs["action_proj_scratch"]
     gemm.fp16_nn(action_Q_ptr, key("attn_out_proj"), proj, num_action, action_hidden_dim, action_attn_width, stream)

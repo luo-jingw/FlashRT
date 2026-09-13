@@ -294,7 +294,7 @@ class FullImageWAMFP16:
         w["k"](normed, _view_fp16(action_K_ptr, num_action, HD), num_action, stream)
         w["v"](normed, _view_fp16(action_V_ptr, num_action, HD), num_action, stream)
 
-        self.attn.run("mot", site_li, q_seq=TOTAL, stream=stream, x0=X0, a0=a0)
+        self.attn.run("mot", site_li, q_seq=NUM_ACTION, kv_seq=TOTAL, stream=stream, x0=X0, a0=a0)
 
         proj = self.action_proj_scratch
         w["proj"](_view_fp16(action_Q_ptr, num_action, ACTION_ATTN_WIDTH), proj, num_action, stream)
@@ -328,7 +328,7 @@ class FullImageWAMFP16:
         w["mlp_in"](normed, mlp, num_action, stream)
         fvk.gelu_inplace_fp16(mlp.data_ptr(), num_action * ACTION_MLP_HIDDEN, stream)
 
-        self.attn.run("mot", site_li, q_seq=TOTAL, stream=stream, x0=X0, a0=a0)
+        self.attn.run("mot", site_li, q_seq=NUM_ACTION, kv_seq=TOTAL, stream=stream, x0=X0, a0=a0)
 
         proj = self.action_proj_scratch
         w["attn_out_proj"](_view_fp16(action_Q_ptr, num_action, ACTION_ATTN_WIDTH), proj, num_action, stream)
