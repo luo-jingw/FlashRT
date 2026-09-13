@@ -823,3 +823,48 @@ real-resolution sequence lengths against the `softmax_mot_joint_fp16`
 `>=1024`-column ceiling flagged in Phase 2. This plan's own stated
 goal — extend FlashRT's Thor pipeline machinery to cover ImageWAM's
 structural shape with random weights, deferring precision — is met.
+
+## Ada (sm_89) Steady-State Speed (this machine, not Thor)
+
+`benchmarks/imagewam_thor_bench.py`: per-layer-type steady-state
+latency (CUDA-event timed, 15 warmup + 50 measured iterations, P50) at
+ImageWAM's REAL confirmed per-head geometry (`hidden=3072, HD=128,
+NH=24, mlp_hidden=9216` backbone; `action_hidden_dim=1024,
+action_attn_width=3072, action_mlp_hidden=4096` ActionDiT — from
+`_imagewam_thor_spec.py`), at a representative (not confirmed-real)
+sequence length `x0=128, a0=896, num_action=64 (=max_action_horizon),
+total=960` — kept under `softmax_mot_joint_fp16`'s confirmed
+`SM_MAX_COLS=1024` ceiling (`csrc/kernels/softmax.cu`) so the number
+reflects real work, not silently-truncated work.
+
+Deliberately benchmarks one layer of each type in isolation (1-layer
+`AttentionSpec`, called repeatedly at `layer_idx=0`) rather than
+allocating the full 25-layer weight set (~5.5GB of random FP16 weights
+at real dims) — this machine has ~6.7GB free on an 8GB shared laptop
+GPU. Whole-pipeline totals below are `layer_count × per-layer P50`,
+not one single measured run — valid because every layer of a given
+type has identical shapes and therefore identical steady-state cost.
+
+| Component | P50 |
+|---|---|
+| backbone double-stream layer | 6.26 ms |
+| backbone single-stream layer | 5.79 ms |
+| ActionDiT double-stream layer | 1.07 ms |
+| ActionDiT single-stream layer | 1.07 ms |
+| `mot_joint` kernel alone (no GEMMs) | 0.87 ms |
+| `standard` attn kernel alone (no GEMMs) | 0.74 ms |
+| **backbone prefill total** (5 double + 20 single) | **147.1 ms** |
+| **one ActionDiT denoise step** (5 double + 20 single) | **26.7 ms** |
+| prefill + 1-step denoise | 173.8 ms |
+| prefill + 4-step denoise | 253.9 ms |
+| prefill + 10-step denoise | 414.1 ms |
+
+Not a Thor number (this machine's own Ada sm_89 GPU) and not an
+accuracy claim (random weights). The per-layer numbers are dominated
+by the large GEMMs (backbone `mlp0`/`mlp2` alone are `896×9216×3072`
+each way), not by the attention kernels themselves — the standalone
+kernel timings above are roughly an order of magnitude below a full
+layer's own time, consistent with that. `attn.run` inside a real layer
+also carries the `get_slot_ptrs`/dispatch Python overhead this
+micro-benchmark's own direct kernel calls skip, so the "kernel only"
+row is a lower bound, not the attention share of a real layer.
