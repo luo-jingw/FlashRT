@@ -698,16 +698,58 @@ Step 1 (graph-vs-graph-free) and step 4 (autotune) are both now
 verified on real Thor hardware — promoted for those two findings
 **against the OLD approximate-math pipeline**; step 4's win needs
 re-confirming on Thor against the NEW real-math pipeline (see above --
-Ada alone now shows no win, unlike before). Step 2 (QKV fusion) is now
-DONE (see above) — correctness/checkpoint-fidelity confirmed, speed
-win unconfirmed on Ada and untested on Thor. Step 3 (residual+norm
-fusion) remains unpromoted, now flagged as the "fused epilogue
-kernels" item in `PROJECT.md`'s mechanism-integration plan
-(2026-09-14): no existing
-FlashRT kernel matches ImageWAM's exact math (LayerNorm-no-affine +
-broadcast-modulate; RMS QK-Norm + interleaved RoPE), so this needs
-genuinely new kernel work, not a call-site change — the largest
-single item in that plan besides FP8/FP4 quantization.
+Ada alone now shows no win, unlike before). Step 2 (QKV fusion) and
+step 3 (fused AdaLN modulation + gated residual, below) are now DONE —
+both correctness-confirmed, neither shows a speed win on Ada.
+
+## Step 3 done: residual+norm fusion — CORRECTION, an existing kernel already matched, no new kernel needed
+
+An earlier pass through this file claimed "no existing FlashRT kernel
+matches ImageWAM's exact math (LayerNorm-no-affine + broadcast-
+modulate)," concluding this would need genuinely new CUDA kernel work.
+**That claim was wrong** — found by reading `csrc/bindings.cpp`/
+`csrc/kernels/norm.cu` directly (not by searching by name/model
+association, which is what missed it the first time): `ada_layer_norm_fp16`
+already exists (written for a different model, GROOT N1.6's own DiT)
+and computes EXACTLY `LayerNorm_no_affine(x)*(1+scale)+shift` in ONE
+kernel launch, with `scale`/`shift` as `[dim]` per-forward broadcast
+vectors — precisely ImageWAM's own real modulation semantics, no math
+difference at all. Similarly `gate_res_fp16` (`residual[i] +=
+gemm_out[i]*gate[i]`, flat) covers the gated-residual step, modulo one
+real constraint: its flat elementwise indexing has no stride/broadcast
+concept, so `gate` must be a genuinely `(seq,dim)`-MATERIALIZED copy,
+not a `(dim,)` broadcast view (unlike `ada_layer_norm_fp16`'s own
+`scale`/`shift`, which the kernel itself broadcasts internally).
+
+`pipeline_thor.py`'s 4 real-math layer helpers now call these two
+kernels directly, replacing the earlier `layer_norm_no_affine_fp16` +
+torch-elementwise-modulate pair and the torch-elementwise gated-
+residual-add. New `_fuse_mod_group` helper produces the exact inputs
+each kernel needs (fp16-cast `shift`/`scale`, broadcast-materialized
+fp16 `gate`) -- proven to run ONLY during graph capture/warmup, never
+during `.replay()` (same reasoning already established for
+`_modulate`'s own former per-call tensor ops), so this is not a
+per-replay cost. `normed_scratch`/`action_normed` buffers are now
+gone entirely (the fused kernel needs no separate LN-output landing
+pad).
+
+Verified: all 21 ImageWAM tests pass; `test_imagewam_thor_real_wiring.py`'s
+cosine checks stay exactly 1.000000 for all 4 layer types (unchanged
+from step 2 — same math, just fewer kernel launches to reach it).
+Speed, real FLUX.2 dims on Ada (`imagewam_thor_bench.py`): backbone_double
+9.6-10.1ms → 10.0ms, backbone_single 9.1-9.4ms → 9.1ms — **no
+measurable win, same as steps 1 and 2**. Consistent with the same
+compute-bound explanation: the layer's own GEMMs (qkv at 3x width,
+mlp0 at 2x width, both thousands of columns) take single-digit
+milliseconds each, while the fused-away kernels (LN+modulate,
+gated-residual) operate on tiny elementwise data and were already
+microseconds — removing 1-2 microsecond-scale launches from a
+~10-millisecond layer is not measurable. Not yet measured on Thor.
+Kept regardless: strictly fewer kernel launches and less global-memory
+round-tripping (the old two-step LN+modulate wrote and re-read an
+intermediate `normed` buffer; the fused kernel never materializes it),
+real code-quality and future-shape-robustness wins even where the
+timing is a wash today.
 
 # OPT-005
 

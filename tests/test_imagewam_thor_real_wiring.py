@@ -147,7 +147,6 @@ def test_double_stream_layer_matches_real_reference():
     bufs = {
         "context": context.data_ptr(),
         "backbone_hidden": combined.data_ptr(),
-        "normed_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
         "modded_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
         "txt_qkv_merged": _own(torch.zeros(x0, 3 * hidden, dtype=FP16, device=DEV)).data_ptr(),
         "img_qkv_merged": _own(torch.zeros(img_len, 3 * hidden, dtype=FP16, device=DEV)).data_ptr(),
@@ -229,7 +228,6 @@ def test_single_stream_layer_matches_real_reference():
     combined = _own(x.clone())
     bufs = {
         "backbone_hidden": combined.data_ptr(),
-        "normed_scratch": _own(torch.zeros(total, hidden, dtype=FP16, device=DEV)).data_ptr(),
         "modded_scratch": _own(torch.zeros(total, hidden, dtype=FP16, device=DEV)).data_ptr(),
         "single_qkv_merged": _own(torch.zeros(total, 3 * hidden, dtype=FP16, device=DEV)).data_ptr(),
         "single_mlp_merged": _own(torch.zeros(total, mlp_hidden * 2, dtype=FP16, device=DEV)).data_ptr(),
@@ -333,7 +331,6 @@ def test_action_double_and_single_layers_match_real_reference():
     action_x = _own(action.clone())
     bufs = {
         "action_hidden": action_x.data_ptr(),
-        "action_normed": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "action_modded": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "action_qkv_merged": _own(torch.zeros(num_action, 3 * attn_dim, dtype=FP16, device=DEV)).data_ptr(),
         "action_proj_scratch": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),
@@ -371,7 +368,6 @@ def test_action_double_and_single_layers_match_real_reference():
     action_x2 = _own(action.clone())
     bufs2 = {
         "action_hidden": action_x2.data_ptr(),
-        "action_normed": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "action_modded": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "action_qkv_merged": _own(torch.zeros(num_action, 3 * attn_dim, dtype=FP16, device=DEV)).data_ptr(),
         "action_proj_scratch": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),

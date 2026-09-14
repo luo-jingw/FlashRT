@@ -117,7 +117,6 @@ def test_prefill_runs_and_populates_kv_cache():
     bufs = {
         "context": context.data_ptr(),
         "backbone_hidden": backbone_hidden.data_ptr(),
-        "normed_scratch": _zeros(a0, hidden).data_ptr(),
         "modded_scratch": _zeros(a0, hidden).data_ptr(),
         "txt_qkv_merged": _zeros(x0, 3 * hidden).data_ptr(),
         "img_qkv_merged": _zeros(a0 - x0, 3 * hidden).data_ptr(),

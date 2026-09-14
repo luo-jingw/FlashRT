@@ -196,7 +196,7 @@ class ImageWAMTorchFrontendThor:
 
         shapes = {
             (x0, hidden, joint_attention_dim),      # txt_in
-            (x0, 3 * hidden, hidden),                 # txt_qkv (OPT-004 step 5, fused)
+            (x0, 3 * hidden, hidden),                 # txt_qkv (OPT-004 step 2, fused)
             (x0, hidden, hidden),                      # txt_proj
             (x0, mlp_hidden * 2, hidden),               # txt_mlp0
             (x0, hidden, mlp_hidden),                   # txt_mlp2
@@ -285,7 +285,6 @@ class ImageWAMTorchFrontendThor:
         return {
             "context": self._context.data_ptr(),
             "backbone_hidden": self._backbone_hidden.data_ptr(),
-            "normed_scratch": z(a0, hidden).data_ptr(),
             "modded_scratch": z(a0, hidden).data_ptr(),
             "txt_qkv_merged": z(x0, 3 * hidden).data_ptr(),
             "img_qkv_merged": z(img_len, 3 * hidden).data_ptr(),
@@ -301,7 +300,6 @@ class ImageWAMTorchFrontendThor:
             "proj_scratch2": z(a0, hidden).data_ptr(),
             "action_latent": self._action_latent.data_ptr(),
             "action_hidden": z(num_action, ahd).data_ptr(),
-            "action_normed": z(num_action, ahd).data_ptr(),
             "action_modded": z(num_action, ahd).data_ptr(),
             "action_proj_scratch": z(num_action, ahd).data_ptr(),
             "action_proj_scratch2": z(num_action, ahd).data_ptr(),

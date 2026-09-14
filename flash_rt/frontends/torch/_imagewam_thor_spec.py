@@ -28,7 +28,7 @@ Dimensions are architecture configs only (no weight download):
 `flash_rt/models/imagewam/pipeline_thor.py`'s real-math layer helpers
 consume directly.** Q/K/V are declared as ONE fused `{prefix}_qkv.weight`
 tensor (`(width, 3*width)`, GEMM (K,N) convention) — a 2026-09-14
-follow-up (OPT-004 step 5, opportunities.md) that both cuts the
+follow-up (OPT-004 step 2, opportunities.md) that both cuts the
 projection from 3 GEMM launches to 1 AND matches a real checkpoint's
 own fused `qkv` tensor directly (a real checkpoint's `img_attn.qkv`/
 `txt_attn.qkv`/`linear1`'s own QKV slice loads into this shape with NO

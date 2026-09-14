@@ -113,7 +113,6 @@ def test_denoise_loop_runs_and_advances_latent():
     bufs = {
         "context": context.data_ptr(),
         "backbone_hidden": backbone_hidden.data_ptr(),
-        "normed_scratch": _zeros(a0, hidden).data_ptr(),
         "modded_scratch": _zeros(a0, hidden).data_ptr(),
         "txt_qkv_merged": _zeros(x0, 3 * hidden).data_ptr(),
         "img_qkv_merged": _zeros(a0 - x0, 3 * hidden).data_ptr(),
@@ -129,7 +128,6 @@ def test_denoise_loop_runs_and_advances_latent():
         "proj_scratch2": _zeros(a0, hidden).data_ptr(),
         "action_latent": action_latent.data_ptr(),
         "action_hidden": _zeros(num_action, action_hidden_dim).data_ptr(),
-        "action_normed": _zeros(num_action, action_hidden_dim).data_ptr(),
         "action_modded": _zeros(num_action, action_hidden_dim).data_ptr(),
         "action_proj_scratch": _zeros(num_action, action_hidden_dim).data_ptr(),
         "action_proj_scratch2": _zeros(num_action, action_hidden_dim).data_ptr(),

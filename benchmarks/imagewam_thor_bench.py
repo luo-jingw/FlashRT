@@ -179,7 +179,6 @@ def bench_backbone_double():
     bufs = {
         "context": _rand(X0, JOINT_ATTN_DIM).data_ptr(),
         "backbone_hidden": _rand(A0, HIDDEN, scale=0.1).data_ptr(),
-        "normed_scratch": _zeros(A0, HIDDEN).data_ptr(),
         "modded_scratch": _zeros(A0, HIDDEN).data_ptr(),
         "txt_qkv_merged": _zeros(X0, 3 * HIDDEN).data_ptr(),
         "img_qkv_merged": _zeros(img_len, 3 * HIDDEN).data_ptr(),
@@ -226,7 +225,6 @@ def bench_backbone_single():
     dims = dict(hidden=HIDDEN, HD=HD, NH=NH, mlp_hidden=MLP_HIDDEN, a0=A0)
     bufs = {
         "backbone_hidden": _rand(A0, HIDDEN, scale=0.1).data_ptr(),
-        "normed_scratch": _zeros(A0, HIDDEN).data_ptr(),
         "modded_scratch": _zeros(A0, HIDDEN).data_ptr(),
         "single_qkv_merged": _zeros(A0, 3 * HIDDEN).data_ptr(),
         "single_mlp_merged": _zeros(A0, MLP_HIDDEN * 2).data_ptr(),
@@ -270,7 +268,6 @@ def bench_action_double():
                 num_action=NUM_ACTION, total=TOTAL)
     bufs = {
         "action_hidden": _rand(NUM_ACTION, ACTION_HIDDEN_DIM, scale=0.1).data_ptr(),
-        "action_normed": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
         "action_modded": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
         "action_qkv_merged": _zeros(NUM_ACTION, 3 * ACTION_ATTN_WIDTH).data_ptr(),
         "action_proj_scratch": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
@@ -315,7 +312,6 @@ def bench_action_single():
                 num_action=NUM_ACTION, total=TOTAL)
     bufs = {
         "action_hidden": _rand(NUM_ACTION, ACTION_HIDDEN_DIM, scale=0.1).data_ptr(),
-        "action_normed": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
         "action_modded": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
         "action_qkv_merged": _zeros(NUM_ACTION, 3 * ACTION_ATTN_WIDTH).data_ptr(),
         "action_proj_scratch": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
