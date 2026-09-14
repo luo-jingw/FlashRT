@@ -46,14 +46,16 @@ def _own(t):
 
 def _fused_qkv(hidden, device):
     """One random fused (hidden, 3*hidden) QKV weight (GEMM (K,N)
-    convention), split by COLUMN range into separate q/k/v matrices --
-    mathematically identical to 3 independent GEMMs (see
-    `_imagewam_thor_spec.py`'s own docstring)."""
+    convention) -- this IS the real fused `{prefix}_qkv.weight` the
+    pointer path now consumes directly (OPT-004 step 5, QKV fusion);
+    `q`/`k`/`v` (contiguous column-slice copies) are still returned
+    for the tensor-level reference (`real_double_stream_block_forward_fp16`
+    etc.) which builds its own `torch.cat([q,k,v],dim=1)`."""
     fused = _own((torch.randn(hidden, 3 * hidden, dtype=torch.float32, device=device) * 0.02).to(FP16))
     q = fused[:, 0:hidden].contiguous()
     k = fused[:, hidden:2 * hidden].contiguous()
     v = fused[:, 2 * hidden:3 * hidden].contiguous()
-    return q, k, v
+    return q, k, v, fused
 
 
 def _lin(n, k, device):
@@ -83,11 +85,9 @@ def test_double_stream_layer_matches_real_reference():
 
     ref_w, ptr_w = {}, {("backbone", "double", 0, "txt_in.weight"): txt_in_w.data_ptr()}
     for side in ("txt", "img"):
-        q, k, v = _fused_qkv(hidden, DEV)
+        q, k, v, fused = _fused_qkv(hidden, DEV)
         ref_w[f"{side}_qkv"] = torch.cat([q, k, v], dim=1)
-        ptr_w[("backbone", "double", 0, f"{side}_q.weight")] = q.data_ptr()
-        ptr_w[("backbone", "double", 0, f"{side}_k.weight")] = k.data_ptr()
-        ptr_w[("backbone", "double", 0, f"{side}_v.weight")] = v.data_ptr()
+        ptr_w[("backbone", "double", 0, f"{side}_qkv.weight")] = fused.data_ptr()
         proj = _lin(hidden, hidden, DEV)
         ref_w[f"{side}_proj"] = proj
         ptr_w[("backbone", "double", 0, f"{side}_proj.weight")] = proj.data_ptr()
@@ -149,6 +149,8 @@ def test_double_stream_layer_matches_real_reference():
         "backbone_hidden": combined.data_ptr(),
         "normed_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
         "modded_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
+        "txt_qkv_merged": _own(torch.zeros(x0, 3 * hidden, dtype=FP16, device=DEV)).data_ptr(),
+        "img_qkv_merged": _own(torch.zeros(img_len, 3 * hidden, dtype=FP16, device=DEV)).data_ptr(),
         "txt_mlp_merged": _own(torch.zeros(x0, mlp_hidden * 2, dtype=FP16, device=DEV)).data_ptr(),
         "txt_mlp_gated": _own(torch.zeros(x0, mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "img_mlp_merged": _own(torch.zeros(img_len, mlp_hidden * 2, dtype=FP16, device=DEV)).data_ptr(),
@@ -173,7 +175,7 @@ def test_single_stream_layer_matches_real_reference():
     torch.manual_seed(1)
     scale = 1.0 / (HD ** 0.5)
 
-    q, k, v = _fused_qkv(hidden, DEV)
+    q, k, v, fused = _fused_qkv(hidden, DEV)
     ref_w = {
         "qkv": torch.cat([q, k, v], dim=1),
         "attn_out": _lin(hidden, hidden, DEV),
@@ -183,9 +185,7 @@ def test_single_stream_layer_matches_real_reference():
         "key_norm": _norm_scale(HD, DEV),
     }
     ptr_w = {
-        ("backbone", "single", 0, "q.weight"): q.data_ptr(),
-        ("backbone", "single", 0, "k.weight"): k.data_ptr(),
-        ("backbone", "single", 0, "v.weight"): v.data_ptr(),
+        ("backbone", "single", 0, "qkv.weight"): fused.data_ptr(),
         ("backbone", "single", 0, "attn_out_proj.weight"): ref_w["attn_out"].data_ptr(),
         ("backbone", "single", 0, "mlp_in.weight"): ref_w["mlp_in"].data_ptr(),
         ("backbone", "single", 0, "mlp_down.weight"): ref_w["mlp_out"].data_ptr(),
@@ -231,6 +231,7 @@ def test_single_stream_layer_matches_real_reference():
         "backbone_hidden": combined.data_ptr(),
         "normed_scratch": _own(torch.zeros(total, hidden, dtype=FP16, device=DEV)).data_ptr(),
         "modded_scratch": _own(torch.zeros(total, hidden, dtype=FP16, device=DEV)).data_ptr(),
+        "single_qkv_merged": _own(torch.zeros(total, 3 * hidden, dtype=FP16, device=DEV)).data_ptr(),
         "single_mlp_merged": _own(torch.zeros(total, mlp_hidden * 2, dtype=FP16, device=DEV)).data_ptr(),
         "single_mlp_gated": _own(torch.zeros(total, mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "proj_scratch": _own(torch.zeros(total, hidden, dtype=FP16, device=DEV)).data_ptr(),
@@ -247,15 +248,14 @@ def test_single_stream_layer_matches_real_reference():
 
 def _action_common(NH, HD, action_hidden, action_mlp_hidden, backbone_total, device):
     attn_dim = NH * HD
-    q, k, v = _fused_qkv(action_hidden, device) if attn_dim == action_hidden else (None, None, None)
-    # ActionDiT's own q/k/v projects action_hidden -> attn_dim (may
+    # ActionDiT's own qkv projects action_hidden -> attn_dim (may
     # differ), so build directly at that shape rather than reusing
     # `_fused_qkv` (which assumes square hidden==attn_dim).
     fused = _own((torch.randn(action_hidden, 3 * attn_dim, dtype=torch.float32, device=device) * 0.02).to(FP16))
     q = fused[:, 0:attn_dim].contiguous()
     k = fused[:, attn_dim:2 * attn_dim].contiguous()
     v = fused[:, 2 * attn_dim:3 * attn_dim].contiguous()
-    return q, k, v
+    return q, k, v, fused
 
 
 def test_action_double_and_single_layers_match_real_reference():
@@ -309,7 +309,7 @@ def test_action_double_and_single_layers_match_real_reference():
                 action_mlp_hidden=action_mlp_hidden, x0=1, a0=backbone_total, total=total,
                 num_action=num_action)
 
-    q, k, v = _action_common(NH, HD, action_hidden, action_mlp_hidden, backbone_total, DEV)
+    q, k, v, qkv_fused = _action_common(NH, HD, action_hidden, action_mlp_hidden, backbone_total, DEV)
     ref_w = {
         "qkv": torch.cat([q, k, v], dim=1),
         "proj": _lin(action_hidden, attn_dim, DEV),
@@ -319,9 +319,7 @@ def test_action_double_and_single_layers_match_real_reference():
         "key_norm": _norm_scale(HD, DEV),
     }
     ptr_w = {
-        ("action_dit", "double", 0, "q.weight"): q.data_ptr(),
-        ("action_dit", "double", 0, "k.weight"): k.data_ptr(),
-        ("action_dit", "double", 0, "v.weight"): v.data_ptr(),
+        ("action_dit", "double", 0, "qkv.weight"): qkv_fused.data_ptr(),
         ("action_dit", "double", 0, "proj.weight"): ref_w["proj"].data_ptr(),
         ("action_dit", "double", 0, "mlp0.weight"): ref_w["mlp_in"].data_ptr(),
         ("action_dit", "double", 0, "mlp2.weight"): ref_w["mlp_out"].data_ptr(),
@@ -337,6 +335,7 @@ def test_action_double_and_single_layers_match_real_reference():
         "action_hidden": action_x.data_ptr(),
         "action_normed": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "action_modded": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),
+        "action_qkv_merged": _own(torch.zeros(num_action, 3 * attn_dim, dtype=FP16, device=DEV)).data_ptr(),
         "action_proj_scratch": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "action_mlp_merged": _own(torch.zeros(num_action, action_mlp_hidden * 2, dtype=FP16, device=DEV)).data_ptr(),
         "action_mlp_gated": _own(torch.zeros(num_action, action_mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
@@ -348,7 +347,7 @@ def test_action_double_and_single_layers_match_real_reference():
 
     # Single layer, independent weights, using the SAME cached K/V
     # (site_layer_idx=1, matching K_cache[1] populated above).
-    q2, k2, v2 = _action_common(NH, HD, action_hidden, action_mlp_hidden, backbone_total, DEV)
+    q2, k2, v2, qkv_fused2 = _action_common(NH, HD, action_hidden, action_mlp_hidden, backbone_total, DEV)
     ref_w2 = {
         "qkv": torch.cat([q2, k2, v2], dim=1),
         "attn_out": _lin(action_hidden, attn_dim, DEV),
@@ -358,9 +357,7 @@ def test_action_double_and_single_layers_match_real_reference():
         "key_norm": _norm_scale(HD, DEV),
     }
     ptr_w2 = {
-        ("action_dit", "single", 0, "q.weight"): q2.data_ptr(),
-        ("action_dit", "single", 0, "k.weight"): k2.data_ptr(),
-        ("action_dit", "single", 0, "v.weight"): v2.data_ptr(),
+        ("action_dit", "single", 0, "qkv.weight"): qkv_fused2.data_ptr(),
         ("action_dit", "single", 0, "attn_out_proj.weight"): ref_w2["attn_out"].data_ptr(),
         ("action_dit", "single", 0, "mlp_in.weight"): ref_w2["mlp_in"].data_ptr(),
         ("action_dit", "single", 0, "mlp_down.weight"): ref_w2["mlp_out"].data_ptr(),
@@ -376,6 +373,7 @@ def test_action_double_and_single_layers_match_real_reference():
         "action_hidden": action_x2.data_ptr(),
         "action_normed": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "action_modded": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),
+        "action_qkv_merged": _own(torch.zeros(num_action, 3 * attn_dim, dtype=FP16, device=DEV)).data_ptr(),
         "action_proj_scratch": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "action_proj_scratch2": _own(torch.zeros(num_action, action_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "action_mlp_merged": _own(torch.zeros(num_action, action_mlp_hidden * 2, dtype=FP16, device=DEV)).data_ptr(),

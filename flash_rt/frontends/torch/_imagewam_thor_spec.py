@@ -26,20 +26,28 @@ Dimensions are architecture configs only (no weight download):
 
 **Per-layer shapes below now match what
 `flash_rt/models/imagewam/pipeline_thor.py`'s real-math layer helpers
-consume directly** (Q/K/V as three separate GEMMs, not one fused
-`qkv`/`linear1` — mathematically identical to a real checkpoint's
-fused tensor sliced by output-row range at load time, same convention
-`flash_rt/models/imagewam/real_single_stream_block.py` already
-documents and uses). This is a deliberate divergence from a prior
-version of this file, which declared checkpoint-tensor-shaped fused
-`qkv`/`linear1`/`linear2` names for "real-load compatibility" that was
-never actually exercised — real checkpoint loading (when it exists)
-will go through ImageWAM's own Python model classes plus
-`benchmarks/imagewam_real_checkpoint_validation.py`'s own
-`extract_*_weights` functions (already verified against the real
+consume directly.** Q/K/V are declared as ONE fused `{prefix}_qkv.weight`
+tensor (`(width, 3*width)`, GEMM (K,N) convention) — a 2026-09-14
+follow-up (OPT-004 step 5, opportunities.md) that both cuts the
+projection from 3 GEMM launches to 1 AND matches a real checkpoint's
+own fused `qkv` tensor directly (a real checkpoint's `img_attn.qkv`/
+`txt_attn.qkv`/`linear1`'s own QKV slice loads into this shape with NO
+splitting needed, unlike an earlier version of this file that
+deliberately kept Q/K/V separate for pointer-code simplicity — that
+turned out to cost both a real GEMM launch and checkpoint-native-ness
+for no benefit). `proj`/`attn_out_proj` (the OUTPUT projection) and
+`mlp0`/`mlp2` (or `mlp_in`/`mlp_down`) remain separate GEMMs — only the
+QKV *input* projection fuses, since `pipeline_thor.py`'s own
+`_double_stream_layer`/etc. need Q and K to land in two DIFFERENT
+persistent buffers (`Q_O`/`K_cache`) afterward regardless (one GEMM
+into a wide scratch buffer, then 3 slice-copies), while `proj`'s single
+output has nowhere else fusing could help.
+
+Real checkpoint loading (when it exists) will go through ImageWAM's
+own Python model classes plus `benchmarks/imagewam_real_checkpoint_validation.py`'s
+own `extract_*_weights` functions (already verified against the real
 checkpoint, cosine=0.9999+), which read from real `nn.Module` objects
-and already do this splitting themselves — not from this file's
-declared shapes.
+directly — not from this file's declared shapes.
 
 K/V are now real per-head width (`backbone_hidden`/`action_attn_width`,
 matching `NH*HD`), not the old broadcast-K/V `HD` width — see
@@ -112,20 +120,16 @@ SPEC = ImageWAMThorSpec()
 # ──────────────────────────────────────────────────────────────────
 
 BACKBONE_DOUBLE_LAYER_SHAPES: dict[str, tuple[int, ...]] = {
-    "img_q.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
-    "img_k.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
-    "img_v.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "img_qkv.weight": (SPEC.backbone_hidden, 3 * SPEC.backbone_hidden),
     "img_proj.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
     "img_mlp0.weight": (SPEC.backbone_mlp_hidden * 2, SPEC.backbone_hidden),
     "img_mlp2.weight": (SPEC.backbone_hidden, SPEC.backbone_mlp_hidden),
     "img_query_norm": (SPEC.backbone_head_dim,),
     "img_key_norm": (SPEC.backbone_head_dim,),
     # txt stream: context arrives at joint_attention_dim, projected
-    # into the shared attention width once per layer before q/k/v.
+    # into the shared attention width once per layer before qkv.
     "txt_in.weight": (SPEC.backbone_hidden, SPEC.joint_attention_dim),
-    "txt_q.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
-    "txt_k.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
-    "txt_v.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "txt_qkv.weight": (SPEC.backbone_hidden, 3 * SPEC.backbone_hidden),
     "txt_proj.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
     "txt_mlp0.weight": (SPEC.backbone_mlp_hidden * 2, SPEC.backbone_hidden),
     "txt_mlp2.weight": (SPEC.backbone_hidden, SPEC.backbone_mlp_hidden),
@@ -135,11 +139,9 @@ BACKBONE_DOUBLE_LAYER_SHAPES: dict[str, tuple[int, ...]] = {
 
 # Single-stream blocks: img+txt merged into one stream. Real fused
 # linear1(QKV+MLP-up)/linear2(attn-out+MLP-down) represented as
-# separate GEMMs -- see module docstring.
+# separate GEMMs, except QKV itself which fuses -- see module docstring.
 BACKBONE_SINGLE_LAYER_SHAPES: dict[str, tuple[int, ...]] = {
-    "q.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
-    "k.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
-    "v.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "qkv.weight": (SPEC.backbone_hidden, 3 * SPEC.backbone_hidden),
     "attn_out_proj.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
     "mlp_in.weight": (SPEC.backbone_mlp_hidden * 2, SPEC.backbone_hidden),
     "mlp_down.weight": (SPEC.backbone_hidden, SPEC.backbone_mlp_hidden),
@@ -166,9 +168,7 @@ SHARED_MOD_SHAPES: dict[str, tuple[int, ...]] = {
 # ──────────────────────────────────────────────────────────────────
 
 ACTION_DIT_DOUBLE_LAYER_SHAPES: dict[str, tuple[int, ...]] = {
-    "q.weight": (SPEC.action_attn_width, SPEC.action_hidden_dim),
-    "k.weight": (SPEC.action_attn_width, SPEC.action_hidden_dim),
-    "v.weight": (SPEC.action_attn_width, SPEC.action_hidden_dim),
+    "qkv.weight": (SPEC.action_hidden_dim, 3 * SPEC.action_attn_width),
     "proj.weight": (SPEC.action_hidden_dim, SPEC.action_attn_width),
     "mlp0.weight": (SPEC.action_mlp_hidden * 2, SPEC.action_hidden_dim),
     "mlp2.weight": (SPEC.action_hidden_dim, SPEC.action_mlp_hidden),
@@ -177,9 +177,7 @@ ACTION_DIT_DOUBLE_LAYER_SHAPES: dict[str, tuple[int, ...]] = {
 }
 
 ACTION_DIT_SINGLE_LAYER_SHAPES: dict[str, tuple[int, ...]] = {
-    "q.weight": (SPEC.action_attn_width, SPEC.action_hidden_dim),
-    "k.weight": (SPEC.action_attn_width, SPEC.action_hidden_dim),
-    "v.weight": (SPEC.action_attn_width, SPEC.action_hidden_dim),
+    "qkv.weight": (SPEC.action_hidden_dim, 3 * SPEC.action_attn_width),
     "attn_out_proj.weight": (SPEC.action_hidden_dim, SPEC.action_attn_width),
     "mlp_in.weight": (SPEC.action_mlp_hidden * 2, SPEC.action_hidden_dim),
     "mlp_down.weight": (SPEC.action_hidden_dim, SPEC.action_mlp_hidden),

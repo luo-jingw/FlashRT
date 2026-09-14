@@ -120,6 +120,20 @@ def _time_ms(fn, warmup=WARMUP, iters=ITERS) -> tuple[float, float, float]:
     return p50, p90, statistics.mean(times)
 
 
+def _autotune(gemm, shapes):
+    """Autotune `gemm.fp16_nn` once per distinct (M,N,K) shape -- OPT-004
+    step 4, now the frontend's own default (see imagewam_thor.py's
+    `_autotune_gemm`). Uses disposable zero-filled scratch, not this
+    benchmark's own real weight/activation buffers -- autotune only
+    times candidate algorithms, it needs no meaningful values."""
+    for m, n, k in shapes:
+        x = torch.zeros(m, k, dtype=FP16, device=DEV)
+        w = torch.zeros(k, n, dtype=FP16, device=DEV)
+        out = torch.zeros(m, n, dtype=FP16, device=DEV)
+        gemm.autotune_fp16_nn(x.data_ptr(), w.data_ptr(), out.data_ptr(), m, n, k, 16)
+    torch.cuda.synchronize()
+
+
 def _make_1layer_backend(*, kind: str):
     """A 1-layer AttentionSpec/backend for isolated per-layer-type timing."""
     max_seq = A0 if kind == "backbone" else TOTAL
@@ -154,9 +168,7 @@ def bench_backbone_double():
     img_len = A0 - X0
     weights = {("backbone", "double", 0, "txt_in.weight"): _lin(HIDDEN, JOINT_ATTN_DIM).data_ptr()}
     for prefix in ("txt", "img"):
-        weights[("backbone", "double", 0, f"{prefix}_q.weight")] = _lin(HIDDEN, HIDDEN).data_ptr()
-        weights[("backbone", "double", 0, f"{prefix}_k.weight")] = _lin(HIDDEN, HIDDEN).data_ptr()
-        weights[("backbone", "double", 0, f"{prefix}_v.weight")] = _lin(HIDDEN, HIDDEN).data_ptr()
+        weights[("backbone", "double", 0, f"{prefix}_qkv.weight")] = _lin(3 * HIDDEN, HIDDEN).data_ptr()
         weights[("backbone", "double", 0, f"{prefix}_proj.weight")] = _lin(HIDDEN, HIDDEN).data_ptr()
         weights[("backbone", "double", 0, f"{prefix}_mlp0.weight")] = _lin(MLP_HIDDEN * 2, HIDDEN).data_ptr()
         weights[("backbone", "double", 0, f"{prefix}_mlp2.weight")] = _lin(HIDDEN, MLP_HIDDEN).data_ptr()
@@ -169,6 +181,8 @@ def bench_backbone_double():
         "backbone_hidden": _rand(A0, HIDDEN, scale=0.1).data_ptr(),
         "normed_scratch": _zeros(A0, HIDDEN).data_ptr(),
         "modded_scratch": _zeros(A0, HIDDEN).data_ptr(),
+        "txt_qkv_merged": _zeros(X0, 3 * HIDDEN).data_ptr(),
+        "img_qkv_merged": _zeros(img_len, 3 * HIDDEN).data_ptr(),
         "txt_mlp_merged": _zeros(X0, MLP_HIDDEN * 2).data_ptr(),
         "txt_mlp_gated": _zeros(X0, MLP_HIDDEN).data_ptr(),
         "img_mlp_merged": _zeros(img_len, MLP_HIDDEN * 2).data_ptr(),
@@ -184,6 +198,12 @@ def bench_backbone_double():
     }
     mod_txt, mod_img, _ = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, HIDDEN)
     table = build_backbone_rope_table(X0, img_len, 1, device=DEV)
+    _autotune(gemm, {
+        (X0, HIDDEN, JOINT_ATTN_DIM), (X0, 3 * HIDDEN, HIDDEN), (X0, HIDDEN, HIDDEN),
+        (X0, MLP_HIDDEN * 2, HIDDEN), (X0, HIDDEN, MLP_HIDDEN),
+        (img_len, 3 * HIDDEN, HIDDEN), (img_len, HIDDEN, HIDDEN), (img_len, MLP_HIDDEN * 2, HIDDEN),
+        (img_len, HIDDEN, MLP_HIDDEN),
+    })
 
     def run():
         _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, attn,
@@ -196,9 +216,7 @@ def bench_backbone_single():
     ctx, attn = _make_1layer_backend(kind="backbone")
     gemm = fvk.GemmRunner()
     weights = {
-        ("backbone", "single", 0, "q.weight"): _lin(HIDDEN, HIDDEN).data_ptr(),
-        ("backbone", "single", 0, "k.weight"): _lin(HIDDEN, HIDDEN).data_ptr(),
-        ("backbone", "single", 0, "v.weight"): _lin(HIDDEN, HIDDEN).data_ptr(),
+        ("backbone", "single", 0, "qkv.weight"): _lin(3 * HIDDEN, HIDDEN).data_ptr(),
         ("backbone", "single", 0, "mlp_in.weight"): _lin(MLP_HIDDEN * 2, HIDDEN).data_ptr(),
         ("backbone", "single", 0, "attn_out_proj.weight"): _lin(HIDDEN, HIDDEN).data_ptr(),
         ("backbone", "single", 0, "mlp_down.weight"): _lin(HIDDEN, MLP_HIDDEN).data_ptr(),
@@ -210,6 +228,7 @@ def bench_backbone_single():
         "backbone_hidden": _rand(A0, HIDDEN, scale=0.1).data_ptr(),
         "normed_scratch": _zeros(A0, HIDDEN).data_ptr(),
         "modded_scratch": _zeros(A0, HIDDEN).data_ptr(),
+        "single_qkv_merged": _zeros(A0, 3 * HIDDEN).data_ptr(),
         "single_mlp_merged": _zeros(A0, MLP_HIDDEN * 2).data_ptr(),
         "single_mlp_gated": _zeros(A0, MLP_HIDDEN).data_ptr(),
         "proj_scratch": _zeros(A0, HIDDEN).data_ptr(),
@@ -224,6 +243,9 @@ def bench_backbone_single():
     }
     _, _, mod_single = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, HIDDEN)
     table = build_backbone_rope_table(X0, A0 - X0, 1, device=DEV)
+    _autotune(gemm, {
+        (A0, 3 * HIDDEN, HIDDEN), (A0, HIDDEN, HIDDEN), (A0, MLP_HIDDEN * 2, HIDDEN), (A0, HIDDEN, MLP_HIDDEN),
+    })
 
     def run():
         _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, 0, attn,
@@ -236,9 +258,7 @@ def bench_action_double():
     ctx, attn = _make_1layer_backend(kind="mot")
     gemm = fvk.GemmRunner()
     weights = {
-        ("action_dit", "double", 0, "q.weight"): _lin(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
-        ("action_dit", "double", 0, "k.weight"): _lin(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
-        ("action_dit", "double", 0, "v.weight"): _lin(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
+        ("action_dit", "double", 0, "qkv.weight"): _lin(3 * ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
         ("action_dit", "double", 0, "proj.weight"): _lin(ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH).data_ptr(),
         ("action_dit", "double", 0, "mlp0.weight"): _lin(ACTION_MLP_HIDDEN * 2, ACTION_HIDDEN_DIM).data_ptr(),
         ("action_dit", "double", 0, "mlp2.weight"): _lin(ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN).data_ptr(),
@@ -252,6 +272,7 @@ def bench_action_double():
         "action_hidden": _rand(NUM_ACTION, ACTION_HIDDEN_DIM, scale=0.1).data_ptr(),
         "action_normed": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
         "action_modded": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
+        "action_qkv_merged": _zeros(NUM_ACTION, 3 * ACTION_ATTN_WIDTH).data_ptr(),
         "action_proj_scratch": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
         "action_mlp_merged": _zeros(NUM_ACTION, ACTION_MLP_HIDDEN * 2).data_ptr(),
         "action_mlp_gated": _zeros(NUM_ACTION, ACTION_MLP_HIDDEN).data_ptr(),
@@ -264,6 +285,12 @@ def bench_action_double():
     }
     mod_double, _ = compute_action_modulation(torch.ones(1, device=DEV), mod_w, ACTION_HIDDEN_DIM)
     action_table = build_action_rope_table(NUM_ACTION, device=DEV)
+    _autotune(gemm, {
+        (NUM_ACTION, 3 * ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM),
+        (NUM_ACTION, ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH),
+        (NUM_ACTION, ACTION_MLP_HIDDEN * 2, ACTION_HIDDEN_DIM),
+        (NUM_ACTION, ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN),
+    })
 
     def run():
         _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, 0, attn,
@@ -276,9 +303,7 @@ def bench_action_single():
     ctx, attn = _make_1layer_backend(kind="mot")
     gemm = fvk.GemmRunner()
     weights = {
-        ("action_dit", "single", 0, "q.weight"): _lin(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
-        ("action_dit", "single", 0, "k.weight"): _lin(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
-        ("action_dit", "single", 0, "v.weight"): _lin(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
+        ("action_dit", "single", 0, "qkv.weight"): _lin(3 * ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
         ("action_dit", "single", 0, "mlp_in.weight"): _lin(ACTION_MLP_HIDDEN * 2, ACTION_HIDDEN_DIM).data_ptr(),
         ("action_dit", "single", 0, "attn_out_proj.weight"): _lin(ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH).data_ptr(),
         ("action_dit", "single", 0, "mlp_down.weight"): _lin(ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN).data_ptr(),
@@ -292,6 +317,7 @@ def bench_action_single():
         "action_hidden": _rand(NUM_ACTION, ACTION_HIDDEN_DIM, scale=0.1).data_ptr(),
         "action_normed": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
         "action_modded": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
+        "action_qkv_merged": _zeros(NUM_ACTION, 3 * ACTION_ATTN_WIDTH).data_ptr(),
         "action_proj_scratch": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
         "action_proj_scratch2": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
         "action_mlp_merged": _zeros(NUM_ACTION, ACTION_MLP_HIDDEN * 2).data_ptr(),
@@ -305,6 +331,12 @@ def bench_action_single():
     }
     _, mod_single = compute_action_modulation(torch.ones(1, device=DEV), mod_w, ACTION_HIDDEN_DIM)
     action_table = build_action_rope_table(NUM_ACTION, device=DEV)
+    _autotune(gemm, {
+        (NUM_ACTION, 3 * ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM),
+        (NUM_ACTION, ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH),
+        (NUM_ACTION, ACTION_MLP_HIDDEN * 2, ACTION_HIDDEN_DIM),
+        (NUM_ACTION, ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN),
+    })
 
     def run():
         _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, 0, attn,

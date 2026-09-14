@@ -97,6 +97,7 @@ class ImageWAMTorchFrontendThor:
 
         self._ctx = fvk.FvkContext()
         self._gemm = fvk.GemmRunner()
+        self._autotune_gemm(d)
 
         self._weights = self._alloc_random_weights(d)
         self._bufs = self._alloc_buffers(d)
@@ -161,6 +162,64 @@ class ImageWAMTorchFrontendThor:
         self._keepalive.append(t)
         return t
 
+    def _autotune_gemm(self, d: dict) -> None:
+        """Autotune `GemmRunner.fp16_nn` once per distinct (M,N,K) shape
+        this frontend's own real math uses (OPT-004 step 4,
+        opportunities.md), at construction time -- before any weight/
+        buffer allocation even, so it never touches this frontend's
+        own real pointers (uses disposable zero-filled scratch of the
+        right shape/dtype instead; autotune only times candidate
+        cuBLASLt algorithms, it does not need meaningful values).
+
+        `autotune_fp16_nn(x_ptr, w_ptr, out_ptr, m, n, k, num_algos)`
+        real-benchmarks up to `num_algos` candidates and writes the
+        winner into the SAME per-(op,M,N,K) cache `fp16_nn` reads from
+        afterward (confirmed by reading `csrc/gemm/gemm_runner.cu`
+        directly -- see `benchmarks/imagewam_thor_fp16_autotuned_bench.py`'s
+        own docstring for the full account) -- this can only match or
+        beat the default heuristic's own top-1 pick, never regress
+        (identical math, only the algorithm choice differs). Every
+        layer of the same type shares an identical shape (confirmed
+        elsewhere in this codebase, e.g. `imagewam_thor_bench.py`'s own
+        docstring: "every layer of the same type has identical shapes
+        and therefore identical steady-state cost"), so exactly one
+        autotune call per distinct shape below covers every layer of
+        that type -- not one call per layer.
+        """
+        hidden, mlp_hidden = d["hidden"], d["mlp_hidden"]
+        joint_attention_dim = d["joint_attention_dim"]
+        x0, a0 = d["x0"], d["a0"]
+        img_len = a0 - x0
+        ahd, aaw, amh, num_action = (
+            d["action_hidden_dim"], d["action_attn_width"],
+            d["action_mlp_hidden"], d["num_action"])
+
+        shapes = {
+            (x0, hidden, joint_attention_dim),      # txt_in
+            (x0, 3 * hidden, hidden),                 # txt_qkv (OPT-004 step 5, fused)
+            (x0, hidden, hidden),                      # txt_proj
+            (x0, mlp_hidden * 2, hidden),               # txt_mlp0
+            (x0, hidden, mlp_hidden),                   # txt_mlp2
+            (img_len, 3 * hidden, hidden),              # img_qkv (fused)
+            (img_len, hidden, hidden),                  # img_proj
+            (img_len, mlp_hidden * 2, hidden),          # img_mlp0
+            (img_len, hidden, mlp_hidden),               # img_mlp2
+            (a0, 3 * hidden, hidden),                     # single qkv (fused)
+            (a0, hidden, hidden),                          # single attn_out_proj
+            (a0, mlp_hidden * 2, hidden),                   # single mlp_in
+            (a0, hidden, mlp_hidden),                        # single mlp_down
+            (num_action, 3 * aaw, ahd),                       # action qkv (fused)
+            (num_action, ahd, aaw),                            # action proj/attn_out_proj
+            (num_action, amh * 2, ahd),                         # action mlp0/mlp_in
+            (num_action, ahd, amh),                              # action mlp2/mlp_down
+        }
+        for m, n, k in shapes:
+            x = torch.zeros(m, k, dtype=FP16, device=DEV)
+            w = torch.zeros(k, n, dtype=FP16, device=DEV)
+            out = torch.zeros(m, n, dtype=FP16, device=DEV)
+            self._gemm.autotune_fp16_nn(x.data_ptr(), w.data_ptr(), out.data_ptr(), m, n, k, 16)
+        torch.cuda.synchronize()
+
     def _rnd_linear(self, n: int, k: int) -> int:
         """Real GEMM (K,N) convention: `n` = output width, `k` = input
         width, stored as (k, n) so `gemm.fp16_nn` reads it directly (a
@@ -182,18 +241,14 @@ class ImageWAMTorchFrontendThor:
         for L in range(d["num_layers_double"]):
             weights[("backbone", "double", L, "txt_in.weight")] = self._rnd_linear(hidden, joint_attention_dim)
             for prefix in ("txt", "img"):
-                weights[("backbone", "double", L, f"{prefix}_q.weight")] = self._rnd_linear(hidden, hidden)
-                weights[("backbone", "double", L, f"{prefix}_k.weight")] = self._rnd_linear(hidden, hidden)
-                weights[("backbone", "double", L, f"{prefix}_v.weight")] = self._rnd_linear(hidden, hidden)
+                weights[("backbone", "double", L, f"{prefix}_qkv.weight")] = self._rnd_linear(3 * hidden, hidden)
                 weights[("backbone", "double", L, f"{prefix}_proj.weight")] = self._rnd_linear(hidden, hidden)
                 weights[("backbone", "double", L, f"{prefix}_mlp0.weight")] = self._rnd_linear(mlp_hidden * 2, hidden)
                 weights[("backbone", "double", L, f"{prefix}_mlp2.weight")] = self._rnd_linear(hidden, mlp_hidden)
                 weights[("backbone", "double", L, f"{prefix}_query_norm")] = self._rnd_norm_scale(HD)
                 weights[("backbone", "double", L, f"{prefix}_key_norm")] = self._rnd_norm_scale(HD)
         for L in range(d["num_layers_single"]):
-            weights[("backbone", "single", L, "q.weight")] = self._rnd_linear(hidden, hidden)
-            weights[("backbone", "single", L, "k.weight")] = self._rnd_linear(hidden, hidden)
-            weights[("backbone", "single", L, "v.weight")] = self._rnd_linear(hidden, hidden)
+            weights[("backbone", "single", L, "qkv.weight")] = self._rnd_linear(3 * hidden, hidden)
             weights[("backbone", "single", L, "attn_out_proj.weight")] = self._rnd_linear(hidden, hidden)
             weights[("backbone", "single", L, "mlp_in.weight")] = self._rnd_linear(mlp_hidden * 2, hidden)
             weights[("backbone", "single", L, "mlp_down.weight")] = self._rnd_linear(hidden, mlp_hidden)
@@ -202,18 +257,14 @@ class ImageWAMTorchFrontendThor:
 
         ahd, aaw, amh = d["action_hidden_dim"], d["action_attn_width"], d["action_mlp_hidden"]
         for L in range(d["action_num_layers_double"]):
-            weights[("action_dit", "double", L, "q.weight")] = self._rnd_linear(aaw, ahd)
-            weights[("action_dit", "double", L, "k.weight")] = self._rnd_linear(aaw, ahd)
-            weights[("action_dit", "double", L, "v.weight")] = self._rnd_linear(aaw, ahd)
+            weights[("action_dit", "double", L, "qkv.weight")] = self._rnd_linear(3 * aaw, ahd)
             weights[("action_dit", "double", L, "proj.weight")] = self._rnd_linear(ahd, aaw)
             weights[("action_dit", "double", L, "mlp0.weight")] = self._rnd_linear(amh * 2, ahd)
             weights[("action_dit", "double", L, "mlp2.weight")] = self._rnd_linear(ahd, amh)
             weights[("action_dit", "double", L, "query_norm")] = self._rnd_norm_scale(HD)
             weights[("action_dit", "double", L, "key_norm")] = self._rnd_norm_scale(HD)
         for L in range(d["action_num_layers_single"]):
-            weights[("action_dit", "single", L, "q.weight")] = self._rnd_linear(aaw, ahd)
-            weights[("action_dit", "single", L, "k.weight")] = self._rnd_linear(aaw, ahd)
-            weights[("action_dit", "single", L, "v.weight")] = self._rnd_linear(aaw, ahd)
+            weights[("action_dit", "single", L, "qkv.weight")] = self._rnd_linear(3 * aaw, ahd)
             weights[("action_dit", "single", L, "attn_out_proj.weight")] = self._rnd_linear(ahd, aaw)
             weights[("action_dit", "single", L, "mlp_in.weight")] = self._rnd_linear(amh * 2, ahd)
             weights[("action_dit", "single", L, "mlp_down.weight")] = self._rnd_linear(ahd, amh)
@@ -225,7 +276,8 @@ class ImageWAMTorchFrontendThor:
         hidden, mlp_hidden, x0, a0 = d["hidden"], d["mlp_hidden"], d["x0"], d["a0"]
         img_len = a0 - x0
         joint_attention_dim = d["joint_attention_dim"]
-        ahd, amh, num_action = d["action_hidden_dim"], d["action_mlp_hidden"], d["num_action"]
+        ahd, aaw, amh, num_action = (
+            d["action_hidden_dim"], d["action_attn_width"], d["action_mlp_hidden"], d["num_action"])
         z = lambda *shape: self._own(torch.zeros(*shape, dtype=FP16, device=DEV))
         self._context = self._own(torch.zeros(x0, joint_attention_dim, dtype=FP16, device=DEV))
         self._backbone_hidden = self._own(torch.zeros(a0, hidden, dtype=FP16, device=DEV))
@@ -235,6 +287,10 @@ class ImageWAMTorchFrontendThor:
             "backbone_hidden": self._backbone_hidden.data_ptr(),
             "normed_scratch": z(a0, hidden).data_ptr(),
             "modded_scratch": z(a0, hidden).data_ptr(),
+            "txt_qkv_merged": z(x0, 3 * hidden).data_ptr(),
+            "img_qkv_merged": z(img_len, 3 * hidden).data_ptr(),
+            "single_qkv_merged": z(a0, 3 * hidden).data_ptr(),
+            "action_qkv_merged": z(num_action, 3 * aaw).data_ptr(),
             "txt_mlp_merged": z(x0, mlp_hidden * 2).data_ptr(),
             "txt_mlp_gated": z(x0, mlp_hidden).data_ptr(),
             "img_mlp_merged": z(img_len, mlp_hidden * 2).data_ptr(),

@@ -79,34 +79,26 @@ def test_denoise_loop_runs_and_advances_latent():
     for L in range(num_double):
         weights[("backbone", "double", L, "txt_in.weight")] = _lin(hidden, joint_attention_dim).data_ptr()
         for prefix in ("txt", "img"):
-            weights[("backbone", "double", L, f"{prefix}_q.weight")] = _lin(hidden, hidden).data_ptr()
-            weights[("backbone", "double", L, f"{prefix}_k.weight")] = _lin(hidden, hidden).data_ptr()
-            weights[("backbone", "double", L, f"{prefix}_v.weight")] = _lin(hidden, hidden).data_ptr()
+            weights[("backbone", "double", L, f"{prefix}_qkv.weight")] = _lin(3 * hidden, hidden).data_ptr()
             weights[("backbone", "double", L, f"{prefix}_proj.weight")] = _lin(hidden, hidden).data_ptr()
             weights[("backbone", "double", L, f"{prefix}_mlp0.weight")] = _lin(mlp_hidden * 2, hidden).data_ptr()
             weights[("backbone", "double", L, f"{prefix}_mlp2.weight")] = _lin(hidden, mlp_hidden).data_ptr()
             weights[("backbone", "double", L, f"{prefix}_query_norm")] = _norm_scale(HD).data_ptr()
             weights[("backbone", "double", L, f"{prefix}_key_norm")] = _norm_scale(HD).data_ptr()
-        weights[("action_dit", "double", L, "q.weight")] = _lin(action_attn_width, action_hidden_dim).data_ptr()
-        weights[("action_dit", "double", L, "k.weight")] = _lin(action_attn_width, action_hidden_dim).data_ptr()
-        weights[("action_dit", "double", L, "v.weight")] = _lin(action_attn_width, action_hidden_dim).data_ptr()
+        weights[("action_dit", "double", L, "qkv.weight")] = _lin(3 * action_attn_width, action_hidden_dim).data_ptr()
         weights[("action_dit", "double", L, "proj.weight")] = _lin(action_hidden_dim, action_attn_width).data_ptr()
         weights[("action_dit", "double", L, "mlp0.weight")] = _lin(action_mlp_hidden * 2, action_hidden_dim).data_ptr()
         weights[("action_dit", "double", L, "mlp2.weight")] = _lin(action_hidden_dim, action_mlp_hidden).data_ptr()
         weights[("action_dit", "double", L, "query_norm")] = _norm_scale(HD).data_ptr()
         weights[("action_dit", "double", L, "key_norm")] = _norm_scale(HD).data_ptr()
     for L in range(num_single):
-        weights[("backbone", "single", L, "q.weight")] = _lin(hidden, hidden).data_ptr()
-        weights[("backbone", "single", L, "k.weight")] = _lin(hidden, hidden).data_ptr()
-        weights[("backbone", "single", L, "v.weight")] = _lin(hidden, hidden).data_ptr()
+        weights[("backbone", "single", L, "qkv.weight")] = _lin(3 * hidden, hidden).data_ptr()
         weights[("backbone", "single", L, "mlp_in.weight")] = _lin(mlp_hidden * 2, hidden).data_ptr()
         weights[("backbone", "single", L, "attn_out_proj.weight")] = _lin(hidden, hidden).data_ptr()
         weights[("backbone", "single", L, "mlp_down.weight")] = _lin(hidden, mlp_hidden).data_ptr()
         weights[("backbone", "single", L, "query_norm")] = _norm_scale(HD).data_ptr()
         weights[("backbone", "single", L, "key_norm")] = _norm_scale(HD).data_ptr()
-        weights[("action_dit", "single", L, "q.weight")] = _lin(action_attn_width, action_hidden_dim).data_ptr()
-        weights[("action_dit", "single", L, "k.weight")] = _lin(action_attn_width, action_hidden_dim).data_ptr()
-        weights[("action_dit", "single", L, "v.weight")] = _lin(action_attn_width, action_hidden_dim).data_ptr()
+        weights[("action_dit", "single", L, "qkv.weight")] = _lin(3 * action_attn_width, action_hidden_dim).data_ptr()
         weights[("action_dit", "single", L, "mlp_in.weight")] = _lin(action_mlp_hidden * 2, action_hidden_dim).data_ptr()
         weights[("action_dit", "single", L, "attn_out_proj.weight")] = _lin(action_hidden_dim, action_attn_width).data_ptr()
         weights[("action_dit", "single", L, "mlp_down.weight")] = _lin(action_hidden_dim, action_mlp_hidden).data_ptr()
@@ -123,6 +115,10 @@ def test_denoise_loop_runs_and_advances_latent():
         "backbone_hidden": backbone_hidden.data_ptr(),
         "normed_scratch": _zeros(a0, hidden).data_ptr(),
         "modded_scratch": _zeros(a0, hidden).data_ptr(),
+        "txt_qkv_merged": _zeros(x0, 3 * hidden).data_ptr(),
+        "img_qkv_merged": _zeros(a0 - x0, 3 * hidden).data_ptr(),
+        "single_qkv_merged": _zeros(a0, 3 * hidden).data_ptr(),
+        "action_qkv_merged": _zeros(num_action, 3 * action_attn_width).data_ptr(),
         "txt_mlp_merged": _zeros(x0, mlp_hidden * 2).data_ptr(),
         "txt_mlp_gated": _zeros(x0, mlp_hidden).data_ptr(),
         "img_mlp_merged": _zeros(a0 - x0, mlp_hidden * 2).data_ptr(),

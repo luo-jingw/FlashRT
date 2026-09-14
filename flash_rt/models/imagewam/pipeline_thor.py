@@ -40,8 +40,9 @@ an eventual real-checkpoint-loading frontend can plug into unchanged.
 Double-stream block (real order, per side txt/img):
     x_normed = LayerNorm_no_affine(x)
     x_mod = (1+scale1)*x_normed + shift1
-    q,k,v = x_mod @ {q,k,v}_weight              # separate GEMMs, real per-head width
-    q,k = QKNorm(q,k)                            # rms_norm_fp16 with the real scale weight
+    qkv = x_mod @ qkv_weight                     # ONE fused GEMM (OPT-004 step 5), real per-head width
+    q,k,v = split_columns(qkv)                    # 3 slice-copies into Q_O/K_cache/V_cache
+    q,k = QKNorm(q,k)                             # rms_norm_fp16 with the real scale weight
     (RoPE applied once below, over the full combined [txt|img] sequence)
     attn = joint_attention(q,k,v)                # ImageWAMAttnBackend "backbone" site, no mask
     x = x + gate1 * (attn @ proj_weight)
@@ -51,10 +52,19 @@ Double-stream block (real order, per side txt/img):
     x = x + gate2 * mlp
 
 Single-stream block: same shape, one stream (no txt/img split), one
-set of q/k/v/mlp_in weights, attn-out-proj + mlp-down SUMMED before the
-one gated residual (matches the real fused `linear2`, represented here
-as two separate GEMMs — see `real_single_stream_block.py`'s own
-docstring for why that split is mathematically identical).
+fused `qkv` GEMM + one `mlp_in` GEMM (both real fused `linear1` slices,
+see `real_single_stream_block.py`'s own docstring), attn-out-proj +
+mlp-down SUMMED before the one gated residual.
+
+**QKV fusion (OPT-004 step 5, 2026-09-14)**: `qkv` is ONE GEMM into a
+`(seq, 3*width)` scratch buffer (matches a real checkpoint's own fused
+tensor directly — see `_imagewam_thor_spec.py`'s docstring), then
+`_copy_slice` lands each third into its own real destination (`Q_O`,
+`K_cache`, `V_cache` are three DIFFERENT persistent buffers the
+attention backend owns, so the split can't be avoided entirely — it
+moves from 3 GEMM launches to 1 GEMM + 3 contiguous copies). `proj`/
+`attn_out_proj`/`mlp0`/`mlp2` (or `mlp_in`/`mlp_down`) remain separate
+GEMMs; only the QKV *input* projection fuses.
 
 ActionDiT double/single blocks: same shape at `action_hidden_dim`/
 `action_attn_width` (which differ, unlike the backbone), IMG-ONLY (no
@@ -105,6 +115,10 @@ frontend, fp16 throughout unless noted):
                                          every sub-block
     modded_scratch    (a0, hidden)   -- post-AdaLN-modulation, reused
                                          by every sub-block
+    txt_qkv_merged/img_qkv_merged  (x0 or img_len, 3*hidden)  -- fused
+                      Q/K/V GEMM scratch (OPT-004 step 5), sliced by
+                      `_copy_slice` into Q_O/K_cache/V_cache
+    single_qkv_merged (a0, 3*hidden)  -- same, single-stream block
     txt_mlp_merged/txt_mlp_gated, img_mlp_merged/img_mlp_gated
                       (x0 or img_len, mlp_hidden*2 / mlp_hidden)
     single_mlp_merged/single_mlp_gated  (a0, mlp_hidden*2 / mlp_hidden)
@@ -116,6 +130,9 @@ frontend, fp16 throughout unless noted):
                                          ONE gated residual)
     action_hidden     (num_action, action_hidden_dim)
     action_normed / action_modded          (num_action, action_hidden_dim)
+    action_qkv_merged (num_action, 3*action_attn_width)  -- fused
+                      action Q/K/V GEMM scratch (double AND single
+                      share this one buffer -- never live at once)
     action_proj_scratch                    (num_action, action_hidden_dim)
     action_mlp_merged/action_mlp_gated     (num_action, action_mlp_hidden*2 / action_mlp_hidden)
     action_latent     (num_action, action_hidden_dim), F32 -- the
@@ -131,23 +148,53 @@ def _ptr_offset(base_ptr: int, row_offset: int, row_width: int) -> int:
     return int(base_ptr) + int(row_offset) * int(row_width) * 2
 
 
-def _wrap_fp16(ptr: int, seq: int, dim: int) -> torch.Tensor:
+def _wrap_fp16(ptr: int, seq: int, dim: int, row_stride: int | None = None) -> torch.Tensor:
     """Zero-copy CUDA tensor view over a raw fp16 pointer -- same
     technique as `flash_rt.hardware.thor.attn_backend._fp16_tensor_from_ptr`
     (not shared via import to keep this module's only external
     dependency `torch`, matching every other pointer-based pipeline
-    file in this project). Used only for the small AdaLN elementwise
-    steps below (modulate / gated-residual / plain add) -- every GEMM
-    and every fvk kernel call still operates on raw pointers directly.
+    file in this project). Used for the small AdaLN elementwise steps
+    below (modulate / gated-residual / plain add) and for the QKV
+    fusion's own column-slice copies (`_copy_slice`) -- every GEMM and
+    every fvk kernel call still operates on raw pointers directly.
+
+    `row_stride` (elements, not bytes): defaults to `dim` (a plain
+    contiguous `(seq,dim)` view). Pass the WIDER buffer's own row
+    width to view a narrower COLUMN SLICE of it across all `seq` rows
+    (e.g. the Q third of a `(seq, 3*hidden)` fused-QKV scratch buffer,
+    stride=`3*hidden`, width=`hidden`) without a copy.
     """
+    stride = int(dim) if row_stride is None else int(row_stride)
     interface = {
         "data": (int(ptr), False),
         "shape": (int(seq), int(dim)),
+        "strides": (stride * 2, 2),
         "typestr": "<f2",
         "version": 3,
     }
     owner = type("_Fp16View", (), {"__cuda_array_interface__": interface})()
     return torch.as_tensor(owner, device="cuda")
+
+
+def _col_ptr(base_ptr: int, col_offset: int) -> int:
+    """Byte offset to column `col_offset` within the SAME row-range as
+    `base_ptr` -- 2 bytes/element. Companion to `_ptr_offset` (which
+    advances by whole ROWS); this advances within one row's columns,
+    for slicing a fused-QKV scratch buffer's Q/K/V thirds."""
+    return int(base_ptr) + int(col_offset) * 2
+
+
+def _copy_slice(dst_ptr: int, src_ptr: int, seq: int, dim: int, *,
+                 dst_row_stride: int | None = None, src_row_stride: int | None = None) -> None:
+    """Plain `dst[:] = src[:]` (no elementwise math), both viewed as
+    `(seq, dim)` -- used to land one Q/K/V third of a fused-QKV GEMM's
+    wider scratch output into its own real per-head-width destination
+    buffer (`Q_O`/`K_cache`/`V_cache`), which `attn.run()`'s attention
+    backend needs at ITS OWN row width, not interleaved with the other
+    two thirds (opportunities.md OPT-004 step 5 -- QKV fusion)."""
+    dst = _wrap_fp16(dst_ptr, seq, dim, row_stride=dst_row_stride)
+    src = _wrap_fp16(src_ptr, seq, dim, row_stride=src_row_stride)
+    dst.copy_(src)
 
 
 def _modulate(normed_ptr: int, out_ptr: int, shift, scale, seq: int, dim: int) -> None:
@@ -185,8 +232,8 @@ def _add_inplace(dst_ptr: int, src_ptr: int, seq: int, dim: int) -> None:
 
 def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream, attn,
                           mod_txt, mod_img, rope_table):
-    """One real FLUX.2 double-stream block: separate img/txt Q/K/V+MLP,
-    joint attn. Reads/writes `bufs["backbone_hidden"]` rows [0,x0)
+    """One real FLUX.2 double-stream block: separate img/txt fused-QKV
+    GEMM + MLP, joint attn. Reads/writes `bufs["backbone_hidden"]` rows [0,x0)
     (text) and [x0,a0) (image) in place.
     """
     hidden = dims["hidden"]
@@ -218,9 +265,11 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
 
     fvk.layer_norm_no_affine_fp16(txt_x, normed, x0, hidden, eps, stream)
     _modulate(normed, modded, txt_shift1, txt_scale1, x0, hidden)
-    gemm.fp16_nn(modded, key("txt_q.weight"), Q_O, x0, hidden, hidden, stream)
-    gemm.fp16_nn(modded, key("txt_k.weight"), K_cache, x0, hidden, hidden, stream)
-    gemm.fp16_nn(modded, key("txt_v.weight"), V_cache, x0, hidden, hidden, stream)
+    txt_qkv_merged = bufs["txt_qkv_merged"]  # (x0, 3*hidden)
+    gemm.fp16_nn(modded, key("txt_qkv.weight"), txt_qkv_merged, x0, 3 * hidden, hidden, stream)
+    _copy_slice(Q_O, txt_qkv_merged, x0, hidden, src_row_stride=3 * hidden)
+    _copy_slice(K_cache, _col_ptr(txt_qkv_merged, hidden), x0, hidden, src_row_stride=3 * hidden)
+    _copy_slice(V_cache, _col_ptr(txt_qkv_merged, 2 * hidden), x0, hidden, src_row_stride=3 * hidden)
     fvk.rms_norm_fp16(Q_O, key("txt_query_norm"), Q_O, x0 * NH, HD, eps, stream)
     fvk.rms_norm_fp16(K_cache, key("txt_key_norm"), K_cache, x0 * NH, HD, eps, stream)
 
@@ -234,9 +283,11 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
 
     fvk.layer_norm_no_affine_fp16(img_x_ptr, img_normed_ptr, img_len, hidden, eps, stream)
     _modulate(img_normed_ptr, img_modded_ptr, img_shift1, img_scale1, img_len, hidden)
-    gemm.fp16_nn(img_modded_ptr, key("img_q.weight"), img_Q_ptr, img_len, hidden, hidden, stream)
-    gemm.fp16_nn(img_modded_ptr, key("img_k.weight"), img_K_ptr, img_len, hidden, hidden, stream)
-    gemm.fp16_nn(img_modded_ptr, key("img_v.weight"), img_V_ptr, img_len, hidden, hidden, stream)
+    img_qkv_merged = bufs["img_qkv_merged"]  # (img_len, 3*hidden)
+    gemm.fp16_nn(img_modded_ptr, key("img_qkv.weight"), img_qkv_merged, img_len, 3 * hidden, hidden, stream)
+    _copy_slice(img_Q_ptr, img_qkv_merged, img_len, hidden, src_row_stride=3 * hidden)
+    _copy_slice(img_K_ptr, _col_ptr(img_qkv_merged, hidden), img_len, hidden, src_row_stride=3 * hidden)
+    _copy_slice(img_V_ptr, _col_ptr(img_qkv_merged, 2 * hidden), img_len, hidden, src_row_stride=3 * hidden)
     fvk.rms_norm_fp16(img_Q_ptr, key("img_query_norm"), img_Q_ptr, img_len * NH, HD, eps, stream)
     fvk.rms_norm_fp16(img_K_ptr, key("img_key_norm"), img_K_ptr, img_len * NH, HD, eps, stream)
 
@@ -278,9 +329,9 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
 
 def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
                           site_layer_idx, stream, attn, mod_single, rope_table):
-    """One real FLUX.2 single-stream block: merged img+txt, separate
-    q/k/v/mlp_in GEMMs (mathematically identical to the real fused
-    `linear1`, see `real_single_stream_block.py`'s own docstring).
+    """One real FLUX.2 single-stream block: merged img+txt, fused
+    `qkv` GEMM + separate `mlp_in` GEMM (both real fused `linear1`
+    slices, see `real_single_stream_block.py`'s own docstring).
     Operates on the whole `bufs["backbone_hidden"]` (a0, hidden)
     buffer. ``weight_layer_idx`` (0..19) indexes this stream's own
     declared weights; ``site_layer_idx`` continues after the
@@ -306,9 +357,11 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     fvk.layer_norm_no_affine_fp16(combined, normed, a0, hidden, eps, stream)
     _modulate(normed, modded, shift, scale, a0, hidden)
 
-    gemm.fp16_nn(modded, key("q.weight"), Q_O, a0, hidden, hidden, stream)
-    gemm.fp16_nn(modded, key("k.weight"), K_cache, a0, hidden, hidden, stream)
-    gemm.fp16_nn(modded, key("v.weight"), V_cache, a0, hidden, hidden, stream)
+    qkv_merged = bufs["single_qkv_merged"]  # (a0, 3*hidden)
+    gemm.fp16_nn(modded, key("qkv.weight"), qkv_merged, a0, 3 * hidden, hidden, stream)
+    _copy_slice(Q_O, qkv_merged, a0, hidden, src_row_stride=3 * hidden)
+    _copy_slice(K_cache, _col_ptr(qkv_merged, hidden), a0, hidden, src_row_stride=3 * hidden)
+    _copy_slice(V_cache, _col_ptr(qkv_merged, 2 * hidden), a0, hidden, src_row_stride=3 * hidden)
     fvk.rms_norm_fp16(Q_O, key("query_norm"), Q_O, a0 * NH, HD, eps, stream)
     fvk.rms_norm_fp16(K_cache, key("key_norm"), K_cache, a0 * NH, HD, eps, stream)
     fvk.rope_apply_fp16_perhead(Q_O, rope_table, a0, NH, HD, stream)
@@ -451,9 +504,13 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
 
     fvk.layer_norm_no_affine_fp16(action_x, normed, num_action, action_hidden_dim, eps, stream)
     _modulate(normed, modded, shift1, scale1, num_action, action_hidden_dim)
-    gemm.fp16_nn(modded, key("q.weight"), action_Q_ptr, num_action, action_attn_width, action_hidden_dim, stream)
-    gemm.fp16_nn(modded, key("k.weight"), action_K_ptr, num_action, action_attn_width, action_hidden_dim, stream)
-    gemm.fp16_nn(modded, key("v.weight"), action_V_ptr, num_action, action_attn_width, action_hidden_dim, stream)
+    qkv_merged = bufs["action_qkv_merged"]  # (num_action, 3*action_attn_width)
+    gemm.fp16_nn(modded, key("qkv.weight"), qkv_merged, num_action, 3 * action_attn_width, action_hidden_dim, stream)
+    _copy_slice(action_Q_ptr, qkv_merged, num_action, action_attn_width, src_row_stride=3 * action_attn_width)
+    _copy_slice(action_K_ptr, _col_ptr(qkv_merged, action_attn_width), num_action, action_attn_width,
+                src_row_stride=3 * action_attn_width)
+    _copy_slice(action_V_ptr, _col_ptr(qkv_merged, 2 * action_attn_width), num_action, action_attn_width,
+                src_row_stride=3 * action_attn_width)
     fvk.rms_norm_fp16(action_Q_ptr, key("query_norm"), action_Q_ptr, num_action * NH, HD, eps, stream)
     fvk.rms_norm_fp16(action_K_ptr, key("key_norm"), action_K_ptr, num_action * NH, HD, eps, stream)
     fvk.rope_apply_fp16_perhead(action_Q_ptr, action_rope_table, num_action, NH, HD, stream)
@@ -500,9 +557,13 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
 
     fvk.layer_norm_no_affine_fp16(action_x, normed, num_action, action_hidden_dim, eps, stream)
     _modulate(normed, modded, shift, scale, num_action, action_hidden_dim)
-    gemm.fp16_nn(modded, key("q.weight"), action_Q_ptr, num_action, action_attn_width, action_hidden_dim, stream)
-    gemm.fp16_nn(modded, key("k.weight"), action_K_ptr, num_action, action_attn_width, action_hidden_dim, stream)
-    gemm.fp16_nn(modded, key("v.weight"), action_V_ptr, num_action, action_attn_width, action_hidden_dim, stream)
+    qkv_merged = bufs["action_qkv_merged"]  # (num_action, 3*action_attn_width)
+    gemm.fp16_nn(modded, key("qkv.weight"), qkv_merged, num_action, 3 * action_attn_width, action_hidden_dim, stream)
+    _copy_slice(action_Q_ptr, qkv_merged, num_action, action_attn_width, src_row_stride=3 * action_attn_width)
+    _copy_slice(action_K_ptr, _col_ptr(qkv_merged, action_attn_width), num_action, action_attn_width,
+                src_row_stride=3 * action_attn_width)
+    _copy_slice(action_V_ptr, _col_ptr(qkv_merged, 2 * action_attn_width), num_action, action_attn_width,
+                src_row_stride=3 * action_attn_width)
     fvk.rms_norm_fp16(action_Q_ptr, key("query_norm"), action_Q_ptr, num_action * NH, HD, eps, stream)
     fvk.rms_norm_fp16(action_K_ptr, key("key_norm"), action_K_ptr, num_action * NH, HD, eps, stream)
     fvk.rope_apply_fp16_perhead(action_Q_ptr, action_rope_table, num_action, NH, HD, stream)

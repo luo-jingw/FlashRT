@@ -93,18 +93,14 @@ def test_prefill_runs_and_populates_kv_cache():
     for L in range(num_double):
         weights[("backbone", "double", L, "txt_in.weight")] = _lin(hidden, joint_attention_dim).data_ptr()
         for prefix in ("txt", "img"):
-            weights[("backbone", "double", L, f"{prefix}_q.weight")] = _lin(hidden, hidden).data_ptr()
-            weights[("backbone", "double", L, f"{prefix}_k.weight")] = _lin(hidden, hidden).data_ptr()
-            weights[("backbone", "double", L, f"{prefix}_v.weight")] = _lin(hidden, hidden).data_ptr()
+            weights[("backbone", "double", L, f"{prefix}_qkv.weight")] = _lin(3 * hidden, hidden).data_ptr()
             weights[("backbone", "double", L, f"{prefix}_proj.weight")] = _lin(hidden, hidden).data_ptr()
             weights[("backbone", "double", L, f"{prefix}_mlp0.weight")] = _lin(mlp_hidden * 2, hidden).data_ptr()
             weights[("backbone", "double", L, f"{prefix}_mlp2.weight")] = _lin(hidden, mlp_hidden).data_ptr()
             weights[("backbone", "double", L, f"{prefix}_query_norm")] = _norm_scale(HD).data_ptr()
             weights[("backbone", "double", L, f"{prefix}_key_norm")] = _norm_scale(HD).data_ptr()
     for L in range(num_single):
-        weights[("backbone", "single", L, "q.weight")] = _lin(hidden, hidden).data_ptr()
-        weights[("backbone", "single", L, "k.weight")] = _lin(hidden, hidden).data_ptr()
-        weights[("backbone", "single", L, "v.weight")] = _lin(hidden, hidden).data_ptr()
+        weights[("backbone", "single", L, "qkv.weight")] = _lin(3 * hidden, hidden).data_ptr()
         weights[("backbone", "single", L, "mlp_in.weight")] = _lin(mlp_hidden * 2, hidden).data_ptr()
         weights[("backbone", "single", L, "attn_out_proj.weight")] = _lin(hidden, hidden).data_ptr()
         weights[("backbone", "single", L, "mlp_down.weight")] = _lin(hidden, mlp_hidden).data_ptr()
@@ -123,6 +119,9 @@ def test_prefill_runs_and_populates_kv_cache():
         "backbone_hidden": backbone_hidden.data_ptr(),
         "normed_scratch": _zeros(a0, hidden).data_ptr(),
         "modded_scratch": _zeros(a0, hidden).data_ptr(),
+        "txt_qkv_merged": _zeros(x0, 3 * hidden).data_ptr(),
+        "img_qkv_merged": _zeros(a0 - x0, 3 * hidden).data_ptr(),
+        "single_qkv_merged": _zeros(a0, 3 * hidden).data_ptr(),
         "txt_mlp_merged": _zeros(x0, mlp_hidden * 2).data_ptr(),
         "txt_mlp_gated": _zeros(x0, mlp_hidden).data_ptr(),
         "img_mlp_merged": _zeros(a0 - x0, mlp_hidden * 2).data_ptr(),

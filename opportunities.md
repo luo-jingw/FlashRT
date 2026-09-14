@@ -626,15 +626,88 @@ not attempted again without a specific reason to revisit (e.g., autotuning
 on the default stream first, THEN switching to a side stream purely for
 capture, never running autotune itself on a non-default stream).
 
+## Step 4 re-measured on the NEW real-math pipeline (2026-09-14) — win vanished on Ada
+
+The +3-4%/+10% autotune win recorded above was measured against the
+OLD approximate-math pipeline (broadcast K/V at `HD` width, plain GELU
+MLP at `mlp_hidden` width). After `pipeline_thor.py`'s real-math
+rewrite (this file's OPT-002 entry, commit `61e7c15`), autotune is now
+wired into `imagewam_thor.py`'s own `__init__` as a genuine default
+(`_autotune_gemm`, one `autotune_fp16_nn` call per distinct real-math
+(M,N,K) shape, before any graph capture) — not just a standalone bench
+script. Re-measured via the updated `benchmarks/imagewam_thor_bench.py`
+(now also autotuning each shape before its own timed loop) at the same
+real FLUX.2 dims, on this same Ada GPU: **backbone_double_layer
+9.461ms → 9.840ms, backbone_single_layer 8.885ms → 9.369ms** — no
+measurable improvement (within run-to-run noise, arguably slightly
+worse). This is an honest negative result, not withheld: the real
+math's WIDER GEMMs (per-head K/V now at `hidden` width instead of
+broadcast `HD`; MLP-gate at `mlp_hidden*2` instead of `mlp_hidden`)
+apparently already sit in a shape region where cuBLASLt's own default
+heuristic is already near-optimal on Ada, unlike the old, narrower
+approximate-math shapes. **Not yet re-measured on Thor** — the
+original finding's own asymmetry (Ada +4% vs. Thor +10%, "Thor's
+cuBLASLt evidently has a wider gap... than Ada's does") means Thor
+could still show a real win at these NEW shapes even though Ada
+doesn't; this needs a real Thor run to know, not assumed either way.
+Kept wired in regardless (autotune cannot regress correctness or,
+here, ever measured a real slowdown beyond noise — only a question of
+whether it's worth the extra warmup-time cost, which is small and
+one-time).
+
+## Step 2 done: QKV GEMM fusion (2026-09-14) — correctness/checkpoint-fidelity win, no measured speed win on Ada
+
+`pipeline_thor.py`'s 4 real-math layer helpers (`_double_stream_layer`,
+`_single_stream_layer`, `_action_double_layer`, `_action_single_layer`)
+now do ONE `qkv` GEMM into a `(seq, 3*width)` scratch buffer instead of
+3 separate Q/K/V GEMMs, then land each third into its own real
+destination (`Q_O`/`K_cache`/`V_cache`) via a new `_copy_slice`
+helper (`_wrap_fp16` extended with an optional `row_stride` so a
+column slice of the wider scratch buffer can be viewed/copied without
+an intermediate copy). `_imagewam_thor_spec.py`'s declared shapes
+changed from 3 separate `{prefix}_q/_k/_v.weight` to one
+`{prefix}_qkv.weight` `(width, 3*width)` — this ALSO now matches a
+real checkpoint's own fused `qkv` tensor directly (an earlier version
+of this file deliberately split Q/K/V for pointer-code simplicity;
+that turned out to cost both a real GEMM launch and checkpoint-
+native-ness for no benefit).
+
+Verified: all 21 ImageWAM tests pass; `test_imagewam_thor_real_wiring.py`'s
+per-layer cosine checks against the tensor-level reference (`real_*.py`)
+are now EXACTLY 1.000000 for all 4 layer types (previously
+double-stream was 0.999984 — the fused path now reproduces the
+reference's own internal fused-GEMM accumulation bit-for-bit instead
+of accumulating slightly differently across 3 separate GEMMs).
+
+Speed, real FLUX.2 dims on this Ada GPU (`imagewam_thor_bench.py`,
+before vs. after, 4 repeat runs): backbone_double 9.84ms → 9.6-10.1ms,
+backbone_single 9.37ms → 9.1-9.4ms, action_double 0.61ms → 0.66-1.29ms,
+action_single 0.51ms → 0.56-1.03ms. **Honest verdict: no measurable
+win on this hardware — within run-to-run noise** (action-layer numbers
+are sub-millisecond and noisy; no run showed a clear regression
+either, backbone layers are flat). Consistent with OPT-004 step 1's
+own "compute-bound, not launch-bound" finding on Ada — cutting 2 GEMM
+launches per block doesn't matter when the GEMMs themselves are large.
+**Not yet measured on Thor** — Thor's own launch-overhead profile is
+unconfirmed either way; kept regardless, since the checkpoint-fidelity
+and bit-exactness wins stand on their own.
+
 ## Promotion Condition
 
 Step 1 (graph-vs-graph-free) and step 4 (autotune) are both now
-verified on real Thor hardware — promoted for those two findings.
-Steps 2-3 (QKV fusion, residual+norm fusion) remain unpromoted: still
-require real checkpoint accuracy work (OPT-001) to be underway and
-Thor performance to be an active concern, and their expected value is
-now judged lower given the "combine autotune+graph" next step above is
-cheaper and already has stronger individual evidence.
+verified on real Thor hardware — promoted for those two findings
+**against the OLD approximate-math pipeline**; step 4's win needs
+re-confirming on Thor against the NEW real-math pipeline (see above --
+Ada alone now shows no win, unlike before). Step 2 (QKV fusion) is now
+DONE (see above) — correctness/checkpoint-fidelity confirmed, speed
+win unconfirmed on Ada and untested on Thor. Step 3 (residual+norm
+fusion) remains unpromoted, now flagged as the "fused epilogue
+kernels" item in `PROJECT.md`'s mechanism-integration plan
+(2026-09-14): no existing
+FlashRT kernel matches ImageWAM's exact math (LayerNorm-no-affine +
+broadcast-modulate; RMS QK-Norm + interleaved RoPE), so this needs
+genuinely new kernel work, not a call-site change — the largest
+single item in that plan besides FP8/FP4 quantization.
 
 # OPT-005
 
