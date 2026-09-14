@@ -62,3 +62,17 @@ void qkv_split_rope_kvcache_fp16_devpos(
     int S, int Q_dim, int K_dim, int HD, int qkv_stride,
     int kc_offset, int kc_stride,
     cudaStream_t stream = 0);
+
+// FP16 RoPE, real per-head (ImageWAM OPT-002 follow-up: unlike
+// `rope_apply` above, which assumes K has a single shared head, this
+// rotates ONE tensor shaped (seq, NH, HD) in place -- call it once for
+// Q and once for K when both are real per-head (see
+// csrc/kernels/attention_cublas.cuh for that layout convention).
+// `rope_weights` is (seq, HD) with the SAME interleaved-cos/sin-per-
+// pair format `rope_apply` uses (rope_weights[pos*HD + 2*d] = cos,
+// [pos*HD + 2*d+1] = sin for pair d) -- shared across every head at a
+// given position, matching real RoPE (position doesn't depend on head).
+void rope_apply_fp16_perhead(
+    __half* X, const __half* rope_weights,
+    int seq, int NH, int HD,
+    cudaStream_t stream = 0);

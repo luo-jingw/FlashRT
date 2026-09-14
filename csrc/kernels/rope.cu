@@ -57,6 +57,45 @@ void rope_apply(const __nv_bfloat16* rope_weights,
         rope_weights, Q, K, seq_len, num_heads, head_dim);
 }
 
+// ── FP16 RoPE, real per-head (ImageWAM OPT-002 follow-up) ──
+// Same interleaved cos/sin-per-pair format as rope_kernel above, but
+// rotates ONE (seq, NH, HD) tensor in place -- caller invokes this once
+// for Q and once for K when both are real per-head, instead of the
+// single-shared-K-head assumption `rope_kernel` bakes in.
+__global__ void rope_apply_fp16_perhead_kernel(
+    __half* __restrict__ X, const __half* __restrict__ rope_weights,
+    int seq, int NH, int HD) {
+    int half_dim = HD / 2;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = seq * NH * half_dim;
+    if (idx >= total) return;
+
+    int d = idx % half_dim;
+    int rem = idx / half_dim;
+    int head = rem % NH;
+    int seq_pos = rem / NH;
+
+    int x_base = (seq_pos * NH + head) * HD;
+    float x0 = __half2float(X[x_base + 2 * d]);
+    float x1 = __half2float(X[x_base + 2 * d + 1]);
+    int rope_base = seq_pos * HD;
+    float c = __half2float(rope_weights[rope_base + 2 * d]);
+    float s = __half2float(rope_weights[rope_base + 2 * d + 1]);
+    X[x_base + 2 * d]     = __float2half(x0 * c - x1 * s);
+    X[x_base + 2 * d + 1] = __float2half(x1 * c + x0 * s);
+}
+
+void rope_apply_fp16_perhead(
+    __half* X, const __half* rope_weights,
+    int seq, int NH, int HD, cudaStream_t stream) {
+    int half_dim = HD / 2;
+    int total = seq * NH * half_dim;
+    int threads = 256;
+    int blocks = (total + threads - 1) / threads;
+    rope_apply_fp16_perhead_kernel<<<blocks, threads, 0, stream>>>(
+        X, rope_weights, seq, NH, HD);
+}
+
 // ── QKV Split ──
 // Generic template (dtype-agnostic: pure memcpy by column region).
 template<typename T>

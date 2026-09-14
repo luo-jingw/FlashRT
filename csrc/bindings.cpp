@@ -1055,6 +1055,16 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
     }, py::arg("rope_weights"), py::arg("Q"), py::arg("K"),
        py::arg("seq_len"), py::arg("num_heads"), py::arg("head_dim"), py::arg("stream") = 0);
 
+    // FP16 RoPE, real per-head (ImageWAM OPT-002 follow-up) -- rotates
+    // ONE (seq, NH, HD) tensor in place; call once for Q, once for K.
+    m.def("rope_apply_fp16_perhead", [](uintptr_t X, uintptr_t rope_weights,
+                                         int seq, int NH, int HD, uintptr_t stream) {
+        rope_apply_fp16_perhead(reinterpret_cast<__half*>(X),
+                                 reinterpret_cast<const __half*>(rope_weights),
+                                 seq, NH, HD, to_stream(stream));
+    }, py::arg("X"), py::arg("rope_weights"),
+       py::arg("seq"), py::arg("NH"), py::arg("HD"), py::arg("stream") = 0);
+
     m.def("qkv_split", [](uintptr_t qkv, uintptr_t Q, uintptr_t K, uintptr_t V,
                            int seq, int q_dim, int k_dim, int v_dim, uintptr_t stream) {
         qkv_split(typed_ptr<__nv_bfloat16>(qkv),
