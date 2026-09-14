@@ -179,22 +179,45 @@ math gaps this project had never modeled, beyond just per-head K/V:
   the technical milestone the whole OPT-002 round was building toward —
   real math is now fully understood and verified at the single-block
   level.
+- **`SingleStreamBlock`'s own real forward is also now done**:
+  `flash_rt/models/imagewam/real_single_stream_block.py` — the 20
+  single-stream layers operate on the already-concatenated `[txt|img]`
+  sequence with fused `linear1`(QKV+MLP-in)/`linear2`(attn-out+MLP-out)
+  GEMMs, represented here as separate GEMMs summed/split
+  (mathematically identical, documented in the module's own docstring).
+  Reuses every kernel already verified for `DoubleStreamBlock` with
+  zero new kernel code. Verified against an independent PyTorch
+  reference, small shape + real dims: cosine=1.0
+  (`tests/test_imagewam_real_single_stream_block.py`).
+- **All 25 real backbone layers (5 double + 20 single) are now looped
+  together and verified**: `flash_rt/models/imagewam/pipeline_real.py`'s
+  `imagewam_prefill_real` chains both block types in the real order,
+  with modulation correctly SHARED across all layers of a stream type
+  (a real architecture property confirmed from `Flux2.forward` — one
+  `Modulation` output per forward, reused by every layer, not per-layer
+  separate modulation) via `compute_shared_modulation`. Verified: a
+  1-layer loop matches a direct block call (wiring correctness,
+  cosine=1.0), and the full 25-layer real backbone at real dims
+  produces finite, well-behaved output (mean~0, std~0.5 — no explosion/
+  vanishing across 25 layers of random weights)
+  (`tests/test_imagewam_pipeline_real.py`). This module is explicitly a
+  correctness-verification path, not a steady-state perf path — it
+  allocates fresh buffers every call with no reuse; one test run OOM'd
+  when the GPU already had ~5.3GB in use from unrelated earlier
+  processes in the same session, succeeded cleanly once cleared.
 - **Still not wired into `pipeline_thor.py`** — everything above lives
-  in new, additive `flash_rt/models/imagewam/real_*.py` modules and
-  tests; the actual serving pipeline still uses the old broadcast-K/V,
-  no-RoPE, no-QK-Norm, no-mask, wrong-width-GELU-MLP path by default.
-  Wiring this in means: changing `_imagewam_thor_spec.py`'s K/V
-  projection width back to full `hidden`, adding QKNorm/RoPE/AdaLN
-  weight+buffer plumbing, correcting the MLP GEMM widths, and looping
-  the single-block forward across all 5 real double-stream layers (this
-  work only built and verified ONE layer) — a real, sizeable pipeline
-  refactor, not yet started.
-- **`SingleStreamBlock`'s own real forward not yet done** — this round
-  only covered `DoubleStreamBlock` (the first 5 layers); the 20
-  single-stream layers have their own analogous but structurally
-  different real forward (`linear1`/`linear2` fused QKV+MLP-in
-  projection, `_qkv`/`_out` structure seen in the real source but not
-  yet built/verified here).
+  in new, additive `flash_rt/models/imagewam/real_*.py`/`pipeline_real.py`
+  modules and tests; the actual serving pipeline (used by the
+  registered `_PIPELINE_MAP` frontend and every current benchmark
+  script) still uses the old broadcast-K/V, no-RoPE, no-QK-Norm,
+  no-mask, wrong-width-GELU-MLP path by default. Wiring this in means:
+  changing `_imagewam_thor_spec.py`'s K/V projection width back to full
+  `hidden`, adding QKNorm/RoPE/AdaLN weight+buffer plumbing, correcting
+  the MLP GEMM widths, and adopting the allocate-once-during-warmup
+  discipline every benchmark script already uses (this round's modules
+  allocate fresh every call) — a real, sizeable pipeline refactor, not
+  yet started. The action-expert side (ActionDiT, the "mot" site) also
+  has no equivalent real-math investigation yet (see below).
 - **No real checkpoint file available locally** — everything above is
   verified against PyTorch references of the real published formulas,
   not against real trained weights. Real end-to-end accuracy validation
