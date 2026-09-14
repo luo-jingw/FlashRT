@@ -671,7 +671,8 @@ class ImageWAMAttnBackend(AttentionBackendBase):
     """
 
     def __init__(self, spec: AttentionSpec, ctx, *,
-                 backbone_slots: dict, mot_slots: dict, use_fa4: bool = False):
+                 backbone_slots: dict, mot_slots: dict, use_fa4: bool = False,
+                 use_perhead_kv: bool = False):
         """
         Args:
             spec: built by ``make_imagewam_attention_spec``.
@@ -703,6 +704,33 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                 PROJECT.md), so this was written by mirroring the
                 already-proven Pi0.5 pattern as closely as possible,
                 not independently verified end-to-end.
+            use_perhead_kv: OPT-002 (opportunities.md). Dispatch BOTH
+                sites through the real per-head K/V kernels
+                (``attention_qkv_fp16_perhead`` /
+                ``attention_qkv_fp16_mot_joint_action_perhead``) instead
+                of the broadcast-K/V kernels this class uses by default.
+                **Requires a K/V buffer FORMAT change the caller is
+                responsible for**: broadcast K/V is ``(seq, HD)``
+                per layer; per-head K/V is ``(seq, NH*HD)`` = ``(seq,
+                HIDDEN)`` per layer (real per-head, one independent K/V
+                vector per query head, matching a real checkpoint's
+                fused QKV projection width) -- passing broadcast-sized
+                K/V buffers here with this flag on reads/writes out of
+                bounds. Mutually compatible with ``use_fa4`` (FA4 stays
+                opt-in for "backbone" only; when both are set, "backbone"
+                goes through FA4 -- which already uses real per-head Q
+                against a still-broadcast K/V internally via
+                ``pack_gqa=True``, see the ``use_fa4`` docstring above --
+                and "mot" goes through the new per-head cuBLAS kernel).
+                Default False so every existing caller and buffer layout
+                is unaffected; verified at the kernel level (real Thor
+                dims, cosine=1.0 against a PyTorch reference and against
+                this class's own existing broadcast kernel) in
+                ``tests/test_imagewam_perhead_attention_kernel.py`` --
+                NOT yet verified at this class's own dispatch level with
+                real per-head-shaped buffers (see
+                ``tests/test_imagewam_attn_backend.py``'s own
+                ``use_perhead_kv`` case for that).
         """
         super().__init__(spec)
         expected_sites = {"backbone", "mot"}
@@ -714,6 +742,7 @@ class ImageWAMAttnBackend(AttentionBackendBase):
 
         self._ctx_cpp = ctx.cpp if hasattr(ctx, "cpp") else ctx
         self._use_fa4 = bool(use_fa4)
+        self._use_perhead_kv = bool(use_perhead_kv)
         self._fa4_fwd = None
         if self._use_fa4:
             from flash_rt.hardware.thor import fa4_backend
@@ -861,6 +890,20 @@ class ImageWAMAttnBackend(AttentionBackendBase):
             # class checks explicitly instead of inheriting the same luck.
             # (FA4, above, has no such restriction -- this guard only
             # applies to the cuBLAS-composed fallback path.)
+            if self._use_perhead_kv:
+                # OPT-002: real per-head K/V, no even-kv_seq restriction
+                # (attention_qkv_fp16_perhead's own softmax call already
+                # handles odd S_kv via the same *_pad convention every
+                # masked kernel in this file uses).
+                fvk.attention_qkv_fp16_perhead(
+                    self._ctx_cpp,
+                    int(s["Q_O"]), K_ptr, V_ptr,
+                    int(s["logits"]), int(s["Q_O"]),
+                    q_seq, kv_seq,
+                    site_spec.num_q_heads, site_spec.head_dim,
+                    float(s["scale"]), stream,
+                )
+                return int(s["Q_O"])
             if kv_seq % 2 != 0:
                 raise ValueError(
                     f"site {site!r} kernel='standard' requires an even "
@@ -902,7 +945,9 @@ class ImageWAMAttnBackend(AttentionBackendBase):
             num_action = q_seq
             row_width = site_spec.num_q_heads * site_spec.head_dim
             q_out_ptr = int(s["Q_O"]) + int(a0) * row_width * 2  # fp16 = 2 bytes/elem
-            fvk.attention_qkv_fp16_mot_joint_action(
+            mot_kernel = (fvk.attention_qkv_fp16_mot_joint_action_perhead
+                          if self._use_perhead_kv else fvk.attention_qkv_fp16_mot_joint_action)
+            mot_kernel(
                 self._ctx_cpp,
                 q_out_ptr, K_ptr, V_ptr,
                 int(s["logits"]), q_out_ptr,
