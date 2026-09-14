@@ -1,13 +1,15 @@
 """ImageWAM (FLUX.2-4B variant) Thor weight specification.
 
-Structural dry-run scope only: every tensor declared here is intended
-for random initialization (see `flash_rt/frontends/torch/imagewam_thor.py`),
-not for loading a real checkpoint. No Qwen3-4B weights are declared:
-every ImageWAM model config (including the FLUX.2-4B one this targets)
-sets `load_text_encoder: false` — ImageWAM never loads or runs the
-text encoder itself, and always receives a precomputed `context`/
-`context_mask` pair. `context` is declared as an input shape below,
-not a weight.
+**Rewritten 2026-09-14 to declare REAL-shaped tensors** (per-head K/V,
+QK-Norm scales, AdaLN modulation weights, real SiLU-GLU MLP widths),
+following opportunities.md OPT-002's now fully-verified real math
+(including against the real trained checkpoint on Thor, cosine=0.9999+
+-- see `benchmarks/imagewam_real_checkpoint_validation.py`). Random
+initialization remains the only fill method here (no real checkpoint
+loading in this file) -- see `flash_rt/frontends/torch/imagewam_thor.py`
+for where real-checkpoint loading would eventually plug in (still not
+implemented; that requires the real `imagewam`/`flux2` packages, only
+available on Thor).
 
 Dimensions are architecture configs only (no weight download):
 - FLUX.2-klein-4B: `black-forest-labs/FLUX.2-klein-4B`,
@@ -22,20 +24,41 @@ Dimensions are architecture configs only (no weight download):
   (see `flash_rt/hardware/thor/attn_backend.py`) to operate on both
   streams' Q/K/V in the same per-head geometry.
 
-Tensor name fragments (`qkv`, `proj`, `linear1`, `linear2`,
-`img_mlp.{0,2}`, `txt_mlp.{0,2}`) are taken from that same YAML's
-`flux2_lora_config.target_suffixes` list, confirmed real names in the
-ImageWAM/FLUX.2 checkpoint. Full per-tensor shapes for the backbone's
-double-stream and single-stream blocks follow FLUX's published
-double-stream (separate img/txt QKV+MLP, jointly attended) /
-single-stream (img+txt merged, QKV+MLP-up fused into `linear1`,
-attn-out+MLP-down fused into `linear2`) block design. ActionDiT's own
-per-block shapes (single action-token stream, no separate txt stream)
-are a structural approximation of the same double/single-stream split
-at `action_hidden_dim` width — not yet verified against
-`imagewam/src/imagewam/models/backbones/action_dit_flux2.py`'s actual
-block implementation; sufficient for a random-init structural dry run,
-not for loading a real ActionDiT checkpoint.
+**Per-layer shapes below now match what
+`flash_rt/models/imagewam/pipeline_thor.py`'s real-math layer helpers
+consume directly** (Q/K/V as three separate GEMMs, not one fused
+`qkv`/`linear1` — mathematically identical to a real checkpoint's
+fused tensor sliced by output-row range at load time, same convention
+`flash_rt/models/imagewam/real_single_stream_block.py` already
+documents and uses). This is a deliberate divergence from a prior
+version of this file, which declared checkpoint-tensor-shaped fused
+`qkv`/`linear1`/`linear2` names for "real-load compatibility" that was
+never actually exercised — real checkpoint loading (when it exists)
+will go through ImageWAM's own Python model classes plus
+`benchmarks/imagewam_real_checkpoint_validation.py`'s own
+`extract_*_weights` functions (already verified against the real
+checkpoint, cosine=0.9999+), which read from real `nn.Module` objects
+and already do this splitting themselves — not from this file's
+declared shapes.
+
+K/V are now real per-head width (`backbone_hidden`/`action_attn_width`,
+matching `NH*HD`), not the old broadcast-K/V `HD` width — see
+opportunities.md OPT-002. MLP first-projection width is `mlp_hidden*2`
+(real SiLU-gated GLU, not plain GELU on `mlp_hidden`) — see
+`flash_rt/models/imagewam/real_mlp.py`. `*_query_norm`/`*_key_norm`
+((HD,) each) are new: real QK-Norm scales, applied via the existing
+`rms_norm_fp16` kernel per (token,head) row (opportunities.md OPT-002 —
+confirmed this kernel already computes the exact real QK-Norm formula,
+no new kernel needed).
+
+`SHARED_MOD_SHAPES`/`ACTION_SHARED_MOD_SHAPES` are NEW: real AdaLN
+modulation is driven by a per-FORWARD (not per-layer) timestep
+embedding, shared across every layer of a given stream type (a real
+architecture property, confirmed from `Flux2.forward` — see
+`flash_rt/models/imagewam/pipeline_real.py`'s `compute_shared_modulation`/
+`compute_action_modulation`). These are allocated ONCE per model
+instance (backbone) or ONCE PER DENOISE STEP (ActionDiT, since its own
+conditioning timestep changes every step), never per-layer.
 """
 
 from __future__ import annotations
@@ -84,60 +107,98 @@ SPEC = ImageWAMThorSpec()
 
 # ──────────────────────────────────────────────────────────────────
 # Backbone (FLUX.2-klein-4B), double-stream blocks: separate img/txt
-# QKV+proj+MLP, jointly attended within the block.
+# Q/K/V+proj+MLP, jointly attended within the block. K/V at real
+# per-head width (backbone_hidden), not broadcast HD.
 # ──────────────────────────────────────────────────────────────────
 
 BACKBONE_DOUBLE_LAYER_SHAPES: dict[str, tuple[int, ...]] = {
-    # img stream operates directly at backbone_hidden.
-    "img_attn.qkv.weight": (3 * SPEC.backbone_hidden, SPEC.backbone_hidden),
-    "img_attn.proj.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
-    "img_mlp.0.weight": (SPEC.backbone_mlp_hidden, SPEC.backbone_hidden),
-    "img_mlp.2.weight": (SPEC.backbone_hidden, SPEC.backbone_mlp_hidden),
+    "img_q.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "img_k.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "img_v.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "img_proj.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "img_mlp0.weight": (SPEC.backbone_mlp_hidden * 2, SPEC.backbone_hidden),
+    "img_mlp2.weight": (SPEC.backbone_hidden, SPEC.backbone_mlp_hidden),
+    "img_query_norm": (SPEC.backbone_head_dim,),
+    "img_key_norm": (SPEC.backbone_head_dim,),
     # txt stream: context arrives at joint_attention_dim, projected
-    # into the shared attention width once per layer before qkv.
+    # into the shared attention width once per layer before q/k/v.
     "txt_in.weight": (SPEC.backbone_hidden, SPEC.joint_attention_dim),
-    "txt_attn.qkv.weight": (3 * SPEC.backbone_hidden, SPEC.backbone_hidden),
-    "txt_attn.proj.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
-    "txt_mlp.0.weight": (SPEC.backbone_mlp_hidden, SPEC.backbone_hidden),
-    "txt_mlp.2.weight": (SPEC.backbone_hidden, SPEC.backbone_mlp_hidden),
+    "txt_q.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "txt_k.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "txt_v.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "txt_proj.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "txt_mlp0.weight": (SPEC.backbone_mlp_hidden * 2, SPEC.backbone_hidden),
+    "txt_mlp2.weight": (SPEC.backbone_hidden, SPEC.backbone_mlp_hidden),
+    "txt_query_norm": (SPEC.backbone_head_dim,),
+    "txt_key_norm": (SPEC.backbone_head_dim,),
 }
 
-# Single-stream blocks: img+txt merged into one stream; QKV+MLP-up
-# fused into linear1, attn-out+MLP-down fused into linear2.
+# Single-stream blocks: img+txt merged into one stream. Real fused
+# linear1(QKV+MLP-up)/linear2(attn-out+MLP-down) represented as
+# separate GEMMs -- see module docstring.
 BACKBONE_SINGLE_LAYER_SHAPES: dict[str, tuple[int, ...]] = {
-    "linear1.weight": (
-        3 * SPEC.backbone_hidden + SPEC.backbone_mlp_hidden,
-        SPEC.backbone_hidden,
-    ),
-    "linear2.weight": (
-        SPEC.backbone_hidden,
-        SPEC.backbone_hidden + SPEC.backbone_mlp_hidden,
-    ),
+    "q.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "k.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "v.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "attn_out_proj.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "mlp_in.weight": (SPEC.backbone_mlp_hidden * 2, SPEC.backbone_hidden),
+    "mlp_down.weight": (SPEC.backbone_hidden, SPEC.backbone_mlp_hidden),
+    "query_norm": (SPEC.backbone_head_dim,),
+    "key_norm": (SPEC.backbone_head_dim,),
+}
+
+# Shared (not per-layer) AdaLN modulation weights, allocated ONCE.
+SHARED_MOD_SHAPES: dict[str, tuple[int, ...]] = {
+    "time_in_w1": (SPEC.backbone_hidden, 256),
+    "time_in_w2": (SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "mod_double_txt": (6 * SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "mod_double_img": (6 * SPEC.backbone_hidden, SPEC.backbone_hidden),
+    "mod_single": (3 * SPEC.backbone_hidden, SPEC.backbone_hidden),
 }
 
 
 # ──────────────────────────────────────────────────────────────────
-# ActionDiT (FLUX.2 variant): single action-token stream. Structural
-# approximation of the backbone's own double/single-stream split at
-# action_hidden_dim width -- see module docstring.
+# ActionDiT (FLUX.2 variant): single action-token stream, IMG-ONLY
+# double block (no txt branch -- see real_action_expert.py). K/V at
+# real per-head width (action_attn_width = NH*HD), not broadcast HD;
+# residual-stream width (action_hidden_dim) differs from attention
+# width (action_attn_width) here, unlike the backbone.
 # ──────────────────────────────────────────────────────────────────
 
 ACTION_DIT_DOUBLE_LAYER_SHAPES: dict[str, tuple[int, ...]] = {
-    "action_attn.qkv.weight": (3 * SPEC.action_attn_width, SPEC.action_hidden_dim),
-    "action_attn.proj.weight": (SPEC.action_hidden_dim, SPEC.action_attn_width),
-    "action_mlp.0.weight": (SPEC.action_mlp_hidden, SPEC.action_hidden_dim),
-    "action_mlp.2.weight": (SPEC.action_hidden_dim, SPEC.action_mlp_hidden),
+    "q.weight": (SPEC.action_attn_width, SPEC.action_hidden_dim),
+    "k.weight": (SPEC.action_attn_width, SPEC.action_hidden_dim),
+    "v.weight": (SPEC.action_attn_width, SPEC.action_hidden_dim),
+    "proj.weight": (SPEC.action_hidden_dim, SPEC.action_attn_width),
+    "mlp0.weight": (SPEC.action_mlp_hidden * 2, SPEC.action_hidden_dim),
+    "mlp2.weight": (SPEC.action_hidden_dim, SPEC.action_mlp_hidden),
+    "query_norm": (SPEC.action_head_dim,),
+    "key_norm": (SPEC.action_head_dim,),
 }
 
 ACTION_DIT_SINGLE_LAYER_SHAPES: dict[str, tuple[int, ...]] = {
-    "linear1.weight": (
-        3 * SPEC.action_attn_width + SPEC.action_mlp_hidden,
-        SPEC.action_hidden_dim,
-    ),
-    "linear2.weight": (
-        SPEC.action_hidden_dim,
-        SPEC.action_attn_width + SPEC.action_mlp_hidden,
-    ),
+    "q.weight": (SPEC.action_attn_width, SPEC.action_hidden_dim),
+    "k.weight": (SPEC.action_attn_width, SPEC.action_hidden_dim),
+    "v.weight": (SPEC.action_attn_width, SPEC.action_hidden_dim),
+    "attn_out_proj.weight": (SPEC.action_hidden_dim, SPEC.action_attn_width),
+    "mlp_in.weight": (SPEC.action_mlp_hidden * 2, SPEC.action_hidden_dim),
+    "mlp_down.weight": (SPEC.action_hidden_dim, SPEC.action_mlp_hidden),
+    "query_norm": (SPEC.action_head_dim,),
+    "key_norm": (SPEC.action_head_dim,),
+}
+
+# ActionDiT's own time_in/modulation weights -- a SEPARATE weight set
+# from the backbone's own (confirmed from mot.py: each expert owns its
+# own time_in). Only ONE double-type modulation (img-only block, no
+# txt), unlike the backbone's separate txt/img pair. Allocated ONCE
+# PER DENOISE STEP (the action-expert's conditioning timestep changes
+# every step; the backbone's own SHARED_MOD_SHAPES stays fixed for the
+# whole forward -- see module docstring).
+ACTION_SHARED_MOD_SHAPES: dict[str, tuple[int, ...]] = {
+    "time_in_w1": (SPEC.action_hidden_dim, 256),
+    "time_in_w2": (SPEC.action_hidden_dim, SPEC.action_hidden_dim),
+    "mod_double": (6 * SPEC.action_hidden_dim, SPEC.action_hidden_dim),
+    "mod_single": (3 * SPEC.action_hidden_dim, SPEC.action_hidden_dim),
 }
 
 
@@ -164,11 +225,11 @@ def action_dit_layer_key(layer: int, is_single: bool, suffix: str) -> str:
 
 
 def iter_expected_shapes() -> Iterable[tuple[str, tuple[int, ...]]]:
-    """Every weight tensor this plan's frontend must allocate.
+    """Every PER-LAYER weight tensor this plan's frontend must allocate.
 
-    Does not include INPUT_SHAPES (context/context_mask) -- those are
-    per-call inputs, not weights; the frontend allocates them
-    separately (see imagewam_thor.py).
+    Does not include `INPUT_SHAPES` (per-call inputs) or the shared
+    modulation weights (`SHARED_MOD_SHAPES`/`ACTION_SHARED_MOD_SHAPES`,
+    allocated once, not per layer -- see module docstring).
     """
     for layer in range(SPEC.backbone_num_layers_double):
         for suffix, shape in BACKBONE_DOUBLE_LAYER_SHAPES.items():

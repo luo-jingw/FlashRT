@@ -1,21 +1,29 @@
 """ImageWAM (FLUX.2-4B variant) Thor torch frontend.
 
-plan.md Phase 5. Structural dry-run scope only (see PROJECT.md,
-pipeline_thor.py's own docstring): random-initialized weights, no
-real checkpoint, no calibration. Wires Phases 1-4 into `set_prompt()`
-and `infer()`, following `_template/frontend.py`'s STEP 1-6 shape --
-adapted where the real, working `CosmosEdgeThor`
+**Rewritten 2026-09-14** alongside `pipeline_thor.py`'s own real-math
+rewrite (opportunities.md OPT-002) -- weights here are still
+random-initialized (see `checkpoint_dir` below), but the MATH they now
+feed is real: per-head K/V, real 4-axis RoPE, QK-Norm, real AdaLN
+modulation, real SiLU-gated-GLU MLP widths, and the real (no-mask)
+attention rule, confirmed against the real trained checkpoint on Thor
+(see `benchmarks/imagewam_real_checkpoint_validation.py`). This is now
+the confirmed target for real Thor deployment (`PROJECT.md`'s
+"Confirmed end goal"), following `_template/frontend.py`'s STEP 1-6
+shape -- adapted where the real, working `CosmosEdgeThor`
 (`flash_rt/models/cosmos3_edge/pipeline_thor.py`) precedent differs
 from the generic template (plain `torch.cuda.Tensor` + `.data_ptr()`
-throughout, not the template's `CudaBuffer` ctypes wrapper -- this
-project has used torch tensors for every buffer since Phase 2, and
-switching to `CudaBuffer` here for no reason would just be a second,
-inconsistent buffer-ownership convention in the same codebase).
+throughout, not the template's `CudaBuffer` ctypes wrapper).
 
 `checkpoint_dir` is accepted for interface parity with every other
-FlashRT frontend but unused: every shape here is random-filled from
-`dims`, never loaded from a real checkpoint (see `opportunities.md`
-OPT-001).
+FlashRT frontend but still unused: every shape here is random-filled
+from `dims`, never loaded from a real checkpoint. Real checkpoint
+loading needs the actual `imagewam`/`flux2` Python packages (only
+available on Thor -- see `PROJECT.md`'s "Real checkpoint testing
+happens ONLY on Thor" note) and would reuse
+`benchmarks/imagewam_real_checkpoint_validation.py`'s own
+`extract_*_weights` functions (already verified against the real
+checkpoint, cosine=0.9999+) rather than re-deriving weight extraction
+here -- tracked as still-open in `opportunities.md` OPT-002.
 
 `context_mask` (declared as an input shape in `_imagewam_thor_spec.py`)
 is accepted by `set_prompt` but never read by anything --
@@ -23,9 +31,20 @@ is accepted by `set_prompt` but never read by anything --
 valid, no padding mask. Not modeled, consistent with everything else
 already deferred to real-checkpoint work.
 
+AdaLN modulation and RoPE tables are precomputed ONCE here (backbone's
+own conditioning timestep is fixed, ActionDiT's varies per denoise
+step but `step` is itself a compile-time constant during graph
+capture -- see `pipeline_thor.py`'s own module docstring) and passed
+into the captured graph as small, fixed-address read-only buffers --
+never recomputed per replay.
+
 Dims default to a small, deliberately-not-real-FLUX.2-4B-size
 structural test scale (this machine's own 8GB GPU headroom, per
-PROJECT.md) -- pass `dims_override` for Thor-scale testing.
+PROJECT.md) -- pass `dims_override` for Thor-scale testing. `HD=128`
+is NOT a free "keep it small" parameter here (unlike the other dims):
+real 4-axis RoPE (`axes_dim=(32,32,32,32)`, opportunities.md OPT-002)
+sums to a fixed 128, so every default/override dims dict below keeps
+`HD=128` and only shrinks `NH`/`hidden`/`mlp_hidden`/sequence lengths.
 """
 from __future__ import annotations
 
@@ -35,23 +54,25 @@ import torch
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
+from flash_rt.models.imagewam.pipeline_real import compute_action_modulation, compute_shared_modulation
+from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 
 DEV = "cuda"
 FP16 = torch.float16
 F32 = torch.float32
 
 _DEFAULT_DIMS = dict(
-    hidden=96, HD=16, NH=6, mlp_hidden=192, joint_attention_dim=64,
-    x0=4, a0=8, num_layers_double=2, num_layers_single=3,
-    action_hidden_dim=32, action_attn_width=96, action_mlp_hidden=64,
-    num_action=3, total=11,
+    hidden=256, HD=128, NH=2, mlp_hidden=384, joint_attention_dim=64,
+    x0=3, a0=8, num_layers_double=2, num_layers_single=3,
+    action_hidden_dim=128, action_attn_width=256, action_mlp_hidden=192,
+    num_action=4, total=12,
     action_num_layers_double=2, action_num_layers_single=3,
     dt=0.5, num_denoise_steps=2,
 )
 
 
 class ImageWAMTorchFrontendThor:
-    """Thor frontend for ImageWAM's structural (random-weight) dry run.
+    """Thor frontend for ImageWAM's real-math (random-weight) dry run.
 
     Naming rule: `<Model><Framework>Frontend<Hardware>` per
     `docs/adding_new_model.md` §0 rule 2.
@@ -64,18 +85,43 @@ class ImageWAMTorchFrontendThor:
         if dims_override:
             self.dims.update(dims_override)
         d = self.dims
+        if d["action_attn_width"] != d["hidden"]:
+            raise ValueError(
+                f"action_attn_width ({d['action_attn_width']}) must equal hidden "
+                f"({d['hidden']}) -- required for mot_joint attention (both experts' "
+                f"Q/K/V must land in the same per-head geometry)")
+        if d["HD"] != 128:
+            raise ValueError(
+                f"HD={d['HD']} -- real 4-axis RoPE (axes_dim=(32,32,32,32)) sums to a "
+                f"fixed 128; HD is not a free structural-test parameter")
 
         self._ctx = fvk.FvkContext()
         self._gemm = fvk.GemmRunner()
 
         self._weights = self._alloc_random_weights(d)
         self._bufs = self._alloc_buffers(d)
+        self._rope_table = self._own(build_backbone_rope_table(
+            d["x0"], d["a0"] - d["x0"], 1, device=DEV))
+        self._action_rope_table = self._own(build_action_rope_table(d["num_action"], device=DEV))
+        self._mod_txt, self._mod_img, self._mod_single = self._compute_backbone_modulation(d)
+        self._action_mods = self._compute_action_modulations(d)
 
-        spec = make_imagewam_attention_spec(max_prefix_seq=d["a0"], max_total_seq=d["total"])
         num_layers = d["num_layers_double"] + d["num_layers_single"]
         HD, hidden = d["HD"], d["hidden"]
-        self._K_cache = self._own(torch.zeros(num_layers, d["total"], HD, dtype=FP16, device=DEV))
-        self._V_cache = self._own(torch.zeros(num_layers, d["total"], HD, dtype=FP16, device=DEV))
+        # num_layers/num_heads/head_dim must match THIS frontend's own
+        # dims, not make_imagewam_attention_spec's real-FLUX.2-4B
+        # defaults (24/128/25) -- see that function's own docstring
+        # for the real bug this fixes (an unparameterized spec here
+        # silently caused an out-of-bounds attention read/write at any
+        # non-real dims, found via tests/test_imagewam_thor_real_wiring.py).
+        spec = make_imagewam_attention_spec(
+            max_prefix_seq=d["a0"], max_total_seq=d["total"],
+            num_layers=num_layers, num_heads=d["NH"], head_dim=HD)
+        # Real per-head K/V: (num_layers, total, hidden) -- NOT the old
+        # broadcast-K/V (num_layers, total, HD) shape (opportunities.md
+        # OPT-002).
+        self._K_cache = self._own(torch.zeros(num_layers, d["total"], hidden, dtype=FP16, device=DEV))
+        self._V_cache = self._own(torch.zeros(num_layers, d["total"], hidden, dtype=FP16, device=DEV))
         self._Q_O = self._own(torch.zeros(d["total"], hidden, dtype=FP16, device=DEV))
         self._logits = self._own(
             torch.zeros(d["total"] * d["NH"], d["total"] + (d["total"] % 2), dtype=FP16, device=DEV))
@@ -92,6 +138,11 @@ class ImageWAMTorchFrontendThor:
                 "V": self._V_cache.data_ptr(), "logits": self._logits.data_ptr(),
                 "scale": 1.0 / (HD ** 0.5), "layer_stride": layer_stride,
             },
+            # OPT-002: real per-head K/V + the real (no-mask) attention
+            # rule, both confirmed against the real trained checkpoint
+            # (benchmarks/imagewam_real_checkpoint_validation.py) --
+            # this is now the default for this frontend, not opt-in.
+            use_perhead_kv=True, use_real_mot_mask=True,
         )
 
         self._graph = None
@@ -100,81 +151,160 @@ class ImageWAMTorchFrontendThor:
     def _own(self, t: torch.Tensor) -> torch.Tensor:
         """Keep a buffer tensor alive for the frontend's own lifetime.
 
-        A bare `torch.zeros(...).data_ptr()` drops the only Python
-        reference the instant that expression finishes -- PyTorch's
-        caching allocator is then free to hand the same memory to the
-        next allocation, silently corrupting an already-stored pointer.
-        Found the hard way in Phase 3/4's own tests; every buffer here
-        goes through this helper for the same reason.
+        A bare `torch.zeros(...).data_ptr()` expression drops the only
+        Python reference the instant that expression finishes --
+        PyTorch's caching allocator is then free to hand the same
+        memory to the next allocation, silently corrupting an
+        already-stored pointer. Every buffer here goes through this
+        helper for that reason.
         """
         self._keepalive.append(t)
         return t
 
+    def _rnd_linear(self, n: int, k: int) -> int:
+        """Real GEMM (K,N) convention: `n` = output width, `k` = input
+        width, stored as (k, n) so `gemm.fp16_nn` reads it directly (a
+        real checkpoint's own (out,in) `nn.Linear` weight would need
+        `.t().contiguous()` at load time -- see `CosmosEdgeThor`'s own
+        precedent)."""
+        return self._own(torch.randn(k, n, dtype=FP16, device=DEV) * 0.02).data_ptr()
+
+    def _rnd_norm_scale(self, HD: int) -> int:
+        """QK-Norm scale, real-checkpoint-typical positive bias (avoids
+        near-zero/huge random values that would make a random-weight
+        dry run's own NaN/Inf check meaningless for unrelated reasons)."""
+        return self._own((torch.randn(HD, dtype=torch.float32, device=DEV).abs() + 0.5).to(FP16)).data_ptr()
+
     def _alloc_random_weights(self, d: dict) -> dict:
-        rnd = lambda *shape: self._own(torch.randn(*shape, dtype=FP16, device=DEV)).data_ptr()
-        weights = {}
         hidden, HD, mlp_hidden = d["hidden"], d["HD"], d["mlp_hidden"]
         joint_attention_dim = d["joint_attention_dim"]
+        weights = {}
         for L in range(d["num_layers_double"]):
-            weights[("backbone", "double", L, "txt_in")] = rnd(joint_attention_dim, hidden)
+            weights[("backbone", "double", L, "txt_in.weight")] = self._rnd_linear(hidden, joint_attention_dim)
             for prefix in ("txt", "img"):
-                weights[("backbone", "double", L, f"{prefix}_q")] = rnd(hidden, hidden)
-                weights[("backbone", "double", L, f"{prefix}_k")] = rnd(hidden, HD)
-                weights[("backbone", "double", L, f"{prefix}_v")] = rnd(hidden, HD)
-                weights[("backbone", "double", L, f"{prefix}_proj")] = rnd(hidden, hidden)
-                weights[("backbone", "double", L, f"{prefix}_mlp0")] = rnd(hidden, mlp_hidden)
-                weights[("backbone", "double", L, f"{prefix}_mlp2")] = rnd(mlp_hidden, hidden)
+                weights[("backbone", "double", L, f"{prefix}_q.weight")] = self._rnd_linear(hidden, hidden)
+                weights[("backbone", "double", L, f"{prefix}_k.weight")] = self._rnd_linear(hidden, hidden)
+                weights[("backbone", "double", L, f"{prefix}_v.weight")] = self._rnd_linear(hidden, hidden)
+                weights[("backbone", "double", L, f"{prefix}_proj.weight")] = self._rnd_linear(hidden, hidden)
+                weights[("backbone", "double", L, f"{prefix}_mlp0.weight")] = self._rnd_linear(mlp_hidden * 2, hidden)
+                weights[("backbone", "double", L, f"{prefix}_mlp2.weight")] = self._rnd_linear(hidden, mlp_hidden)
+                weights[("backbone", "double", L, f"{prefix}_query_norm")] = self._rnd_norm_scale(HD)
+                weights[("backbone", "double", L, f"{prefix}_key_norm")] = self._rnd_norm_scale(HD)
         for L in range(d["num_layers_single"]):
-            weights[("backbone", "single", L, "q")] = rnd(hidden, hidden)
-            weights[("backbone", "single", L, "k")] = rnd(hidden, HD)
-            weights[("backbone", "single", L, "v")] = rnd(hidden, HD)
-            weights[("backbone", "single", L, "mlp_in")] = rnd(hidden, mlp_hidden)
-            weights[("backbone", "single", L, "attn_out_proj")] = rnd(hidden, hidden)
-            weights[("backbone", "single", L, "mlp_down")] = rnd(mlp_hidden, hidden)
+            weights[("backbone", "single", L, "q.weight")] = self._rnd_linear(hidden, hidden)
+            weights[("backbone", "single", L, "k.weight")] = self._rnd_linear(hidden, hidden)
+            weights[("backbone", "single", L, "v.weight")] = self._rnd_linear(hidden, hidden)
+            weights[("backbone", "single", L, "attn_out_proj.weight")] = self._rnd_linear(hidden, hidden)
+            weights[("backbone", "single", L, "mlp_in.weight")] = self._rnd_linear(mlp_hidden * 2, hidden)
+            weights[("backbone", "single", L, "mlp_down.weight")] = self._rnd_linear(hidden, mlp_hidden)
+            weights[("backbone", "single", L, "query_norm")] = self._rnd_norm_scale(HD)
+            weights[("backbone", "single", L, "key_norm")] = self._rnd_norm_scale(HD)
 
         ahd, aaw, amh = d["action_hidden_dim"], d["action_attn_width"], d["action_mlp_hidden"]
         for L in range(d["action_num_layers_double"]):
-            weights[("action_dit", "double", L, "q")] = rnd(ahd, aaw)
-            weights[("action_dit", "double", L, "k")] = rnd(ahd, HD)
-            weights[("action_dit", "double", L, "v")] = rnd(ahd, HD)
-            weights[("action_dit", "double", L, "proj")] = rnd(aaw, ahd)
-            weights[("action_dit", "double", L, "mlp0")] = rnd(ahd, amh)
-            weights[("action_dit", "double", L, "mlp2")] = rnd(amh, ahd)
+            weights[("action_dit", "double", L, "q.weight")] = self._rnd_linear(aaw, ahd)
+            weights[("action_dit", "double", L, "k.weight")] = self._rnd_linear(aaw, ahd)
+            weights[("action_dit", "double", L, "v.weight")] = self._rnd_linear(aaw, ahd)
+            weights[("action_dit", "double", L, "proj.weight")] = self._rnd_linear(ahd, aaw)
+            weights[("action_dit", "double", L, "mlp0.weight")] = self._rnd_linear(amh * 2, ahd)
+            weights[("action_dit", "double", L, "mlp2.weight")] = self._rnd_linear(ahd, amh)
+            weights[("action_dit", "double", L, "query_norm")] = self._rnd_norm_scale(HD)
+            weights[("action_dit", "double", L, "key_norm")] = self._rnd_norm_scale(HD)
         for L in range(d["action_num_layers_single"]):
-            weights[("action_dit", "single", L, "q")] = rnd(ahd, aaw)
-            weights[("action_dit", "single", L, "k")] = rnd(ahd, HD)
-            weights[("action_dit", "single", L, "v")] = rnd(ahd, HD)
-            weights[("action_dit", "single", L, "mlp_in")] = rnd(ahd, amh)
-            weights[("action_dit", "single", L, "attn_out_proj")] = rnd(aaw, ahd)
-            weights[("action_dit", "single", L, "mlp_down")] = rnd(amh, ahd)
+            weights[("action_dit", "single", L, "q.weight")] = self._rnd_linear(aaw, ahd)
+            weights[("action_dit", "single", L, "k.weight")] = self._rnd_linear(aaw, ahd)
+            weights[("action_dit", "single", L, "v.weight")] = self._rnd_linear(aaw, ahd)
+            weights[("action_dit", "single", L, "attn_out_proj.weight")] = self._rnd_linear(ahd, aaw)
+            weights[("action_dit", "single", L, "mlp_in.weight")] = self._rnd_linear(amh * 2, ahd)
+            weights[("action_dit", "single", L, "mlp_down.weight")] = self._rnd_linear(ahd, amh)
+            weights[("action_dit", "single", L, "query_norm")] = self._rnd_norm_scale(HD)
+            weights[("action_dit", "single", L, "key_norm")] = self._rnd_norm_scale(HD)
         return weights
 
     def _alloc_buffers(self, d: dict) -> dict:
         hidden, mlp_hidden, x0, a0 = d["hidden"], d["mlp_hidden"], d["x0"], d["a0"]
+        img_len = a0 - x0
         joint_attention_dim = d["joint_attention_dim"]
         ahd, amh, num_action = d["action_hidden_dim"], d["action_mlp_hidden"], d["num_action"]
         z = lambda *shape: self._own(torch.zeros(*shape, dtype=FP16, device=DEV))
-        ones_hidden = self._own(torch.ones(hidden, dtype=FP16, device=DEV))
-        ones_action = self._own(torch.ones(ahd, dtype=FP16, device=DEV))
         self._context = self._own(torch.zeros(x0, joint_attention_dim, dtype=FP16, device=DEV))
         self._backbone_hidden = self._own(torch.zeros(a0, hidden, dtype=FP16, device=DEV))
         self._action_latent = self._own(torch.zeros(num_action, ahd, dtype=F32, device=DEV))
         return {
             "context": self._context.data_ptr(),
             "backbone_hidden": self._backbone_hidden.data_ptr(),
-            "txt_mlp_hidden": z(x0, mlp_hidden).data_ptr(),
-            "img_mlp_hidden": z(a0 - x0, mlp_hidden).data_ptr(),
-            "single_mlp_hidden": z(a0, mlp_hidden).data_ptr(),
-            "proj_scratch": z(a0, hidden).data_ptr(),
             "normed_scratch": z(a0, hidden).data_ptr(),
-            "norm_ones": ones_hidden.data_ptr(),
+            "modded_scratch": z(a0, hidden).data_ptr(),
+            "txt_mlp_merged": z(x0, mlp_hidden * 2).data_ptr(),
+            "txt_mlp_gated": z(x0, mlp_hidden).data_ptr(),
+            "img_mlp_merged": z(img_len, mlp_hidden * 2).data_ptr(),
+            "img_mlp_gated": z(img_len, mlp_hidden).data_ptr(),
+            "single_mlp_merged": z(a0, mlp_hidden * 2).data_ptr(),
+            "single_mlp_gated": z(a0, mlp_hidden).data_ptr(),
+            "proj_scratch": z(a0, hidden).data_ptr(),
+            "proj_scratch2": z(a0, hidden).data_ptr(),
             "action_latent": self._action_latent.data_ptr(),
             "action_hidden": z(num_action, ahd).data_ptr(),
             "action_normed": z(num_action, ahd).data_ptr(),
-            "action_norm_ones": ones_action.data_ptr(),
+            "action_modded": z(num_action, ahd).data_ptr(),
             "action_proj_scratch": z(num_action, ahd).data_ptr(),
-            "action_mlp_hidden": z(num_action, amh).data_ptr(),
+            "action_proj_scratch2": z(num_action, ahd).data_ptr(),
+            "action_mlp_merged": z(num_action, amh * 2).data_ptr(),
+            "action_mlp_gated": z(num_action, amh).data_ptr(),
         }
+
+    def _compute_backbone_modulation(self, d: dict):
+        """Backbone's own AdaLN modulation, computed ONCE: real
+        inference always conditions the reference/context encode on a
+        FIXED timestep=0 (confirmed against the real checkpoint run,
+        `benchmarks/imagewam_real_checkpoint_validation.py`'s own
+        `video_timestep = torch.zeros(1)`), so this never needs
+        recomputing per replay -- see pipeline_thor.py's own docstring.
+        """
+        hidden = d["hidden"]
+        mod_w = {
+            "time_in_w1": self._own(torch.randn(hidden, 256, dtype=torch.float32, device=DEV) * 0.02),
+            "time_in_w2": self._own(torch.randn(hidden, hidden, dtype=torch.float32, device=DEV) * 0.02),
+            "mod_double_txt": self._own(torch.randn(6 * hidden, hidden, dtype=torch.float32, device=DEV) * 0.02),
+            "mod_double_img": self._own(torch.randn(6 * hidden, hidden, dtype=torch.float32, device=DEV) * 0.02),
+            "mod_single": self._own(torch.randn(3 * hidden, hidden, dtype=torch.float32, device=DEV) * 0.02),
+        }
+        timestep = self._own(torch.zeros(1, dtype=torch.float32, device=DEV))
+        mod_txt, mod_img, mod_single = compute_shared_modulation(timestep, mod_w, hidden)
+        for group in (mod_txt[0], mod_txt[1], mod_img[0], mod_img[1], mod_single):
+            for t in group:
+                self._own(t)
+        return mod_txt, mod_img, mod_single
+
+    def _compute_action_modulations(self, d: dict):
+        """ActionDiT's own AdaLN modulation, ONE tuple PER DENOISE STEP:
+        its conditioning timestep changes every step (flow-matching
+        schedule, `1.0 -> 0.0` uniform), but `step` is itself a
+        compile-time Python constant during CUDA Graph capture, so
+        every step's own modulation is ALSO a compile-time constant --
+        precomputed here, once, never recomputed per replay.
+        """
+        ahd = d["action_hidden_dim"]
+        mod_w = {
+            "time_in_w1": self._own(torch.randn(ahd, 256, dtype=torch.float32, device=DEV) * 0.02),
+            "time_in_w2": self._own(torch.randn(ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
+            "mod_double": self._own(torch.randn(6 * ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
+            "mod_single": self._own(torch.randn(3 * ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
+        }
+        dt = d["dt"]
+        mods = []
+        for step in range(d["num_denoise_steps"]):
+            action_timestep = 1.0 - step * dt
+            timestep = self._own(torch.full((1,), action_timestep, dtype=torch.float32, device=DEV))
+            mod_double, mod_single = compute_action_modulation(timestep, mod_w, ahd)
+            for t in mod_double[0]:
+                self._own(t)
+            for t in mod_double[1]:
+                self._own(t)
+            for t in mod_single:
+                self._own(t)
+            mods.append((mod_double, mod_single))
+        return mods
 
     def _capture_graph(self) -> None:
         s = torch.cuda.Stream()
@@ -182,16 +312,24 @@ class ImageWAMTorchFrontendThor:
         with torch.cuda.stream(s):
             for _ in range(2):
                 imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, self._weights,
-                                  self.dims, stream=s.cuda_stream, attn=self._attn)
+                                  self.dims, stream=s.cuda_stream, attn=self._attn,
+                                  mod_txt=self._mod_txt, mod_img=self._mod_img,
+                                  mod_single=self._mod_single, rope_table=self._rope_table.data_ptr())
                 imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, self._weights,
-                                       self.dims, stream=s.cuda_stream, attn=self._attn)
+                                       self.dims, stream=s.cuda_stream, attn=self._attn,
+                                       action_mods=self._action_mods,
+                                       action_rope_table=self._action_rope_table.data_ptr())
         torch.cuda.current_stream().wait_stream(s)
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph, stream=s):
             imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, self._weights,
-                              self.dims, stream=s.cuda_stream, attn=self._attn)
+                              self.dims, stream=s.cuda_stream, attn=self._attn,
+                              mod_txt=self._mod_txt, mod_img=self._mod_img,
+                              mod_single=self._mod_single, rope_table=self._rope_table.data_ptr())
             imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, self._weights,
-                                   self.dims, stream=s.cuda_stream, attn=self._attn)
+                                   self.dims, stream=s.cuda_stream, attn=self._attn,
+                                   action_mods=self._action_mods,
+                                   action_rope_table=self._action_rope_table.data_ptr())
         self._graph = graph
 
     def set_prompt(self, prompt_text: str) -> None:

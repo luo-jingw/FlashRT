@@ -1,23 +1,28 @@
 #!/usr/bin/env python
 """ImageWAM Thor structural-dry-run speed benchmark (plan.md, all phases).
 
-Measures steady-state per-layer-type latency at ImageWAM's REAL
-per-head geometry (NH=24, HD=128, backbone hidden=3072/mlp=9216,
-ActionDiT hidden=1024/attn_width=3072/mlp=4096 -- from
-`_imagewam_thor_spec.py`'s confirmed FLUX.2-klein-4B/ActionDiT config
-values), then derives whole-pipeline totals by simple arithmetic
-(layer count x per-layer time). This is NOT accuracy validation --
-random weights, explicitly out of scope per PROJECT.md -- and NOT a
-Thor number: this runs on the project's own Ada (sm_89) 8GB GPU.
+**Rewritten 2026-09-14 alongside `pipeline_thor.py`'s real-math rewrite**
+(opportunities.md OPT-002 / PROJECT.md "Confirmed end goal") -- measures
+the REAL per-layer math (per-head K/V, QK-Norm, real 4-axis RoPE, real
+AdaLN modulation, real SiLU-gated-GLU MLP, real no-mask attention) at
+ImageWAM's REAL per-head geometry (NH=24, HD=128, backbone
+hidden=3072/mlp=9216, ActionDiT hidden=1024/attn_width=3072/mlp=4096 --
+from `_imagewam_thor_spec.py`'s confirmed FLUX.2-klein-4B/ActionDiT
+config values), then derives whole-pipeline totals by simple
+arithmetic (layer count x per-layer time). This is NOT accuracy
+validation -- random weights, explicitly out of scope per PROJECT.md
+-- and NOT a Thor number: this runs on the project's own Ada (sm_89)
+8GB GPU.
 
 Deliberately does NOT allocate the full 25-layer weight set at once
-(~5.5GB of random FP16 weights at real dims) -- this machine has ~6.7GB
-free on an 8GB shared laptop GPU. Instead, each layer TYPE (backbone
-double-stream, backbone single-stream, ActionDiT double-stream,
-ActionDiT single-stream) is benchmarked in isolation with a 1-layer
-attention spec, called repeatedly at layer_idx=0 -- valid because
-every layer of the same type has identical shapes and therefore
-identical steady-state cost (confirmed by GemmRunner's own
+(~5.5GB of random FP16 weights at real dims, now larger still with the
+real per-head K/V and doubled MLP-gate widths) -- this machine has
+~6.7GB free on an 8GB shared laptop GPU. Instead, each layer TYPE
+(backbone double-stream, backbone single-stream, ActionDiT
+double-stream, ActionDiT single-stream) is benchmarked in isolation
+with a 1-layer attention spec, called repeatedly at layer_idx=0 --
+valid because every layer of the same type has identical shapes and
+therefore identical steady-state cost (confirmed by GemmRunner's own
 per-(op,M,N,K) cache: repeated identical-shape calls hit the same
 cached cuBLASLt algorithm).
 
@@ -34,21 +39,23 @@ doing LESS work than a correct implementation needs, not more).
 from __future__ import annotations
 
 import statistics
-import time
 
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
+from flash_rt.models.imagewam.pipeline_real import compute_action_modulation, compute_shared_modulation
 from flash_rt.models.imagewam.pipeline_thor import (
     _action_double_layer,
     _action_single_layer,
     _double_stream_layer,
     _single_stream_layer,
 )
+from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 
 DEV = "cuda"
 FP16 = torch.float16
+F32 = torch.float32
 
 # Real confirmed dims (_imagewam_thor_spec.py).
 HIDDEN, HD, NH, MLP_HIDDEN, JOINT_ATTN_DIM = 3072, 128, 24, 9216, 7680
@@ -66,20 +73,30 @@ WARMUP, ITERS = 15, 50
 _keepalive = []
 
 
-def _rand(*shape):
-    t = torch.randn(*shape, dtype=FP16, device=DEV)
+def _rand(*shape, dtype=FP16, scale=0.02):
+    t = (torch.randn(*shape, dtype=torch.float32, device=DEV) * scale).to(dtype)
     _keepalive.append(t)
     return t
 
 
-def _zeros(*shape):
-    t = torch.zeros(*shape, dtype=FP16, device=DEV)
+def _lin(n, k, scale=0.02):
+    """Weight in GEMM (K,N) convention -- see test_imagewam_prefill.py's
+    own docstring for the dangling-pointer trap this helper avoids
+    (`.contiguous()` on a non-contiguous `.t()` allocates a NEW tensor
+    that must itself be kept alive, not just its pre-transpose input)."""
+    t = (torch.randn(n, k, dtype=torch.float32, device=DEV) * scale).to(FP16).t().contiguous()
     _keepalive.append(t)
     return t
 
 
-def _ones(*shape):
-    t = torch.ones(*shape, dtype=FP16, device=DEV)
+def _zeros(*shape, dtype=FP16):
+    t = torch.zeros(*shape, dtype=dtype, device=DEV)
+    _keepalive.append(t)
+    return t
+
+
+def _norm_scale(HD):
+    t = (torch.randn(HD, dtype=torch.float32, device=DEV).abs() + 0.5).to(FP16)
     _keepalive.append(t)
     return t
 
@@ -105,15 +122,14 @@ def _time_ms(fn, warmup=WARMUP, iters=ITERS) -> tuple[float, float, float]:
 
 def _make_1layer_backend(*, kind: str):
     """A 1-layer AttentionSpec/backend for isolated per-layer-type timing."""
-    spec = make_imagewam_attention_spec(max_prefix_seq=A0, max_total_seq=TOTAL)
-    # Shrink both sites to 1 layer -- this micro-benchmark only ever
-    # calls layer_idx=0.
-    spec.sites["backbone"].num_layers = 1
-    spec.sites["mot"].num_layers = 1
-    ctx = fvk.FvkContext()
     max_seq = A0 if kind == "backbone" else TOTAL
-    K_cache = _zeros(1, max_seq, HD)
-    V_cache = _zeros(1, max_seq, HD)
+    spec = make_imagewam_attention_spec(max_prefix_seq=A0, max_total_seq=TOTAL,
+                                         num_layers=1, num_heads=NH, head_dim=HD)
+    ctx = fvk.FvkContext()
+    # Real per-head K/V: (1, max_seq, HIDDEN), not the old broadcast
+    # (1, max_seq, HD) shape (opportunities.md OPT-002).
+    K_cache = _zeros(1, max_seq, HIDDEN)
+    V_cache = _zeros(1, max_seq, HIDDEN)
     Q_O = _zeros(max_seq, HIDDEN)
     logits = _zeros(max_seq * NH, max_seq + (max_seq % 2))
     backend = ImageWAMAttnBackend(
@@ -127,6 +143,7 @@ def _make_1layer_backend(*, kind: str):
             "logits": logits.data_ptr(), "scale": 1.0 / (HD ** 0.5),
             "layer_stride": K_cache[0].numel() * 2,
         },
+        use_perhead_kv=True, use_real_mot_mask=True,
     )
     return ctx, backend
 
@@ -134,29 +151,43 @@ def _make_1layer_backend(*, kind: str):
 def bench_backbone_double():
     ctx, attn = _make_1layer_backend(kind="backbone")
     gemm = fvk.GemmRunner()
-    weights = {}
-    weights[("backbone", "double", 0, "txt_in")] = _rand(JOINT_ATTN_DIM, HIDDEN).data_ptr()
+    img_len = A0 - X0
+    weights = {("backbone", "double", 0, "txt_in.weight"): _lin(HIDDEN, JOINT_ATTN_DIM).data_ptr()}
     for prefix in ("txt", "img"):
-        weights[("backbone", "double", 0, f"{prefix}_q")] = _rand(HIDDEN, HIDDEN).data_ptr()
-        weights[("backbone", "double", 0, f"{prefix}_k")] = _rand(HIDDEN, HD).data_ptr()
-        weights[("backbone", "double", 0, f"{prefix}_v")] = _rand(HIDDEN, HD).data_ptr()
-        weights[("backbone", "double", 0, f"{prefix}_proj")] = _rand(HIDDEN, HIDDEN).data_ptr()
-        weights[("backbone", "double", 0, f"{prefix}_mlp0")] = _rand(HIDDEN, MLP_HIDDEN).data_ptr()
-        weights[("backbone", "double", 0, f"{prefix}_mlp2")] = _rand(MLP_HIDDEN, HIDDEN).data_ptr()
-    dims = dict(hidden=HIDDEN, HD=HD, mlp_hidden=MLP_HIDDEN,
+        weights[("backbone", "double", 0, f"{prefix}_q.weight")] = _lin(HIDDEN, HIDDEN).data_ptr()
+        weights[("backbone", "double", 0, f"{prefix}_k.weight")] = _lin(HIDDEN, HIDDEN).data_ptr()
+        weights[("backbone", "double", 0, f"{prefix}_v.weight")] = _lin(HIDDEN, HIDDEN).data_ptr()
+        weights[("backbone", "double", 0, f"{prefix}_proj.weight")] = _lin(HIDDEN, HIDDEN).data_ptr()
+        weights[("backbone", "double", 0, f"{prefix}_mlp0.weight")] = _lin(MLP_HIDDEN * 2, HIDDEN).data_ptr()
+        weights[("backbone", "double", 0, f"{prefix}_mlp2.weight")] = _lin(HIDDEN, MLP_HIDDEN).data_ptr()
+        weights[("backbone", "double", 0, f"{prefix}_query_norm")] = _norm_scale(HD).data_ptr()
+        weights[("backbone", "double", 0, f"{prefix}_key_norm")] = _norm_scale(HD).data_ptr()
+    dims = dict(hidden=HIDDEN, HD=HD, NH=NH, mlp_hidden=MLP_HIDDEN,
                 joint_attention_dim=JOINT_ATTN_DIM, x0=X0, a0=A0)
     bufs = {
         "context": _rand(X0, JOINT_ATTN_DIM).data_ptr(),
-        "backbone_hidden": _rand(A0, HIDDEN).data_ptr(),
+        "backbone_hidden": _rand(A0, HIDDEN, scale=0.1).data_ptr(),
         "normed_scratch": _zeros(A0, HIDDEN).data_ptr(),
-        "norm_ones": _ones(HIDDEN).data_ptr(),
-        "txt_mlp_hidden": _zeros(X0, MLP_HIDDEN).data_ptr(),
-        "img_mlp_hidden": _zeros(A0 - X0, MLP_HIDDEN).data_ptr(),
+        "modded_scratch": _zeros(A0, HIDDEN).data_ptr(),
+        "txt_mlp_merged": _zeros(X0, MLP_HIDDEN * 2).data_ptr(),
+        "txt_mlp_gated": _zeros(X0, MLP_HIDDEN).data_ptr(),
+        "img_mlp_merged": _zeros(img_len, MLP_HIDDEN * 2).data_ptr(),
+        "img_mlp_gated": _zeros(img_len, MLP_HIDDEN).data_ptr(),
         "proj_scratch": _zeros(A0, HIDDEN).data_ptr(),
     }
+    mod_w = {
+        "time_in_w1": torch.randn(HIDDEN, 256, dtype=F32, device=DEV) * 0.02,
+        "time_in_w2": torch.randn(HIDDEN, HIDDEN, dtype=F32, device=DEV) * 0.02,
+        "mod_double_txt": torch.randn(6 * HIDDEN, HIDDEN, dtype=F32, device=DEV) * 0.02,
+        "mod_double_img": torch.randn(6 * HIDDEN, HIDDEN, dtype=F32, device=DEV) * 0.02,
+        "mod_single": torch.randn(3 * HIDDEN, HIDDEN, dtype=F32, device=DEV) * 0.02,
+    }
+    mod_txt, mod_img, _ = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, HIDDEN)
+    table = build_backbone_rope_table(X0, img_len, 1, device=DEV)
 
     def run():
-        _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, attn)
+        _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, attn,
+                              mod_txt, mod_img, table.data_ptr())
 
     return _time_ms(run)
 
@@ -165,24 +196,38 @@ def bench_backbone_single():
     ctx, attn = _make_1layer_backend(kind="backbone")
     gemm = fvk.GemmRunner()
     weights = {
-        ("backbone", "single", 0, "q"): _rand(HIDDEN, HIDDEN).data_ptr(),
-        ("backbone", "single", 0, "k"): _rand(HIDDEN, HD).data_ptr(),
-        ("backbone", "single", 0, "v"): _rand(HIDDEN, HD).data_ptr(),
-        ("backbone", "single", 0, "mlp_in"): _rand(HIDDEN, MLP_HIDDEN).data_ptr(),
-        ("backbone", "single", 0, "attn_out_proj"): _rand(HIDDEN, HIDDEN).data_ptr(),
-        ("backbone", "single", 0, "mlp_down"): _rand(MLP_HIDDEN, HIDDEN).data_ptr(),
+        ("backbone", "single", 0, "q.weight"): _lin(HIDDEN, HIDDEN).data_ptr(),
+        ("backbone", "single", 0, "k.weight"): _lin(HIDDEN, HIDDEN).data_ptr(),
+        ("backbone", "single", 0, "v.weight"): _lin(HIDDEN, HIDDEN).data_ptr(),
+        ("backbone", "single", 0, "mlp_in.weight"): _lin(MLP_HIDDEN * 2, HIDDEN).data_ptr(),
+        ("backbone", "single", 0, "attn_out_proj.weight"): _lin(HIDDEN, HIDDEN).data_ptr(),
+        ("backbone", "single", 0, "mlp_down.weight"): _lin(HIDDEN, MLP_HIDDEN).data_ptr(),
+        ("backbone", "single", 0, "query_norm"): _norm_scale(HD).data_ptr(),
+        ("backbone", "single", 0, "key_norm"): _norm_scale(HD).data_ptr(),
     }
-    dims = dict(hidden=HIDDEN, HD=HD, mlp_hidden=MLP_HIDDEN, a0=A0)
+    dims = dict(hidden=HIDDEN, HD=HD, NH=NH, mlp_hidden=MLP_HIDDEN, a0=A0)
     bufs = {
-        "backbone_hidden": _rand(A0, HIDDEN).data_ptr(),
+        "backbone_hidden": _rand(A0, HIDDEN, scale=0.1).data_ptr(),
         "normed_scratch": _zeros(A0, HIDDEN).data_ptr(),
-        "norm_ones": _ones(HIDDEN).data_ptr(),
-        "single_mlp_hidden": _zeros(A0, MLP_HIDDEN).data_ptr(),
+        "modded_scratch": _zeros(A0, HIDDEN).data_ptr(),
+        "single_mlp_merged": _zeros(A0, MLP_HIDDEN * 2).data_ptr(),
+        "single_mlp_gated": _zeros(A0, MLP_HIDDEN).data_ptr(),
         "proj_scratch": _zeros(A0, HIDDEN).data_ptr(),
+        "proj_scratch2": _zeros(A0, HIDDEN).data_ptr(),
     }
+    mod_w = {
+        "time_in_w1": torch.randn(HIDDEN, 256, dtype=F32, device=DEV) * 0.02,
+        "time_in_w2": torch.randn(HIDDEN, HIDDEN, dtype=F32, device=DEV) * 0.02,
+        "mod_double_txt": torch.randn(6 * HIDDEN, HIDDEN, dtype=F32, device=DEV) * 0.02,
+        "mod_double_img": torch.randn(6 * HIDDEN, HIDDEN, dtype=F32, device=DEV) * 0.02,
+        "mod_single": torch.randn(3 * HIDDEN, HIDDEN, dtype=F32, device=DEV) * 0.02,
+    }
+    _, _, mod_single = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, HIDDEN)
+    table = build_backbone_rope_table(X0, A0 - X0, 1, device=DEV)
 
     def run():
-        _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, 0, attn)
+        _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, 0, attn,
+                              mod_single, table.data_ptr())
 
     return _time_ms(run)
 
@@ -191,26 +236,38 @@ def bench_action_double():
     ctx, attn = _make_1layer_backend(kind="mot")
     gemm = fvk.GemmRunner()
     weights = {
-        ("action_dit", "double", 0, "q"): _rand(ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH).data_ptr(),
-        ("action_dit", "double", 0, "k"): _rand(ACTION_HIDDEN_DIM, HD).data_ptr(),
-        ("action_dit", "double", 0, "v"): _rand(ACTION_HIDDEN_DIM, HD).data_ptr(),
-        ("action_dit", "double", 0, "proj"): _rand(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
-        ("action_dit", "double", 0, "mlp0"): _rand(ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN).data_ptr(),
-        ("action_dit", "double", 0, "mlp2"): _rand(ACTION_MLP_HIDDEN, ACTION_HIDDEN_DIM).data_ptr(),
+        ("action_dit", "double", 0, "q.weight"): _lin(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
+        ("action_dit", "double", 0, "k.weight"): _lin(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
+        ("action_dit", "double", 0, "v.weight"): _lin(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
+        ("action_dit", "double", 0, "proj.weight"): _lin(ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH).data_ptr(),
+        ("action_dit", "double", 0, "mlp0.weight"): _lin(ACTION_MLP_HIDDEN * 2, ACTION_HIDDEN_DIM).data_ptr(),
+        ("action_dit", "double", 0, "mlp2.weight"): _lin(ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN).data_ptr(),
+        ("action_dit", "double", 0, "query_norm"): _norm_scale(HD).data_ptr(),
+        ("action_dit", "double", 0, "key_norm"): _norm_scale(HD).data_ptr(),
     }
     dims = dict(action_hidden_dim=ACTION_HIDDEN_DIM, action_attn_width=ACTION_ATTN_WIDTH,
-                HD=HD, action_mlp_hidden=ACTION_MLP_HIDDEN, x0=X0, a0=A0,
+                HD=HD, NH=NH, action_mlp_hidden=ACTION_MLP_HIDDEN, x0=X0, a0=A0,
                 num_action=NUM_ACTION, total=TOTAL)
     bufs = {
-        "action_hidden": _rand(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
+        "action_hidden": _rand(NUM_ACTION, ACTION_HIDDEN_DIM, scale=0.1).data_ptr(),
         "action_normed": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
-        "action_norm_ones": _ones(ACTION_HIDDEN_DIM).data_ptr(),
+        "action_modded": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
         "action_proj_scratch": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
-        "action_mlp_hidden": _zeros(NUM_ACTION, ACTION_MLP_HIDDEN).data_ptr(),
+        "action_mlp_merged": _zeros(NUM_ACTION, ACTION_MLP_HIDDEN * 2).data_ptr(),
+        "action_mlp_gated": _zeros(NUM_ACTION, ACTION_MLP_HIDDEN).data_ptr(),
     }
+    mod_w = {
+        "time_in_w1": torch.randn(ACTION_HIDDEN_DIM, 256, dtype=F32, device=DEV) * 0.02,
+        "time_in_w2": torch.randn(ACTION_HIDDEN_DIM, ACTION_HIDDEN_DIM, dtype=F32, device=DEV) * 0.02,
+        "mod_double": torch.randn(6 * ACTION_HIDDEN_DIM, ACTION_HIDDEN_DIM, dtype=F32, device=DEV) * 0.02,
+        "mod_single": torch.randn(3 * ACTION_HIDDEN_DIM, ACTION_HIDDEN_DIM, dtype=F32, device=DEV) * 0.02,
+    }
+    mod_double, _ = compute_action_modulation(torch.ones(1, device=DEV), mod_w, ACTION_HIDDEN_DIM)
+    action_table = build_action_rope_table(NUM_ACTION, device=DEV)
 
     def run():
-        _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, 0, attn)
+        _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, 0, attn,
+                              mod_double, action_table.data_ptr())
 
     return _time_ms(run)
 
@@ -219,44 +276,57 @@ def bench_action_single():
     ctx, attn = _make_1layer_backend(kind="mot")
     gemm = fvk.GemmRunner()
     weights = {
-        ("action_dit", "single", 0, "q"): _rand(ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH).data_ptr(),
-        ("action_dit", "single", 0, "k"): _rand(ACTION_HIDDEN_DIM, HD).data_ptr(),
-        ("action_dit", "single", 0, "v"): _rand(ACTION_HIDDEN_DIM, HD).data_ptr(),
-        ("action_dit", "single", 0, "mlp_in"): _rand(ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN).data_ptr(),
-        ("action_dit", "single", 0, "attn_out_proj"): _rand(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
-        ("action_dit", "single", 0, "mlp_down"): _rand(ACTION_MLP_HIDDEN, ACTION_HIDDEN_DIM).data_ptr(),
+        ("action_dit", "single", 0, "q.weight"): _lin(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
+        ("action_dit", "single", 0, "k.weight"): _lin(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
+        ("action_dit", "single", 0, "v.weight"): _lin(ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
+        ("action_dit", "single", 0, "mlp_in.weight"): _lin(ACTION_MLP_HIDDEN * 2, ACTION_HIDDEN_DIM).data_ptr(),
+        ("action_dit", "single", 0, "attn_out_proj.weight"): _lin(ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH).data_ptr(),
+        ("action_dit", "single", 0, "mlp_down.weight"): _lin(ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN).data_ptr(),
+        ("action_dit", "single", 0, "query_norm"): _norm_scale(HD).data_ptr(),
+        ("action_dit", "single", 0, "key_norm"): _norm_scale(HD).data_ptr(),
     }
     dims = dict(action_hidden_dim=ACTION_HIDDEN_DIM, action_attn_width=ACTION_ATTN_WIDTH,
-                HD=HD, action_mlp_hidden=ACTION_MLP_HIDDEN, x0=X0, a0=A0,
+                HD=HD, NH=NH, action_mlp_hidden=ACTION_MLP_HIDDEN, x0=X0, a0=A0,
                 num_action=NUM_ACTION, total=TOTAL)
     bufs = {
-        "action_hidden": _rand(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
+        "action_hidden": _rand(NUM_ACTION, ACTION_HIDDEN_DIM, scale=0.1).data_ptr(),
         "action_normed": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
-        "action_norm_ones": _ones(ACTION_HIDDEN_DIM).data_ptr(),
+        "action_modded": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
         "action_proj_scratch": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
-        "action_mlp_hidden": _zeros(NUM_ACTION, ACTION_MLP_HIDDEN).data_ptr(),
+        "action_proj_scratch2": _zeros(NUM_ACTION, ACTION_HIDDEN_DIM).data_ptr(),
+        "action_mlp_merged": _zeros(NUM_ACTION, ACTION_MLP_HIDDEN * 2).data_ptr(),
+        "action_mlp_gated": _zeros(NUM_ACTION, ACTION_MLP_HIDDEN).data_ptr(),
     }
+    mod_w = {
+        "time_in_w1": torch.randn(ACTION_HIDDEN_DIM, 256, dtype=F32, device=DEV) * 0.02,
+        "time_in_w2": torch.randn(ACTION_HIDDEN_DIM, ACTION_HIDDEN_DIM, dtype=F32, device=DEV) * 0.02,
+        "mod_double": torch.randn(6 * ACTION_HIDDEN_DIM, ACTION_HIDDEN_DIM, dtype=F32, device=DEV) * 0.02,
+        "mod_single": torch.randn(3 * ACTION_HIDDEN_DIM, ACTION_HIDDEN_DIM, dtype=F32, device=DEV) * 0.02,
+    }
+    _, mod_single = compute_action_modulation(torch.ones(1, device=DEV), mod_w, ACTION_HIDDEN_DIM)
+    action_table = build_action_rope_table(NUM_ACTION, device=DEV)
 
     def run():
-        _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, 0, attn)
+        _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, 0, attn,
+                              mod_single, action_table.data_ptr())
 
     return _time_ms(run)
 
 
 def bench_mot_joint_kernel_only():
     ctx = fvk.FvkContext()
-    q = _rand(TOTAL * NH, HD)
-    k = _rand(TOTAL, HD)
-    v = _rand(TOTAL, HD)
+    q = _rand(NUM_ACTION * NH, HD)
+    k = _rand(TOTAL, HIDDEN)
+    v = _rand(TOTAL, HIDDEN)
     total_pad = TOTAL + (TOTAL % 2)
-    logits = _zeros(TOTAL * NH, total_pad)
-    out = _zeros(TOTAL * NH, HD)
+    logits = _zeros(NUM_ACTION * NH, total_pad)
+    out = _zeros(NUM_ACTION * NH, HD)
     scale = 1.0 / (HD ** 0.5)
 
     def run():
-        fvk.attention_qkv_fp16_mot_joint(ctx, q.data_ptr(), k.data_ptr(), v.data_ptr(),
-                                          logits.data_ptr(), out.data_ptr(),
-                                          TOTAL, NH, HD, A0, A0, scale, 0)
+        fvk.attention_qkv_fp16_perhead(ctx, q.data_ptr(), k.data_ptr(), v.data_ptr(),
+                                        logits.data_ptr(), out.data_ptr(),
+                                        NUM_ACTION, TOTAL, NH, HD, scale, 0)
 
     return _time_ms(run)
 
@@ -264,16 +334,16 @@ def bench_mot_joint_kernel_only():
 def bench_standard_attn_kernel_only():
     ctx = fvk.FvkContext()
     q = _rand(A0 * NH, HD)
-    k = _rand(A0, HD)
-    v = _rand(A0, HD)
+    k = _rand(A0, HIDDEN)
+    v = _rand(A0, HIDDEN)
     logits = _zeros(A0 * NH, A0)
     out = _zeros(A0 * NH, HD)
     scale = 1.0 / (HD ** 0.5)
 
     def run():
-        fvk.attention_qkv_fp16(ctx, q.data_ptr(), k.data_ptr(), v.data_ptr(),
-                                logits.data_ptr(), out.data_ptr(),
-                                A0, A0, NH, HD, scale, 0)
+        fvk.attention_qkv_fp16_perhead(ctx, q.data_ptr(), k.data_ptr(), v.data_ptr(),
+                                        logits.data_ptr(), out.data_ptr(),
+                                        A0, A0, NH, HD, scale, 0)
 
     return _time_ms(run)
 
@@ -284,6 +354,8 @@ def main():
           f"action_mlp_hidden={ACTION_MLP_HIDDEN}")
     print(f"Seq: x0={X0} a0={A0} num_action={NUM_ACTION} total={TOTAL} "
           f"(representative, not a confirmed real ImageWAM deployment length)")
+    print(f"Real math (opportunities.md OPT-002): per-head K/V, QK-Norm, RoPE, "
+          f"AdaLN, SiLU-GLU MLP, no-mask attention -- not the old approximation.")
     print(f"Warmup={WARMUP} iters={ITERS}, CUDA-event timing, P50/P90/mean in ms\n")
 
     results = {}

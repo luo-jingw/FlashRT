@@ -1,101 +1,129 @@
-"""ImageWAM (FLUX.2-4B variant) Thor compute path — backbone prefill.
+"""ImageWAM (FLUX.2-4B variant) Thor compute path — backbone prefill +
+ActionDiT denoise loop, REAL math (opportunities.md OPT-002).
 
-plan.md Phase 3. Structural dry-run scope only (see PROJECT.md /
-plan.md): random-initialized weights, BF16/FP16 only, no FP8, no
-calibration, no real checkpoint. Goal is a populated, correctly-shaped
-KV cache with no NaN/Inf, not accuracy against a trained model.
+**Rewritten 2026-09-14** to replace the earlier structural-dry-run
+approximation (unweighted RMS norm, single-shared-broadcast K/V, no
+RoPE/QK-Norm/AdaLN, plain GELU MLP at the wrong width, and a wrong
+attention-mask exclusion) with the real math this project has since
+verified end to end — including against the real trained checkpoint on
+Thor (`benchmarks/imagewam_real_checkpoint_validation.py`, backbone
+cosine=0.999927, ActionDiT cosine=0.999963). This is now the confirmed
+target for real Thor deployment (`PROJECT.md`'s "Confirmed end goal"),
+not a permanent parallel/throwaway path — see `opportunities.md` OPT-002
+for the full history of what was found and fixed.
 
-# Simplifications versus the real FLUX.2-klein-4B / ImageWAM backbone
+Weights are still random-initialized here (see
+`flash_rt/frontends/torch/imagewam_thor.py`) — real checkpoint loading
+is a separate, still-open piece of work (needs the real `imagewam`/
+`flux2` packages, only available on Thor; see
+`benchmarks/imagewam_real_checkpoint_validation.py` for the weight
+EXTRACTION logic already verified against the real checkpoint, which a
+future loader would reuse). Nothing about the math below depends on
+where the weights come from.
+
+# Real per-layer structure
 =======================================================================
 
-Documented explicitly here (not silently assumed) because each one
-would need to be revisited before this pipeline could produce
-accurate output against a real checkpoint. None of them affect
-correctness of *this* phase's stated goal (finite output, correct
-pointer-interface, correct shapes).
+Ported from `flash_rt/models/imagewam/real_double_stream_block.py` /
+`real_single_stream_block.py` / `real_action_expert.py` (which remain
+the verified tensor-level reference this pointer-based rewrite is
+checked against — see `tests/test_imagewam_thor_real_wiring.py`), but
+restructured as pointer-based, buffer-reusing code with attention
+dispatched through `ImageWAMAttnBackend` (constructed with
+`use_perhead_kv=True, use_real_mot_mask=True`) instead of calling fvk
+attention kernels directly — matching FlashRT's own established
+production convention (the `AttentionBackendBase` protocol every other
+real Thor pipeline in this codebase, e.g. Pi0.5's, uses uniformly) so
+the pipeline-owned per-layer KV cache stays the single source of truth
+an eventual real-checkpoint-loading frontend can plug into unchanged.
 
-1. **Unweighted (unit-scale) RMS norm only, no AdaLN modulation.**
-   `_imagewam_thor_spec.py` (Phase 1) declares no norm/modulation
-   weight tensors at all, so there is no per-layer learnable norm
-   scale to load. This pipeline still calls `fvk.rms_norm_fp16` before
-   every attention and MLP sub-block, passing a single shared,
-   all-ones "weight" buffer (`bufs["norm_ones"]`) instead of a real
-   learned scale -- true normalization (bounds activation magnitude),
-   just with an always-1.0 elementwise gain. This was not optional:
-   an earlier version of this file had NO normalization at all, and
-   the Phase 3 wiring test caught real NaN/Inf after only a few
-   layers -- unbounded residual growth through repeated random-weight
-   GEMMs in FP16 overflows quickly with no norm anywhere, regardless
-   of random-vs-real weights. Real FLUX double/single-stream blocks
-   additionally apply per-block AdaLN shift/scale/gate from a
-   timestep+text conditioning vector; that part is still not modeled.
+Double-stream block (real order, per side txt/img):
+    x_normed = LayerNorm_no_affine(x)
+    x_mod = (1+scale1)*x_normed + shift1
+    q,k,v = x_mod @ {q,k,v}_weight              # separate GEMMs, real per-head width
+    q,k = QKNorm(q,k)                            # rms_norm_fp16 with the real scale weight
+    (RoPE applied once below, over the full combined [txt|img] sequence)
+    attn = joint_attention(q,k,v)                # ImageWAMAttnBackend "backbone" site, no mask
+    x = x + gate1 * (attn @ proj_weight)
+    x_normed2 = LayerNorm_no_affine(x)
+    x_mod2 = (1+scale2)*x_normed2 + shift2
+    mlp = silu_glu(x_mod2 @ mlp0_weight) @ mlp2_weight
+    x = x + gate2 * mlp
 
-2. **Single-shared K/V per position, not real per-head MHA.** The
-   `attention_qkv_fp16` / `attention_qkv_fp16_mot_joint` kernels this
-   pipeline calls through `ImageWAMAttnBackend` both take K/V as a
-   single `(seq, HD)` buffer broadcast across all `NH` query heads
-   (confirmed by reading `csrc/kernels/attention_cublas.cu` directly —
-   this is the same shape `attention_qkv_fp16_state_masked` already
-   uses for Pi0.5's own GQA `num_kv_heads=1` sites). Real FLUX/DiT
-   attention uses full per-head K/V (`num_kv_heads == num_q_heads`).
-   This pipeline's own K/V projection weights are therefore declared
-   at `HD` width (128), not `hidden` width (3072) like the real
-   checkpoint's fused QKV tensor — a genuine architectural
-   simplification, not just a random-vs-real-weight difference.
-   Tracked as a follow-up in `opportunities.md` (a real per-head-K/V
-   kernel is a separate, substantial CUDA task).
+Single-stream block: same shape, one stream (no txt/img split), one
+set of q/k/v/mlp_in weights, attn-out-proj + mlp-down SUMMED before the
+one gated residual (matches the real fused `linear2`, represented here
+as two separate GEMMs — see `real_single_stream_block.py`'s own
+docstring for why that split is mathematically identical).
 
-3. **No persistent text-stream residual across double-stream layers.**
-   `_imagewam_thor_spec.py` declares one `txt_in` weight PER
-   double-stream layer (matching the real checkpoint's tensor names).
-   This pipeline re-derives the text stream fresh from raw `context`
-   at every double-stream layer via that layer's own `txt_in`,
-   discarding the previous layer's text-side attention+MLP update
-   rather than carrying it forward as a residual. The image stream
-   does not have this limitation — it keeps one true residual across
-   all 5 double-stream layers.
+ActionDiT double/single blocks: same shape at `action_hidden_dim`/
+`action_attn_width` (which differ, unlike the backbone), IMG-ONLY (no
+txt branch), joint attention against the "mot" site (Q = action rows
+only, K/V = the full combined sequence including the frozen backbone
+K/V cache written during prefill — no mask, same real rule as
+"backbone").
 
-# Weight pointer keys this file expects (post-split, not the raw
-# checkpoint-shaped WEIGHT_SPEC declared in Phase 1)
+# AdaLN modulation is precomputed OUTSIDE this module, once
 =======================================================================
 
-Phase 1's `_imagewam_thor_spec.py` declares checkpoint-shaped tensors
-(a fused `img_attn.qkv.weight`, etc.) for real-checkpoint-loading
-compatibility. This pipeline instead consumes already-split,
-already-transposed-to-(K,N) pointers (splitting a fused QKV tensor
-into separate Q/K/V matrices, and transposing PyTorch's `(out, in)`
-convention to `(in, out)` for `GemmRunner.fp16_nn`, are both one-time
-operations that belong in the frontend's weight-loading step — see
-`CosmosEdgeThor.__init__`'s own `.t().contiguous()` for the established
-precedent). Phase 5 (frontend) is responsible for producing these keys
-from Phase 1's declared shapes (real load) or by direct random-fill
-(this stage). Keys, all `weights[("backbone", stream, layer, slot)]`:
+Real AdaLN modulation depends on a per-FORWARD timestep, shared across
+every layer of a given stream type — the backbone's is FIXED for the
+whole forward (real inference always conditions the reference/context
+encode on `timestep=0`, confirmed against the real checkpoint run
+above), and ActionDiT's changes once per denoise STEP (but `step` is
+already a compile-time Python constant during CUDA Graph capture — see
+`imagewam_denoise_step`'s own docstring below), so this module never
+recomputes AdaLN inside a per-replay-cost path. The caller (the
+frontend, Phase 5) is expected to precompute the modulation tuples via
+`flash_rt.models.imagewam.pipeline_real.compute_shared_modulation`/
+`compute_action_modulation` ONCE before graph capture, and to
+precompute the RoPE tables via
+`flash_rt.models.imagewam.rope.build_backbone_rope_table`/
+`build_action_rope_table` ONCE — then pass all of these in as the
+`mod_txt`/`mod_img`/`mod_single`/`rope_table`/`action_mods`/
+`action_rope_table` arguments below. Every one of these is captured by
+the graph as a small, fixed-address read-only buffer; nothing here
+allocates or recomputes them per replay.
 
-  stream="double", layer in [0, 5):
-    txt_in (joint_attention_dim, hidden), txt_q/txt_proj (hidden, hidden),
-    txt_k/txt_v (hidden, HD), txt_mlp0 (hidden, mlp_hidden),
-    txt_mlp2 (mlp_hidden, hidden), and the img_* analogs of all but txt_in.
+# Weight pointer keys this file expects
+=======================================================================
 
-  stream="single", layer in [0, 20):
-    q/attn_out_proj (hidden, hidden), k/v (hidden, HD),
-    mlp_in (hidden, mlp_hidden), mlp_down (mlp_hidden, hidden).
+See `flash_rt/frontends/torch/_imagewam_thor_spec.py` for the full
+per-layer shape declarations this file's weight dict keys must match
+(`weights[("backbone", stream, layer, slot)]` / `weights[("action_dit",
+stream, layer, slot)]`, `slot` matching that spec file's own suffix
+names). K/V weights are real per-head width (`hidden`/`action_attn_width`,
+NOT the old broadcast `HD` width); `*_query_norm`/`*_key_norm` are new
+QK-Norm scale weights; `*mlp0`/`mlp_in` widths are `mlp_hidden*2` (real
+SiLU-gated GLU).
 
 `bufs` keys (pipeline-owned scratch, pre-allocated once by the
-frontend, fp16 throughout):
+frontend, fp16 throughout unless noted):
     context           (max_txt_seq, joint_attention_dim)  -- input
-    backbone_hidden   (a0, hidden)   -- the persistent residual;
-                                         rows [0,x0) = text, [x0,a0) = image
-    normed_scratch    (a0, hidden)   -- pre-norm landing pad, reused by
-                                         every attention/MLP sub-block
-    norm_ones         (hidden,)      -- all-1.0, the unweighted RMS norm
-                                         "weight" every call shares
-    txt_mlp_hidden    (x0, mlp_hidden)
-    img_mlp_hidden    (a0 - x0, mlp_hidden)
-    single_mlp_hidden (a0, mlp_hidden)
+    backbone_hidden   (a0, hidden)   -- the persistent residual
+    normed_scratch    (a0, hidden)   -- LayerNorm output, reused by
+                                         every sub-block
+    modded_scratch    (a0, hidden)   -- post-AdaLN-modulation, reused
+                                         by every sub-block
+    txt_mlp_merged/txt_mlp_gated, img_mlp_merged/img_mlp_gated
+                      (x0 or img_len, mlp_hidden*2 / mlp_hidden)
+    single_mlp_merged/single_mlp_gated  (a0, mlp_hidden*2 / mlp_hidden)
     proj_scratch      (a0, hidden)   -- GEMM output landing pad before
-                                         the residual_add_fp16 accumulate
+                                         the gated-residual accumulate
+    proj_scratch2     (a0, hidden)   -- single-stream block's own
+                                         second landing pad (attn-out
+                                         and mlp-down are summed before
+                                         ONE gated residual)
+    action_hidden     (num_action, action_hidden_dim)
+    action_normed / action_modded          (num_action, action_hidden_dim)
+    action_proj_scratch                    (num_action, action_hidden_dim)
+    action_mlp_merged/action_mlp_gated     (num_action, action_mlp_hidden*2 / action_mlp_hidden)
+    action_latent     (num_action, action_hidden_dim), F32 -- the
+                       running flow-matching state
 """
 from __future__ import annotations
+
+import torch
 
 
 def _ptr_offset(base_ptr: int, row_offset: int, row_width: int) -> int:
@@ -103,126 +131,201 @@ def _ptr_offset(base_ptr: int, row_offset: int, row_width: int) -> int:
     return int(base_ptr) + int(row_offset) * int(row_width) * 2
 
 
-def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream, attn):
-    """One FLUX.2 double-stream block: separate img/txt QKV+MLP, joint attn.
+def _wrap_fp16(ptr: int, seq: int, dim: int) -> torch.Tensor:
+    """Zero-copy CUDA tensor view over a raw fp16 pointer -- same
+    technique as `flash_rt.hardware.thor.attn_backend._fp16_tensor_from_ptr`
+    (not shared via import to keep this module's only external
+    dependency `torch`, matching every other pointer-based pipeline
+    file in this project). Used only for the small AdaLN elementwise
+    steps below (modulate / gated-residual / plain add) -- every GEMM
+    and every fvk kernel call still operates on raw pointers directly.
+    """
+    interface = {
+        "data": (int(ptr), False),
+        "shape": (int(seq), int(dim)),
+        "typestr": "<f2",
+        "version": 3,
+    }
+    owner = type("_Fp16View", (), {"__cuda_array_interface__": interface})()
+    return torch.as_tensor(owner, device="cuda")
 
-    Reads/writes `bufs["backbone_hidden"]` rows [0,x0) (text) and
-    [x0,a0) (image) in place.
+
+def _modulate(normed_ptr: int, out_ptr: int, shift, scale, seq: int, dim: int) -> None:
+    """Real `(1+scale)*normed + shift`, writing into `out_ptr` (may
+    equal `normed_ptr`). `shift`/`scale` are `(1,1,dim)` float32
+    tensors from `adaln.modulation`'s own chunk output -- see that
+    module's docstring. All ops are in-place on existing buffers or
+    tiny (dim-sized) allocations, both safe and cheap under CUDA Graph
+    capture (PyTorch's graph-private memory pool handles allocation
+    during capture correctly; only a raw, non-pooled `cudaMalloc` --
+    e.g. `GemmRunner`'s C++ constructor -- breaks capture, not this).
+    """
+    normed = _wrap_fp16(normed_ptr, seq, dim)
+    out = _wrap_fp16(out_ptr, seq, dim)
+    out.copy_(normed)
+    out.mul_(1.0 + scale[0].to(out.dtype))
+    out.add_(shift[0].to(out.dtype))
+
+
+def _gated_residual_inplace(residual_ptr: int, sublayer_ptr: int, gate, seq: int, dim: int) -> None:
+    """Real `residual += gate * sublayer_out`, in place at `residual_ptr`."""
+    residual = _wrap_fp16(residual_ptr, seq, dim)
+    sublayer = _wrap_fp16(sublayer_ptr, seq, dim)
+    residual.add_(gate[0].to(residual.dtype) * sublayer)
+
+
+def _add_inplace(dst_ptr: int, src_ptr: int, seq: int, dim: int) -> None:
+    """Plain `dst += src`, in place -- used to sum the single-stream
+    block's attn-out and mlp-down projections before their ONE shared
+    gated residual (see module docstring)."""
+    dst = _wrap_fp16(dst_ptr, seq, dim)
+    src = _wrap_fp16(src_ptr, seq, dim)
+    dst.add_(src)
+
+
+def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream, attn,
+                          mod_txt, mod_img, rope_table):
+    """One real FLUX.2 double-stream block: separate img/txt Q/K/V+MLP,
+    joint attn. Reads/writes `bufs["backbone_hidden"]` rows [0,x0)
+    (text) and [x0,a0) (image) in place.
     """
     hidden = dims["hidden"]
     HD = dims["HD"]
+    NH = dims["NH"]
     mlp_hidden = dims["mlp_hidden"]
     joint_attention_dim = dims["joint_attention_dim"]
     x0 = dims["x0"]
     a0 = dims["a0"]
     img_len = a0 - x0
-
-    combined = bufs["backbone_hidden"]  # (a0, hidden)
-    normed = bufs["normed_scratch"]     # (a0, hidden) scratch
-    ones = bufs["norm_ones"]
     eps = 1e-6
     key = lambda slot: weights[("backbone", "double", layer_idx, slot)]
 
+    (txt_shift1, txt_scale1, txt_gate1), (txt_shift2, txt_scale2, txt_gate2) = mod_txt
+    (img_shift1, img_scale1, img_gate1), (img_shift2, img_scale2, img_gate2) = mod_img
+
+    combined = bufs["backbone_hidden"]  # (a0, hidden)
+    normed = bufs["normed_scratch"]
+    modded = bufs["modded_scratch"]
+
     ptrs = attn.get_slot_ptrs("backbone", layer_idx)
-    Q_O, K_cache, V_cache = ptrs["Q"], ptrs["K"], ptrs["V"]
+    Q_O, K_cache, V_cache = ptrs["Q"], ptrs["K"], ptrs["V"]  # real per-head width (hidden)
 
-    # --- text stream: freshly re-derived from raw context (see module
-    # docstring simplification #3), overwrites rows [0,x0) of combined ---
-    gemm.fp16_nn(bufs["context"], key("txt_in"), combined, x0, hidden, joint_attention_dim, stream)
+    # --- text stream: freshly re-derived from raw context (kept
+    # simplification, see the git history of this file / plan.md),
+    # overwrites rows [0,x0) of combined ---
+    gemm.fp16_nn(bufs["context"], key("txt_in.weight"), combined, x0, hidden, joint_attention_dim, stream)
     txt_x = combined  # rows [0, x0)
-    txt_normed = normed
 
-    fvk.rms_norm_fp16(txt_x, ones, txt_normed, x0, hidden, eps, stream)
-    gemm.fp16_nn(txt_normed, key("txt_q"), Q_O, x0, hidden, hidden, stream)
-    gemm.fp16_nn(txt_normed, key("txt_k"), K_cache, x0, HD, hidden, stream)
-    gemm.fp16_nn(txt_normed, key("txt_v"), V_cache, x0, HD, hidden, stream)
+    fvk.layer_norm_no_affine_fp16(txt_x, normed, x0, hidden, eps, stream)
+    _modulate(normed, modded, txt_shift1, txt_scale1, x0, hidden)
+    gemm.fp16_nn(modded, key("txt_q.weight"), Q_O, x0, hidden, hidden, stream)
+    gemm.fp16_nn(modded, key("txt_k.weight"), K_cache, x0, hidden, hidden, stream)
+    gemm.fp16_nn(modded, key("txt_v.weight"), V_cache, x0, hidden, hidden, stream)
+    fvk.rms_norm_fp16(Q_O, key("txt_query_norm"), Q_O, x0 * NH, HD, eps, stream)
+    fvk.rms_norm_fp16(K_cache, key("txt_key_norm"), K_cache, x0 * NH, HD, eps, stream)
 
     # --- image stream: persistent residual, rows [x0,a0) of combined ---
     img_x_ptr = _ptr_offset(combined, x0, hidden)
     img_normed_ptr = _ptr_offset(normed, x0, hidden)
+    img_modded_ptr = _ptr_offset(modded, x0, hidden)
     img_Q_ptr = _ptr_offset(Q_O, x0, hidden)
-    img_K_ptr = _ptr_offset(K_cache, x0, HD)
-    img_V_ptr = _ptr_offset(V_cache, x0, HD)
-    fvk.rms_norm_fp16(img_x_ptr, ones, img_normed_ptr, img_len, hidden, eps, stream)
-    gemm.fp16_nn(img_normed_ptr, key("img_q"), img_Q_ptr, img_len, hidden, hidden, stream)
-    gemm.fp16_nn(img_normed_ptr, key("img_k"), img_K_ptr, img_len, HD, hidden, stream)
-    gemm.fp16_nn(img_normed_ptr, key("img_v"), img_V_ptr, img_len, HD, hidden, stream)
+    img_K_ptr = _ptr_offset(K_cache, x0, hidden)
+    img_V_ptr = _ptr_offset(V_cache, x0, hidden)
 
-    # --- joint self-attention over the whole [text | image] sequence ---
+    fvk.layer_norm_no_affine_fp16(img_x_ptr, img_normed_ptr, img_len, hidden, eps, stream)
+    _modulate(img_normed_ptr, img_modded_ptr, img_shift1, img_scale1, img_len, hidden)
+    gemm.fp16_nn(img_modded_ptr, key("img_q.weight"), img_Q_ptr, img_len, hidden, hidden, stream)
+    gemm.fp16_nn(img_modded_ptr, key("img_k.weight"), img_K_ptr, img_len, hidden, hidden, stream)
+    gemm.fp16_nn(img_modded_ptr, key("img_v.weight"), img_V_ptr, img_len, hidden, hidden, stream)
+    fvk.rms_norm_fp16(img_Q_ptr, key("img_query_norm"), img_Q_ptr, img_len * NH, HD, eps, stream)
+    fvk.rms_norm_fp16(img_K_ptr, key("img_key_norm"), img_K_ptr, img_len * NH, HD, eps, stream)
+
+    # --- RoPE over the FULL combined [txt|img] sequence, once each
+    # for Q and K (matches real_double_stream_block_forward_fp16) ---
+    fvk.rope_apply_fp16_perhead(Q_O, rope_table, a0, NH, HD, stream)
+    fvk.rope_apply_fp16_perhead(K_cache, rope_table, a0, NH, HD, stream)
+
+    # --- joint self-attention over the whole [text | image] sequence,
+    # real per-head, no mask (opportunities.md OPT-002's correction) ---
     attn.run("backbone", layer_idx, q_seq=a0, stream=stream)
-    # Output lands back at Q_O, split by the same row ranges.
 
-    # --- separate output projections, residual-accumulated ---
+    # --- separate output projections, GATED residual ---
     proj = bufs["proj_scratch"]
-    gemm.fp16_nn(Q_O, key("txt_proj"), proj, x0, hidden, hidden, stream)
-    fvk.residual_add_fp16(txt_x, proj, x0 * hidden, stream)
+    gemm.fp16_nn(Q_O, key("txt_proj.weight"), proj, x0, hidden, hidden, stream)
+    _gated_residual_inplace(txt_x, proj, txt_gate1, x0, hidden)
 
     img_proj_ptr = _ptr_offset(proj, x0, hidden)
-    gemm.fp16_nn(img_Q_ptr, key("img_proj"), img_proj_ptr, img_len, hidden, hidden, stream)
-    fvk.residual_add_fp16(img_x_ptr, img_proj_ptr, img_len * hidden, stream)
+    gemm.fp16_nn(img_Q_ptr, key("img_proj.weight"), img_proj_ptr, img_len, hidden, hidden, stream)
+    _gated_residual_inplace(img_x_ptr, img_proj_ptr, img_gate1, img_len, hidden)
 
-    # --- separate MLPs, residual-accumulated ---
-    fvk.rms_norm_fp16(txt_x, ones, txt_normed, x0, hidden, eps, stream)
-    txt_mlp = bufs["txt_mlp_hidden"]
-    gemm.fp16_nn(txt_normed, key("txt_mlp0"), txt_mlp, x0, mlp_hidden, hidden, stream)
-    fvk.gelu_inplace_fp16(txt_mlp, x0 * mlp_hidden, stream)
-    gemm.fp16_nn(txt_mlp, key("txt_mlp2"), proj, x0, hidden, mlp_hidden, stream)
-    fvk.residual_add_fp16(txt_x, proj, x0 * hidden, stream)
+    # --- separate real SiLU-GLU MLPs, GATED residual ---
+    fvk.layer_norm_no_affine_fp16(txt_x, normed, x0, hidden, eps, stream)
+    _modulate(normed, modded, txt_shift2, txt_scale2, x0, hidden)
+    txt_mlp_merged, txt_mlp_gated = bufs["txt_mlp_merged"], bufs["txt_mlp_gated"]
+    gemm.fp16_nn(modded, key("txt_mlp0.weight"), txt_mlp_merged, x0, mlp_hidden * 2, hidden, stream)
+    fvk.silu_glu_merged_fp16(txt_mlp_merged, txt_mlp_gated, x0, mlp_hidden, stream)
+    gemm.fp16_nn(txt_mlp_gated, key("txt_mlp2.weight"), proj, x0, hidden, mlp_hidden, stream)
+    _gated_residual_inplace(txt_x, proj, txt_gate2, x0, hidden)
 
-    fvk.rms_norm_fp16(img_x_ptr, ones, img_normed_ptr, img_len, hidden, eps, stream)
-    img_mlp = bufs["img_mlp_hidden"]
-    gemm.fp16_nn(img_normed_ptr, key("img_mlp0"), img_mlp, img_len, mlp_hidden, hidden, stream)
-    fvk.gelu_inplace_fp16(img_mlp, img_len * mlp_hidden, stream)
-    gemm.fp16_nn(img_mlp, key("img_mlp2"), img_proj_ptr, img_len, hidden, mlp_hidden, stream)
-    fvk.residual_add_fp16(img_x_ptr, img_proj_ptr, img_len * hidden, stream)
+    fvk.layer_norm_no_affine_fp16(img_x_ptr, img_normed_ptr, img_len, hidden, eps, stream)
+    _modulate(img_normed_ptr, img_modded_ptr, img_shift2, img_scale2, img_len, hidden)
+    img_mlp_merged, img_mlp_gated = bufs["img_mlp_merged"], bufs["img_mlp_gated"]
+    gemm.fp16_nn(img_modded_ptr, key("img_mlp0.weight"), img_mlp_merged, img_len, mlp_hidden * 2, hidden, stream)
+    fvk.silu_glu_merged_fp16(img_mlp_merged, img_mlp_gated, img_len, mlp_hidden, stream)
+    gemm.fp16_nn(img_mlp_gated, key("img_mlp2.weight"), img_proj_ptr, img_len, hidden, mlp_hidden, stream)
+    _gated_residual_inplace(img_x_ptr, img_proj_ptr, img_gate2, img_len, hidden)
 
 
 def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
-                          site_layer_idx, stream, attn):
-    """One FLUX.2 single-stream block: merged img+txt, fused QKV+MLP-in.
-
-    Operates on the whole `bufs["backbone_hidden"]` (a0, hidden) buffer.
-    ``weight_layer_idx`` (0..19) indexes this stream's own declared
-    weights; ``site_layer_idx`` (continues after the double-stream
-    layers) indexes the "backbone" attention site's shared 25-layer KV
-    cache -- these are deliberately different counters, see
-    ``imagewam_prefill``.
+                          site_layer_idx, stream, attn, mod_single, rope_table):
+    """One real FLUX.2 single-stream block: merged img+txt, separate
+    q/k/v/mlp_in GEMMs (mathematically identical to the real fused
+    `linear1`, see `real_single_stream_block.py`'s own docstring).
+    Operates on the whole `bufs["backbone_hidden"]` (a0, hidden)
+    buffer. ``weight_layer_idx`` (0..19) indexes this stream's own
+    declared weights; ``site_layer_idx`` continues after the
+    double-stream layers, indexing the "backbone" attention site's
+    shared 25-layer KV cache.
     """
     hidden = dims["hidden"]
     HD = dims["HD"]
+    NH = dims["NH"]
     mlp_hidden = dims["mlp_hidden"]
     a0 = dims["a0"]
+    eps = 1e-6
+    key = lambda slot: weights[("backbone", "single", weight_layer_idx, slot)]
+    shift, scale, gate = mod_single
 
     combined = bufs["backbone_hidden"]
     normed = bufs["normed_scratch"]
-    ones = bufs["norm_ones"]
-    eps = 1e-6
-    key = lambda slot: weights[("backbone", "single", weight_layer_idx, slot)]
+    modded = bufs["modded_scratch"]
 
     ptrs = attn.get_slot_ptrs("backbone", site_layer_idx)
     Q_O, K_cache, V_cache = ptrs["Q"], ptrs["K"], ptrs["V"]
 
-    # One norm feeds Q/K/V and mlp_in alike -- matches real FLUX single-
-    # stream blocks, which apply one fused `linear1` GEMM to one
-    # normalized input; this pipeline only split that GEMM into four
-    # separate ones (see module docstring's weight-key convention).
-    fvk.rms_norm_fp16(combined, ones, normed, a0, hidden, eps, stream)
-    gemm.fp16_nn(normed, key("q"), Q_O, a0, hidden, hidden, stream)
-    gemm.fp16_nn(normed, key("k"), K_cache, a0, HD, hidden, stream)
-    gemm.fp16_nn(normed, key("v"), V_cache, a0, HD, hidden, stream)
+    fvk.layer_norm_no_affine_fp16(combined, normed, a0, hidden, eps, stream)
+    _modulate(normed, modded, shift, scale, a0, hidden)
 
-    mlp = bufs["single_mlp_hidden"]
-    gemm.fp16_nn(normed, key("mlp_in"), mlp, a0, mlp_hidden, hidden, stream)
-    fvk.gelu_inplace_fp16(mlp, a0 * mlp_hidden, stream)
+    gemm.fp16_nn(modded, key("q.weight"), Q_O, a0, hidden, hidden, stream)
+    gemm.fp16_nn(modded, key("k.weight"), K_cache, a0, hidden, hidden, stream)
+    gemm.fp16_nn(modded, key("v.weight"), V_cache, a0, hidden, hidden, stream)
+    fvk.rms_norm_fp16(Q_O, key("query_norm"), Q_O, a0 * NH, HD, eps, stream)
+    fvk.rms_norm_fp16(K_cache, key("key_norm"), K_cache, a0 * NH, HD, eps, stream)
+    fvk.rope_apply_fp16_perhead(Q_O, rope_table, a0, NH, HD, stream)
+    fvk.rope_apply_fp16_perhead(K_cache, rope_table, a0, NH, HD, stream)
+
+    mlp_merged, mlp_gated = bufs["single_mlp_merged"], bufs["single_mlp_gated"]
+    gemm.fp16_nn(modded, key("mlp_in.weight"), mlp_merged, a0, mlp_hidden * 2, hidden, stream)
+    fvk.silu_glu_merged_fp16(mlp_merged, mlp_gated, a0, mlp_hidden, stream)
 
     attn.run("backbone", site_layer_idx, q_seq=a0, stream=stream)
 
-    proj = bufs["proj_scratch"]
-    gemm.fp16_nn(Q_O, key("attn_out_proj"), proj, a0, hidden, hidden, stream)
-    fvk.residual_add_fp16(combined, proj, a0 * hidden, stream)
-
-    gemm.fp16_nn(mlp, key("mlp_down"), proj, a0, hidden, mlp_hidden, stream)
-    fvk.residual_add_fp16(combined, proj, a0 * hidden, stream)
+    from_attn = bufs["proj_scratch"]
+    from_mlp = bufs["proj_scratch2"]
+    gemm.fp16_nn(Q_O, key("attn_out_proj.weight"), from_attn, a0, hidden, hidden, stream)
+    gemm.fp16_nn(mlp_gated, key("mlp_down.weight"), from_mlp, a0, hidden, mlp_hidden, stream)
+    _add_inplace(from_attn, from_mlp, a0, hidden)
+    _gated_residual_inplace(combined, from_attn, gate, a0, hidden)
 
 
 def imagewam_encode_once(ctx, fvk, gemm, bufs, weights, dims, stream=0):
@@ -231,206 +334,219 @@ def imagewam_encode_once(ctx, fvk, gemm, bufs, weights, dims, stream=0):
     ImageWAM's real encode step is a VAE forward
     (`_encode_flux2_image_tokens`); no VAE weights are declared (out of
     scope -- see `_imagewam_thor_spec.py` and `opportunities.md`
-    OPT-001). The frontend fills `bufs["backbone_hidden"]`'s image rows
-    `[x0, a0)` directly with random data once, standing in for
-    already-encoded image patch tokens, so there is nothing left for
-    this function to compute. Kept as its own pipeline-stage function
-    (matching the Interface in plan.md) so a real VAE integration has
-    an unambiguous place to go later, rather than folding "encode" into
-    "prefill" silently.
+    OPT-001/OPT-008). The frontend fills `bufs["backbone_hidden"]`'s
+    image rows `[x0, a0)` directly, standing in for already-encoded
+    image patch tokens, so there is nothing left for this function to
+    compute. Kept as its own pipeline-stage function (matching the
+    Interface in plan.md) so a real VAE integration has an unambiguous
+    place to go later, rather than folding "encode" into "prefill"
+    silently.
     """
     return
 
 
-def imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None):
-    """One backbone forward (5 double-stream + 20 single-stream layers)
-    over the [prefix | target-image] sequence, populating the per-layer
-    KV cache the later denoise loop (Phase 4) reads through the "mot"
+def imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None,
+                      mod_txt=None, mod_img=None, mod_single=None, rope_table=None):
+    """One real backbone forward (5 double-stream + 20 single-stream
+    layers) over the [prefix | target-image] sequence, populating the
+    per-layer KV cache the later denoise loop reads through the "mot"
     attention site.
 
     Required `dims` keys: hidden, HD, NH, mlp_hidden, joint_attention_dim,
     x0, a0, num_layers_double, num_layers_single.
 
+    `mod_txt`/`mod_img`/`mod_single`/`rope_table`: precomputed ONCE by
+    the caller before graph capture -- see module docstring's "AdaLN
+    modulation is precomputed outside this module" section
+    (`flash_rt.models.imagewam.pipeline_real.compute_shared_modulation`
+    / `flash_rt.models.imagewam.rope.build_backbone_rope_table`).
+
     `gemm` must be a `fvk.GemmRunner` constructed once by the caller
-    (frontend, Phase 5) outside any CUDA-graph-capturable region --
-    `GemmRunner()` does `cudaMalloc` for a 256MB workspace at
-    construction (see `docs/adding_new_model.md`'s own pointer-interface
-    contract example, which threads `gemm` in the same way). An earlier
-    draft of this function constructed a fresh `GemmRunner()` inside
-    each per-layer helper (25 times per call) -- wrong on two counts:
-    it allocates inside what must become a graph-capturable region, and
-    it produced a real `cublasLtMatmul` internal error at runtime on
-    this machine's 8GB GPU (found by running the Phase 3 wiring test,
-    not by inspection).
+    outside any CUDA-graph-capturable region -- `GemmRunner()` does a
+    raw `cudaMalloc` for a 256MB workspace at construction, which is
+    NOT safe to call from inside a capturing stream (unlike ordinary
+    torch tensor allocations, which DO go through the graph-safe
+    caching allocator -- see `_modulate`'s own docstring). Confirmed by
+    an earlier draft's real `cublasLtMatmul` internal error at runtime,
+    not by inspection.
     """
     if attn is None:
         raise ValueError("imagewam_prefill requires an ImageWAMAttnBackend via attn=")
+    if mod_txt is None or mod_img is None or mod_single is None or rope_table is None:
+        raise ValueError(
+            "imagewam_prefill requires mod_txt/mod_img/mod_single/rope_table -- see "
+            "flash_rt.models.imagewam.pipeline_real.compute_shared_modulation / "
+            "flash_rt.models.imagewam.rope.build_backbone_rope_table")
     num_double = dims["num_layers_double"]
     for layer_idx in range(num_double):
-        _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream, attn)
+        _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream, attn,
+                              mod_txt, mod_img, rope_table)
     # The "backbone" attention site's per-layer KV cache is ONE
     # contiguous 25-layer range (num_layers_double + num_layers_single);
     # single-stream layers continue that same indexing rather than
     # restarting at 0, which would otherwise alias double-stream layer
     # 0..4's own K/V cache slots.
     for i in range(dims["num_layers_single"]):
-        _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, i, num_double + i, stream, attn)
+        _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, i, num_double + i, stream, attn,
+                              mod_single, rope_table)
 
 
 # ──────────────────────────────────────────────────────────────────
-# Phase 4: denoise loop (ActionDiT + mot_joint attention against the
-# backbone's frozen K/V cache, flow-matching Euler update)
+# ActionDiT (denoise loop): joint attention against the backbone's
+# frozen K/V cache via the "mot" site, flow-matching Euler update.
 # ──────────────────────────────────────────────────────────────────
 #
-# ActionDiT is a single action-token stream (see _imagewam_thor_spec.py's
-# own docstring) -- its "double"/"single" naming mirrors the backbone's
-# only so every backbone layer has a same-indexed ActionDiT layer for
-# `mot_joint` validity; there is no separate img/txt split to make
-# here. `_action_double_layer` is therefore structurally identical to
-# `_double_stream_layer`'s "img" half (separate q/k/v/proj/mlp0/mlp2),
-# and `_action_single_layer` to `_single_stream_layer` (fused-in-the-
-# pipeline q/k/v/mlp_in from one norm, attn_out_proj + mlp_down summed)
-# -- just at `action_hidden_dim`/`action_attn_width` instead of
-# `hidden`, and scoped to the action rows only.
+# ActionDiT is IMG-ONLY (no separate txt branch, see
+# `real_action_expert.py`) -- its "double"/"single" naming mirrors the
+# backbone's only so every backbone layer has a same-indexed ActionDiT
+# layer for `mot_joint` validity.
 #
 # Per-step attention: only the action rows have a live query this
 # step -- the backbone/image rows' own Q was already consumed during
-# prefill (Phase 3) and is never read again. `attn.run("mot", ...,
-# q_seq=num_action, kv_seq=total, ...)` computes attention for ONLY the
-# action rows (OPT-003 fix, opportunities.md -- an earlier version
-# computed the whole `total` sequence here, confirmed on real Thor
-# hardware to leave the denoise step's cost flat across every precision
-# tested since it was purely attention-bound overcompute, not a
-# correctness issue). K/V still cover the whole combined sequence.
-# Rows `[a0, total)` of the shared Q_O/K_cache/V_cache are overwritten
-# with this step's fresh ActionDiT Q/K/V before every `attn.run` call;
-# rows `[0, a0)` are left exactly as prefill last wrote them.
+# prefill and is never read again (OPT-003, opportunities.md).
+# `attn.run("mot", ..., q_seq=num_action, kv_seq=total, ...)` computes
+# attention for ONLY the action rows; K/V still cover the whole
+# combined sequence AND include no mask (opportunities.md's OPT-002/
+# OPT-003 "Major correction" -- action sees the whole [text|ref|action]
+# sequence, confirmed against the real checkpoint). Rows `[a0, total)`
+# of the shared Q_O/K_cache/V_cache are overwritten with this step's
+# fresh ActionDiT Q/K/V before every `attn.run` call; rows `[0, a0)`
+# are left exactly as prefill last wrote them.
 #
-# ActionDiT has no declared output-projection weight (Phase 1 declares
-# only q/k/v/proj/mlp0/mlp2 and linear1/linear2, ending at
-# `action_hidden_dim` width, not a real small action_dim) -- this
-# pipeline treats the ActionDiT's own final hidden state as the
-# velocity directly, same width as `bufs["action_latent"]`. A
-# documented placeholder, not a bug: a real action-dim projection head
-# is real-checkpoint-dependent work, alongside OPT-001/OPT-002.
+# ActionDiT has no declared output-projection head to a real small
+# action_dim (no real `action_encoder`/output head modeled here -- see
+# opportunities.md's `imagewam_full_forward_real` docstring for the
+# same documented placeholder) -- this pipeline treats the ActionDiT's
+# own final hidden state as the velocity directly, same width as
+# `bufs["action_latent"]`.
 
 
-def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_layer_idx, stream, attn):
+def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_layer_idx, stream, attn,
+                          mod, action_rope_table):
     action_hidden_dim = dims["action_hidden_dim"]
     action_attn_width = dims["action_attn_width"]  # == backbone's `hidden`, required for mot_joint
     HD = dims["HD"]
+    NH = dims["NH"]
     action_mlp_hidden = dims["action_mlp_hidden"]
     x0 = dims["x0"]
     a0 = dims["a0"]
     num_action = dims["num_action"]
+    eps = 1e-6
+    key = lambda slot: weights[("action_dit", "double", layer_idx, slot)]
+    (shift1, scale1, gate1), (shift2, scale2, gate2) = mod
 
     action_x = bufs["action_hidden"]  # (num_action, action_hidden_dim)
     normed = bufs["action_normed"]
-    ones = bufs["action_norm_ones"]
-    eps = 1e-6
-    key = lambda slot: weights[("action_dit", "double", layer_idx, slot)]
+    modded = bufs["action_modded"]
 
     ptrs = attn.get_slot_ptrs("mot", site_layer_idx)
     Q_O, K_cache, V_cache = ptrs["Q"], ptrs["K"], ptrs["V"]
     # Q_O/K_cache/V_cache's row width is action_attn_width (shared with
-    # the backbone), NOT action_hidden_dim -- the residual stream and
-    # the attention-facing projection are different widths for ActionDiT
-    # (unlike the backbone, where they coincide).
+    # the backbone, now real per-head width), NOT action_hidden_dim --
+    # the residual stream and the attention-facing projection are
+    # different widths for ActionDiT (unlike the backbone).
     action_Q_ptr = _ptr_offset(Q_O, a0, action_attn_width)
-    action_K_ptr = _ptr_offset(K_cache, a0, HD)
-    action_V_ptr = _ptr_offset(V_cache, a0, HD)
+    action_K_ptr = _ptr_offset(K_cache, a0, action_attn_width)
+    action_V_ptr = _ptr_offset(V_cache, a0, action_attn_width)
 
-    fvk.rms_norm_fp16(action_x, ones, normed, num_action, action_hidden_dim, eps, stream)
-    gemm.fp16_nn(normed, key("q"), action_Q_ptr, num_action, action_attn_width, action_hidden_dim, stream)
-    gemm.fp16_nn(normed, key("k"), action_K_ptr, num_action, HD, action_hidden_dim, stream)
-    gemm.fp16_nn(normed, key("v"), action_V_ptr, num_action, HD, action_hidden_dim, stream)
+    fvk.layer_norm_no_affine_fp16(action_x, normed, num_action, action_hidden_dim, eps, stream)
+    _modulate(normed, modded, shift1, scale1, num_action, action_hidden_dim)
+    gemm.fp16_nn(modded, key("q.weight"), action_Q_ptr, num_action, action_attn_width, action_hidden_dim, stream)
+    gemm.fp16_nn(modded, key("k.weight"), action_K_ptr, num_action, action_attn_width, action_hidden_dim, stream)
+    gemm.fp16_nn(modded, key("v.weight"), action_V_ptr, num_action, action_attn_width, action_hidden_dim, stream)
+    fvk.rms_norm_fp16(action_Q_ptr, key("query_norm"), action_Q_ptr, num_action * NH, HD, eps, stream)
+    fvk.rms_norm_fp16(action_K_ptr, key("key_norm"), action_K_ptr, num_action * NH, HD, eps, stream)
+    fvk.rope_apply_fp16_perhead(action_Q_ptr, action_rope_table, num_action, NH, HD, stream)
+    fvk.rope_apply_fp16_perhead(action_K_ptr, action_rope_table, num_action, NH, HD, stream)
 
     attn.run("mot", site_layer_idx, q_seq=num_action, kv_seq=dims["total"], stream=stream, x0=x0, a0=a0)
 
     proj = bufs["action_proj_scratch"]
-    gemm.fp16_nn(action_Q_ptr, key("proj"), proj, num_action, action_hidden_dim, action_attn_width, stream)
-    fvk.residual_add_fp16(action_x, proj, num_action * action_hidden_dim, stream)
+    gemm.fp16_nn(action_Q_ptr, key("proj.weight"), proj, num_action, action_hidden_dim, action_attn_width, stream)
+    _gated_residual_inplace(action_x, proj, gate1, num_action, action_hidden_dim)
 
-    fvk.rms_norm_fp16(action_x, ones, normed, num_action, action_hidden_dim, eps, stream)
-    mlp = bufs["action_mlp_hidden"]
-    gemm.fp16_nn(normed, key("mlp0"), mlp, num_action, action_mlp_hidden, action_hidden_dim, stream)
-    fvk.gelu_inplace_fp16(mlp, num_action * action_mlp_hidden, stream)
-    gemm.fp16_nn(mlp, key("mlp2"), proj, num_action, action_hidden_dim, action_mlp_hidden, stream)
-    fvk.residual_add_fp16(action_x, proj, num_action * action_hidden_dim, stream)
+    fvk.layer_norm_no_affine_fp16(action_x, normed, num_action, action_hidden_dim, eps, stream)
+    _modulate(normed, modded, shift2, scale2, num_action, action_hidden_dim)
+    mlp_merged, mlp_gated = bufs["action_mlp_merged"], bufs["action_mlp_gated"]
+    gemm.fp16_nn(modded, key("mlp0.weight"), mlp_merged, num_action, action_mlp_hidden * 2, action_hidden_dim, stream)
+    fvk.silu_glu_merged_fp16(mlp_merged, mlp_gated, num_action, action_mlp_hidden, stream)
+    gemm.fp16_nn(mlp_gated, key("mlp2.weight"), proj, num_action, action_hidden_dim, action_mlp_hidden, stream)
+    _gated_residual_inplace(action_x, proj, gate2, num_action, action_hidden_dim)
 
 
 def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
-                          site_layer_idx, stream, attn):
+                          site_layer_idx, stream, attn, mod, action_rope_table):
     action_hidden_dim = dims["action_hidden_dim"]
     action_attn_width = dims["action_attn_width"]
     HD = dims["HD"]
+    NH = dims["NH"]
     action_mlp_hidden = dims["action_mlp_hidden"]
     x0 = dims["x0"]
     a0 = dims["a0"]
     num_action = dims["num_action"]
+    eps = 1e-6
+    key = lambda slot: weights[("action_dit", "single", weight_layer_idx, slot)]
+    shift, scale, gate = mod
 
     action_x = bufs["action_hidden"]
     normed = bufs["action_normed"]
-    ones = bufs["action_norm_ones"]
-    eps = 1e-6
-    key = lambda slot: weights[("action_dit", "single", weight_layer_idx, slot)]
+    modded = bufs["action_modded"]
 
     ptrs = attn.get_slot_ptrs("mot", site_layer_idx)
     Q_O, K_cache, V_cache = ptrs["Q"], ptrs["K"], ptrs["V"]
     action_Q_ptr = _ptr_offset(Q_O, a0, action_attn_width)
-    action_K_ptr = _ptr_offset(K_cache, a0, HD)
-    action_V_ptr = _ptr_offset(V_cache, a0, HD)
+    action_K_ptr = _ptr_offset(K_cache, a0, action_attn_width)
+    action_V_ptr = _ptr_offset(V_cache, a0, action_attn_width)
 
-    fvk.rms_norm_fp16(action_x, ones, normed, num_action, action_hidden_dim, eps, stream)
-    gemm.fp16_nn(normed, key("q"), action_Q_ptr, num_action, action_attn_width, action_hidden_dim, stream)
-    gemm.fp16_nn(normed, key("k"), action_K_ptr, num_action, HD, action_hidden_dim, stream)
-    gemm.fp16_nn(normed, key("v"), action_V_ptr, num_action, HD, action_hidden_dim, stream)
-
-    mlp = bufs["action_mlp_hidden"]
-    gemm.fp16_nn(normed, key("mlp_in"), mlp, num_action, action_mlp_hidden, action_hidden_dim, stream)
-    fvk.gelu_inplace_fp16(mlp, num_action * action_mlp_hidden, stream)
+    fvk.layer_norm_no_affine_fp16(action_x, normed, num_action, action_hidden_dim, eps, stream)
+    _modulate(normed, modded, shift, scale, num_action, action_hidden_dim)
+    gemm.fp16_nn(modded, key("q.weight"), action_Q_ptr, num_action, action_attn_width, action_hidden_dim, stream)
+    gemm.fp16_nn(modded, key("k.weight"), action_K_ptr, num_action, action_attn_width, action_hidden_dim, stream)
+    gemm.fp16_nn(modded, key("v.weight"), action_V_ptr, num_action, action_attn_width, action_hidden_dim, stream)
+    fvk.rms_norm_fp16(action_Q_ptr, key("query_norm"), action_Q_ptr, num_action * NH, HD, eps, stream)
+    fvk.rms_norm_fp16(action_K_ptr, key("key_norm"), action_K_ptr, num_action * NH, HD, eps, stream)
+    fvk.rope_apply_fp16_perhead(action_Q_ptr, action_rope_table, num_action, NH, HD, stream)
+    fvk.rope_apply_fp16_perhead(action_K_ptr, action_rope_table, num_action, NH, HD, stream)
 
     attn.run("mot", site_layer_idx, q_seq=num_action, kv_seq=dims["total"], stream=stream, x0=x0, a0=a0)
 
-    proj = bufs["action_proj_scratch"]
-    gemm.fp16_nn(action_Q_ptr, key("attn_out_proj"), proj, num_action, action_hidden_dim, action_attn_width, stream)
-    fvk.residual_add_fp16(action_x, proj, num_action * action_hidden_dim, stream)
+    mlp_merged, mlp_gated = bufs["action_mlp_merged"], bufs["action_mlp_gated"]
+    gemm.fp16_nn(modded, key("mlp_in.weight"), mlp_merged, num_action, action_mlp_hidden * 2, action_hidden_dim, stream)
+    fvk.silu_glu_merged_fp16(mlp_merged, mlp_gated, num_action, action_mlp_hidden, stream)
 
-    gemm.fp16_nn(mlp, key("mlp_down"), proj, num_action, action_hidden_dim, action_mlp_hidden, stream)
-    fvk.residual_add_fp16(action_x, proj, num_action * action_hidden_dim, stream)
+    from_attn = bufs["action_proj_scratch"]
+    from_mlp = bufs["action_proj_scratch2"]
+    gemm.fp16_nn(action_Q_ptr, key("attn_out_proj.weight"), from_attn, num_action, action_hidden_dim, action_attn_width, stream)
+    gemm.fp16_nn(mlp_gated, key("mlp_down.weight"), from_mlp, num_action, action_hidden_dim, action_mlp_hidden, stream)
+    _add_inplace(from_attn, from_mlp, num_action, action_hidden_dim)
+    _gated_residual_inplace(action_x, from_attn, gate, num_action, action_hidden_dim)
 
 
-def imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=0, *, attn=None):
+def imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=0, *, attn=None,
+                           mod_double=None, mod_single=None, action_rope_table=None):
     """One flow-matching Euler step of the ActionDiT denoise loop.
 
     `step` is a plain Python int -- a compile-time constant during CUDA
     Graph capture (this project's own dt schedule is a fixed uniform
-    `1.0 / num_denoise_steps`, so `step` is not yet read for anything;
-    kept as a parameter for where a real per-step timestep embedding
-    would go, matching `dims["dt"]` staying a Python float rather than
-    a device-side scalar -- verified against `CosmosEdgeThor`'s own
-    real capture/replay code, not assumed: cosmos3_edge's whole N-step
-    loop is captured as ONE graph with `step` unrolled at CAPTURE time
-    into N constant-indexed kernel sequences, not read from a device
-    scalar written before each replay as an earlier draft of this
-    plan's Phase 4 Structures section assumed).
+    `1.0 / num_denoise_steps`). `mod_double`/`mod_single` are THIS
+    STEP's own precomputed AdaLN modulation (ActionDiT's conditioning
+    timestep changes every step, but since `step` is itself a
+    compile-time constant, so is every step's timestep -- the caller
+    precomputes one modulation tuple PER STEP before capture, see
+    module docstring, and `imagewam_denoise_loop` below selects the
+    right one per iteration).
 
-    Required `dims` keys (beyond Phase 3's): action_hidden_dim,
-    action_attn_width (must equal `hidden` -- the shared per-head width
-    `mot_joint` requires; ActionDiT's own residual width and its
-    attention-facing projection width are NOT the same value, unlike
-    the backbone where they coincide), HD, action_mlp_hidden, x0, a0,
-    total, num_action, action_num_layers_double,
-    action_num_layers_single, dt.
-
-    Required `bufs` keys (beyond Phase 3's): action_latent (F32,
-    (num_action, action_hidden_dim) -- the running flow-matching
-    state), action_hidden (FP16, same shape -- ActionDiT's own working
-    residual), action_normed, action_norm_ones, action_proj_scratch,
-    action_mlp_hidden.
+    Required `dims` keys (beyond `imagewam_prefill`'s): action_hidden_dim,
+    action_attn_width (must equal `hidden`), HD, action_mlp_hidden, x0, a0,
+    total, num_action, action_num_layers_double, action_num_layers_single, dt.
     """
     if attn is None:
         raise ValueError("imagewam_denoise_step requires an ImageWAMAttnBackend via attn=")
+    if mod_double is None or mod_single is None or action_rope_table is None:
+        raise ValueError(
+            "imagewam_denoise_step requires mod_double/mod_single/action_rope_table -- see "
+            "flash_rt.models.imagewam.pipeline_real.compute_action_modulation / "
+            "flash_rt.models.imagewam.rope.build_action_rope_table")
     num_action = dims["num_action"]
     action_hidden_dim = dims["action_hidden_dim"]
     n = num_action * action_hidden_dim
@@ -439,22 +555,31 @@ def imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=0, *
 
     num_double = dims["action_num_layers_double"]
     for layer_idx in range(num_double):
-        _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, layer_idx, stream, attn)
+        _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, layer_idx, stream, attn,
+                              mod_double, action_rope_table)
     for i in range(dims["action_num_layers_single"]):
-        _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, i, num_double + i, stream, attn)
+        _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, i, num_double + i, stream, attn,
+                              mod_single, action_rope_table)
 
     fvk.gpu_euler_step(bufs["action_latent"], bufs["action_hidden"],
                         num_action, action_hidden_dim, dims["dt"], 0, stream)
 
 
-def imagewam_denoise_loop(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None):
-    """The whole flow-matching denoise loop -- what the frontend (Phase 5)
-    captures as ONE CUDA Graph (matching `CosmosEdgeThor.capture()`'s
-    real pattern: `run_loop()`, called once inside `torch.cuda.graph(...)`,
-    is this function; `denoise()`'s single `graph.replay()` re-executes
-    every step at once).
+def imagewam_denoise_loop(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None,
+                           action_mods=None, action_rope_table=None):
+    """The whole flow-matching denoise loop -- what the frontend
+    captures as ONE CUDA Graph together with `imagewam_prefill`.
 
-    Required `dims` key (beyond `imagewam_denoise_step`'s): num_denoise_steps.
+    `action_mods`: a list of `(mod_double, mod_single)` tuples, one per
+    denoise step (`dims["num_denoise_steps"]` entries), precomputed
+    ONCE by the caller before capture -- see module docstring.
     """
+    if action_mods is None or action_rope_table is None:
+        raise ValueError(
+            "imagewam_denoise_loop requires action_mods/action_rope_table -- see "
+            "flash_rt.models.imagewam.pipeline_real.compute_action_modulation")
     for step in range(dims["num_denoise_steps"]):
-        imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=stream, attn=attn)
+        mod_double, mod_single = action_mods[step]
+        imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=stream, attn=attn,
+                               mod_double=mod_double, mod_single=mod_single,
+                               action_rope_table=action_rope_table)

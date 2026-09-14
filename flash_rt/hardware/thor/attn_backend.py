@@ -568,7 +568,10 @@ def make_pi0_attention_spec(*, num_views: int, enc_seq_max: int,
 # ════════════════════════════════════════════════════════════════════
 
 def make_imagewam_attention_spec(*, max_prefix_seq: int,
-                                  max_total_seq: int) -> AttentionSpec:
+                                  max_total_seq: int,
+                                  num_layers: int = 25,
+                                  num_heads: int = 24,
+                                  head_dim: int = 128) -> AttentionSpec:
     """Build the ImageWAM AttentionSpec (two sites: "backbone", "mot").
 
     Two sites, not one -- corrected after tracing ``infer_action_flux2``
@@ -610,18 +613,38 @@ def make_imagewam_attention_spec(*, max_prefix_seq: int,
             (``csrc/kernels/softmax.cuh``); this must also respect
             that ceiling until a block-level (not warp-level) softmax
             variant exists.
+        num_layers/num_heads/head_dim: default to the real FLUX.2-4B/
+            ActionDiT values (25 = 5 double + 20 single, 24, 128).
+            **Bug found 2026-09-14** while wiring `pipeline_thor.py`'s
+            real-math rewrite: an earlier version of this function
+            hardcoded these three with no override, so `ImageWAMAttnBackend.run()`
+            (which reads `num_q_heads`/`head_dim`/`num_layers` from
+            THIS spec object, not from the caller's own runtime dims)
+            silently used 24/128/25 even when a caller's actual Q/K/V
+            buffers were sized for smaller test dims -- producing an
+            out-of-bounds read/write (huge finite-looking garbage, not
+            a crash) rather than a correctness error. Every PRIOR test
+            that used small dims here only checked NaN/shape (never a
+            real numeric reference), so this went undetected; every
+            test that DID check real correctness happened to use the
+            real 24/128 dims already, masking the bug by coincidence.
+            Found by `tests/test_imagewam_thor_real_wiring.py`, the
+            first test to compare small-dims `ImageWAMAttnBackend`
+            output against an independent reference. Pass these
+            explicitly whenever the caller's own dims differ from the
+            real FLUX.2-4B architecture (e.g. any small/fast unit test).
     """
     spec = AttentionSpec()
     spec.add_site(
         "backbone",
-        num_layers=25,  # backbone_num_layers_double + backbone_num_layers_single (5+20)
-        num_q_heads=24, num_kv_heads=24, head_dim=128,
+        num_layers=int(num_layers),
+        num_q_heads=int(num_heads), num_kv_heads=int(num_heads), head_dim=int(head_dim),
         max_q_seq=int(max_prefix_seq), max_kv_seq=int(max_prefix_seq),
     )
     spec.add_site(
         "mot",
-        num_layers=25,
-        num_q_heads=24, num_kv_heads=24, head_dim=128,
+        num_layers=int(num_layers),
+        num_q_heads=int(num_heads), num_kv_heads=int(num_heads), head_dim=int(head_dim),
         max_q_seq=int(max_total_seq), max_kv_seq=int(max_total_seq),
         extra={"kernel": "mot_joint"},
     )

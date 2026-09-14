@@ -229,19 +229,60 @@ math gaps this project had never modeled, beyond just per-head K/V:
   (`tests/test_imagewam_real_action_expert.py`). **This completes
   OPT-002's real-math coverage** — both backbone block types and the
   action expert now have fully verified real forwards.
-- **Still not wired into `pipeline_thor.py`** — everything above lives
-  in new, additive `flash_rt/models/imagewam/real_*.py`/`pipeline_real.py`
-  modules and tests; the actual serving pipeline (used by the
-  registered `_PIPELINE_MAP` frontend and every current benchmark
-  script) still uses the old broadcast-K/V, no-RoPE, no-QK-Norm,
-  wrong-mask, wrong-width-GELU-MLP path by default. Wiring this in
-  means: changing `_imagewam_thor_spec.py`'s K/V projection width back
-  to full `hidden`, adding QKNorm/RoPE/AdaLN weight+buffer plumbing,
-  correcting the MLP GEMM widths, replacing the "mot_joint" kernels'
-  wrong mask, and adopting the allocate-once-during-warmup discipline
-  every benchmark script already uses (this round's modules allocate
-  fresh every call) — a real, sizeable pipeline refactor, not yet
-  started.
+- **NOW WIRED into `pipeline_thor.py` (2026-09-14) — this is the
+  confirmed real deployment target, per `PROJECT.md`'s "Confirmed end
+  goal."** `pipeline_thor.py`, `_imagewam_thor_spec.py`, and
+  `flash_rt/frontends/torch/imagewam_thor.py` were rewritten IN PLACE
+  (not a parallel file) to use the real math by default: real per-head
+  K/V (`ImageWAMAttnBackend(use_perhead_kv=True, use_real_mot_mask=True)`,
+  now the default for this frontend), real QK-Norm/RoPE/AdaLN
+  modulation, real SiLU-gated-GLU MLP widths (`mlp_hidden*2`), and the
+  real no-mask attention rule. AdaLN modulation and RoPE tables are
+  precomputed ONCE (backbone: fixed conditioning timestep; ActionDiT:
+  once PER denoise step, since `step` is already a compile-time
+  constant during CUDA Graph capture) rather than recomputed per
+  replay — still allocate-once/steady-state/CUDA-Graph-compatible,
+  matching every other real Thor pipeline in this codebase.
+  Verified (`tests/test_imagewam_thor_real_wiring.py`, new): each
+  pointer-based layer helper (`_double_stream_layer`,
+  `_single_stream_layer`, `_action_double_layer`,
+  `_action_single_layer`) matches the already-verified tensor-level
+  reference (`real_*.py`) built from IDENTICAL weights, cosine
+  0.999984-1.000000. `tests/test_imagewam_frontend.py`/
+  `test_imagewam_prefill.py`/`test_imagewam_denoise.py` (existing wiring
+  tests) updated to the new weight-key/buffer conventions and still
+  pass. `benchmarks/imagewam_thor_bench.py` (the isolated per-layer-type
+  speed probe, at real dims) updated to match and now measures the
+  REAL math's cost (heavier than the old approximation: real per-head
+  K/V and doubled MLP-gate width both add real GEMM work).
+  **Real bug found and fixed along the way**: `make_imagewam_attention_spec`
+  hardcoded `num_q_heads=24, head_dim=128, num_layers=25` with no
+  override -- `ImageWAMAttnBackend.run()` reads these from the spec
+  object, not the caller's own dims, so any caller using smaller test
+  dims got a silent out-of-bounds attention read/write (huge
+  finite-looking garbage, not a crash). Every prior test at small dims
+  only checked NaN/shape, never a real numeric reference, so this went
+  undetected; every test that DID check real correctness happened to
+  already use the real 24/128/25 values, masking it by coincidence.
+  Now takes `num_layers`/`num_heads`/`head_dim` overrides (default to
+  the real values, so every real-dims caller is unaffected). See that
+  function's own docstring for the full account.
+  **Still open**: real checkpoint LOADING (the frontend's
+  `checkpoint_dir` arg is still unused; weights stay random-filled —
+  needs the real `imagewam`/`flux2` packages, only available on Thor,
+  reusing `benchmarks/imagewam_real_checkpoint_validation.py`'s own
+  `extract_*_weights` functions rather than re-deriving extraction
+  here). The 6 quantized precision-comparison benchmark scripts
+  (`imagewam_thor_{fp16,fp8,fp4,int8,int4}_bench.py`,
+  `imagewam_thor_fp16_autotuned_bench.py`) each carry their OWN
+  self-contained forward implementation (confirmed: none of them
+  import from `pipeline_thor.py`), independent of this rewrite --
+  they still run the OLD approximate math internally and are now
+  stale relative to the confirmed real-math standard; updating them is
+  real, separate follow-up work (each needs the same per-script
+  weight/buffer/mod/rope updates `imagewam_thor_bench.py` just got,
+  plus their own precision-specific quantization wrapper changes) —
+  not started.
 - **Real checkpoint validation now DONE, run by the user on Thor
   (2026-09-14)** — `benchmarks/imagewam_real_checkpoint_validation.py`
   (written this round, dry-run tested locally via
