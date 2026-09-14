@@ -143,13 +143,31 @@ math gaps this project had never modeled, beyond just per-head K/V:
   changing `_imagewam_thor_spec.py`'s K/V projection width back to full
   `hidden` (matching the real checkpoint's fused QKV tensor) and adding
   QKNorm/RoPE weight+buffer plumbing to `pipeline_thor.py` itself.
-- **Still missing, not investigated**: AdaLN modulation (the real
-  time-embedding-driven shift/scale/gate mechanism), LayerNorm (the
-  real blocks use `elementwise_affine=False` LayerNorm, not RMSNorm,
-  for the main residual-stream normalization — separate from QKNorm),
-  and the exact MLP/residual structure. `real_backbone_attn.py`'s own
-  docstring flags these explicitly as out of scope for the attention-
-  only combination done so far.
+- **AdaLN modulation and the real LayerNorm are now also done** (as of
+  `flash_rt/models/imagewam/adaln.py` / `tests/test_imagewam_adaln.py`):
+  `timestep_embedding`, `MLPEmbedder` (`time_in`), `Modulation`
+  (shift/scale/gate), and the real `elementwise_affine=False` LayerNorm
+  (via the existing `layer_norm_no_affine_fp16` kernel, confirmed exact)
+  are all implemented and verified against an independent reference,
+  end to end at real dims (cosine>0.999). Deliberately plain PyTorch for
+  the embedding/modulation math itself (a per-batch, not per-token,
+  computation — negligible cost, not worth new-kernel risk); the
+  LayerNorm itself (the one piece touching the full (S,D) hidden state)
+  uses the real FlashRT kernel. **Still not wired into any real block
+  forward** — `adaln.py` gives primitives (`apply_modulation`,
+  `apply_gated_residual`, etc.), not a full DoubleStreamBlock/
+  SingleStreamBlock combining them with attention + MLP + real
+  residual structure end to end.
+- **Still missing, not investigated**: the exact MLP structure (real
+  blocks use a `SiLUActivation`-gated `nn.Sequential` MLP with a
+  `mlp_mult_factor=2` doubling before the gate — not yet read closely)
+  and the full per-block wiring order (norm1 -> modulate -> attn ->
+  gate-residual -> norm2 -> modulate -> mlp -> gate-residual, twice,
+  once for img and once for txt, per `DoubleStreamBlock`). A full single
+  real `DoubleStreamBlock`/`SingleStreamBlock` forward, combining
+  attention (done) + AdaLN (done) + MLP (not done) + the real residual
+  wiring (not done), is the next real milestone toward end-to-end
+  accuracy validation.
 - **No real checkpoint file available locally** — everything above is
   verified against PyTorch references of the real published formulas,
   not against real trained weights. Real end-to-end accuracy validation
