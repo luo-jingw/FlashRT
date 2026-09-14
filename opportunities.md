@@ -223,22 +223,102 @@ math gaps this project had never modeled, beyond just per-head K/V:
   not against real trained weights. Real end-to-end accuracy validation
   (the original goal that surfaced all of this) still needs a real
   checkpoint, which only exists on Thor per the user's own statement.
-- "mot" site's own real mask/RoPE/QKNorm requirements not yet
-  investigated — this work so far only covered "backbone"; the
-  ActionDiT expert and the joint "mot" attention likely have their own
-  analogous (possibly different) real requirements, unchecked.
+- "mot" site's own real structure now understood (see below) — the
+  action expert (`ActionDiTFlux2` in ImageWAM's own source, not
+  `flux2/model.py`) has its own separate double/single blocks,
+  structurally identical to the backbone's but IMG-ONLY (no txt
+  branch), and its own joint attention is orchestrated externally by
+  `MoT.forward_flux2_action_with_video_cache`, not internal to the
+  block itself. Real kernel-level implementation not yet built — see
+  the correction below for the real mask this needs.
+
+## Major correction: the real attention mask is NOT what this round built (found while investigating ActionDiT)
+
+While reading `ActionDiTFlux2` (ImageWAM's own source, not
+`flux2/model.py`) to build its real forward, found that ImageWAM's
+`MoT` class (`imagewam/models/backbones/mot.py`) does **not** call
+`block.forward_kv_extract` (which internally uses `flux2/model.py`'s
+`causal_attn_fn`, the function this round's "backbone_ref_masked" mask
+was based on) for its real joint-attention path at all. It calls
+`block._prepare_qkv`/`block.prepare_qkv` directly to get raw Q/K/V, and
+does its OWN attention via `MoT._mixed_attention`, using a mask built
+by `imagewam.py`'s `_build_mot_attention_mask_flux2` — a completely
+different function with a completely different rule.
+
+Read that function directly: for a `[text | ref | target | action]`
+sequence, text and ref attend to `[text,ref]`, target additionally
+attends to itself, and action attends to `[text,ref]` and to itself,
+never to `target`. Read its real call sites in `infer_action_flux2`
+directly too (this project's actual real deployment target): **both
+calls pass `target_len=0`** — the real action-inference path never has
+a separate noisy/target-image segment at all, only text, one reference
+image, and (later) action tokens. With `target_len=0`, the rule reduces
+to: **no masking between text and ref at all** (full bidirectional
+visibility), and **action sees everything** (text, ref, AND action) —
+not "action excludes the image region", which is what this project's
+own pre-existing "mot_joint"/"mot_joint_action" kernels (OPT-003,
+predates this session) AND this round's new "backbone_ref_masked"
+kernel both assumed.
+
+**Fixed in this round's own new modules**: `real_backbone_attn.py`,
+`real_double_stream_block.py`, `real_single_stream_block.py`, and their
+tests now use plain unmasked `attention_qkv_fp16_perhead` instead of
+`attention_qkv_fp16_backbone_ref_masked_perhead` — re-verified against
+independent PyTorch references with the mask removed, all still
+cosine≈1.0 at real dims. `attention_qkv_fp16_backbone_ref_masked_perhead`
+itself is NOT deleted (it's a real, correct kernel for a DIFFERENT real
+rule `causal_attn_fn` genuinely uses elsewhere, just not on this
+project's real deployment path) — kept as a validated building block,
+documentation updated to state its actual status clearly.
+
+**NOT yet fixed**: the pre-existing, ALREADY-SHIPPED "mot_joint"/
+"mot_joint_action" kernels (`csrc/kernels/attention_cublas.cu`,
+predates this session, described as OPT-003 "RESOLVED... verified
+real 2.2-3.1x speedup") exclude the `[x0,a0)` "image" region from
+action's visibility — per this correction, for this project's real
+`target_len=0` deployment target, action should NOT exclude that region
+at all. **OPT-003's own real speedup (fewer query rows for action, from
+`total*NH` down to `num_action*NH`) remains completely valid and
+unaffected** — that optimization is about how many rows get computed,
+not which columns they can see — but the MASK RULE itself
+(`softmax_mot_joint_fp16`/`softmax_mot_joint_action_fp16`'s three-region
+exclusion) has never actually been checked against
+`_build_mot_attention_mask_flux2` until now, and per this finding
+appears to encode a rule real deployment doesn't need. This is a real,
+open correctness question in shipped, production kernel code — not yet
+fixed, since fixing it means either building a new unmasked-for-action
+per-head kernel (straightforward, `attention_qkv_fp16_perhead` with Q
+offset to the action rows already does this) and re-wiring
+`attn_backend.py`'s "mot" dispatch, or first getting more certainty
+(e.g. re-deriving independently, or checking with real checkpoint
+outputs once available) before touching code three phases of this
+project have already built on top of.
 
 ## Promotion Condition
 
-Kernel-level math promoted (verified real, not a hypothesis). Full
-promotion (default-on in the real pipeline) blocked on the "still
-open" items above, especially AdaLN modulation/LayerNorm (needed for
-ANY real block-level forward, not just attention) and real checkpoint
-access.
+Kernel-level math promoted (verified real, not a hypothesis) for
+per-head K/V, RoPE, QK-Norm, AdaLN, LayerNorm, and the real MLP. The
+attention MASK specifically needs the correction above applied to the
+pre-existing "mot_joint" kernels before this whole area can be called
+fully resolved. Full promotion (default-on in the real pipeline)
+additionally blocked on the "still open" items above (pipeline wiring,
+real checkpoint access) and a real ActionDiT kernel implementation
+(not yet built, now that its real structure and the real mask are
+both understood).
 
 # OPT-003
 
-Status: RESOLVED (fixed and verified on both Ada and real Thor hardware)
+Status: RESOLVED for the query-count reduction (fixed and verified on
+both Ada and real Thor hardware) — but see OPT-002's "Major correction"
+section: the MASK RULE this kernel's softmax uses (three-region,
+excluding `[x0,a0)` "image" from action's visibility) has never been
+checked against ImageWAM's own real mask builder
+(`_build_mot_attention_mask_flux2`) until OPT-002's real-math round,
+and per that finding appears to encode a rule the real deployment
+target (`target_len=0`) doesn't need — action should see everything,
+not exclude the image region. The SPEEDUP here (fewer query rows) is
+real and unaffected; the mask CORRECTNESS is now an open question, not
+yet fixed.
 
 Area: ImageWAM denoise step — mot_joint attention computed ~15x more than needed
 

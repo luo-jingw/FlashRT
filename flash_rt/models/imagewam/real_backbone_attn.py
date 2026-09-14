@@ -1,27 +1,34 @@
 """ImageWAM real "backbone" self-attention: QK-Norm -> RoPE -> real
-masked per-head attention, combined into the order the real upstream
-code actually uses.
+per-head attention, combined into the order the real upstream code
+actually uses.
 
 Real order of operations, confirmed by reading `DoubleStreamBlock`/
 `SingleStreamBlock` in `black-forest-labs/flux2`'s `src/flux2/model.py`
 (pinned commit `50fe5162777813d869182b139e83b10743caef15`) directly:
 QKNorm is applied to Q/K FIRST (`self.norm(q, k, v)` /
 `self.img_attn.norm(...)`), THEN RoPE (`apply_rope(q, k, pe)`), THEN
-the masked attention itself. Each of these three steps was already
-implemented and independently verified against the real math elsewhere
-in this project (see `tests/test_imagewam_qknorm_reuse.py`,
-`tests/test_imagewam_rope_kernel.py`,
-`tests/test_imagewam_backbone_ref_masked_kernel.py`) -- this module
-only chains them in the correct real order, catching any interface/
-ordering mismatch a per-piece test can't see (each piece alone is
-correct; the composition could still be wrong if e.g. RoPE ran before
-QK-Norm, or operated on the wrong buffer).
+the attention itself.
+
+**No mask**: an earlier version of this module used
+`attention_qkv_fp16_backbone_ref_masked_perhead` (a "txt sees all, ref
+sees only itself" rule), based on `flux2/model.py`'s own
+`causal_attn_fn`. Found while investigating ActionDiT's real structure
+that ImageWAM's real inference path never calls that function at all --
+it calls `block._prepare_qkv` directly and does its own joint attention
+via `MoT._mixed_attention`, with a mask from `imagewam.py`'s
+`_build_mot_attention_mask_flux2`. That function's real call sites in
+`infer_action_flux2` both pass `target_len=0` (the real action-
+inference path never has a separate noisy/target-image segment), which
+makes the real mask rule reduce to full, unmasked visibility between
+text and ref. Uses plain `attention_qkv_fp16_perhead` accordingly (see
+`opportunities.md` for the full correction and
+`real_double_stream_block.py`'s own docstring, which has the same
+note).
 
 Does NOT include AdaLN modulation, LayerNorm, MLP, or residual
-connections -- those are separate, not-yet-investigated parts of the
-real DoubleStreamBlock/SingleStreamBlock forward, out of scope for this
-combined ATTENTION-only test (see opportunities.md for what's tracked
-as still open).
+connections -- those live in `real_double_stream_block.py`/
+`real_single_stream_block.py`, which supersede this module for a full
+block forward; kept as a smaller, attention-only building block.
 """
 from __future__ import annotations
 
@@ -34,7 +41,7 @@ def real_backbone_attention_fp16(
     query_norm_weight: int, key_norm_weight: int,
     rope_table: int,
     logits: int, out: int,
-    total: int, NH: int, HD: int, x0: int,
+    total: int, NH: int, HD: int,
     attn_scale: float,
     eps: float = 1e-6,
     stream: int = 0,
@@ -60,7 +67,6 @@ def real_backbone_attention_fp16(
     fvk.rope_apply_fp16_perhead(Q, rope_table, total, NH, HD, stream)
     fvk.rope_apply_fp16_perhead(K, rope_table, total, NH, HD, stream)
 
-    # Real masked per-head attention (see
-    # test_imagewam_backbone_ref_masked_kernel.py).
-    fvk.attention_qkv_fp16_backbone_ref_masked_perhead(
-        ctx_cpp, Q, K, V, logits, out, total, NH, HD, x0, attn_scale, stream)
+    # No mask -- see module docstring for the real target_len=0 finding.
+    fvk.attention_qkv_fp16_perhead(
+        ctx_cpp, Q, K, V, logits, out, total, total, NH, HD, attn_scale, stream)

@@ -1,7 +1,25 @@
 """ImageWAM/FLUX.2 real DoubleStreamBlock forward -- the final piece
 combining every real-math correction found this round (per-head K/V,
-RoPE, QK-Norm, the real txt/ref mask, AdaLN modulation, real LayerNorm,
-real SiLU-gated MLP) into one full single-layer block forward.
+RoPE, QK-Norm, AdaLN modulation, real LayerNorm, real SiLU-gated MLP)
+into one full single-layer block forward.
+
+**Mask correction**: an earlier version of this module used a real
+"txt sees all, ref sees only itself" mask, based on `flux2/model.py`'s
+own `causal_attn_fn`. Found while investigating ActionDiT's real
+structure that this is the WRONG source function -- ImageWAM's own
+inference path never calls `causal_attn_fn`/`forward_kv_extract` at
+all; it calls `block._prepare_qkv` directly and does its OWN joint
+attention via `MoT._mixed_attention`, with a mask built by
+`imagewam.py`'s `_build_mot_attention_mask_flux2`. Read that function
+AND its real call sites in `infer_action_flux2` directly: both mask
+constructions there pass `target_len=0` (the real action-inference path
+never has a separate noisy/target-image segment -- only text, a
+reference image, and, later, action tokens exist). With
+`target_len=0`, `_build_mot_attention_mask_flux2`'s own rule reduces to
+NO masking at all between text and ref (`mask[text, text:ref]=True` AND
+`mask[ref, text:ref]=True` -- both directions, full visibility) --
+confirmed directly from the real source, not re-derived. This module
+now uses plain unmasked `attention_qkv_fp16_perhead` accordingly.
 
 Real order, confirmed by reading `DoubleStreamBlock._prepare_qkv`/
 `_apply_residuals` in `black-forest-labs/flux2`'s `src/flux2/model.py`
@@ -15,7 +33,7 @@ Real order, confirmed by reading `DoubleStreamBlock._prepare_qkv`/
     img_q,img_k = QKNorm(img_q,img_k)      # img_attn.norm
     q,k,v = cat([txt_*, img_*])            # [txt | ref-image] combined
     q,k = RoPE(q,k)
-    attn = masked_attention(q,k,v)         # real txt/ref mask
+    attn = attention(q,k,v)                # NO mask (target_len=0 case)
     txt_attn_out, img_attn_out = split(attn)
     txt = txt + txt_mod1_gate * txt_attn.proj(txt_attn_out)
     img = img + img_mod1_gate * img_attn.proj(img_attn_out)
@@ -24,8 +42,8 @@ Real order, confirmed by reading `DoubleStreamBlock._prepare_qkv`/
 
 This module is a verification primitive, not yet wired into
 `pipeline_thor.py` (see opportunities.md for what remains before that:
-real checkpoint access, `_imagewam_thor_spec.py` weight-shape changes,
-SingleStreamBlock's own analogous real forward -- not yet done here).
+real checkpoint access, `_imagewam_thor_spec.py` weight-shape changes --
+not yet done here).
 """
 from __future__ import annotations
 
@@ -114,9 +132,11 @@ def real_double_stream_block_forward_fp16(
     total_pad = total + (total % 2)
     logits = torch.zeros(total * NH, total_pad, dtype=FP16, device=DEV)
     attn_out = torch.zeros(total, NH, HD, dtype=FP16, device=DEV)
-    fvk.attention_qkv_fp16_backbone_ref_masked_perhead(
+    # No mask: the real target_len=0 case (see module docstring) has no
+    # exclusion between text and ref -- plain full self-attention.
+    fvk.attention_qkv_fp16_perhead(
         ctx_cpp, Q.data_ptr(), K.data_ptr(), V.data_ptr(),
-        logits.data_ptr(), attn_out.data_ptr(), total, NH, HD, x0, attn_scale, 0)
+        logits.data_ptr(), attn_out.data_ptr(), total, total, NH, HD, attn_scale, 0)
 
     attn_out_flat = attn_out.reshape(total, hidden)
     txt_attn_out = attn_out_flat[:x0].contiguous()

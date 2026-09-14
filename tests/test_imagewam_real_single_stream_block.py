@@ -13,6 +13,11 @@ GEMMs, not the fused form, since they are mathematically identical and
 the point of this test is to verify the ORCHESTRATION (order, residual
 wiring, buffer layout), which per-piece tests elsewhere already proved
 correct in isolation.
+
+**No mask** (corrected from an earlier version that used a "txt sees
+all, ref sees only itself" rule): see `real_single_stream_block.py`'s
+own docstring for the full correction (ImageWAM's real inference path
+always has `target_len=0`, which reduces to full, unmasked visibility).
 """
 import torch
 import torch.nn.functional as F
@@ -64,20 +69,17 @@ def _ref_apply_rope(x, freqs):
     return torch.stack([out0, out1], dim=-1).reshape(seq, NH, HD)
 
 
-def _ref_masked_attn(Q, K, V, scale, x0, total):
+def _ref_full_attn(Q, K, V, scale):
     q = Q.permute(1, 0, 2).float()
     k = K.permute(1, 0, 2).float()
     v = V.permute(1, 0, 2).float()
     logits = torch.matmul(q, k.transpose(-1, -2)) * scale
-    mask = torch.ones(total, total, dtype=torch.bool, device=Q.device)
-    mask[x0:total, 0:x0] = False
-    logits = logits.masked_fill(~mask.unsqueeze(0), float("-inf"))
     probs = torch.softmax(logits, dim=-1)
     out = torch.matmul(probs, v)
     return out.permute(1, 0, 2).contiguous()
 
 
-def _ref_single_stream_block(x, w, mod, ids, x0, NH, HD, hidden, mlp_hidden, scale):
+def _ref_single_stream_block(x, w, mod, ids, NH, HD, hidden, mlp_hidden, scale):
     total = x.shape[0]
     shift, scale_mod, gate = mod
 
@@ -93,7 +95,7 @@ def _ref_single_stream_block(x, w, mod, ids, x0, NH, HD, hidden, mlp_hidden, sca
     q = _ref_apply_rope(q, freqs)
     k = _ref_apply_rope(k, freqs)
 
-    attn = _ref_masked_attn(q.to(FP16), k.to(FP16), v.to(FP16), scale, x0, total)
+    attn = _ref_full_attn(q.to(FP16), k.to(FP16), v.to(FP16), scale)
     attn_flat = attn.reshape(total, hidden)
 
     mlp_merged = F.linear(x_mod, w["mlp_in"].float())
@@ -157,12 +159,12 @@ def _run_case(x0, img_len, NH, HD, hidden, mlp_hidden, seed):
     img_ids[..., 2] = torch.arange(ref_w, dtype=torch.float32, device=DEV)[None, :]
     ids = torch.cat([txt_ids, img_ids.reshape(ref_h * ref_w, 4)], dim=0)
 
-    ref = _ref_single_stream_block(x, w, mod, ids, x0, NH, HD, hidden, mlp_hidden, scale)
+    ref = _ref_single_stream_block(x, w, mod, ids, NH, HD, hidden, mlp_hidden, scale)
 
     gemm = fvk.GemmRunner()
     ctx = fvk.FvkContext()
     out = real_single_stream_block_forward_fp16(
-        gemm, ctx, x.clone(), _gemm_weights(w), mod, table, NH, HD, hidden, mlp_hidden, x0, scale)
+        gemm, ctx, x.clone(), _gemm_weights(w), mod, table, NH, HD, hidden, mlp_hidden, scale)
 
     return _cosine(ref, out)
 

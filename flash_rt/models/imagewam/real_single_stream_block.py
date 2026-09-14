@@ -32,8 +32,15 @@ would use.
 
 Real order, confirmed from `SingleStreamBlock._qkv`/`_out`:
 LayerNorm -> modulate -> [qkv projection, mlp-in projection] -> QK-Norm
--> RoPE -> masked attention -> SiLU-gated MLP activation ->
+-> RoPE -> attention -> SiLU-gated MLP activation ->
 [attn-out projection + mlp-out projection, summed] -> gated residual.
+
+**No attention mask**: see `real_double_stream_block.py`'s own docstring
+for the full correction -- ImageWAM's real inference path
+(`infer_action_flux2`) always calls `_build_mot_attention_mask_flux2`
+with `target_len=0`, which reduces to no masking between text and ref
+tokens at all. This block operates on the whole `[txt|img]` combined
+sequence, so it uses plain unmasked `attention_qkv_fp16_perhead`.
 """
 from __future__ import annotations
 
@@ -52,7 +59,7 @@ def real_single_stream_block_forward_fp16(
     weights: dict,
     mod: tuple,
     rope_table: torch.Tensor,
-    NH: int, HD: int, hidden: int, mlp_hidden: int, x0: int,
+    NH: int, HD: int, hidden: int, mlp_hidden: int,
     attn_scale: float,
 ):
     """x: (total, hidden) fp16 -- the ALREADY-CONCATENATED [txt | img]
@@ -90,9 +97,11 @@ def real_single_stream_block_forward_fp16(
     total_pad = total + (total % 2)
     logits = torch.zeros(total * NH, total_pad, dtype=FP16, device=DEV)
     attn_out = torch.zeros(total, NH, HD, dtype=FP16, device=DEV)
-    fvk.attention_qkv_fp16_backbone_ref_masked_perhead(
+    # No mask: the real target_len=0 case (see module docstring) has no
+    # exclusion anywhere in this already-combined sequence.
+    fvk.attention_qkv_fp16_perhead(
         ctx_cpp, Q.data_ptr(), K.data_ptr(), V.data_ptr(),
-        logits.data_ptr(), attn_out.data_ptr(), total, NH, HD, x0, attn_scale, 0)
+        logits.data_ptr(), attn_out.data_ptr(), total, total, NH, HD, attn_scale, 0)
     attn_out_flat = attn_out.reshape(total, hidden)
 
     mlp_merged = torch.zeros(total, mlp_hidden * 2, dtype=FP16, device=DEV)

@@ -1,18 +1,23 @@
-"""ImageWAM real "backbone" self-attention correctness (opportunities.md
-real-mask correction, found alongside RoPE/QK-Norm while starting
-OPT-002's real-checkpoint work).
+"""`attention_qkv_fp16_backbone_ref_masked_perhead` kernel correctness.
 
-Real upstream `causal_attn_fn` (`black-forest-labs/flux2`'s
-`src/flux2/model.py` at the pinned commit
-`50fe5162777813d869182b139e83b10743caef15`, fetched and read directly)
-is NOT plain unmasked self-attention, despite this project's earlier
-"backbone" naming assumption: text+image tokens attend to everything,
-but reference-image tokens attend ONLY to themselves. For ImageWAM's
-real `infer_action_flux2` action-inference path specifically, the
-target-image group is always empty (0 tokens), so only two groups
-exist: txt (sees everything) and ref-image (the camera observation,
-sees only itself, never the text). `attention_qkv_fp16_backbone_ref_masked_perhead`
-implements exactly this 2-group rule with real per-head K/V (OPT-002).
+**Status update, found while investigating ActionDiT's real structure**:
+this kernel's mask rule ("txt sees all, ref sees only itself") was
+based on `flux2/model.py`'s own `causal_attn_fn`, which turned out to
+be the WRONG source function for ImageWAM's real inference path.
+ImageWAM's own `MoT._mixed_attention` (with a mask from `imagewam.py`'s
+`_build_mot_attention_mask_flux2`) is what `infer_action_flux2` actually
+uses, and that function's real call sites always pass `target_len=0`,
+which reduces to NO masking between text and ref at all -- see
+`opportunities.md` OPT-002 for the full correction. This kernel is
+therefore **not used by `real_backbone_attn.py`/`real_double_stream_block.py`/
+`real_single_stream_block.py` any more** (they use plain
+`attention_qkv_fp16_perhead` instead). The kernel itself is still a
+real, correct implementation of the 2-group rule it was built for (a
+mask ImageWAM's own `flux2/model.py`-internal `causal_attn_fn` DOES use,
+just not on the path this project's real deployment target exercises)
+-- kept, with this test, as a validated building block for a
+hypothetical future need (e.g. if `target_len>0` were ever relevant),
+not deleted just because it's currently unused.
 """
 import torch
 

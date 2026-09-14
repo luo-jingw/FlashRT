@@ -1,17 +1,23 @@
 """ImageWAM real "backbone" self-attention, COMBINED (opportunities.md).
 
-Each of QK-Norm, RoPE, and the real txt/ref mask was already verified
-independently elsewhere (test_imagewam_qknorm_reuse.py,
-test_imagewam_rope_kernel.py, test_imagewam_backbone_ref_masked_kernel.py)
--- but a per-piece test can't catch an ORDERING or INTERFACE bug in
-how they're chained together (e.g. RoPE running before QK-Norm, or one
-step accidentally reading a stale buffer). This test builds an
-INDEPENDENT PyTorch reference that composes the same three real
-formulas in the real order (QK-Norm -> RoPE -> masked attention,
-confirmed from `DoubleStreamBlock`/`SingleStreamBlock` in the real
-`flux2/model.py` at the pinned commit) and compares it against
+Each of QK-Norm and RoPE was already verified independently elsewhere
+(test_imagewam_qknorm_reuse.py, test_imagewam_rope_kernel.py) -- but a
+per-piece test can't catch an ORDERING or INTERFACE bug in how they're
+chained together (e.g. RoPE running before QK-Norm, or one step
+accidentally reading a stale buffer). This test builds an INDEPENDENT
+PyTorch reference that composes the same real formulas in the real
+order (QK-Norm -> RoPE -> attention, confirmed from
+`DoubleStreamBlock`/`SingleStreamBlock` in the real `flux2/model.py` at
+the pinned commit) and compares it against
 `flash_rt.models.imagewam.real_backbone_attn.real_backbone_attention_fp16`
 end to end.
+
+**No mask**: an earlier version of this test used a "txt sees all, ref
+sees only itself" mask. Found while investigating ActionDiT's real
+structure that ImageWAM's real inference path (`infer_action_flux2`)
+always calls its own mask builder with `target_len=0`, which reduces to
+full, unmasked visibility between text and ref -- see
+`real_backbone_attn.py`'s own docstring for the full correction.
 
 Still does NOT include AdaLN modulation, LayerNorm, MLP, or residual
 connections -- see that module's own docstring for what remains out of
@@ -57,14 +63,11 @@ def _ref_apply_rope(x: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
     return torch.stack([out0, out1], dim=-1).reshape(seq, NH, HD)
 
 
-def _ref_backbone_ref_masked_attn(Q, K, V, scale, x0, total):
+def _ref_full_attn(Q, K, V, scale):
     q = Q.permute(1, 0, 2).float()
     k = K.permute(1, 0, 2).float()
     v = V.permute(1, 0, 2).float()
     logits = torch.matmul(q, k.transpose(-1, -2)) * scale
-    mask = torch.ones(total, total, dtype=torch.bool, device=Q.device)
-    mask[x0:total, 0:x0] = False
-    logits = logits.masked_fill(~mask.unsqueeze(0), float("-inf"))
     probs = torch.softmax(logits, dim=-1)
     out = torch.matmul(probs, v)
     return out.permute(1, 0, 2).contiguous()
@@ -74,15 +77,15 @@ AXES_DIM = (32, 32, 32, 32)
 THETA = 2000
 
 
-def _ref_full_pipeline(Q, K, V, query_norm_scale, key_norm_scale, ids, x0, total, scale):
-    """Independent reference: QK-Norm -> RoPE -> masked attention, in
-    the real order."""
+def _ref_full_pipeline(Q, K, V, query_norm_scale, key_norm_scale, ids, scale):
+    """Independent reference: QK-Norm -> RoPE -> attention, in the real
+    order, no mask (see module docstring)."""
     Qn = _ref_rmsnorm(Q, query_norm_scale)
     Kn = _ref_rmsnorm(K, key_norm_scale)
     freqs = _ref_embed_nd(ids, AXES_DIM, THETA)
     Qr = _ref_apply_rope(Qn, freqs).to(Q.dtype)
     Kr = _ref_apply_rope(Kn, freqs).to(K.dtype)
-    return _ref_backbone_ref_masked_attn(Qr, Kr, V, scale, x0, total)
+    return _ref_full_attn(Qr, Kr, V, scale)
 
 
 def _cosine(a, b):
@@ -90,7 +93,7 @@ def _cosine(a, b):
     return (torch.dot(a_, b_) / (a_.norm() * b_.norm() + 1e-12)).item()
 
 
-def _run_flashrt(Q, K, V, query_norm_scale, key_norm_scale, table, x0, total, NH, HD, scale):
+def _run_flashrt(Q, K, V, query_norm_scale, key_norm_scale, table, total, NH, HD, scale):
     total_pad = total + (total % 2)
     logits = torch.zeros(total * NH, total_pad, dtype=FP16, device=DEV)
     out = torch.zeros(total, NH, HD, dtype=FP16, device=DEV)
@@ -101,7 +104,7 @@ def _run_flashrt(Q, K, V, query_norm_scale, key_norm_scale, table, x0, total, NH
         ctx, Q_work.data_ptr(), K_work.data_ptr(), V.data_ptr(),
         query_norm_scale.data_ptr(), key_norm_scale.data_ptr(),
         table.data_ptr(), logits.data_ptr(), out.data_ptr(),
-        total, NH, HD, x0, scale, stream=0)
+        total, NH, HD, scale, stream=0)
     torch.cuda.synchronize()
     return out
 
@@ -131,8 +134,8 @@ def test_combined_backbone_attention_small_shape():
     img_ids[..., 2] = torch.arange(ref_w, dtype=torch.float32, device=DEV)[None, :]
     ids = torch.cat([txt_ids, img_ids.reshape(ref_h * ref_w, 4)], dim=0)
 
-    ref = _ref_full_pipeline(Q, K, V, query_norm_scale, key_norm_scale, ids, x0, total, scale)
-    out = _run_flashrt(Q, K, V, query_norm_scale, key_norm_scale, table, x0, total, NH, HD, scale)
+    ref = _ref_full_pipeline(Q, K, V, query_norm_scale, key_norm_scale, ids, scale)
+    out = _run_flashrt(Q, K, V, query_norm_scale, key_norm_scale, table, total, NH, HD, scale)
 
     cos = _cosine(ref, out)
     print(f"combined backbone attention (small): cosine={cos:.6f}")
@@ -161,8 +164,8 @@ def test_combined_backbone_attention_real_dims():
     img_ids[..., 2] = torch.arange(REF_W, dtype=torch.float32, device=DEV)[None, :]
     ids = torch.cat([txt_ids, img_ids.reshape(REF_H * REF_W, 4)], dim=0)
 
-    ref = _ref_full_pipeline(Q, K, V, query_norm_scale, key_norm_scale, ids, X0, TOTAL, scale)
-    out = _run_flashrt(Q, K, V, query_norm_scale, key_norm_scale, table, X0, TOTAL, NH, HD, scale)
+    ref = _ref_full_pipeline(Q, K, V, query_norm_scale, key_norm_scale, ids, scale)
+    out = _run_flashrt(Q, K, V, query_norm_scale, key_norm_scale, table, TOTAL, NH, HD, scale)
 
     cos = _cosine(ref, out)
     print(f"combined backbone attention (real dims): cosine={cos:.6f}")

@@ -167,12 +167,19 @@ void attention_qkv_fp16_mot_joint_action_perhead(
     float attn_scale,
     cudaStream_t stream = 0);
 
-// ImageWAM real "backbone" self-attention, real per-head K/V (see
-// softmax_backbone_ref_masked_fp16 for the mask rule: txt rows
-// [0,x0) see everything, ref rows [x0,total) see only themselves).
-// Self-attention: S == S_kv == total. Corrects this project's earlier
-// "backbone = plain unmasked self-attention" assumption -- see
-// opportunities.md.
+// ImageWAM "backbone" self-attention with a "txt sees all, ref sees
+// only itself" mask, real per-head K/V (see softmax_backbone_ref_masked_fp16
+// for the exact rule). Self-attention: S == S_kv == total.
+//
+// STATUS: NOT what this project's real deployment target
+// (ImageWAM's infer_action_flux2) actually needs -- that path's own
+// mask builder (imagewam.py's _build_mot_attention_mask_flux2) always
+// runs with target_len=0, which reduces to NO masking between text and
+// ref at all. This kernel's mask matches flux2/model.py's own internal
+// causal_attn_fn instead, which ImageWAM's real inference never calls.
+// See opportunities.md OPT-002 for the full correction. Kept as a
+// real, tested building block (attention_qkv_fp16_perhead, unmasked,
+// is what real_backbone_attn.py and friends use instead).
 void attention_qkv_fp16_backbone_ref_masked_perhead(
     cublasHandle_t handle,
     const __half* Q,         // (total, NH, HD)

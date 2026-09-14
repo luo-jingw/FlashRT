@@ -96,6 +96,6 @@ def imagewam_prefill_real(
     for w in single_layer_weights:
         combined = real_single_stream_block_forward_fp16(
             gemm, ctx, combined, w, mod_single,
-            rope_table, NH, HD, hidden, mlp_hidden, x0, attn_scale)
+            rope_table, NH, HD, hidden, mlp_hidden, attn_scale)
 
     return combined

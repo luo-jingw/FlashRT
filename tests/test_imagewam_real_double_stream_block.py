@@ -1,8 +1,13 @@
 """ImageWAM/FLUX.2 real DoubleStreamBlock forward, FULLY COMBINED
 (opportunities.md OPT-002 -- the culmination of this round's real-math
-work: per-head K/V, RoPE, QK-Norm, the real txt/ref mask, AdaLN
-modulation, real LayerNorm, and the real SiLU-gated MLP, all in one
-single-layer block forward).
+work: per-head K/V, RoPE, QK-Norm, AdaLN modulation, real LayerNorm,
+and the real SiLU-gated MLP, all in one single-layer block forward).
+
+**No mask** (corrected from an earlier version that used a "txt sees
+all, ref sees only itself" rule): ImageWAM's real inference path always
+calls its own mask builder with `target_len=0`, which reduces to full,
+unmasked visibility between text and ref -- see
+`real_double_stream_block.py`'s own docstring for the full correction.
 
 Compares `flash_rt.models.imagewam.real_double_stream_block.real_double_stream_block_forward_fp16`
 against an INDEPENDENT, from-scratch PyTorch reference of the real
@@ -66,14 +71,11 @@ def _ref_apply_rope(x, freqs):
     return torch.stack([out0, out1], dim=-1).reshape(seq, NH, HD)
 
 
-def _ref_masked_attn(Q, K, V, scale, x0, total):
+def _ref_full_attn(Q, K, V, scale):
     q = Q.permute(1, 0, 2).float()
     k = K.permute(1, 0, 2).float()
     v = V.permute(1, 0, 2).float()
     logits = torch.matmul(q, k.transpose(-1, -2)) * scale
-    mask = torch.ones(total, total, dtype=torch.bool, device=Q.device)
-    mask[x0:total, 0:x0] = False
-    logits = logits.masked_fill(~mask.unsqueeze(0), float("-inf"))
     probs = torch.softmax(logits, dim=-1)
     out = torch.matmul(probs, v)
     return out.permute(1, 0, 2).contiguous()
@@ -112,7 +114,7 @@ def _ref_double_stream_block(txt, img, w, mod_txt, mod_img, ids, x0, img_len, NH
     Q = _ref_apply_rope(Q, freqs)
     K = _ref_apply_rope(K, freqs)
 
-    attn = _ref_masked_attn(Q.to(FP16), K.to(FP16), V.to(FP16), scale, x0, total)
+    attn = _ref_full_attn(Q.to(FP16), K.to(FP16), V.to(FP16), scale)
     attn_flat = attn.reshape(total, hidden)
     txt_attn_out, img_attn_out = attn_flat[:x0], attn_flat[x0:]
 
