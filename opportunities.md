@@ -808,6 +808,30 @@ GEMMs) is worth more than shaving launch overhead, and now there's a
 concrete, large, first-priority target (VAE) that dwarfs the graph/
 autotune win entirely.
 
+## Correction: Real Token Width Is 128, Not 64 — Found While Starting OPT-002's Real-Checkpoint Work
+
+While reading ImageWAM's real upstream source (`flux2_video_expert.py`,
+already cloned locally) to understand the real checkpoint's tensor
+naming for OPT-002's accuracy-validation harness, found this module's
+own VAE token-width assumption was wrong. Two real, verbatim facts from
+that source: `Flux2VideoExpert.pre_dit`'s own docstring states packed
+image tokens must be `[B,N,128]`, and `Flux2VideoExpert.pack_latents`
+is `rearrange(latents, "b c h w -> b (h w) c")` -- a PURE reshape, no
+2x2 patch-merge at all. Together these mean the real FLUX.2 VAE
+downsamples 16x spatially AND emits 128 channels directly, not the
+classic SD/FLUX.1 pattern (8x downsample + 16 latent channels + a
+separate 2x2-merge to 64-dim tokens) this module wrongly assumed by
+analogy when first written. Fixed: the stub encoder now downsamples
+16x in one conv stack (5 stages, 4 downsamples) and emits 128 channels
+directly; `pack_latents` is now a pure reshape too, matching the real
+one exactly. `img_in`'s K dimension changed from 64 to 128 accordingly
+in every bench script (they import the constant, not a hardcoded
+value, so this needed zero changes to the scripts themselves).
+Re-verified INT4/FP16 end to end on this machine after the fix (both
+still run cleanly, VAE cost ~49ms, close to the pre-fix number); FP8/
+FP4 still fail at the same known, unrelated points, now correctly
+showing K=128 in the error message instead of K=64.
+
 ## VAE Stub Optimization Attempt (Ada, this dev machine) — Real Gain, Reverted to Off by Default for Reliability
 
 Profiled with `torch.profiler` first rather than guessing: convolution

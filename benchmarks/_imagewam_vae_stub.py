@@ -11,24 +11,33 @@ Consistent with every other component in this project's scope (random
 weights, no real checkpoint, see PROJECT.md), this is a standard,
 public-knowledge latent-diffusion VAE encoder shape (the same
 conv/resnet/attention structure used across the SD/FLUX family of
-autoencoders: `ch=128`, `ch_mult=(1,2,4,4)`, 2 ResnetBlocks per stage,
-one mid-block self-attention, GroupNorm(32)+SiLU throughout, 8x total
-spatial downsampling, 16 latent channels -- FLUX-family models use 16
-channels where SD's own VAE uses 4). This gives a real, non-trivial
-conv workload of the right computational order for a speed measurement,
-not a claim of bit-exact architecture match.
+autoencoders: `ch=128`, 2 ResnetBlocks per stage, one mid-block self-
+attention, GroupNorm(32)+SiLU throughout). This gives a real,
+non-trivial conv workload of the right computational order for a speed
+measurement, not a claim of bit-exact architecture match.
 
-Shape contract, cross-checked against `imagewam.py`'s own real
-`_encode_flux2_image_tokens`: input image H,W must be multiples of 16
-(8x VAE downsample * 2x patch-merge); output token count is
-`(H/16)*(W/16)`, each token `16*4=64`-dim (FLUX's own `pack_latents`
-does the same 2x2 spatial-to-channel patch merge implemented here via
-`pixel_unshuffle`). `VAE_IMG_H=384, VAE_IMG_W=512` are chosen to
-produce exactly 768 tokens -- matching `A0-X0` already used by every
-`imagewam_thor_*_bench.py` script for the image-token span, so this
-module's output drops directly into the existing `combined[x0:a0]`
-buffer via a single `img_in` projection, same convention as the
-existing `txt_in` projection for text tokens.
+**Token width/downsample factor, corrected from an earlier guess after
+reading the real upstream source directly**: `imagewam.py`'s own
+`_encode_flux2_image_tokens` asserts image H,W must be multiples of 16,
+and `Flux2VideoExpert.pre_dit`'s own docstring states the packed image
+tokens it consumes must be `[B,N,128]` -- confirmed real, not assumed
+(`flux2_video_expert.py`, both lines quoted verbatim in this project's
+git history). Also confirmed real: `Flux2VideoExpert.pack_latents` is
+`rearrange(latents, "b c h w -> b (h w) c")` -- a PURE reshape, no 2x2
+patch-merge step at all. Together these mean the real FLUX.2 VAE
+downsamples 16x spatially AND emits 128 channels directly (not the
+classic SD/FLUX.1 pattern of 8x downsample + 16 latent channels + a
+separate 2x2-merge to 64-dim tokens, which an earlier version of this
+module wrongly assumed by analogy). This encoder now downsamples 16x
+in one conv stack (`ch_mult` has 5 stages, 4 downsamples between them)
+and emits 128 channels directly via `conv_out` -- `pack_latents` below
+is correspondingly a pure reshape now too, matching the real one
+exactly instead of doing an extra (wrong) patch-merge. `VAE_IMG_H=384,
+VAE_IMG_W=512` are chosen to produce exactly 768 tokens -- matching
+`A0-X0` already used by every `imagewam_thor_*_bench.py` script for the
+image-token span, so this module's output drops directly into the
+existing `combined[x0:a0]` buffer via a single `img_in` projection,
+same convention as the existing `txt_in` projection for text tokens.
 
 Runs on plain PyTorch/cuDNN ops throughout (Conv2d, GroupNorm, SiLU,
 `scaled_dot_product_attention`) -- no new FlashRT kernel needed, same
@@ -44,8 +53,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 VAE_IMG_H, VAE_IMG_W = 384, 512
-VAE_LATENT_CH = 16
-VAE_PATCH_TOKEN_DIM = VAE_LATENT_CH * 4  # 64, after 2x2 pixel_unshuffle
+VAE_LATENT_CH = 128  # real FLUX.2 packed-token width, see module docstring
+VAE_PATCH_TOKEN_DIM = VAE_LATENT_CH  # no patch-merge -- pack_latents is a pure reshape
 VAE_NUM_TOKENS = (VAE_IMG_H // 16) * (VAE_IMG_W // 16)  # 24*32 = 768
 
 
@@ -83,7 +92,7 @@ class _AttnBlock(nn.Module):
 
 
 class Flux2VaeEncoderStub(nn.Module):
-    def __init__(self, base_ch: int = 128, ch_mult=(1, 2, 4, 4), num_res_blocks: int = 2,
+    def __init__(self, base_ch: int = 128, ch_mult=(1, 2, 4, 4, 4), num_res_blocks: int = 2,
                  latent_ch: int = VAE_LATENT_CH):
         super().__init__()
         chs = [base_ch * m for m in ch_mult]
@@ -182,9 +191,11 @@ def build_vae_encoder(device: str = "cuda", dtype: torch.dtype = torch.float16,
 
 
 def pack_latents(latents: torch.Tensor) -> torch.Tensor:
-    """[B, C, H, W] -> [B, (H/2)*(W/2), C*4] via 2x2 space-to-depth, matching
-    FLUX's own `pack_latents` patch-merge convention."""
-    b = latents.shape[0]
-    packed = F.pixel_unshuffle(latents, 2)  # [B, C*4, H/2, W/2]
-    c4, h2, w2 = packed.shape[1], packed.shape[2], packed.shape[3]
-    return packed.reshape(b, c4, h2 * w2).permute(0, 2, 1).contiguous()  # [B, tokens, C*4]
+    """[B, C, H, W] -> [B, H*W, C], a PURE reshape -- matches the real
+    `Flux2VideoExpert.pack_latents` exactly (`rearrange(latents,
+    "b c h w -> b (h w) c")`, confirmed by reading flux2_video_expert.py
+    directly: no patch-merge step at all, since this encoder already
+    downsamples 16x and emits the real 128-channel token width directly
+    -- see this module's own docstring for the correction history)."""
+    b, c, h, w = latents.shape
+    return latents.reshape(b, c, h * w).permute(0, 2, 1).contiguous()  # [B, tokens, C]
