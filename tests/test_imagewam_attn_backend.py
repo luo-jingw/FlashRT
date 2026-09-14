@@ -186,6 +186,87 @@ def test_backbone_and_mot_sites_run_perhead_without_nan():
     print("PASS: both sites dispatch (use_perhead_kv=True) and match the broadcast path")
 
 
+def test_mot_real_mask_matches_plain_attention_and_differs_from_default():
+    """opportunities.md OPT-002/OPT-003 bug fix: use_real_mot_mask=True
+    must (a) match a direct call to the plain, unmasked kernel
+    (attention_qkv_fp16_padded) fed the SAME full [0,total) K/V --
+    proving the dispatch genuinely removed the exclusion, not just
+    changed which kernel computes the same masked result -- and (b)
+    produce a DIFFERENT result from the default (masked) dispatch on
+    the same inputs, proving this flag is not a no-op."""
+    NH, HD = 24, 128
+    x0, a0, total = 4, 8, 12
+    scale = 1.0 / (HD ** 0.5)
+    device = "cuda"
+
+    spec = make_imagewam_attention_spec(max_prefix_seq=a0, max_total_seq=total)
+    ctx = fvk.FvkContext()
+    num_layers = spec.site("mot").num_layers
+
+    torch.manual_seed(3)
+    K_all = torch.randn(num_layers, total, HD, dtype=torch.float16, device=device)
+    V_all = torch.randn(num_layers, total, HD, dtype=torch.float16, device=device)
+    layer_stride = K_all[0].numel() * 2
+
+    backbone_Q_O = torch.zeros(a0 * NH, HD, dtype=torch.float16, device=device)
+    backbone_logits = torch.zeros(a0 * NH, a0, dtype=torch.float16, device=device)
+    mot_Q_O = torch.zeros(total * NH, HD, dtype=torch.float16, device=device)
+    total_pad = total + (total % 2)
+    mot_logits = torch.zeros(total * NH, total_pad, dtype=torch.float16, device=device)
+    num_action = total - a0
+    Q_seed = torch.randn(total * NH, HD, dtype=torch.float16, device=device)
+
+    def make_backend(use_real_mask):
+        return ImageWAMAttnBackend(
+            spec, ctx,
+            backbone_slots={
+                "Q_O": backbone_Q_O.data_ptr(), "K": K_all.data_ptr(),
+                "V": V_all.data_ptr(), "logits": backbone_logits.data_ptr(),
+                "scale": scale,
+            },
+            mot_slots={
+                "Q_O": mot_Q_O.data_ptr(), "K": K_all.data_ptr(),
+                "V": V_all.data_ptr(), "logits": mot_logits.data_ptr(),
+                "scale": scale, "layer_stride": layer_stride,
+            },
+            use_real_mot_mask=use_real_mask,
+        )
+
+    mot_Q_O.copy_(Q_seed)
+    make_backend(False).run("mot", 0, q_seq=num_action, kv_seq=total, stream=0, x0=x0, a0=a0)
+    torch.cuda.synchronize()
+    out_default = mot_Q_O.clone()
+
+    mot_Q_O.copy_(Q_seed)
+    make_backend(True).run("mot", 0, q_seq=num_action, kv_seq=total, stream=0, x0=x0, a0=a0)
+    torch.cuda.synchronize()
+    out_real_mask = mot_Q_O.clone()
+
+    # (a) matches a direct plain-kernel call on the same inputs
+    mot_Q_O.copy_(Q_seed)
+    action_Q_ptr = mot_Q_O.data_ptr() + a0 * NH * HD * 2
+    direct_out = torch.zeros(num_action * NH, HD, dtype=torch.float16, device=device)
+    fvk.attention_qkv_fp16_padded(
+        ctx, action_Q_ptr, K_all[0].data_ptr(), V_all[0].data_ptr(),
+        mot_logits.data_ptr(), direct_out.data_ptr(),
+        num_action, total, NH, HD, scale, 0)
+    torch.cuda.synchronize()
+
+    def _cosine_flat(a, b):
+        a_, b_ = a.float().flatten(), b.float().flatten()
+        return (torch.dot(a_, b_) / (a_.norm() * b_.norm() + 1e-12)).item()
+
+    cos_matches_plain = _cosine_flat(out_real_mask[a0 * NH:total * NH], direct_out)
+    cos_default_vs_real = _cosine_flat(out_default[a0 * NH:total * NH], out_real_mask[a0 * NH:total * NH])
+    print(f"use_real_mot_mask=True vs direct plain kernel: cosine={cos_matches_plain:.6f}")
+    print(f"default (masked) vs use_real_mot_mask=True: cosine={cos_default_vs_real:.6f} (must NOT be ~1.0)")
+    assert cos_matches_plain > 0.999
+    assert cos_default_vs_real < 0.99  # must genuinely differ
+
+    print("PASS: use_real_mot_mask=True matches plain unmasked attention and differs from the default")
+
+
 if __name__ == "__main__":
     test_backbone_and_mot_sites_run_without_nan()
     test_backbone_and_mot_sites_run_perhead_without_nan()
+    test_mot_real_mask_matches_plain_attention_and_differs_from_default()

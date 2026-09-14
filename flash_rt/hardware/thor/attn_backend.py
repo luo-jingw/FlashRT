@@ -672,7 +672,7 @@ class ImageWAMAttnBackend(AttentionBackendBase):
 
     def __init__(self, spec: AttentionSpec, ctx, *,
                  backbone_slots: dict, mot_slots: dict, use_fa4: bool = False,
-                 use_perhead_kv: bool = False):
+                 use_perhead_kv: bool = False, use_real_mot_mask: bool = False):
         """
         Args:
             spec: built by ``make_imagewam_attention_spec``.
@@ -731,6 +731,35 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                 real per-head-shaped buffers (see
                 ``tests/test_imagewam_attn_backend.py``'s own
                 ``use_perhead_kv`` case for that).
+            use_real_mot_mask: **Bug fix, opportunities.md OPT-002/
+                OPT-003 "Major correction"**. The "mot_joint" kernel this
+                class dispatches to by default
+                (``attention_qkv_fp16_mot_joint_action`` /
+                ``_perhead``) excludes the ``[x0,a0)`` "image" region
+                from action's visibility -- found, by reading ImageWAM's
+                own real mask builder (``imagewam.py``'s
+                ``_build_mot_attention_mask_flux2``) and its real call
+                sites in ``infer_action_flux2`` directly, that this is
+                WRONG for this project's real deployment target: those
+                real call sites always pass ``target_len=0``, which
+                means action should see the ENTIRE combined sequence
+                (prefix, image, and action), not exclude the image
+                region. When ``True``, "mot_joint" dispatches through
+                plain, unmasked ``attention_qkv_fp16_padded`` (broadcast
+                K/V, handles odd ``kv_seq`` safely) or
+                ``attention_qkv_fp16_perhead`` (real per-head K/V, when
+                combined with ``use_perhead_kv=True``) instead -- the
+                SAME kernels the "backbone" site's "standard" dispatch
+                already uses, since the real "mot" and "backbone" rules
+                turned out to be the same (no mask) once
+                ``target_len=0`` is accounted for. Default ``False`` so
+                every existing caller, including every
+                ``imagewam_thor_*_bench.py`` script and
+                ``pipeline_thor.py`` itself, is completely unaffected --
+                this flips a real, previously-unverified correctness
+                assumption, not a drop-in-safe optimization like
+                ``use_fa4``/``use_perhead_kv``, so it stays opt-in until
+                validated against a real checkpoint.
         """
         super().__init__(spec)
         expected_sites = {"backbone", "mot"}
@@ -743,6 +772,7 @@ class ImageWAMAttnBackend(AttentionBackendBase):
         self._ctx_cpp = ctx.cpp if hasattr(ctx, "cpp") else ctx
         self._use_fa4 = bool(use_fa4)
         self._use_perhead_kv = bool(use_perhead_kv)
+        self._use_real_mot_mask = bool(use_real_mot_mask)
         self._fa4_fwd = None
         if self._use_fa4:
             from flash_rt.hardware.thor import fa4_backend
@@ -945,6 +975,28 @@ class ImageWAMAttnBackend(AttentionBackendBase):
             num_action = q_seq
             row_width = site_spec.num_q_heads * site_spec.head_dim
             q_out_ptr = int(s["Q_O"]) + int(a0) * row_width * 2  # fp16 = 2 bytes/elem
+            if self._use_real_mot_mask:
+                # Bug fix (opportunities.md OPT-002/OPT-003): the real
+                # mask needs NO exclusion at all -- see this flag's own
+                # docstring. Dispatch through the same plain kernels
+                # "backbone" already uses.
+                if self._use_perhead_kv:
+                    fvk.attention_qkv_fp16_perhead(
+                        self._ctx_cpp,
+                        q_out_ptr, K_ptr, V_ptr,
+                        int(s["logits"]), q_out_ptr,
+                        num_action, kv_seq, site_spec.num_q_heads, site_spec.head_dim,
+                        float(s["scale"]), stream,
+                    )
+                else:
+                    fvk.attention_qkv_fp16_padded(
+                        self._ctx_cpp,
+                        q_out_ptr, K_ptr, V_ptr,
+                        int(s["logits"]), q_out_ptr,
+                        num_action, kv_seq, site_spec.num_q_heads, site_spec.head_dim,
+                        float(s["scale"]), stream,
+                    )
+                return q_out_ptr
             mot_kernel = (fvk.attention_qkv_fp16_mot_joint_action_perhead
                           if self._use_perhead_kv else fvk.attention_qkv_fp16_mot_joint_action)
             mot_kernel(
