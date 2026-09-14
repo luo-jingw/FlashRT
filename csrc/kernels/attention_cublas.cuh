@@ -166,3 +166,21 @@ void attention_qkv_fp16_mot_joint_action_perhead(
     int x0, int a0,          // block boundaries, see softmax_mot_joint_action_fp16
     float attn_scale,
     cudaStream_t stream = 0);
+
+// ImageWAM real "backbone" self-attention, real per-head K/V (see
+// softmax_backbone_ref_masked_fp16 for the mask rule: txt rows
+// [0,x0) see everything, ref rows [x0,total) see only themselves).
+// Self-attention: S == S_kv == total. Corrects this project's earlier
+// "backbone = plain unmasked self-attention" assumption -- see
+// opportunities.md.
+void attention_qkv_fp16_backbone_ref_masked_perhead(
+    cublasHandle_t handle,
+    const __half* Q,         // (total, NH, HD)
+    const __half* K,         // (total, NH, HD)
+    const __half* V,         // (total, NH, HD)
+    __half* logits,          // scratch: (total*NH, total_padded)
+    __half* out,             // (total, NH, HD)
+    int total, int NH, int HD,
+    int x0,                  // txt/ref boundary
+    float attn_scale,
+    cudaStream_t stream = 0);

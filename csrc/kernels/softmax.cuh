@@ -69,3 +69,17 @@ void softmax_mot_joint_fp16(__half* data, int rows, int cols,
 void softmax_mot_joint_action_fp16(__half* data, int rows, int cols,
                                     int x0, int a0, int total,
                                     cudaStream_t stream = 0);
+
+// ImageWAM real "backbone" mask (opportunities.md correction: the
+// project's own earlier "backbone = plain unmasked self-attention"
+// assumption was wrong). Real FLUX.2 `causal_attn_fn` rule for the
+// combined [txt (0,x0) | ref-image (x0,total)] sequence used by the
+// real `infer_action_flux2` inference path (target-image length is
+// always 0 there, so only these two groups exist): txt rows see
+// EVERY column [0, total); ref rows see ONLY [x0, total) -- the
+// reference image attends to itself alone, never to text. `rows` is
+// `total * NH` (self-attention: every token has a live query here,
+// unlike "mot"'s action-only optimization).
+void softmax_backbone_ref_masked_fp16(__half* data, int rows, int cols,
+                                       int NH, int x0, int total,
+                                       cudaStream_t stream = 0);

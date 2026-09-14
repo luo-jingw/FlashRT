@@ -545,3 +545,50 @@ void attention_qkv_fp16_mot_joint_action_perhead(
         NH,
         CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
 }
+
+
+void attention_qkv_fp16_backbone_ref_masked_perhead(
+    cublasHandle_t handle,
+    const __half* Q,
+    const __half* K,
+    const __half* V,
+    __half* logits,
+    __half* out,
+    int total, int NH, int HD,
+    int x0,
+    float attn_scale,
+    cudaStream_t stream)
+{
+    cublasSetStream(handle, stream);
+
+    int total_pad = total + (total & 1);
+    long long strideQK = HD;
+    long long strideLogits = total_pad;
+
+    float zero = 0.0f;
+    cublasGemmStridedBatchedEx(handle,
+        CUBLAS_OP_T, CUBLAS_OP_N,
+        total, total, HD,
+        &attn_scale,
+        K, CUDA_R_16F, NH * HD, strideQK,
+        Q, CUDA_R_16F, NH * HD, strideQK,
+        &zero,
+        logits, CUDA_R_16F, NH * total_pad, strideLogits,
+        NH,
+        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+
+    softmax_backbone_ref_masked_fp16(logits, total * NH, total_pad,
+                                      NH, x0, total, stream);
+
+    float one = 1.0f;
+    cublasGemmStridedBatchedEx(handle,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        HD, total, total,
+        &one,
+        V, CUDA_R_16F, NH * HD, strideQK,
+        logits, CUDA_R_16F, NH * total_pad, strideLogits,
+        &zero,
+        out, CUDA_R_16F, NH * HD, strideQK,
+        NH,
+        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+}
