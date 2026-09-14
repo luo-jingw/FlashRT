@@ -1409,3 +1409,66 @@ gives a concrete next target: **VAE optimization is now the single
 highest-value remaining performance item**, promoted ahead of both
 OPT-005's pipeline-integration follow-up and further backbone GEMM
 work — see opportunities.md OPT-008's updated Promotion Condition.
+
+## Real Thor Hardware Result — OPT-002 Round Full Verification + 5-Precision Comparison (commit e329d3a)
+
+User rebuilt on Thor with `-DGPU_ARCH=110` (no new build flags needed --
+all of this round's kernels are plain cuBLAS/CUDA, same as everything
+else). All 14 tests pass with no platform-specific compile or numeric
+issues:
+
+**New correctness tests (this round's real-math work), all PASS,
+cosine matching Ada exactly**: `test_imagewam_perhead_attention_kernel.py`
+(5 sub-checks, cosine=1.000000), `test_imagewam_attn_backend.py`
+(`use_perhead_kv=True`, cosine=1.000000 both sites), `test_imagewam_rope_kernel.py`
+(embed diff=0, apply cosine=1.000000), `test_imagewam_qknorm_reuse.py`
+(cosine=1.000000 incl. in-place), `test_imagewam_backbone_ref_masked_kernel.py`
+(cosine=1.000000, all 3 behavioral perturbation checks correct),
+`test_imagewam_real_backbone_attention.py` (small=1.000000, real
+dims=0.999999), `test_imagewam_adaln.py` (timestep diff=0, rest
+cosine=1.000000), `test_imagewam_real_mlp.py` (cosine=1.000000 both
+shapes), `test_imagewam_real_double_stream_block.py` (the full combined
+block, cosine=1.000000 both txt/img streams, real dims 3072/9216).
+
+**Regression suite**: `mot_joint`, `mot_joint_action`, `denoise`,
+`frontend`, `prefill` all still PASS -- the old broadcast path is
+untouched by this round's additive work.
+
+**Full 5-precision comparison, all with the corrected (128-channel,
+16x-downsample) VAE, graph-free, random weights, still the OLD
+approximate pipeline (broadcast K/V + GELU MLP -- the new real-math
+work from this round is NOT wired into the pipeline yet)**:
+
+| precision | vae | prefill(+VAE) | denoise x1 | **full (prefill+10-step)** | vs FP16 |
+|---|---|---|---|---|---|
+| FP16 | 38.6 | 119.8 | 5.85 | **178.3 ms** | — |
+| FP8 (dynamic scale) | 39.0 | 104.6 | 6.19 | **166.5 ms** | 1.07x |
+| FP4 (NVFP4) | 39.3 | 94.4 | 5.53 | **149.7 ms** | **1.19x** |
+| INT8 (SM80) | 38.8 | 114.9 | 6.21 | **177.1 ms** | ~1.00x |
+| INT4 (SM80) | 38.9 | 761.5 | 49.4 | **1255 ms** | **0.14x (7.0x slower)** |
+
+DiT-only (VAE subtracted: prefill-VAE + 10x denoise): FP16 140ms, FP8
+128ms, FP4 110ms, INT8 138ms, INT4 1216ms.
+
+**New finding: INT8 (SM80) now runs the FULL pipeline cleanly on
+Thor**, including the exact K=9216 (mlp_down) shape that reliably fails
+on this dev machine's Ada GPU -- confirms that failure is Ada-specific
+(a real hardware/driver quirk of this SM80-templated kernel on that
+specific architecture), not a general property of the kernel family.
+However, Thor's INT8 latency is essentially identical to FP16 (no real
+tensor-core benefit at this shape on Thor either) -- INT8 remains not
+worth pursuing on Thor for a different reason than on Ada (no crash,
+but no speedup). INT4 remains the confirmed dead end on Thor (OPT-007,
+unchanged, ~7x slower).
+
+**Takeaways**: NVFP4 is Thor's only precision tier with a clear,
+meaningful full-pipeline win (1.19x). FP8's dynamic-scale cost mostly
+cancels its own GEMM speedup (1.07x, barely worth it as measured here
+with zero calibration). VAE (~39ms) is still ~22% of the FP16 full
+path, larger than the entire 10-step denoise loop -- OPT-008's VAE-
+optimization priority stands.
+
+`benchmarks/imagewam_thor_int8_bench.py` updated to include the real
+VAE encode step, matching every other precision sibling script (it
+previously had none) -- brought back from the user's own Thor-side
+edit into this repo for consistency.

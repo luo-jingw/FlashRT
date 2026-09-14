@@ -42,10 +42,12 @@ target machine and the current structural plan's phases are complete.
 
 # OPT-002
 
-Status: kernel-level RESOLVED (real per-head K/V, RoPE, QK-Norm, real
-mask all implemented and verified, including combined); NOT YET wired
-into `pipeline_thor.py`/`_imagewam_thor_spec.py`, and NOT YET validated
-against a real checkpoint (no checkpoint file available locally)
+Status: kernel-level RESOLVED, VERIFIED ON REAL THOR HARDWARE (all 9
+new correctness tests pass on Thor with cosine matching Ada exactly,
+commit `e329d3a`, `GPU_ARCH=110`, no platform-specific issues); NOT YET
+wired into `pipeline_thor.py`/`_imagewam_thor_spec.py`, and NOT YET
+validated against a real checkpoint (no checkpoint file available
+locally or on Thor yet)
 
 Area: ImageWAM backbone/action-expert attention — real per-head K/V,
 and (found while starting this work) real RoPE, real QK-Norm, and a
@@ -759,6 +761,41 @@ being used by accident later. This kernel family remains a legitimate
 (if still K-limited and flaky above K=4096) option on the true
 Ampere/Orin-class hardware it was actually built for — the negative
 result here is Thor-specific, not universal.
+
+## Follow-up: Full-Pipeline INT8 on Thor — Confirms No Crash, Confirms No Benefit
+
+Re-ran with the corrected (128-channel) VAE included, full 25+25-layer
+pipeline (previously only isolated per-shape INT8 numbers existed for
+Thor): **INT8 (SM80) now completes the full pipeline cleanly on Thor**,
+including the exact K=9216 (`mlp_down`) shape that reliably crashes on
+this dev machine's Ada GPU — confirms that Ada failure is a real
+hardware/driver-specific quirk of this SM80-templated kernel on that
+specific architecture, not a general property of the kernel family.
+Full-pipeline latency: **177.1ms, essentially identical to FP16's
+178.3ms** (~1.00x) — consistent with the per-shape numbers above
+(INT8 was never dramatically slower like INT4, just not faster either).
+INT8 on Thor is therefore a *different* kind of dead end than on Ada:
+not a crash, just genuinely no benefit — still not worth pursuing
+there. INT4 remains the dramatic (~7x) slowdown confirmed again in this
+same full-pipeline run (1255ms).
+
+**Yet another data point for this kernel family's known flakiness,
+found while adding the VAE step to `imagewam_thor_int8_bench.py` on
+Ada**: the exact same script, run back to back with no code changes,
+sometimes completes the `vae_encode` timing loop and reaches the known
+K=9216 failure within a few seconds (the normal, expected behavior,
+reproduced most of the time), and sometimes hangs for 60+ seconds at
+100% GPU util with zero forward progress before being killed by hand —
+reproduced twice, not reproduced in three separate instrumented
+step-by-step re-executions of the identical call sequence (model
+construction, single `run_vae_encode` calls, the exact 15-warmup+50-
+measured pattern `_time_ms` uses). Not root-caused; adds to (not
+distinct from) the several other unexplained run-to-run instabilities
+already on record for this SM80 CUTLASS kernel family elsewhere in this
+entry — this one is new in KIND (a hang, not a crash or wrong value)
+but consistent with the pattern of "treat any single result from this
+kernel family as provisional." Does not block anything further since
+this path is already closed on both Ada (crash) and Thor (no benefit).
 
 ## Opportunity
 
