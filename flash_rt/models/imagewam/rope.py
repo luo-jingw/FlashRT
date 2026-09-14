@@ -81,6 +81,18 @@ def build_img_ids(token_height: int, token_width: int, time_value: float,
     return ids.reshape(token_height * token_width, 4)
 
 
+def build_action_ids(seq_len: int, device: str = "cuda") -> torch.Tensor:
+    """Real `ActionDiTFlux2.build_action_ids` convention (ImageWAM's own
+    source, `action_dit_flux2.py`, not `flux2/model.py`): axis 0 = a
+    constant 2.0 (a "type marker" distinguishing action tokens from text
+    (axis 3) or image (axes 0-2, time_value 10.0 for ref) in the shared
+    RoPE space), axis 1 = running index, axes 2-3 = 0."""
+    ids = torch.zeros(seq_len, 4, dtype=torch.float32, device=device)
+    ids[:, 0] = 2.0
+    ids[:, 1] = torch.arange(seq_len, dtype=torch.float32, device=device)
+    return ids
+
+
 def embed_nd_interleaved(ids: torch.Tensor, axes_dim=FLUX2_AXES_DIM,
                           theta: int = FLUX2_ROPE_THETA) -> torch.Tensor:
     """Real `EmbedND.forward` port: ids (seq, len(axes_dim)) -> (seq, head_dim)
@@ -114,5 +126,23 @@ def build_backbone_rope_table(x0: int, ref_h: int, ref_w: int, *,
     txt_ids = build_txt_ids(x0, device=device)
     img_ids = build_img_ids(ref_h, ref_w, ref_time_value, device=device)
     ids = torch.cat([txt_ids, img_ids], dim=0)
+    table = embed_nd_interleaved(ids, axes_dim=axes_dim, theta=theta)
+    return table.to(torch.float16).contiguous()
+
+
+def build_action_rope_table(action_len: int, *,
+                             axes_dim=FLUX2_AXES_DIM,
+                             theta: int = FLUX2_ROPE_THETA,
+                             device: str = "cuda") -> torch.Tensor:
+    """RoPE table for ActionDiT's own fresh Q/K (real
+    `action_pe = video_expert.transformer.pe_embedder(action_ids)` in
+    `mot.py`'s `forward_flux2_action_with_video_cache`, confirmed by
+    reading that function directly -- action uses the SAME `pe_embedder`
+    config as the backbone, just its own `build_action_ids` position
+    convention). Returns (action_len, head_dim) interleaved cos/sin,
+    fp16, ready for `rope_apply_fp16_perhead` on action's own Q/K only
+    (the cached backbone K was already rotated during backbone prefill
+    with `build_backbone_rope_table` and never needs re-rotating)."""
+    ids = build_action_ids(action_len, device=device)
     table = embed_nd_interleaved(ids, axes_dim=axes_dim, theta=theta)
     return table.to(torch.float16).contiguous()
