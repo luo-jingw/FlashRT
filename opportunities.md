@@ -42,9 +42,12 @@ target machine and the current structural plan's phases are complete.
 
 # OPT-002
 
-Status: kernel-level RESOLVED, VERIFIED ON REAL THOR HARDWARE (all 9
-new correctness tests pass on Thor with cosine matching Ada exactly,
-commit `e329d3a`, `GPU_ARCH=110`, no platform-specific issues); NOT YET
+Status: kernel-level RESOLVED for both backbone block types (verified
+on real Thor hardware, commit `e329d3a`) AND now ActionDiT/"mot"
+(Ada-only so far, not yet re-verified on Thor) — full real-math
+coverage complete, INCLUDING a major mask correction found while
+building ActionDiT (see below: the mask this round first built, and
+the pre-existing "mot_joint" kernels, both had the wrong rule). NOT YET
 wired into `pipeline_thor.py`/`_imagewam_thor_spec.py`, and NOT YET
 validated against a real checkpoint (no checkpoint file available
 locally or on Thor yet)
@@ -205,32 +208,45 @@ math gaps this project had never modeled, beyond just per-head K/V:
   allocates fresh buffers every call with no reuse; one test run OOM'd
   when the GPU already had ~5.3GB in use from unrelated earlier
   processes in the same session, succeeded cleanly once cleared.
+- **`ActionDiT` ("mot" site) real forward is now also done**:
+  `flash_rt/models/imagewam/real_action_expert.py` implements the real
+  `SlimFlux2DoubleBlock`/`SlimFlux2SingleBlock` (ImageWAM's own
+  `action_dit_flux2.py`, not `flux2/model.py` — IMG-ONLY, no txt
+  branch) plus the real joint-attention orchestration from `mot.py`'s
+  `forward_flux2_action_with_video_cache`: action's own fresh Q/K/V
+  concatenated with a FROZEN backbone K/V cache, one attention call
+  (Q=action rows only, K/V=full concatenated sequence), no mask (per
+  the correction below). Also found and handled: `attn_dim` (`NH*HD`,
+  3072) `!= hidden` (1024) here, unlike the backbone where they're
+  equal — every function takes both separately. ActionDiT's own RoPE
+  uses a different position convention (`build_action_ids`: axis0=2.0
+  type marker, axis1=running index) but the same `pe_embedder` config,
+  confirmed from `mot.py`'s own
+  `action_pe = video_expert.transformer.pe_embedder(action_ids)` call.
+  Verified against an independent PyTorch reference, small shape + real
+  dims (hidden=1024, attn_dim=3072, mlp_hidden=4096, NH=24, HD=128,
+  num_action=64, backbone_total=896): cosine=1.0, all 4 cases
+  (`tests/test_imagewam_real_action_expert.py`). **This completes
+  OPT-002's real-math coverage** — both backbone block types and the
+  action expert now have fully verified real forwards.
 - **Still not wired into `pipeline_thor.py`** — everything above lives
   in new, additive `flash_rt/models/imagewam/real_*.py`/`pipeline_real.py`
   modules and tests; the actual serving pipeline (used by the
   registered `_PIPELINE_MAP` frontend and every current benchmark
   script) still uses the old broadcast-K/V, no-RoPE, no-QK-Norm,
-  no-mask, wrong-width-GELU-MLP path by default. Wiring this in means:
-  changing `_imagewam_thor_spec.py`'s K/V projection width back to full
-  `hidden`, adding QKNorm/RoPE/AdaLN weight+buffer plumbing, correcting
-  the MLP GEMM widths, and adopting the allocate-once-during-warmup
-  discipline every benchmark script already uses (this round's modules
-  allocate fresh every call) — a real, sizeable pipeline refactor, not
-  yet started. The action-expert side (ActionDiT, the "mot" site) also
-  has no equivalent real-math investigation yet (see below).
+  wrong-mask, wrong-width-GELU-MLP path by default. Wiring this in
+  means: changing `_imagewam_thor_spec.py`'s K/V projection width back
+  to full `hidden`, adding QKNorm/RoPE/AdaLN weight+buffer plumbing,
+  correcting the MLP GEMM widths, replacing the "mot_joint" kernels'
+  wrong mask, and adopting the allocate-once-during-warmup discipline
+  every benchmark script already uses (this round's modules allocate
+  fresh every call) — a real, sizeable pipeline refactor, not yet
+  started.
 - **No real checkpoint file available locally** — everything above is
   verified against PyTorch references of the real published formulas,
   not against real trained weights. Real end-to-end accuracy validation
   (the original goal that surfaced all of this) still needs a real
   checkpoint, which only exists on Thor per the user's own statement.
-- "mot" site's own real structure now understood (see below) — the
-  action expert (`ActionDiTFlux2` in ImageWAM's own source, not
-  `flux2/model.py`) has its own separate double/single blocks,
-  structurally identical to the backbone's but IMG-ONLY (no txt
-  branch), and its own joint attention is orchestrated externally by
-  `MoT.forward_flux2_action_with_video_cache`, not internal to the
-  block itself. Real kernel-level implementation not yet built — see
-  the correction below for the real mask this needs.
 
 ## Major correction: the real attention mask is NOT what this round built (found while investigating ActionDiT)
 
