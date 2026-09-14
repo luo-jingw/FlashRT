@@ -287,54 +287,48 @@ rule `causal_attn_fn` genuinely uses elsewhere, just not on this
 project's real deployment path) — kept as a validated building block,
 documentation updated to state its actual status clearly.
 
-**NOT yet fixed**: the pre-existing, ALREADY-SHIPPED "mot_joint"/
-"mot_joint_action" kernels (`csrc/kernels/attention_cublas.cu`,
-predates this session, described as OPT-003 "RESOLVED... verified
-real 2.2-3.1x speedup") exclude the `[x0,a0)` "image" region from
-action's visibility — per this correction, for this project's real
-`target_len=0` deployment target, action should NOT exclude that region
-at all. **OPT-003's own real speedup (fewer query rows for action, from
+**Fixed as opt-in**: `ImageWAMAttnBackend` gained `use_real_mot_mask`
+(default `False`, mirrors `use_fa4`/`use_perhead_kv`'s own pattern).
+When `True`, "mot_joint" dispatches through the same plain, unmasked
+kernels "backbone" already uses (`attention_qkv_fp16_padded` for
+broadcast K/V, `attention_qkv_fp16_perhead` for real per-head K/V)
+instead of the masked `attention_qkv_fp16_mot_joint_action`/`_perhead`
+— no new kernel needed, since the real "mot" and "backbone" rules
+turned out to be identical (no mask) once `target_len=0` is accounted
+for. **OPT-003's own real speedup (fewer query rows for action, from
 `total*NH` down to `num_action*NH`) remains completely valid and
-unaffected** — that optimization is about how many rows get computed,
-not which columns they can see — but the MASK RULE itself
-(`softmax_mot_joint_fp16`/`softmax_mot_joint_action_fp16`'s three-region
-exclusion) has never actually been checked against
-`_build_mot_attention_mask_flux2` until now, and per this finding
-appears to encode a rule real deployment doesn't need. This is a real,
-open correctness question in shipped, production kernel code — not yet
-fixed, since fixing it means either building a new unmasked-for-action
-per-head kernel (straightforward, `attention_qkv_fp16_perhead` with Q
-offset to the action rows already does this) and re-wiring
-`attn_backend.py`'s "mot" dispatch, or first getting more certainty
-(e.g. re-deriving independently, or checking with real checkpoint
-outputs once available) before touching code three phases of this
-project have already built on top of.
+unaffected** by this — that optimization is about how many rows get
+computed, not which columns they can see. Verified two ways
+(`tests/test_imagewam_attn_backend.py`): `use_real_mot_mask=True`'s
+output matches a direct call to the plain kernel exactly (cosine=1.0),
+and genuinely DIFFERS from the default masked dispatch on the same
+inputs (cosine=0.81, confirming the flag is not a no-op). Default
+`False` so every existing caller (`pipeline_thor.py`, every
+`imagewam_thor_*_bench.py` script) is completely unaffected — confirmed
+via the full existing regression suite, all unchanged. Kept opt-in
+rather than made default despite being a confirmed bug fix: no real
+checkpoint exists yet to validate the corrected behavior end to end.
 
 ## Promotion Condition
 
 Kernel-level math promoted (verified real, not a hypothesis) for
-per-head K/V, RoPE, QK-Norm, AdaLN, LayerNorm, and the real MLP. The
-attention MASK specifically needs the correction above applied to the
-pre-existing "mot_joint" kernels before this whole area can be called
-fully resolved. Full promotion (default-on in the real pipeline)
+per-head K/V, RoPE, QK-Norm, AdaLN, LayerNorm, the real MLP, and now
+the real attention mask (fixed as opt-in, see above). Full promotion
+(default-on in the real pipeline)
 additionally blocked on the "still open" items above (pipeline wiring,
-real checkpoint access) and a real ActionDiT kernel implementation
-(not yet built, now that its real structure and the real mask are
-both understood).
+real checkpoint access).
 
 # OPT-003
 
 Status: RESOLVED for the query-count reduction (fixed and verified on
-both Ada and real Thor hardware) — but see OPT-002's "Major correction"
-section: the MASK RULE this kernel's softmax uses (three-region,
-excluding `[x0,a0)` "image" from action's visibility) has never been
-checked against ImageWAM's own real mask builder
-(`_build_mot_attention_mask_flux2`) until OPT-002's real-math round,
-and per that finding appears to encode a rule the real deployment
-target (`target_len=0`) doesn't need — action should see everything,
-not exclude the image region. The SPEEDUP here (fewer query rows) is
-real and unaffected; the mask CORRECTNESS is now an open question, not
-yet fixed.
+both Ada and real Thor hardware). Mask CORRECTNESS: see OPT-002's
+"Major correction" section — the default kernel's three-region mask
+(excluding `[x0,a0)` "image" from action's visibility) doesn't match
+ImageWAM's own real mask builder for this project's real deployment
+target (`target_len=0` — action should see everything). Fixed as an
+opt-in flag (`use_real_mot_mask=True` on `ImageWAMAttnBackend`),
+default stays off (matching the OLD mask) until real-checkpoint
+validation exists.
 
 Area: ImageWAM denoise step — mot_joint attention computed ~15x more than needed
 
