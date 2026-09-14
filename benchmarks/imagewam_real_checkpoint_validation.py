@@ -4,32 +4,38 @@ real-math modules (flash_rt/models/imagewam/real_*.py, opportunities.md
 OPT-002) against ImageWAM's own real PyTorch model, loaded with REAL
 trained weights from the released checkpoint.
 
-**UNTESTED by this session** -- no checkpoint file, `imagewam` package,
-or `flux2` package is available on this project's own dev machine (Ada
-sm_89, no way to even build a Thor GPU_ARCH=110 flash_rt_kernels.so
-locally). Written by reading ImageWAM's own real loading code
-(`imagewam.py`'s `ImageWAM.from_flux2_klein_pretrained` /
-`load_checkpoint`, `mot.py`'s `prefill_flux2_video_cache` /
-`forward_flux2_action_with_video_cache`) directly, not guessed.
+**Run on real Thor hardware by the user, 2026-09-14, against the real
+`yuyangalin/ImageWAM-FLUX.2-4B-LIBERO` release checkpoint**:
+Backbone cosine=0.999927, ActionDiT cosine=0.999963 (see plan.md "Real
+Thor Hardware Result -- Real-Checkpoint Validation"). A few env details
+below were corrected against that real run (this project's own dev
+machine still has no checkpoint/`imagewam`/`flux2` locally, so this
+script itself is unchanged from what was actually run).
 
 ## Prerequisites (run this on the machine with the checkpoint)
 
-  - `imagewam` package importable: `pip install -e .` inside the
-    ImageWAM repo checkout, or point `PYTHONPATH` at its `src/`.
+  - `imagewam` package importable via `PYTHONPATH=<ImageWAM repo>/src`
+    (NOT `pip install -e .` -- that pulls in the package's own pinned
+    deps and downgraded Thor's `torch==2.9.1+cu130` to `2.7.1` in
+    practice; point `PYTHONPATH` at `src/` instead).
   - `black-forest-labs/flux2` cloned at the pinned commit and
     importable: `FLUX2_SRC` env var pointing at it (see ImageWAM's own
     `docs/dependencies.md` / `README_zh.md` "模型准备" section).
   - Downloaded checkpoint files, env vars:
       `FLUX2_MODEL_PATH`   -- base FLUX.2 klein-base-4B safetensors
       `FLUX2_AE_MODEL_PATH` -- FLUX.2 autoencoder safetensors
-      `CKPT_PATH`          -- ImageWAM release `checkpoint.pt`
-                              (e.g. yuyangalin/ImageWAM-FLUX.2-4B-LIBERO)
+      `CKPT_PATH`          -- ImageWAM release checkpoint file. **The
+                              real release (yuyangalin/ImageWAM-FLUX.2-4B-LIBERO)
+                              names this `model.pt`, not `checkpoint.pt`**
+                              (the docstring originally guessed wrong
+                              here -- confirmed on the real Thor run).
   - FlashRT itself importable (this repo).
-  - Optionally `ACTION_DIM` env var (raw per-timestep action dimension
-    -- check the release's own `train_config.yaml`; defaults to 7 here,
-    almost certainly wrong for your specific task/robot -- **check
-    this before trusting any result**, a wrong action_dim silently
-    produces a shape mismatch or a nonsensical-but-not-crashing compare).
+  - `ACTION_DIM` env var (raw per-timestep action dimension). For the
+    real LIBERO release this is **7** (LIBERO's own 7-DoF action
+    space), confirmed against the release's sibling `config.yaml` (NOT
+    `train_config.yaml` as originally guessed) -- still check this
+    against your own release's config rather than trusting this
+    default blindly for a different task/robot.
 
 ## What this validates, and what it deliberately skips
 
@@ -55,20 +61,22 @@ inference time (see opportunities.md's "Major correction" for the full
 story) -- calling the block method directly would silently validate
 against the WRONG reference.
 
-## Known uncertainty, not resolved here
+## LoRA-merge branch -- checked, not an issue for the LIBERO release
 
 `ImageWAM.load_checkpoint`'s real source has a LoRA-merge branch for
 `stack == "flux2"` (`merge_lora_state_dict_to_plain` /
 `remap_plain_linear_keys_to_lora_base`) that runs unconditionally for
-this stack -- meaning the real checkpoint's weights may be stored in a
-different key layout than the plain module structure this script reads
-weights from directly (`model.video_expert.transformer.double_blocks[i].img_attn.qkv.weight`
-etc.). If `model.load_checkpoint(...)` completes without missing/
-unexpected key warnings, the merge already ran and the plain module
-attributes below are correct to read from AFTER loading (which is what
-this script does) -- if it warns about missing/unexpected keys, that
-is a real signal something needs investigating before trusting the
-comparison below.
+this stack -- meaning the real checkpoint's weights COULD in principle
+be stored in a different key layout than the plain module structure
+this script reads weights from directly
+(`model.video_expert.transformer.double_blocks[i].img_attn.qkv.weight`
+etc.). **Checked on the real Thor run**: `model.load_checkpoint(...)`
+reported `missing_keys=0 unexpected_keys=0` for the LIBERO release --
+the plain module attributes this script reads from directly are
+correct as-is; no LoRA-layout mismatch for this specific checkpoint.
+If you see missing/unexpected key warnings on a DIFFERENT release,
+that is still the signal something needs investigating before trusting
+the comparison below.
 """
 from __future__ import annotations
 

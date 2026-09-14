@@ -1472,3 +1472,52 @@ optimization priority stands.
 VAE encode step, matching every other precision sibling script (it
 previously had none) -- brought back from the user's own Thor-side
 edit into this repo for consistency.
+
+## Real Thor Hardware Result — Real-Checkpoint Validation (commit dc5e0ca, run 2026-09-14)
+
+User ran `benchmarks/imagewam_real_checkpoint_validation.py` on Thor
+against the real, downloaded `yuyangalin/ImageWAM-FLUX.2-4B-LIBERO`
+release checkpoint (not a random/fake one). Environment corrections
+vs. this round's own docstring guesses, confirmed against the actual
+release layout: checkpoint file is `model.pt` (not `checkpoint.pt`),
+sibling config is `config.yaml` (not `train_config.yaml`), `action_dim`
+= 7 (LIBERO 7-DoF, explicitly checked against the release config, not
+the script's default), `imagewam` installed via `PYTHONPATH=ImageWAM/src`
+(a real `pip install -e .` would have downgraded Thor's
+`torch==2.9.1+cu130` to `2.7.1` via the package's own dependency pins
+-- avoided).
+
+`model.load_checkpoint` reported `missing_keys=0 unexpected_keys=0` --
+the LoRA-merge branch flagged earlier as an open uncertainty was a
+non-issue for this specific checkpoint (only an unrelated
+`proprio_encoder` warning, expected since the validation script never
+passes `proprio_dim`).
+
+Result, comparing FlashRT's real-math modules (this round's
+`real_double_stream_block.py`/`real_single_stream_block.py`/
+`pipeline_real.py`/`real_action_expert.py`) against the ACTUAL official
+reference path with real trained bf16 weights (`model.video_expert.pre_dit`
++ `_build_mot_attention_mask_flux2` + `mot.prefill_flux2_video_cache`
+for the 25-layer backbone; `model.action_expert.pre_dit` +
+`mot.forward_flux2_action_with_video_cache` for ActionDiT):
+
+| component | shape | cosine |
+|---|---|---|
+| Backbone (25-layer full prefill) | (896, 3072) | **0.999927** |
+| ActionDiT (double+single, video-cache joint attn) | (64, 1024) | **0.999963** |
+
+Both ~0.9999, the expected small headroom below 1.0 from bf16 (real
+weights) vs. fp16 (FlashRT compute) precision, not from a math error.
+**This confirms every real-math correction from this OPT-002 round --
+per-head K/V, real 4-axis RoPE, QK-Norm, AdaLN modulation, real
+LayerNorm, the real SiLU-gated-GLU MLP, and the corrected no-mask
+attention rule -- end-to-end against real trained weights, not just
+independent PyTorch references.** OPT-002's real-math coverage is now
+fully validated, not just theoretically verified.
+
+**What remains open**: everything above is still only in the new,
+additive `real_*.py`/`pipeline_real.py` modules; `pipeline_thor.py`
+itself (the actual served pipeline, and every `imagewam_thor_*_bench.py`
+script) is unchanged and still uses the old approximate math by
+default. Wiring the validated real math into the actual serving path
+is the next real piece of work, not yet started.

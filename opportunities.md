@@ -242,11 +242,35 @@ math gaps this project had never modeled, beyond just per-head K/V:
   every benchmark script already uses (this round's modules allocate
   fresh every call) — a real, sizeable pipeline refactor, not yet
   started.
-- **No real checkpoint file available locally** — everything above is
-  verified against PyTorch references of the real published formulas,
-  not against real trained weights. Real end-to-end accuracy validation
-  (the original goal that surfaced all of this) still needs a real
-  checkpoint, which only exists on Thor per the user's own statement.
+- **Real checkpoint validation now DONE, run by the user on Thor
+  (2026-09-14)** — `benchmarks/imagewam_real_checkpoint_validation.py`
+  (written this round, dry-run tested locally via
+  `tests/test_imagewam_real_checkpoint_extraction.py` against fake
+  modules) was run against the real
+  `yuyangalin/ImageWAM-FLUX.2-4B-LIBERO` release checkpoint (`model.pt`,
+  not `checkpoint.pt` as this round's docstring had guessed;
+  `config.yaml`, not `train_config.yaml`; `action_dim=7`, LIBERO 7-DoF,
+  explicitly confirmed against the release config rather than trusting
+  the script's own default). `model.load_checkpoint` reported
+  `missing_keys=0 unexpected_keys=0` — the LoRA-merge branch flagged as
+  an open uncertainty was a non-issue for this checkpoint (only an
+  unrelated `proprio_encoder` warning, expected since the script never
+  passes `proprio_dim`). Real full-network result, against the ACTUAL
+  official reference path (`model.video_expert.pre_dit` +
+  `_build_mot_attention_mask_flux2` + `mot.prefill_flux2_video_cache`
+  for backbone; `model.action_expert.pre_dit` +
+  `mot.forward_flux2_action_with_video_cache` for ActionDiT):
+  **Backbone cosine=0.999927, ActionDiT cosine=0.999963** (both against
+  a 25-double+single-layer full prefill / full ActionDiT forward, real
+  dims, real trained bf16 weights, expected small headroom below 1.0
+  purely from bf16-vs-fp16 precision, not from any math error). This
+  confirms every real-math correction in this round (per-head K/V, RoPE,
+  QK-Norm, AdaLN, real LayerNorm, real MLP, and the corrected no-mask
+  rule) end-to-end against real trained weights, not just independent
+  PyTorch references. **OPT-002's real-math coverage is now fully
+  validated, not just theoretically verified.** The remaining gap is
+  purely the wiring one already noted above: none of this is in
+  `pipeline_thor.py`'s actual serving path yet.
 
 ## Major correction: the real attention mask is NOT what this round built (found while investigating ActionDiT)
 
