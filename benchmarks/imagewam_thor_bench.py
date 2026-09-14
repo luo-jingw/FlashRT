@@ -38,6 +38,7 @@ doing LESS work than a correct implementation needs, not more).
 """
 from __future__ import annotations
 
+import os
 import statistics
 
 import torch
@@ -69,6 +70,18 @@ NUM_ACTION = MAX_ACTION_HORIZON
 TOTAL = A0 + NUM_ACTION  # 960, under the 1024 softmax ceiling
 
 WARMUP, ITERS = 15, 50
+
+# OPT-005: FA4 for the "backbone" site only ("mot"/ActionDiT has no
+# FA4-equivalent mask support -- unaffected either way). Opt-in via env
+# var, not a hardcoded default here, since this same script also runs
+# on this dev machine's own Ada GPU (no FA4 runtime at all). Verified
+# correct AND fast on real Thor hardware for the real per-head
+# convention this script already uses (cosine=1.000000, 3.75x
+# standalone at real a0=896 dims -- opportunities.md OPT-005's own
+# 2026-09-14 entry): `IMAGEWAM_USE_FA4=1 python3 imagewam_thor_bench.py`
+# on Thor to fold that win into the backbone_double/backbone_single
+# numbers below.
+USE_FA4 = os.environ.get("IMAGEWAM_USE_FA4", "0") == "1"
 
 _keepalive = []
 
@@ -158,6 +171,10 @@ def _make_1layer_backend(*, kind: str):
             "layer_stride": K_cache[0].numel() * 2,
         },
         use_perhead_kv=True, use_real_mot_mask=True,
+        # Only "backbone" has an FA4 dispatch branch at all; harmless
+        # to pass for "mot" too (ImageWAMAttnBackend simply never
+        # reads it there), but gated on `kind` for clarity.
+        use_fa4=(USE_FA4 and kind == "backbone"),
     )
     return ctx, backend
 

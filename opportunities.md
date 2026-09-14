@@ -655,6 +655,17 @@ here, ever measured a real slowdown beyond noise — only a question of
 whether it's worth the extra warmup-time cost, which is small and
 one-time).
 
+**Re-measured on real Thor hardware (2026-09-14, commit `6478844`)** —
+confirmed: the asymmetry holds again. Combined with steps 2 (QKV
+fusion) and 3 (fused AdaLN/gated-residual, below) all active together
+(the frontend's own unconditional defaults, can't isolate autotune
+alone from this run), backbone_single dropped ~15% and backbone_double
+~9% versus the pre-these-changes real-math baseline on the SAME Thor
+hardware (`61e7c15`'s own numbers) — see this file's OPT-004 "Step 3"
+section below for the full table. Ada showed nothing; Thor shows a
+real double-digit-percent win. Do not trust the Ada-only "no win"
+finding above as final for Thor.
+
 ## Step 2 done: QKV GEMM fusion (2026-09-14) — correctness/checkpoint-fidelity win, no measured speed win on Ada
 
 `pipeline_thor.py`'s 4 real-math layer helpers (`_double_stream_layer`,
@@ -751,9 +762,52 @@ intermediate `normed` buffer; the fused kernel never materializes it),
 real code-quality and future-shape-robustness wins even where the
 timing is a wash today.
 
+## Real Thor result (2026-09-14, commit `6478844`) — steps 1+2+3 combined, a real win on Thor unlike Ada
+
+User ran `imagewam_thor_bench.py` on Thor with all three of autotune
+(step 4/OPT-004), QKV fusion (step 2), and the fused AdaLN/gated-
+residual kernels (step 3, this section) active together (can't
+isolate each individually from one bench run, but ALL THREE are now
+the frontend's own unconditional default, so this is the honest
+combined number a real Thor deployment actually gets):
+
+| layer | Thor P50 (this commit) | Ada P50 (for reference) | Thor P50 (previous real-math commit `61e7c15`, autotune/QKV-fusion/kernel-fusion NOT yet applied) |
+|---|---|---|---|
+| backbone_double | **5.53 ms** | 10.0 ms | 6.04 ms |
+| backbone_single | **4.47 ms** | 9.1 ms | 5.28 ms |
+| action_double | 0.57 ms | 0.9 ms | 0.58 ms |
+| action_single | 0.53 ms | 0.5 ms | 0.54 ms |
+
+Derived: backbone prefill (5 double + 20 single) 135.8ms → **117.0ms**
+(**-14%**), one denoise step 13.7ms → 13.5ms (flat), prefill+10-step
+273ms → **252ms**. **Unlike Ada, Thor DOES show a real win here**:
+backbone_single ~-15%, backbone_double ~-9%. ActionDiT barely moves
+(only 64 action tokens -- still launch-count-dominated at that small a
+shape, where these fusions save launches but each layer's own total
+work is already tiny). The standalone attention-kernel-only numbers
+(`mot_joint_kernel_only`/`standard_attn_kernel_only`) are UNCHANGED
+(0.042ms / 0.824ms) confirming the win comes from the GEMM/kernel-
+launch-count reductions (QKV fusion + AdaLN/gate fusion + autotune),
+not from any change to attention itself.
+
+Context: this real-math prefill number (117ms) is still slower than
+the OLD approximate-math FP16 full pipeline's own prefill number
+(81.6ms, from the pre-OPT-002 benchmark table) -- expected and not a
+regression from this round's work; it's the real cost of doing the
+actually-correct math (real per-head K/V, real RoPE/QK-Norm/AdaLN,
+real-width MLP) that the old approximate pipeline never paid.
+
+**Confirms the Ada-vs-Thor asymmetry this file has now recorded twice**
+(autotune's own original 2026-09 measurement was +4% Ada / +10% Thor
+on the OLD approximate math) — small per-launch/per-algorithm savings
+that don't matter on Ada's own GEMM/launch balance DO matter on Thor's.
+Do not trust an "Ada shows no win" result as the final word for any
+future launch-count-reduction work on this pipeline without a real
+Thor measurement.
+
 # OPT-005
 
-Status: RESOLVED — verified on real Thor hardware (cosine=1.000000, rel_l2=0.000412), real 4.05x standalone speedup on the "backbone" site; NOT YET wired into the real 25-layer prefill benchmarks (still opt-in, off by default everywhere)
+Status: RESOLVED — verified on real Thor hardware for BOTH broadcast K/V (cosine=1.000000, rel_l2=0.000412, 4.09x) and real per-head K/V (cosine=1.000000, rel_l2=0.000427/0.000614, 3.75x at real a0=896 dims, see the 2026-09-14 entry below); NOT YET wired into the real 25-layer prefill benchmarks or the frontend at all (still opt-in, off by default everywhere, and the frontend has no parameter to enable it yet)
 
 Area: FA4 for the "backbone" site's plain self-attention (faster kernel; does NOT independently fix OPT-002's broadcast-K/V, see correction below)
 
@@ -898,6 +952,42 @@ to cover the new branch specifically (the original test only exercises
 confirm a clean skip on this machine — **this fix is unverified until
 run on Thor**; do not flip `use_fa4=True` on by default without that
 confirmation first.
+
+## Real Thor confirmation (2026-09-14, commit `6478844`) — the fix is correct, and fast
+
+Both `test_imagewam_fa4_backbone.py` cases ran on Thor (not skipped --
+FA4 runtime active there) for the first time since the per-head fix:
+
+| case | cosine | rel_l2 |
+|---|---|---|
+| broadcast K/V (old convention) | 1.000000 | 0.000412 |
+| **real per-head K/V (this fix)** | **1.000000** | 0.000427 |
+
+Confirms the `pack_gqa=False` branch this commit added is numerically
+correct against real per-head memory, not just "doesn't crash."
+
+`benchmarks/imagewam_fa4_vs_cublas_bench.py` (broadcast K/V, a0=896):
+cuBLAS 0.826ms, FA4 0.202ms, **4.09x**. Separately measured at the
+REAL per-head shape (both a small seq=8 case and the real a0=896):
+cosine=1.000000 both, cuBLAS-perhead 0.778ms vs FA4-perhead 0.208ms
+(**3.75x**) at a0=896 (FA4-perhead's own `mean` runs higher than its
+`P50` -- a real long tail, not seen in the broadcast case; P50 itself
+is stable). Both the correctness fix AND the original 4x-class speedup
+now hold for the real per-head convention this project actually uses
+by default.
+
+**Still not wired into the main per-layer/pipeline benchmark or the
+frontend** — `imagewam_thor_bench.py`'s own per-layer numbers (see
+OPT-004's "Step 3" real Thor confirmation) do NOT include this
+speedup yet (`_make_1layer_backend` still constructs
+`ImageWAMAttnBackend` without `use_fa4=True`); `ImageWAMTorchFrontendThor`
+itself has no way to enable it at all yet. This is the concrete
+next step -- add an explicit `use_fa4` opt-in parameter (NOT a
+default-True flip, since this dev machine's own Ada GPU has no FA4
+runtime and `ImageWAMAttnBackend`'s constructor raises if `use_fa4=True`
+without one -- defaulting it on would break every local test/frontend
+construction here) and re-measure the per-layer/prefill numbers with
+it enabled on Thor.
 
 # OPT-006
 

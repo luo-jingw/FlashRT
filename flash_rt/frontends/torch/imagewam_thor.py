@@ -78,7 +78,8 @@ class ImageWAMTorchFrontendThor:
     `docs/adding_new_model.md` §0 rule 2.
     """
 
-    def __init__(self, checkpoint_dir=None, *, dims_override: dict | None = None, **kwargs):
+    def __init__(self, checkpoint_dir=None, *, dims_override: dict | None = None,
+                 use_fa4: bool = False, **kwargs):
         del checkpoint_dir, kwargs
         self._keepalive = []
         self.dims = dict(_DEFAULT_DIMS)
@@ -144,6 +145,19 @@ class ImageWAMTorchFrontendThor:
             # (benchmarks/imagewam_real_checkpoint_validation.py) --
             # this is now the default for this frontend, not opt-in.
             use_perhead_kv=True, use_real_mot_mask=True,
+            # OPT-005: FA4 for the "backbone" site only ("mot" has no
+            # FA4-equivalent mask support, unaffected either way).
+            # Default False, NOT True: this frontend also runs on this
+            # dev machine's own Ada GPU, which has no FA4 runtime at
+            # all -- `ImageWAMAttnBackend`'s own constructor raises if
+            # `use_fa4=True` without one, so a default-True here would
+            # break every local test/construction. Verified correct
+            # AND fast on real Thor hardware for the real per-head
+            # convention this class now always uses (cosine=1.000000,
+            # 3.75x standalone -- opportunities.md OPT-005's own
+            # 2026-09-14 entry); pass `use_fa4=True` explicitly when
+            # constructing this frontend on Thor to get the win.
+            use_fa4=use_fa4,
         )
 
         self._graph = None
