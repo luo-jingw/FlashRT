@@ -711,22 +711,33 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                 ``ThorFlashAttnBackend`` does for encoder/decoder).
             use_fa4: OPT-005 (opportunities.md). Dispatch the "backbone"
                 site's plain self-attention through FA4 instead of the
-                cuBLAS-composed ``attention_qkv_fp16`` kernel, following
-                the EXACT tensor-view/call pattern
-                ``ThorFlashAttnBackend`` already uses (and has verified)
-                for Pi0.5's own "encoder" site -- same
-                single-shared-KV-head convention (``pack_gqa=True``), so
-                no buffer-format change is needed. Does NOT change
-                "mot" (the three-region masked joint attention still
-                uses the custom cuBLAS kernel; FA4's plain
-                causal/non-causal API has no equivalent for that mask,
-                not evaluated here). Default False so every existing
-                caller is unaffected; UNTESTED beyond this class's own
-                construction-time checks -- this project has no
-                Blackwell/Thor hardware to run FA4 on directly (see
-                PROJECT.md), so this was written by mirroring the
-                already-proven Pi0.5 pattern as closely as possible,
-                not independently verified end-to-end.
+                cuBLAS-composed ``attention_qkv_fp16``/``_perhead``
+                kernel. `run()`'s own FA4 branch adapts to whichever
+                K/V convention ``use_perhead_kv`` selects: real
+                per-head K/V (this class's own default since OPT-002)
+                uses FA4's plain MHA shape with ``pack_gqa=False``
+                (num_kv_heads already equals num_q_heads, no broadcast
+                needed); the OLD single-shared-KV-head convention (only
+                reachable with ``use_perhead_kv=False``) still uses
+                ``pack_gqa=True``, the ORIGINAL pattern mirrored from
+                ``ThorFlashAttnBackend``'s already-verified Pi0.5
+                "encoder" site usage -- fixed 2026-09-14 after an audit
+                found the per-head case was silently using the wrong
+                tensor shape (`(1,kv_seq,1,head_dim)` instead of
+                `(1,kv_seq,num_q_heads,head_dim)`), which would have
+                misread real per-head K/V memory had this ever been
+                enabled. Does NOT change "mot" (the joint attention
+                still uses the custom cuBLAS kernel; FA4's plain
+                causal/non-causal API has no equivalent for that
+                shape, not evaluated here). Default False so every
+                existing caller is unaffected; still UNTESTED beyond
+                this class's own construction-time checks -- this
+                project has no Blackwell/Thor hardware to run FA4 on
+                directly (see PROJECT.md), so both the original pattern
+                and this fix were written by reasoning from the
+                already-proven Pi0.5 pattern and the real per-head
+                buffer layout, not independently verified end-to-end;
+                needs a real Thor run before flipping this on.
             use_perhead_kv: OPT-002 (opportunities.md). Dispatch BOTH
                 sites through the real per-head K/V kernels
                 (``attention_qkv_fp16_perhead`` /
@@ -902,31 +913,53 @@ class ImageWAMAttnBackend(AttentionBackendBase):
         kernel = site_spec.extra.get("kernel", "standard")
         if kernel == "standard":
             if self._use_fa4:
-                # OPT-005: same tensor-view/call pattern
-                # ThorFlashAttnBackend already uses (and has verified)
-                # for Pi0.5's own "encoder" site -- K/V as a single
-                # shared head (pack_gqa=True lets FA4 broadcast it
-                # across all NH query heads internally), matching this
-                # class's own existing K/V storage convention exactly
-                # (OPT-002's broadcast-K/V simplification), so no
-                # buffer-format change is needed here. `logits` is
-                # reused as FA4's own output scratch (FA4 cannot alias
-                # its Q input as output); the result is then copied
-                # into Q_O, matching Pi0.5's own pattern and this
-                # class's own pointer-stability contract (callers read
-                # the attention result from Q_O, not from `logits`).
+                # OPT-005, fixed 2026-09-14 for OPT-002's real per-head
+                # K/V (use_perhead_kv=True, now this class's own
+                # default -- see that flag's docstring). An earlier
+                # version of this branch hardcoded K/V as a single
+                # shared head with pack_gqa=True (the OLD broadcast-K/V
+                # convention this class used before OPT-002) -- with
+                # real per-head K/V, K_ptr/V_ptr actually point at
+                # `(kv_seq, NH*HD)` buffers; reading them as
+                # `(1,kv_seq,1,head_dim)` would silently use a
+                # row-stride of `head_dim` elements instead of the real
+                # `NH*head_dim`, misreading memory. Found (not yet run
+                # -- this project has no Blackwell/Thor hardware to
+                # verify FA4 on directly, see `use_fa4`'s own docstring)
+                # while auditing this class against OPT-002's per-head
+                # rewrite. Real per-head K/V needs NO GQA broadcast
+                # (num_kv_heads already equals num_q_heads), so
+                # `pack_gqa` must be False in that case; the OLD
+                # broadcast-K/V shape+pack_gqa=True path is kept for
+                # `use_perhead_kv=False` callers (none currently exist
+                # with `use_fa4=True` at once, but the combination was
+                # always documented as valid).
                 q_tensor = _fp16_tensor_from_ptr(
                     int(s["Q_O"]), (1, q_seq, site_spec.num_q_heads, site_spec.head_dim))
-                k_tensor = _fp16_tensor_from_ptr(
-                    K_ptr, (1, kv_seq, 1, site_spec.head_dim))
-                v_tensor = _fp16_tensor_from_ptr(
-                    V_ptr, (1, kv_seq, 1, site_spec.head_dim))
+                if self._use_perhead_kv:
+                    k_tensor = _fp16_tensor_from_ptr(
+                        K_ptr, (1, kv_seq, site_spec.num_q_heads, site_spec.head_dim))
+                    v_tensor = _fp16_tensor_from_ptr(
+                        V_ptr, (1, kv_seq, site_spec.num_q_heads, site_spec.head_dim))
+                    pack_gqa = False
+                else:
+                    k_tensor = _fp16_tensor_from_ptr(
+                        K_ptr, (1, kv_seq, 1, site_spec.head_dim))
+                    v_tensor = _fp16_tensor_from_ptr(
+                        V_ptr, (1, kv_seq, 1, site_spec.head_dim))
+                    pack_gqa = True
+                # `logits` is reused as FA4's own output scratch (FA4
+                # cannot alias its Q input as output); the result is
+                # then copied into Q_O, matching Pi0.5's own pattern
+                # and this class's own pointer-stability contract
+                # (callers read the attention result from Q_O, not
+                # from `logits`).
                 output = _fp16_tensor_from_ptr(
                     int(s["logits"]), (1, q_seq, site_spec.num_q_heads, site_spec.head_dim))
                 with self._fa4_stream_context(stream):
                     self._fa4_fwd(
                         q_tensor, k_tensor, v_tensor, causal=False,
-                        num_splits=1, pack_gqa=True, out=output)
+                        num_splits=1, pack_gqa=pack_gqa, out=output)
                     q_tensor.copy_(output)
                 return int(s["Q_O"])
             # attention_qkv_fp16's own softmax reinterprets each logits

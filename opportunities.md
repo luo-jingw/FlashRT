@@ -829,6 +829,34 @@ hardware, safe to turn on. Remaining work is threading `use_fa4=True`
 through the real benchmark scripts' backend construction and measuring
 the actual full-prefill delta, not just the isolated per-call number.
 
+## Real bug found and fixed (2026-09-14): FA4 dispatch never updated for OPT-002's per-head K/V
+
+The Thor result above (cosine=1.000000) was measured against the
+broadcast-K/V convention — `use_perhead_kv` did not exist yet at that
+point. After OPT-002's real-math rewrite made `use_perhead_kv=True`
+this class's own DEFAULT, `ImageWAMAttnBackend.run()`'s FA4 branch was
+never revisited: it still hardcoded `k_tensor`/`v_tensor` as
+`(1,kv_seq,1,head_dim)` with `pack_gqa=True` (the broadcast shape),
+which would silently misread real per-head K/V memory (a `(kv_seq,
+NH*HD)` buffer read with a row-stride of only `head_dim` elements)
+had `use_fa4=True` ever been combined with the now-default
+`use_perhead_kv=True` — not a hypothetical, this project's own stated
+plan (this file's mechanism-integration entry in `PROJECT.md`) is to
+flip `use_fa4=True` on by default for "backbone" next.
+
+Found by auditing this method against OPT-002 directly (not by
+running it — still no Blackwell/Thor hardware locally to execute FA4
+at all). Fixed: the branch now checks `self._use_perhead_kv` and picks
+`(1,kv_seq,num_q_heads,head_dim)` + `pack_gqa=False` for the real
+per-head case, keeping the original `(1,kv_seq,1,head_dim)` +
+`pack_gqa=True` shape only for `use_perhead_kv=False` callers. Added
+`tests/test_imagewam_fa4_backbone.py::test_fa4_matches_cublas_backbone_attention_perhead`
+to cover the new branch specifically (the original test only exercises
+`pack_gqa=True` and would not have caught this). Both tests still only
+confirm a clean skip on this machine — **this fix is unverified until
+run on Thor**; do not flip `use_fa4=True` on by default without that
+confirmation first.
+
 # OPT-006
 
 Status: not promoted
