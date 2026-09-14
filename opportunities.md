@@ -42,11 +42,16 @@ target machine and the current structural plan's phases are complete.
 
 # OPT-002
 
-Status: not promoted
+Status: kernel-level RESOLVED (real per-head K/V, RoPE, QK-Norm, real
+mask all implemented and verified, including combined); NOT YET wired
+into `pipeline_thor.py`/`_imagewam_thor_spec.py`, and NOT YET validated
+against a real checkpoint (no checkpoint file available locally)
 
-Area: ImageWAM backbone/action-expert attention — real per-head K/V
+Area: ImageWAM backbone/action-expert attention — real per-head K/V,
+and (found while starting this work) real RoPE, real QK-Norm, and a
+real attention mask, none of which this project had ever modeled
 
-## Observation
+## Observation (original)
 
 The Thor kernels this plan's backbone forward calls through
 `ImageWAMAttnBackend` (`attention_qkv_fp16`, `attention_qkv_fp16_mot_joint`)
@@ -60,33 +65,108 @@ consequence — a genuine architectural simplification of ImageWAM's
 real attention mechanism, separate from (and in addition to) the
 random-vs-real-weight difference tracked in OPT-001.
 
-## Opportunity
+## Scope correction: three MORE real gaps found while starting this work
 
-Write a real per-head-K/V masked attention kernel (K/V shaped
-`(seq, NH, HD)` like Q, not `(seq, HD)`) for both the plain self-attention
-site ("backbone") and the three-region masked joint site ("mot"), and
-switch `_imagewam_thor_spec.py`'s K/V projection shapes back to full
-`hidden` width to match the real checkpoint's fused QKV tensor exactly.
+Fetched and read the real `black-forest-labs/flux2` source at the
+exact commit ImageWAM's own `docs/dependencies.md` pins
+(`50fe5162777813d869182b139e83b10743caef15`) to understand the real
+checkpoint's tensor layout for accuracy validation. This confirmed the
+project's real dims exactly (`Klein4BParams`: hidden_size=3072,
+num_heads=24, depth=5, depth_single_blocks=20, context_in_dim=7680,
+in_channels=128 — the last one also fixed a wrong VAE token-width
+guess, see the VAE section above) but also surfaced three more real
+math gaps this project had never modeled, beyond just per-head K/V:
 
-## Expected Mechanism
+1. **RoPE**: real FLUX.2 applies a 4-axis rotary position embedding to
+   Q/K before attention (`axes_dim=[32,32,32,32]` summing to
+   `head_dim=128` — axis 0 = constant "time" value, axis 1 = image row,
+   axis 2 = image column, axis 3 = a running index used by text only).
+   No kernel in this project applied any RoPE at all before this.
+2. **QK-Norm**: real FLUX.2 applies an independent, learned per-head
+   RMSNorm to Q and K before RoPE (`QKNorm`/`RMSNorm` in the real
+   source). Not modeled anywhere in this project before this.
+3. **Real attention mask**: real `causal_attn_fn` is NOT plain unmasked
+   self-attention (this project's own "backbone" naming assumption) —
+   text+image attend to everything, but reference-image tokens attend
+   ONLY to themselves. For ImageWAM's real `infer_action_flux2` action-
+   inference path specifically, the target-image group is always empty
+   (0 tokens), reducing this to two groups: txt (sees everything) and
+   ref-image / the camera observation (sees only itself, never text).
 
-Same cuBLAS-composed pattern already used (QK^T GEMM -> fused masked
-softmax -> PV GEMM), extended to batch over `NH` independent K/V sets
-instead of broadcasting one shared set — likely a batched/strided
-cuBLAS GEMM (`cublasGemmStridedBatchedEx`) rather than a single big GEMM,
-since each head now has its own K/V.
+## Implemented and verified (kernel level + combined)
 
-## Required Evidence
+- `attention_qkv_fp16_perhead` / `attention_qkv_fp16_mot_joint_action_perhead`
+  (`csrc/kernels/attention_cublas.cu/.cuh`): real per-head K/V via
+  `cublasGemmStridedBatchedEx`, for "backbone" (plain) and "mot" (the
+  existing 3-region mask) respectively. Wired into `ImageWAMAttnBackend`
+  via an opt-in `use_perhead_kv` flag (default off, mirrors `use_fa4`'s
+  pattern). Verified at the kernel level (small shape + real dims,
+  cosine=1.0 vs a PyTorch reference, and vs the existing broadcast
+  kernel with shared-across-heads K/V) and at the backend/dispatch
+  level (`tests/test_imagewam_perhead_attention_kernel.py`,
+  `tests/test_imagewam_attn_backend.py`).
+- `rope_apply_fp16_perhead` (`csrc/kernels/rope.cu/.cuh`) +
+  `flash_rt/models/imagewam/rope.py` (Python precompute of the real
+  4-axis position table). Verified bit-exact against the real,
+  unmodified upstream file at the pinned commit (not committed to this
+  repo), and against an independent from-scratch transcription of the
+  same real formula in `tests/test_imagewam_rope_kernel.py` (small
+  shape + real dims, cosine=1.0).
+- QK-Norm needs **no new kernel** — `rms_norm_fp16` already computes
+  the exact real formula per (token, head) row, confirmed in
+  `tests/test_imagewam_qknorm_reuse.py` (small shape, real dims, and an
+  in-place-safety check, all cosine=1.0).
+- `attention_qkv_fp16_backbone_ref_masked_perhead`
+  (`csrc/kernels/attention_cublas.cu/.cuh` +
+  `softmax_backbone_ref_masked_fp16` in `softmax.cu/.cuh`): the real
+  2-group mask, built real-per-head from the start. Verified against an
+  independent PyTorch reference (small shape + real dims, cosine=1.0)
+  AND a direct behavioral perturbation check (a ref row's output is
+  provably unchanged when only txt-side K/V move, a txt row's output
+  does change when ref-side K/V move) in
+  `tests/test_imagewam_backbone_ref_masked_kernel.py`.
+- `flash_rt/models/imagewam/real_backbone_attn.py`: chains all three
+  (QK-Norm -> RoPE -> masked attention, the REAL order, confirmed from
+  `DoubleStreamBlock`/`SingleStreamBlock` directly) into one real
+  backbone-attention call. Verified against an independent PyTorch
+  reference composing the same three real formulas in the same real
+  order, at both a small shape and real dims (cosine=1.0 both) in
+  `tests/test_imagewam_real_backbone_attention.py` — this catches
+  ordering/interface bugs a per-piece test can't see.
 
-Only matters once real checkpoint weights are being loaded (OPT-001)
-— a random-weight structural dry run does not need real per-head
-fidelity to test wiring, pointer contracts, or shapes.
+## Still open
+
+- **NOT wired into `pipeline_thor.py`/`_imagewam_thor_spec.py`** — all
+  of the above lives in new, additive modules and tests; the actual
+  pipeline still uses the old broadcast-K/V, no-RoPE, no-QK-Norm,
+  no-mask "standard" kernel path by default. Wiring this in means
+  changing `_imagewam_thor_spec.py`'s K/V projection width back to full
+  `hidden` (matching the real checkpoint's fused QKV tensor) and adding
+  QKNorm/RoPE weight+buffer plumbing to `pipeline_thor.py` itself.
+- **Still missing, not investigated**: AdaLN modulation (the real
+  time-embedding-driven shift/scale/gate mechanism), LayerNorm (the
+  real blocks use `elementwise_affine=False` LayerNorm, not RMSNorm,
+  for the main residual-stream normalization — separate from QKNorm),
+  and the exact MLP/residual structure. `real_backbone_attn.py`'s own
+  docstring flags these explicitly as out of scope for the attention-
+  only combination done so far.
+- **No real checkpoint file available locally** — everything above is
+  verified against PyTorch references of the real published formulas,
+  not against real trained weights. Real end-to-end accuracy validation
+  (the original goal that surfaced all of this) still needs a real
+  checkpoint, which only exists on Thor per the user's own statement.
+- "mot" site's own real mask/RoPE/QKNorm requirements not yet
+  investigated — this work so far only covered "backbone"; the
+  ActionDiT expert and the joint "mot" attention likely have their own
+  analogous (possibly different) real requirements, unchecked.
 
 ## Promotion Condition
 
-Promote alongside OPT-001, when real-weight accuracy validation
-begins and a broadcast-K/V approximation is shown to diverge from the
-reference implementation.
+Kernel-level math promoted (verified real, not a hypothesis). Full
+promotion (default-on in the real pipeline) blocked on the "still
+open" items above, especially AdaLN modulation/LayerNorm (needed for
+ANY real block-level forward, not just attention) and real checkpoint
+access.
 
 # OPT-003
 
