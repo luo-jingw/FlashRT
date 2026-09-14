@@ -159,6 +159,41 @@ Do not record token values or other secrets here.
   calibration, and accuracy validation. These are deferred, not
   abandoned — they require real weights and calibration data this
   stage does not use.
+- **Confirmed end goal (2026-09-14, explicit user direction): this
+  targets real Thor deployment, not an indefinitely-scoped structural
+  dry run.** `pipeline_thor.py`/`_imagewam_thor_spec.py`/
+  `flash_rt/frontends/torch/imagewam_thor.py` should converge toward
+  the SAME standard implementation framework FlashRT's other real
+  Thor deployments already use (Pi0.5's own `pipeline_thor.py` +
+  frontend is the reference pattern to align with: pointer-owned
+  steady-state buffers, one CUDA Graph capture/replay, the
+  `AttentionBackendBase` protocol, real checkpoint loading) — not kept
+  as a permanent parallel/throwaway "correctness only" path. The
+  `real_*.py`/`pipeline_real.py` modules under
+  `flash_rt/models/imagewam/` (opportunities.md OPT-002) are the
+  verified real-math building blocks for that convergence, not a
+  separate destination in themselves.
+- **Real checkpoint testing happens ONLY on Thor, never on this
+  machine — this has been stated multiple times, stop re-asking.** The
+  user has HF access and has already downloaded
+  `yuyangalin/ImageWAM-FLUX.2-4B-LIBERO` on the Thor machine; this dev
+  machine has no checkpoint, no `imagewam` package, and no `flux2`
+  package, and never will for this project's normal workflow. Any
+  real-checkpoint-dependent verification is written here (dev machine)
+  as a script/test with clear instructions, then handed to the user to
+  run on Thor and report back — see `benchmarks/imagewam_real_checkpoint_validation.py`
+  for the established pattern. Confirmed real environment details from
+  that first real run (2026-09-14, cosine=0.999927 backbone /
+  0.999963 ActionDiT): checkpoint file is `model.pt` (not
+  `checkpoint.pt`), sibling config is `config.yaml` (not
+  `train_config.yaml`), `action_dim=7` (LIBERO 7-DoF), `imagewam`
+  installed via `PYTHONPATH=<repo>/src` (NOT `pip install -e .` --
+  that downgrades Thor's `torch==2.9.1+cu130` to `2.7.1` via the
+  package's own pinned deps), `FLUX2_SRC` points at `flux2` cloned at
+  pinned commit `50fe5162777813d869182b139e83b10743caef15`,
+  `model.load_checkpoint` reported `missing_keys=0 unexpected_keys=0`
+  (the LoRA-merge branch flagged as a possible complication was a
+  non-issue for this release).
 
 ## Onboarding
 
