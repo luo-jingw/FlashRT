@@ -1521,3 +1521,261 @@ itself (the actual served pipeline, and every `imagewam_thor_*_bench.py`
 script) is unchanged and still uses the old approximate math by
 default. Wiring the validated real math into the actual serving path
 is the next real piece of work, not yet started.
+
+**Superseded 2026-09-14**: this was fully done afterward — see
+`opportunities.md` OPT-002's own final entries and the "# Plan: OPT-004
+step 5" section below for what followed. `pipeline_thor.py` is now the
+real-math path by default; the mechanism-integration plan below is the
+current active one.
+
+---
+
+# Plan: OPT-004 step 5 — FP8/NVFP4 quantized GEMM for ImageWAM
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+`pipeline_thor.py`'s real-math layer functions (OPT-002, confirmed
+Thor-verified this session, further sped up by OPT-004 steps 1-4 —
+autotune, QKV fusion, fused AdaLN/gated-residual kernels, FA4, all
+four combined giving a real -23% backbone-prefill win on Thor) run
+EVERY GEMM in plain FP16 (`gemm.fp16_nn`). FlashRT already has proven,
+working FP8 (`fvk.quantize_fp8_device_fp16` + `fvk.fp8_gemm_descale_fp16`)
+and NVFP4 (`quant_act_nvfp4` + `fp4_gemm`) quantization primitives,
+but they are only exercised inside `benchmarks/imagewam_thor_fp8_bench.py`/
+`imagewam_thor_fp4_bench.py` — standalone scripts that (confirmed by
+direct inspection) still model the OLD approximate math (broadcast K/V
+at `HD` width via `_zeros_fp16(num_layers, TOTAL, HD)`, the OLD
+`make_imagewam_attention_spec` override-after-construction calling
+convention) and do not import or touch `pipeline_thor.py` at all.
+
+Previously measured wins (OLD approximate math, real FLUX.2 dims, real
+Thor hardware, from this file's own now-superseded tables above): FP8
+dynamic-scale ~1.07x full-pipeline, NVFP4 ~1.19x full-pipeline. INT8/
+INT4 are closed dead ends (OPT-006/007, unrelated to this plan).
+
+A related project (pi0.5_ggml, cross-session memory `pi05_fp8_quant_scheme_candidates`
+ISSUE-018) found that an FP8 kernel written for/tuned on Ada does NOT
+automatically reach Thor's own native FP8 tensor cores when merely
+recompiled for sm_110 — real Thor hardware there showed F16 beating
+FP8 by MORE (1.58x) than Ada did (1.22x), the opposite of what a
+genuine Thor-native FP8 kernel should show. That is a DIFFERENT kernel
+family (ggml-cuda's own CUDA kernels, not FlashRT's `fp8_gemm_descale_fp16`/
+`fp4_gemm`) — whether FlashRT's own kernels have this same gap is
+UNKNOWN and must be checked before trusting any number this plan
+produces (see Phase 0).
+
+### Problem
+
+No path exists to run ImageWAM's CURRENT real math (post-OPT-002:
+real per-head K/V, fused QKV at 3x width, real MLP-gate at
+`mlp_hidden*2` width, fused AdaLN kernels — all now `pipeline_thor.py`'s
+own defaults) at a quantized precision at all. The existing FP8/FP4
+evidence is measured against different (old, narrower) shapes and a
+disconnected code path, so it cannot be trusted to predict this
+plan's own result.
+
+### Measurable goal
+
+Quantized (FP8 and/or NVFP4) GEMM wired into `pipeline_thor.py`'s
+actual real-math layer functions as an opt-in construction parameter
+(matching the `use_perhead_kv`/`use_real_mot_mask`/`use_fa4`
+precedent), verified for correctness (cosine against the FP16
+real-math reference, at a LOSSY-precision tolerance — e.g. >0.99, NOT
+the >0.999 bar used for every FP16-only mechanism change so far, since
+quantization is genuinely lossy) and for real per-layer/full-prefill
+speed on Thor hardware, at the CURRENT real-math shapes.
+
+## Structure
+
+- `flash_rt/models/imagewam/pipeline_thor.py` — OWNS per-layer GEMM
+  dispatch. Every weight-projection `gemm.fp16_nn(...)` call site
+  becomes a uniform call through a uniform "linear op" object,
+  independent of which precision that object was built with.
+- NEW `flash_rt/models/imagewam/quant_linear.py` — OWNS the linear-op
+  classes (`Fp16Linear` passthrough, `Fp8Linear`, `Nvfp4Linear`),
+  promoting the ALREADY-PROVEN `_Fp8Linear`/`_Fp4Linear` pattern from
+  the disconnected benchmark scripts into a real, importable, reusable
+  module. The underlying KERNELS are not new (Phase 0 decides whether
+  they need to be); this module is new glue code, not new CUDA.
+- `flash_rt/frontends/torch/imagewam_thor.py` — OWNS frontend
+  construction; gains a `precision: str = "fp16"` parameter, threaded
+  into weight allocation (each real weight tensor gets wrapped in the
+  selected linear-op class ONCE at construction, matching the
+  autotune/FA4 opt-in precedent already in this file).
+- `flash_rt/frontends/torch/_imagewam_thor_spec.py` — UNCHANGED.
+  Quantization is a storage-format/dispatch choice, not a shape
+  change.
+- `benchmarks/imagewam_thor_bench.py` — OWNS per-layer speed
+  measurement; gains the same `precision=`/env-toggle pattern just
+  established for `IMAGEWAM_USE_FA4` (OPT-005), so this plan reports
+  through the SAME already-trusted harness instead of a fourth
+  parallel disconnected script.
+- The 5 existing `imagewam_thor_{fp16,fp8,fp4,int8,int4}_bench.py`
+  scripts stay OUT OF SCOPE (already flagged elsewhere as stale;
+  updating them to real-math shapes is separate, not-yet-started work).
+
+State ownership: quantized weight copies are owned by the SAME
+`self._weights` dict `imagewam_thor.py` already owns — each dict value
+becomes a linear-op OBJECT (callable) instead of a raw pointer int,
+not a second parallel structure. Open decision for Phase 1: whether
+random-weight dry-run mode should skip allocating the now-redundant
+FP16 copy once a weight is quantized (saves memory, adds a branch) or
+just keep both (simpler, matches this stage's own "not yet
+memory-optimized" scope) — default to keeping both unless it blocks
+something.
+
+## Interface
+
+```python
+# flash_rt/models/imagewam/quant_linear.py
+class Fp16Linear:
+    def __init__(self, gemm, weight_ptr: int, n: int, k: int): ...
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None: ...
+
+class Fp8Linear:
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int): ...  # quantizes once
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None: ...
+    # internally: quantize_fp8_device_fp16(activation) -> fp8_gemm_descale_fp16
+
+class Nvfp4Linear:
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int): ...
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None: ...
+    # internally: quant_act_nvfp4(activation) -> fp4_gemm
+```
+
+`pipeline_thor.py` call-site change (mechanical, applied at every
+weight-projection site in all 4 layer functions):
+```python
+# before:
+gemm.fp16_nn(modded, key("txt_qkv.weight"), txt_qkv_merged, x0, 3 * hidden, hidden, stream)
+# after:
+key("txt_qkv.weight")(modded, txt_qkv_merged, x0, stream)
+```
+`key(slot)` now returns the linear-op OBJECT (built once at
+construction), not a raw pointer — `weights` dict values change type
+uniformly. Non-weight-projection calls (QKV-slice copies, QK-Norm,
+RoPE, attention, SiLU-GLU) are UNCHANGED — precision only touches the
+weight-projection GEMMs, matching what the existing benchmark scripts
+already scope FP8/FP4 to.
+
+## Flow
+
+1. `imagewam_thor.py.__init__`: allocate real FP16 weight tensors (as
+   today) → for each, construct the linear-op object selected by
+   `precision` (`Fp16Linear` wraps the plain pointer + `gemm`;
+   `Fp8Linear`/`Nvfp4Linear` quantize the weight once) → store the
+   OBJECT (not a raw int) as the `self._weights` dict value.
+2. Per layer: every call site is now `key(slot)(x_ptr, out_ptr, m, stream)`
+   uniformly; no precision branching inside `pipeline_thor.py` itself.
+3. Graph capture: unaffected in shape/mechanism — quantization becomes
+   "what happens inside one call," still fully capturable (same
+   graph-safety reasoning already established this session for
+   `_fuse_mod_group`/autotune).
+
+## Code Mapping
+
+| module | file | task |
+|---|---|---|
+| linear-op classes | `flash_rt/models/imagewam/quant_linear.py` (new) | `Fp16Linear`/`Fp8Linear`/`Nvfp4Linear` |
+| GEMM dispatch | `flash_rt/models/imagewam/pipeline_thor.py` | every weight-projection call site → `key(slot)(...)` |
+| frontend construction | `flash_rt/frontends/torch/imagewam_thor.py` | `precision=` param, weight-wrapping |
+| per-layer bench | `benchmarks/imagewam_thor_bench.py` | matching `precision=`/env toggle |
+| correctness tests | `tests/test_imagewam_quant_linear.py` (new) | Fp8/Nvfp4 vs Fp16 cosine, small dims |
+| wiring re-check | `tests/test_imagewam_thor_real_wiring.py` | extend to cover a quantized pass at lossy tolerance |
+| record | `opportunities.md` OPT-004 | final "step 5" entry once measured |
+
+## Implementation Phases
+
+### Phase 0 — research, BLOCKING, no code
+
+Phase Status: completed
+
+Goal: resolve whether `fp8_gemm_descale_fp16`/`fp4_gemm` are already
+Thor-native (sm_110 in their own build target list, or a genuinely
+per-arch-tuned dispatch) or Ada-bound, mirroring pi0.5_ggml's own
+ISSUE-018 finding for a DIFFERENT kernel family.
+
+**Result: NOT the pi0.5_ggml gap. Both kernels are Thor-aware by
+construction, for two different reasons:**
+
+- **`fp4_gemm`** (`csrc/gemm/fp4/cutlass_fp4_gemm.cu`): a genuine
+  CUTLASS 4.x kernel (CUTLASS's own example 72a, Blackwell NVFP4x
+  NVFP4→bf16, adapted for fp16 output), explicitly gated by
+  `ENABLE_SM100_CUTLASS` and built with `-arch=sm_110a`/`sm_100a` (the
+  `'a'` suffix required for `TCGEN05_MXF4_MMA`, a Blackwell-generation
+  tensor-core MMA instruction — confirmed by reading the kernel
+  source's own top-of-file comment directly). `CMakeLists.txt:43-44`
+  confirms `GPU_ARCH=110` (Thor) sets `ENABLE_SM100_CUTLASS=ON`
+  automatically. This is compiled FOR Thor's own tensor-core
+  generation, not a recompiled Ada kernel — the ~1.19x real Thor
+  number already on record is trustworthy as a genuine Thor-native
+  result.
+- **`fp8_gemm_descale_fp16`** (`csrc/kernels/decoder_fused.cu:310`):
+  NOT a custom hand-written kernel at all — it's a `cublasLtMatmul`
+  call (NVIDIA's own vendor library), which dispatches to whatever
+  tensor-core path is appropriate for the ACTUAL GPU it runs on via
+  its own internal heuristic (`cublasLtMatmulAlgoGetHeuristic`) — this
+  is architecturally the opposite situation from pi0.5_ggml's own
+  custom, hand-tuned-for-Ada CUDA kernel. The only residual, much
+  lower-severity question is whether cuBLASLt's own tactic selection
+  is AS WELL-TUNED for Thor's FP8 tensor cores as for Ada's (a vendor-
+  library maturity question, not a "wrong architecture entirely"
+  question) — not something this project's own code can fix either
+  way, and not blocking.
+
+Modified files: none. Affected modules: none (pure investigation).
+Conclusion: proceed to Phase 1 — no reason to expect either kernel
+undershoots Thor's real potential the way pi0.5_ggml's did.
+
+### Phase 1 — `quant_linear.py` + FP8 wiring, correctness only, small dims
+
+Phase Status: pending
+
+Goal: `Fp16Linear`/`Fp8Linear` implemented and cosine-verified against
+the FP16 real-math reference, small test dims, no speed measurement.
+Modified files: new `flash_rt/models/imagewam/quant_linear.py`;
+`pipeline_thor.py` (call-site interface change); new
+`tests/test_imagewam_quant_linear.py`.
+Affected modules: `pipeline_thor.py`'s dispatch layer only — no
+weight-shape, attention, or AdaLN changes.
+Observation method: cosine check (>0.99) for one layer of each of the
+4 real-math layer types (double/single backbone, double/single
+action), FP8 vs. the already-trusted FP16 reference.
+
+### Phase 2 — NVFP4 wiring, same bar
+
+Phase Status: pending
+
+Goal: `Nvfp4Linear`, same verification pattern as Phase 1.
+Modified files: `quant_linear.py`, tests.
+Affected modules: same as Phase 1.
+Observation method: same cosine bar, NVFP4 vs. FP16 reference.
+
+### Phase 3 — frontend + per-layer benchmark integration
+
+Phase Status: pending
+
+Goal: `imagewam_thor.py`'s `precision=` param; `imagewam_thor_bench.py`'s
+matching toggle; real per-layer timing at real FLUX.2 dims (Ada first
+-- correctness doesn't need Thor, timing here is only a sanity check
+given OPT-004's own repeated Ada-underestimates-Thor pattern).
+Modified files: `imagewam_thor.py`, `imagewam_thor_bench.py`.
+Affected modules: frontend construction, bench harness.
+Observation method: per-layer P50 table (FP16 vs FP8 vs NVFP4), same
+style as every other OPT-004 step's own table.
+
+### Phase 4 — real Thor measurement + close-out
+
+Phase Status: pending
+
+Goal: hand to the user for a real Thor correctness + speed run,
+following the exact checklist pattern already established for OPT-004
+steps 1-4.
+Modified files: `opportunities.md` only (recording the result).
+Affected modules: none (measurement only).
+Observation method: Thor cosine + P50 table, compared against the
+104.7ms real-math prefill baseline OPT-004/OPT-005 already established.
