@@ -65,6 +65,7 @@ def real_double_stream_block_forward_fp16(
     rope_table: torch.Tensor,
     NH: int, HD: int, hidden: int, mlp_hidden: int,
     attn_scale: float,
+    *, return_kv: bool = False,
 ):
     """txt: (x0, hidden) fp16. img: (img_len, hidden) fp16. Both updated
     and returned (new tensors, not in-place, for test clarity).
@@ -77,6 +78,17 @@ def real_double_stream_block_forward_fp16(
 
     `mod_txt`/`mod_img`: `((shift1,scale1,gate1), (shift2,scale2,gate2))`
     from `flash_rt.models.imagewam.adaln.modulation(..., double=True)`.
+
+    `return_kv`: when True, also returns this layer's own post-QKNorm+
+    RoPE per-head `(K, V)` (each `(x0+img_len, NH, HD)`, in the same
+    `[txt | img]` row order as this block's own combined attention
+    call) -- needed by `pipeline_real.imagewam_full_forward_real` to
+    build the per-layer frozen K/V cache the action expert's joint
+    attention reads later (see `real_action_expert.py`'s own
+    `cached_k`/`cached_v` parameters). Returns `(txt, img, K, V)`
+    instead of `(txt, img)` when set; default False keeps every
+    existing caller (`imagewam_prefill_real`, this module's own tests)
+    unaffected.
     """
     x0, img_len = txt.shape[0], img.shape[0]
     total = x0 + img_len
@@ -176,4 +188,6 @@ def real_double_stream_block_forward_fp16(
     txt = apply_gated_residual(txt.float(), txt_mlp_out.float(), txt_gate2[0].float()).to(FP16)
     img = apply_gated_residual(img.float(), img_mlp_out.float(), img_gate2[0].float()).to(FP16)
 
+    if return_kv:
+        return txt, img, K, V
     return txt, img

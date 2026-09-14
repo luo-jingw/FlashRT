@@ -47,12 +47,18 @@ from __future__ import annotations
 
 import torch
 
+import flash_rt.flash_rt_kernels as fvk
 from flash_rt.models.imagewam.adaln import mlp_embedder, modulation, timestep_embedding_real
+from flash_rt.models.imagewam.real_action_expert import (
+    real_action_double_block_forward_fp16,
+    real_action_single_block_forward_fp16,
+)
 from flash_rt.models.imagewam.real_double_stream_block import real_double_stream_block_forward_fp16
 from flash_rt.models.imagewam.real_single_stream_block import real_single_stream_block_forward_fp16
 
 DEV = "cuda"
 FP16 = torch.float16
+F32 = torch.float32
 
 
 def compute_shared_modulation(timestep: torch.Tensor, weights: dict, hidden: int):
@@ -75,7 +81,8 @@ def imagewam_prefill_real(
     rope_table: torch.Tensor,
     NH: int, HD: int, hidden: int, mlp_hidden: int,
     attn_scale: float,
-) -> torch.Tensor:
+    *, collect_kv_cache: bool = False,
+):
     """Real 25-layer backbone prefill (5 double + 20 single). Returns
     the final combined [txt | img] sequence (total, hidden).
 
@@ -85,17 +92,158 @@ def imagewam_prefill_real(
     Modulation is SHARED across all layers of a given stream type
     (real architecture property, not a simplification) -- computed
     once via `compute_shared_modulation` and passed in here.
+
+    `collect_kv_cache`: when True, also returns a 25-entry list of this
+    forward's own per-layer, post-QKNorm+RoPE `(K, V)` (each
+    `(x0+img_len, NH, HD)`) -- the FROZEN cache
+    `imagewam_full_forward_real`'s action-expert denoise loop reads via
+    `real_action_double_block_forward_fp16`/`real_action_single_block_forward_fp16`'s
+    own `cached_k`/`cached_v` parameters, in the same double-then-single
+    layer order used everywhere else in this module. Returns
+    `(combined, kv_cache)` instead of `combined` when set; default
+    False keeps every existing caller unaffected.
     """
     x0 = txt.shape[0]
+    kv_cache = [] if collect_kv_cache else None
     for w in double_layer_weights:
-        txt, img = real_double_stream_block_forward_fp16(
-            gemm, ctx, txt, img, w, mod_double_txt, mod_double_img,
-            rope_table, NH, HD, hidden, mlp_hidden, attn_scale)
+        if collect_kv_cache:
+            txt, img, K, V = real_double_stream_block_forward_fp16(
+                gemm, ctx, txt, img, w, mod_double_txt, mod_double_img,
+                rope_table, NH, HD, hidden, mlp_hidden, attn_scale, return_kv=True)
+            kv_cache.append((K, V))
+        else:
+            txt, img = real_double_stream_block_forward_fp16(
+                gemm, ctx, txt, img, w, mod_double_txt, mod_double_img,
+                rope_table, NH, HD, hidden, mlp_hidden, attn_scale)
 
     combined = torch.cat([txt, img], dim=0).contiguous()
     for w in single_layer_weights:
-        combined = real_single_stream_block_forward_fp16(
-            gemm, ctx, combined, w, mod_single,
-            rope_table, NH, HD, hidden, mlp_hidden, attn_scale)
+        if collect_kv_cache:
+            combined, K, V = real_single_stream_block_forward_fp16(
+                gemm, ctx, combined, w, mod_single,
+                rope_table, NH, HD, hidden, mlp_hidden, attn_scale, return_kv=True)
+            kv_cache.append((K, V))
+        else:
+            combined = real_single_stream_block_forward_fp16(
+                gemm, ctx, combined, w, mod_single,
+                rope_table, NH, HD, hidden, mlp_hidden, attn_scale)
 
+    if collect_kv_cache:
+        return combined, kv_cache
     return combined
+
+
+def compute_action_modulation(timestep: torch.Tensor, weights: dict, hidden: int):
+    """Same shape as `compute_shared_modulation`, for ActionDiT's own
+    weights. `weights` keys: `time_in_w1`, `time_in_w2` (ActionDiT's
+    own `time_in` MLPEmbedder -- a SEPARATE weight set from the
+    backbone's, confirmed from `mot.py`: each expert owns its own
+    `time_in`), `mod_double` (`(6*hidden,hidden)`, double=True --
+    ActionDiT's double block is img-only, so there is only ONE
+    double-type modulation here, unlike the backbone's separate
+    txt/img pair), `mod_single` (`(3*hidden,hidden)`, double=False).
+    Returns `(mod_double, mod_single)`.
+    """
+    emb = timestep_embedding_real(timestep)
+    vec = mlp_embedder(emb, weights["time_in_w1"], weights["time_in_w2"])
+    mod_double = modulation(vec, weights["mod_double"], double=True)
+    mod_single, _ = modulation(vec, weights["mod_single"], double=False)
+    return mod_double, mod_single
+
+
+def imagewam_full_forward_real(
+    gemm, ctx,
+    txt: torch.Tensor, img: torch.Tensor, action_latent: torch.Tensor,
+    backbone_double_weights: list[dict], backbone_single_weights: list[dict],
+    backbone_shared_weights: dict,
+    action_double_weights: list[dict], action_single_weights: list[dict],
+    action_shared_weights: dict,
+    backbone_rope_table: torch.Tensor, action_rope_table: torch.Tensor,
+    NH: int, HD: int, hidden: int, mlp_hidden: int,
+    action_hidden: int, action_mlp_hidden: int,
+    attn_scale: float,
+    num_denoise_steps: int,
+    *, backbone_timestep: float = 0.0,
+) -> torch.Tensor:
+    """The FULL real ImageWAM forward: one backbone prefill (producing
+    the frozen per-layer K/V cache) followed by the whole ActionDiT
+    flow-matching denoise loop, reading that cache through the real
+    (unmasked -- opportunities.md's mask correction) joint attention.
+    Extends `imagewam_prefill_real`'s own backbone-only scope to the
+    complete model, still a **correctness-verification path, not a
+    steady-state performance path** (same caveat as every function in
+    this module -- fresh buffer allocation every call, no CUDA Graph,
+    no `pipeline_thor.py` wiring; see opportunities.md OPT-002 for what
+    a real steady-state port still needs).
+
+    Real per-forward structure, following `imagewam_prefill_real`'s own
+    backbone loop plus `mot.py`'s `forward_flux2_action_with_video_cache`
+    called once per denoise step (`infer_action_flux2`'s own loop):
+
+        combined, kv_cache = imagewam_prefill_real(..., collect_kv_cache=True)
+        for step in range(num_denoise_steps):
+            action_timestep = 1.0 - step / num_denoise_steps   # flow-matching schedule
+            mod_double, mod_single = compute_action_modulation(action_timestep, ...)
+            action = action_latent (cast to fp16)
+            for i, w in enumerate(action_double_weights):
+                action = real_action_double_block_forward_fp16(..., cached_k=kv_cache[i][0], cached_v=kv_cache[i][1], ...)
+            for i, w in enumerate(action_single_weights):
+                action = real_action_single_block_forward_fp16(..., cached_k=kv_cache[5+i][0], cached_v=kv_cache[5+i][1], ...)
+            action_latent = action_latent + dt * action   # Euler step, dt = 1/num_denoise_steps
+
+    **Two structural approximations, both already established elsewhere
+    in this codebase (not new to this function), documented explicitly**:
+    (1) the backbone's own conditioning timestep is fixed at
+    ``backbone_timestep=0.0`` (matching the exact value used by
+    `benchmarks/imagewam_real_checkpoint_validation.py`'s real-checkpoint
+    run, where `video_timestep = torch.zeros(1)` -- confirmed correct
+    there, cosine=0.999927 against the real reference; a real backbone
+    forward conditioned on a DIFFERENT timestep is not validated here);
+    (2) ActionDiT's own raw `action_latent` is fed directly into its
+    transformer blocks with no `action_encoder` (a real
+    `Linear(action_dim, hidden_dim)` WITH bias that projects raw,
+    small-width action values up to `action_hidden` first) --
+    `pipeline_thor.py`'s own dry-run pipeline makes this identical
+    simplification (`action_latent` allocated directly at
+    `action_hidden_dim` width, see its own module docstring); a real
+    action-dim projection head is real-checkpoint-dependent work, same
+    status as OPT-001.
+
+    `backbone_shared_weights`/`action_shared_weights`: see
+    `compute_shared_modulation`/`compute_action_modulation` for the
+    required keys.
+
+    Returns the final `action_latent` (float32, `(num_action,
+    action_hidden)`, the flow-matching output).
+    """
+    mod_txt, mod_img, mod_single_bb = compute_shared_modulation(
+        torch.full((1,), backbone_timestep, dtype=F32, device=DEV), backbone_shared_weights, hidden)
+    combined, kv_cache = imagewam_prefill_real(
+        gemm, ctx, txt, img, backbone_double_weights, backbone_single_weights,
+        mod_txt, mod_img, mod_single_bb, backbone_rope_table,
+        NH, HD, hidden, mlp_hidden, attn_scale, collect_kv_cache=True)
+    del combined  # only the per-layer kv_cache is read by the denoise loop below
+
+    num_action = action_latent.shape[0]
+    num_double = len(action_double_weights)
+    dt = 1.0 / num_denoise_steps
+    for step in range(num_denoise_steps):
+        action_timestep = 1.0 - step * dt
+        mod_double, mod_single = compute_action_modulation(
+            torch.full((1,), action_timestep, dtype=F32, device=DEV), action_shared_weights, action_hidden)
+
+        action = action_latent.to(FP16)
+        for i, w in enumerate(action_double_weights):
+            K, V = kv_cache[i]
+            action = real_action_double_block_forward_fp16(
+                gemm, action, w, mod_double, action_rope_table, K, V,
+                NH, HD, action_hidden, action_mlp_hidden, attn_scale)
+        for i, w in enumerate(action_single_weights):
+            K, V = kv_cache[num_double + i]
+            action = real_action_single_block_forward_fp16(
+                gemm, action, w, mod_single, action_rope_table, K, V,
+                NH, HD, action_hidden, action_mlp_hidden, attn_scale)
+
+        action_latent = action_latent + dt * action.float()
+
+    return action_latent

@@ -61,6 +61,7 @@ def real_single_stream_block_forward_fp16(
     rope_table: torch.Tensor,
     NH: int, HD: int, hidden: int, mlp_hidden: int,
     attn_scale: float,
+    *, return_kv: bool = False,
 ):
     """x: (total, hidden) fp16 -- the ALREADY-CONCATENATED [txt | img]
     combined sequence. Returns the updated x (new tensor).
@@ -72,6 +73,12 @@ def real_single_stream_block_forward_fp16(
 
     `mod`: `(shift, scale, gate)` from
     `flash_rt.models.imagewam.adaln.modulation(..., double=False)`.
+
+    `return_kv`: see `real_double_stream_block_forward_fp16`'s own
+    docstring -- same purpose, this block's own post-QKNorm+RoPE
+    per-head `(K, V)` over the whole `total` sequence. Returns
+    `(x, K, V)` instead of `x` when set; default False keeps every
+    existing caller unaffected.
     """
     total = x.shape[0]
     ctx_cpp = ctx.cpp if hasattr(ctx, "cpp") else ctx
@@ -119,4 +126,7 @@ def real_single_stream_block_forward_fp16(
     torch.cuda.synchronize()
 
     output = (from_attn.float() + from_mlp.float()).to(FP16)
-    return apply_gated_residual(x.float(), output.float(), gate[0].float()).to(FP16)
+    x_out = apply_gated_residual(x.float(), output.float(), gate[0].float()).to(FP16)
+    if return_kv:
+        return x_out, K, V
+    return x_out

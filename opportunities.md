@@ -271,6 +271,36 @@ math gaps this project had never modeled, beyond just per-head K/V:
   validated, not just theoretically verified.** The remaining gap is
   purely the wiring one already noted above: none of this is in
   `pipeline_thor.py`'s actual serving path yet.
+- **Real-math coverage extended from single-forward to the FULL model
+  (backbone + complete denoise loop)**: `pipeline_real.py`'s new
+  `imagewam_full_forward_real` runs one backbone prefill (extending
+  `imagewam_prefill_real` with a `collect_kv_cache=True` option that
+  returns each of the 25 layers' own post-QKNorm+RoPE per-head K/V,
+  needed by the action expert's joint attention) followed by the whole
+  ActionDiT flow-matching denoise loop over `num_denoise_steps`, with
+  action's own AdaLN modulation correctly recomputed every step from
+  that step's changing timestep (new `compute_action_modulation`,
+  mirroring `compute_shared_modulation`'s pattern for ActionDiT's own,
+  separate `time_in`/mod weights) and an Euler update between steps.
+  Verified (`tests/test_imagewam_pipeline_full_real.py`): a 1-denoise-
+  step run matches a manual reference built by calling the
+  already-verified lower-level block functions directly with the same
+  weights (cosine=1.000000) — checking specifically the NEW wiring this
+  function adds (per-layer K/V cache indexing between the backbone and
+  same-indexed action layer, per-step modulation recompute, the Euler
+  update), not re-verifying any single block's own math; a 4-step loop
+  produces finite, well-behaved output. Still explicitly a
+  **correctness-verification path, not steady-state** (fresh buffer
+  allocation every call, no CUDA Graph) — same status as every other
+  `real_*.py`/`pipeline_real.py` module; does not change what
+  `pipeline_thor.py` still needs (see above). Two structural
+  approximations carried over from `pipeline_thor.py`'s own established
+  dry-run convention, documented in `imagewam_full_forward_real`'s own
+  docstring: the backbone's own conditioning timestep is fixed at 0.0
+  (matches the real-checkpoint validation run above exactly); ActionDiT's
+  real `action_encoder` (`Linear(action_dim, hidden_dim)`, WITH bias)
+  is not modeled — raw `action_latent` is fed to the transformer blocks
+  directly, same simplification `pipeline_thor.py` already makes.
 
 ## Major correction: the real attention mask is NOT what this round built (found while investigating ActionDiT)
 
