@@ -807,7 +807,7 @@ Thor measurement.
 
 # OPT-005
 
-Status: RESOLVED — verified on real Thor hardware for BOTH broadcast K/V (cosine=1.000000, rel_l2=0.000412, 4.09x) and real per-head K/V (cosine=1.000000, rel_l2=0.000427/0.000614, 3.75x at real a0=896 dims, see the 2026-09-14 entry below); NOT YET wired into the real 25-layer prefill benchmarks or the frontend at all (still opt-in, off by default everywhere, and the frontend has no parameter to enable it yet)
+Status: RESOLVED and wired in as an opt-in — verified on real Thor hardware for BOTH broadcast K/V (cosine=1.000000, rel_l2=0.000412, 4.09x) and real per-head K/V (cosine=1.000000, rel_l2=0.000427/0.000614, 3.75x standalone); folded into the full per-layer benchmark (commit `2a4079b`), confirming a real -10.5% prefill win on top of OPT-004's steps 1-3. Opt-in via `use_fa4=` (frontend) / `IMAGEWAM_USE_FA4=1` (bench script), default False since this dev machine's own Ada GPU has no FA4 runtime.
 
 Area: FA4 for the "backbone" site's plain self-attention (faster kernel; does NOT independently fix OPT-002's broadcast-K/V, see correction below)
 
@@ -976,18 +976,43 @@ is stable). Both the correctness fix AND the original 4x-class speedup
 now hold for the real per-head convention this project actually uses
 by default.
 
-**Still not wired into the main per-layer/pipeline benchmark or the
-frontend** — `imagewam_thor_bench.py`'s own per-layer numbers (see
-OPT-004's "Step 3" real Thor confirmation) do NOT include this
-speedup yet (`_make_1layer_backend` still constructs
-`ImageWAMAttnBackend` without `use_fa4=True`); `ImageWAMTorchFrontendThor`
-itself has no way to enable it at all yet. This is the concrete
-next step -- add an explicit `use_fa4` opt-in parameter (NOT a
-default-True flip, since this dev machine's own Ada GPU has no FA4
-runtime and `ImageWAMAttnBackend`'s constructor raises if `use_fa4=True`
-without one -- defaulting it on would break every local test/frontend
-construction here) and re-measure the per-layer/prefill numbers with
-it enabled on Thor.
+**Wired in as an opt-in (commit `2a4079b`)** — `ImageWAMTorchFrontendThor`
+gained a `use_fa4: bool = False` constructor param, and
+`imagewam_thor_bench.py` an `IMAGEWAM_USE_FA4=1` env toggle (both
+default False: this dev machine's own Ada GPU has no FA4 runtime at
+all, so a default-True would break every local test/frontend
+construction here).
+
+## Real Thor result, folded into the full per-layer benchmark (2026-09-14, commit `2a4079b`)
+
+`IMAGEWAM_USE_FA4=1 python3 imagewam_thor_bench.py` on Thor, on top of
+OPT-004's steps 1+2+3 (autotune, QKV fusion, fused AdaLN/gated-
+residual — all already default) already active:
+
+| layer | FA4 off | FA4 on | delta |
+|---|---|---|---|
+| backbone_double | 5.53 ms | 4.81 ms | **-13%** |
+| backbone_single | 4.47 ms | 4.03 ms | **-10%** |
+| action_double/single | 0.57 / 0.53 ms | 0.57 / 0.56 ms | unchanged (FA4 only touches "backbone", never "mot") |
+
+Derived: prefill 117.0ms → **104.7ms** (**-10.5%**), prefill+10-step
+252ms → **246ms**. A real, additional win on top of steps 1-3 — all
+four mechanisms (autotune, QKV fusion, fused AdaLN/gate, FA4) are now
+confirmed to combine additively on real Thor hardware, none of them
+individually large but together taking backbone prefill from the
+original real-math baseline (135.8ms, commit `61e7c15`) down to
+104.7ms (**-23% total**).
+
+One benchmark-harness nuance the user's own Thor run caught and
+correctly diagnosed, not a bug: `standard_attn_kernel_only` (the
+isolated attention-only row in the same script) stayed flat
+(0.824ms → 0.842ms) under `IMAGEWAM_USE_FA4=1` — that function calls
+`fvk.attention_qkv_fp16_perhead` directly, bypassing
+`ImageWAMAttnBackend` entirely, so the env var has no code path to
+reach it. The 3.75x FA4 win this row is meant to represent is already
+correctly folded into the `backbone_double`/`backbone_single` numbers
+above (which DO go through `ImageWAMAttnBackend`); this standalone row
+measures a different, FA4-blind code path by design and needs no fix.
 
 # OPT-006
 
