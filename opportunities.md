@@ -153,21 +153,46 @@ math gaps this project had never modeled, beyond just per-head K/V:
   the embedding/modulation math itself (a per-batch, not per-token,
   computation — negligible cost, not worth new-kernel risk); the
   LayerNorm itself (the one piece touching the full (S,D) hidden state)
-  uses the real FlashRT kernel. **Still not wired into any real block
-  forward** — `adaln.py` gives primitives (`apply_modulation`,
-  `apply_gated_residual`, etc.), not a full DoubleStreamBlock/
-  SingleStreamBlock combining them with attention + MLP + real
-  residual structure end to end.
-- **Still missing, not investigated**: the exact MLP structure (real
-  blocks use a `SiLUActivation`-gated `nn.Sequential` MLP with a
-  `mlp_mult_factor=2` doubling before the gate — not yet read closely)
-  and the full per-block wiring order (norm1 -> modulate -> attn ->
-  gate-residual -> norm2 -> modulate -> mlp -> gate-residual, twice,
-  once for img and once for txt, per `DoubleStreamBlock`). A full single
-  real `DoubleStreamBlock`/`SingleStreamBlock` forward, combining
-  attention (done) + AdaLN (done) + MLP (not done) + the real residual
-  wiring (not done), is the next real milestone toward end-to-end
-  accuracy validation.
+  uses the real FlashRT kernel.
+- **The real MLP is also done**: real `DoubleStreamBlock.img_mlp`/
+  `txt_mlp` is `Linear(hidden, mlp_hidden*2) -> SiLU-gated GLU chunk ->
+  Linear(mlp_hidden, hidden)` — TWICE the first GEMM's width this
+  project's existing benchmark scripts/pipeline assumed, and a SiLU-gate
+  chunk instead of plain GELU (a real speed+accuracy correction, not
+  yet applied to `imagewam_thor_*_bench.py`/`pipeline_thor.py`). New
+  `silu_glu_merged_fp16` kernel + `flash_rt/models/imagewam/real_mlp.py`,
+  verified (cosine=1.0, small shape + real dims).
+- **A full single real `DoubleStreamBlock` forward is now combined and
+  verified**: `flash_rt/models/imagewam/real_double_stream_block.py`
+  chains every piece above (per-head K/V, RoPE, QK-Norm, the real mask,
+  AdaLN modulation, real LayerNorm, real MLP) in the exact real order
+  (norm1 -> modulate -> qkv -> QK-Norm -> concat -> RoPE -> masked
+  attention -> split -> proj -> gated residual -> norm2 -> modulate ->
+  MLP -> gated residual, separately for txt and img streams sharing one
+  combined attention call) — confirmed against a from-scratch
+  independent PyTorch reference of the full real block, at both a small
+  shape and real ImageWAM dims (hidden=3072, mlp_hidden=9216, NH=24,
+  HD=128, x0=128, img_len=768): cosine=1.0 for both txt and img, both
+  shapes (`tests/test_imagewam_real_double_stream_block.py`). This is
+  the technical milestone the whole OPT-002 round was building toward —
+  real math is now fully understood and verified at the single-block
+  level.
+- **Still not wired into `pipeline_thor.py`** — everything above lives
+  in new, additive `flash_rt/models/imagewam/real_*.py` modules and
+  tests; the actual serving pipeline still uses the old broadcast-K/V,
+  no-RoPE, no-QK-Norm, no-mask, wrong-width-GELU-MLP path by default.
+  Wiring this in means: changing `_imagewam_thor_spec.py`'s K/V
+  projection width back to full `hidden`, adding QKNorm/RoPE/AdaLN
+  weight+buffer plumbing, correcting the MLP GEMM widths, and looping
+  the single-block forward across all 5 real double-stream layers (this
+  work only built and verified ONE layer) — a real, sizeable pipeline
+  refactor, not yet started.
+- **`SingleStreamBlock`'s own real forward not yet done** — this round
+  only covered `DoubleStreamBlock` (the first 5 layers); the 20
+  single-stream layers have their own analogous but structurally
+  different real forward (`linear1`/`linear2` fused QKV+MLP-in
+  projection, `_qkv`/`_out` structure seen in the real source but not
+  yet built/verified here).
 - **No real checkpoint file available locally** — everything above is
   verified against PyTorch references of the real published formulas,
   not against real trained weights. Real end-to-end accuracy validation
