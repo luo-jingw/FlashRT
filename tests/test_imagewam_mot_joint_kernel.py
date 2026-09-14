@@ -16,7 +16,7 @@ Mask rule (see csrc/kernels/attention_cublas.cuh / softmax.cuh):
 import torch
 import torch.nn.functional as F
 
-import flash_rt_kernels as fvk
+import flash_rt.flash_rt_kernels as fvk
 
 
 def _reference(q, k, v, x0, a0, total, NH, HD, scale):

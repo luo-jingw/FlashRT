@@ -111,3 +111,58 @@ void attention_qkv_fp16_mot_joint_action(
     int x0, int a0,          // block boundaries, see softmax_mot_joint_action_fp16
     float attn_scale,
     cudaStream_t stream = 0);
+
+// ================================================================
+// Real per-head K/V attention (OPT-002, opportunities.md).
+//
+// Every kernel above BROADCASTS one shared (S_kv, HD) K/V block across
+// all NH query heads -- a structural simplification, not what a real
+// checkpoint's fused QKV projection produces (real per-head K/V, shape
+// (S_kv, NH, HD)). These two kernels compute the same QK^T -> masked-
+// softmax -> PV composition, but with independent per-head K/V, via
+// `cublasGemmStridedBatchedEx` batched over the NH head dimension.
+//
+// Layout convention for ALL per-head buffers here (Q/K/V/out): token-
+// major, head-minor row-major (seq, NH, HD) -- element (tok, head, d)
+// at flat offset tok*NH*HD + head*HD + d. This is the SAME physical
+// layout the broadcast kernels' own Q/out already use (a (S, NH*HD)
+// GEMM output read as (S*NH, HD)) -- only K/V change shape, from
+// (S_kv, HD) to (S_kv, NH*HD) read as (S_kv, NH, HD). No change to the
+// `logits` buffer's own row/column convention (row = tok*NH+head, same
+// as every kernel above) -- the softmax mask kernels are reused
+// UNCHANGED, since masking is a function of token position only, never
+// of whether K/V happens to be shared or per-head.
+// ================================================================
+
+// Plain (unmasked) real per-head self/cross-attention. Reference
+// implementation for OPT-002's "backbone" site, and a portable cuBLAS
+// fallback for when the faster Thor-only `fmha_strided_full` (CUTLASS
+// SM100, dlopen'd from libfmha_fp16_strided.so) isn't loaded.
+void attention_qkv_fp16_perhead(
+    cublasHandle_t handle,
+    const __half* Q,         // (S, NH, HD) row-major
+    const __half* K,         // (S_kv, NH, HD) row-major -- real per-head, NOT broadcast
+    const __half* V,         // (S_kv, NH, HD) row-major
+    __half* logits,          // scratch: (S*NH, S_kv_padded)
+    __half* out,             // (S, NH, HD) row-major
+    int S, int S_kv, int NH, int HD,
+    float attn_scale,
+    cudaStream_t stream = 0);
+
+// ImageWAM MoT joint-attention, ACTION QUERIES ONLY, real per-head K/V.
+// Same block-mask rule and Q/K/V role split as
+// attention_qkv_fp16_mot_joint_action above (Q = action rows only,
+// K/V = full combined sequence, action rows see [0,x0) U [a0,total)),
+// but K/V are real per-head (total, NH, HD) instead of broadcast
+// (total, HD).
+void attention_qkv_fp16_mot_joint_action_perhead(
+    cublasHandle_t handle,
+    const __half* Q,         // (num_action, NH, HD) -- action rows only
+    const __half* K,         // (total, NH, HD) -- full combined K, real per-head
+    const __half* V,         // (total, NH, HD) -- full combined V, real per-head
+    __half* logits,          // scratch: (num_action*NH, total_padded)
+    __half* out,             // (num_action, NH, HD)
+    int num_action, int total, int NH, int HD,
+    int x0, int a0,          // block boundaries, see softmax_mot_joint_action_fp16
+    float attn_scale,
+    cudaStream_t stream = 0);

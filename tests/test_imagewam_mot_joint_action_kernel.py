@@ -15,7 +15,7 @@ action rows): action row sees [0, x0) U [a0, total) -- never
 import torch
 import torch.nn.functional as F
 
-import flash_rt_kernels as fvk
+import flash_rt.flash_rt_kernels as fvk
 
 
 def _reference(q_action, k, v, x0, a0, total, num_action, NH, HD, scale):

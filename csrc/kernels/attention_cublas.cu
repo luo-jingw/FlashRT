@@ -420,3 +420,128 @@ void attention_qkv_fp16_mot_joint_action(
         out, CUDA_R_16F, HD,
         CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
 }
+
+
+// ================================================================
+// Real per-head K/V attention (OPT-002) -- see attention_cublas.cuh
+// for the full layout convention. Both kernels below batch over the
+// NH head dimension via cublasGemmStridedBatchedEx: for a fixed head
+// h, a token's data sits at base offset h*HD within that token's own
+// NH*HD-wide row, so the per-head "matrix" for QK^T/PV has leading
+// dimension NH*HD (the stride between consecutive tokens) and batch
+// stride HD (the offset from head h to head h+1 within one token).
+// The `logits` buffer keeps its existing (row=tok*NH+head, col=key)
+// layout, so head h's own logits sub-matrix has leading dimension
+// NH*total_pad (stride between consecutive query tokens' rows for the
+// SAME head) and batch stride total_pad (offset from head h to h+1).
+// ================================================================
+
+void attention_qkv_fp16_perhead(
+    cublasHandle_t handle,
+    const __half* Q,
+    const __half* K,
+    const __half* V,
+    __half* logits,
+    __half* out,
+    int S, int S_kv, int NH, int HD,
+    float attn_scale,
+    cudaStream_t stream)
+{
+    cublasSetStream(handle, stream);
+
+    int S_kv_pad = S_kv + (S_kv & 1);
+    long long strideQK = HD;              // head h -> h+1 within one token
+    long long strideLogits = S_kv_pad;    // head h -> h+1 within one query row-block
+
+    // Step 1: QK^T per head, batched over NH.
+    // logits_h(S_kv, S) = K_h^T(HD,S_kv)^T * Q_h(HD,S), col-major.
+    float zero = 0.0f;
+    cublasGemmStridedBatchedEx(handle,
+        CUBLAS_OP_T, CUBLAS_OP_N,
+        S_kv, S, HD,
+        &attn_scale,
+        K, CUDA_R_16F, NH * HD, strideQK,
+        Q, CUDA_R_16F, NH * HD, strideQK,
+        &zero,
+        logits, CUDA_R_16F, NH * S_kv_pad, strideLogits,
+        NH,
+        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+
+    if (S_kv & 1) {
+        // Pad column at row S_kv in EVERY one of the S*NH query rows --
+        // same fill kernel already used by attention_qkv_fp16_padded,
+        // just over the full S*NH row count (head-interleaving doesn't
+        // change which rows need the pad fill).
+        fill_neginf_strided_fp16(logits + S_kv, S_kv_pad, S * NH, stream);
+    }
+
+    // Step 2: softmax (in-place, per-row) -- unchanged, row layout is
+    // identical to the broadcast-K/V kernels.
+    softmax_fp16(logits, S * NH, S_kv_pad, stream);
+
+    // Step 3: PV per head, batched over NH.
+    // out_h(HD, S) = V_h(HD,S_kv) * logits_h(S_kv,S), col-major.
+    float one = 1.0f;
+    cublasGemmStridedBatchedEx(handle,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        HD, S, S_kv,
+        &one,
+        V, CUDA_R_16F, NH * HD, strideQK,
+        logits, CUDA_R_16F, NH * S_kv_pad, strideLogits,
+        &zero,
+        out, CUDA_R_16F, NH * HD, strideQK,
+        NH,
+        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+}
+
+
+void attention_qkv_fp16_mot_joint_action_perhead(
+    cublasHandle_t handle,
+    const __half* Q,
+    const __half* K,
+    const __half* V,
+    __half* logits,
+    __half* out,
+    int num_action, int total, int NH, int HD,
+    int x0, int a0,
+    float attn_scale,
+    cudaStream_t stream)
+{
+    cublasSetStream(handle, stream);
+
+    int total_pad = total + (total & 1);
+    long long strideQK = HD;
+    long long strideLogits = total_pad;
+
+    // Step 1: QK^T for action queries, batched over NH heads.
+    float zero = 0.0f;
+    cublasGemmStridedBatchedEx(handle,
+        CUBLAS_OP_T, CUBLAS_OP_N,
+        total, num_action, HD,
+        &attn_scale,
+        K, CUDA_R_16F, NH * HD, strideQK,
+        Q, CUDA_R_16F, NH * HD, strideQK,
+        &zero,
+        logits, CUDA_R_16F, NH * total_pad, strideLogits,
+        NH,
+        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+
+    // Step 2: same fused mask+softmax as the broadcast-K/V version --
+    // row layout (tok*NH+head) is unchanged, mask is a function of
+    // token position only.
+    softmax_mot_joint_action_fp16(logits, num_action * NH, total_pad,
+                                   x0, a0, total, stream);
+
+    // Step 3: PV, batched over NH heads.
+    float one = 1.0f;
+    cublasGemmStridedBatchedEx(handle,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        HD, num_action, total,
+        &one,
+        V, CUDA_R_16F, NH * HD, strideQK,
+        logits, CUDA_R_16F, NH * total_pad, strideLogits,
+        &zero,
+        out, CUDA_R_16F, NH * HD, strideQK,
+        NH,
+        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+}
