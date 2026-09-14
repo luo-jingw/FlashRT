@@ -49,6 +49,16 @@ void gelu_inplace_fp16(__half* x, int n, cudaStream_t stream = 0);
 void gate_geglu_merged_fp16(const __half* merged, __half* out,
                                 int seq, int half_dim, cudaStream_t stream = 0);
 
+// ImageWAM/FLUX.2 real MLP gate (opportunities.md OPT-002 follow-up):
+// same "merged, strided-halves" layout as gate_geglu_merged_fp16 above
+// (merged[row, col] = gate, merged[row, half_dim+col] = up), but SiLU
+// instead of GELU -- matches the real `SiLUActivation.forward`
+// (`x1, x2 = x.chunk(2, dim=-1); return silu(x1) * x2`) exactly, found
+// while reading flux2/model.py directly. The existing gate_geglu_*
+// kernels use GELU and are for a DIFFERENT model; not reusable here.
+void silu_glu_merged_fp16(const __half* merged, __half* out,
+                           int seq, int half_dim, cudaStream_t stream = 0);
+
 // Element-wise multiply: out[i] = a[i] * b[i] for i in [0, n).
 // FP16 inputs and output, FP32 multiply.  Used by R3.1 split-G7 path
 // to combine GELU(gate) with up after two separate GEMMs.

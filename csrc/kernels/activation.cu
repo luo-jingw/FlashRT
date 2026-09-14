@@ -173,6 +173,34 @@ void gate_geglu_merged_fp16(const __half* merged, __half* out,
     gate_geglu_merged_kernel<__half><<<blocks, 256, 0, stream>>>(merged, out, seq, half_dim);
 }
 
+// ImageWAM/FLUX.2 real MLP gate: same merged/strided-halves layout as
+// gate_geglu_merged above, SiLU instead of GELU (see activation.cuh).
+template<typename T>
+__global__ void silu_glu_merged_kernel(const T* __restrict__ merged,
+                                        T* __restrict__ out,
+                                        int seq, int half_dim) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = seq * half_dim;
+    if (idx < total) {
+        int row = idx / half_dim;
+        int col = idx % half_dim;
+        int full_dim = half_dim * 2;
+        float g = to_f32(merged[row * full_dim + col]);
+        float u = to_f32(merged[row * full_dim + half_dim + col]);
+        float silu = g / (1.0f + expf(-g));
+        out[idx] = from_f32<T>(silu * u);
+    }
+}
+
+template __global__ void silu_glu_merged_kernel<__half>(const __half*, __half*, int, int);
+
+void silu_glu_merged_fp16(const __half* merged, __half* out,
+                           int seq, int half_dim, cudaStream_t stream) {
+    int total = seq * half_dim;
+    int blocks = (total + 255) / 256;
+    silu_glu_merged_kernel<__half><<<blocks, 256, 0, stream>>>(merged, out, seq, half_dim);
+}
+
 // Vectorized 8-half / thread element-wise multiply.  BW-bound; pairs
 // with two split-G7 GEMMs in R3.1 to replace gate_geglu_merged_fp16.
 __global__ void mul_fp16_kernel(const __half* __restrict__ a,

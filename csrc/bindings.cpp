@@ -1867,6 +1867,13 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
                                    reinterpret_cast<__half*>(out), seq, half_dim, to_stream(stream));
     }, py::arg("merged"), py::arg("out"), py::arg("seq"), py::arg("half_dim"), py::arg("stream") = 0);
 
+    // ImageWAM/FLUX.2 real MLP gate (SiLU, not GELU -- see activation.cuh).
+    m.def("silu_glu_merged_fp16", [](uintptr_t merged, uintptr_t out,
+                                      int seq, int half_dim, uintptr_t stream) {
+        silu_glu_merged_fp16(reinterpret_cast<const __half*>(merged),
+                              reinterpret_cast<__half*>(out), seq, half_dim, to_stream(stream));
+    }, py::arg("merged"), py::arg("out"), py::arg("seq"), py::arg("half_dim"), py::arg("stream") = 0);
+
     m.def("mul_fp16", [](uintptr_t a, uintptr_t b, uintptr_t out,
                          int n, uintptr_t stream) {
         mul_fp16(reinterpret_cast<const __half*>(a),
