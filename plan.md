@@ -2212,18 +2212,76 @@ all. Same two checks reproduced independently in
 
 ### Phase 4 — real Thor measurement + close-out
 
-Phase Status: pending
+Phase Status: completed
 
-Goal: hand to the user for a real Thor run comparing FOUR configurations
-at identical shapes: FP16 (117.0ms), dynamic FP8 (122.8ms, already
-measured), static-scale FP8 + `cublasLtMatmul` (Phase 1's own
-contribution isolated), static-scale FP8 + CUTLASS (Phase 1+2 combined,
-the actual house-mechanism equivalent). If static-scale-only already
-recovers most of the gap, the CUTLASS kernel choice matters less than
-expected; if only the CUTLASS swap does, cuBLASLt's own chosen tactic
-is the real bottleneck at these shapes, not the calibration overhead.
-Modified files: `opportunities.md` (recording the 4-way result),
-`plan.md` (this section's own Phase 4 write-up).
+User ran the 4-way comparison on real Thor (`HEAD cfba7ef`). Same-machine
+FP16 re-measurement: 116.4ms (vs. the earlier 117.0ms — run-to-run
+noise, not a regression).
+
+**Correctness, no SKIP lines**:
+
+| path | cosine |
+|---|---:|
+| `Fp8Linear` (dynamic) | 0.999242 |
+| `StaticFp8Linear(cublaslt)` | 0.999242 |
+| `StaticFp8Linear(cutlass)` | 0.999242 |
+| `Nvfp4Linear` | 0.989133 (unchanged from step 5's own measurement, 0.98 bar) |
+
+All three FP8 variants are numerically IDENTICAL (same quantization,
+just different scale-freezing/GEMM-dispatch mechanics) — exactly the
+expected result, confirms neither the static-scale change nor the
+CUTLASS swap altered the actual math, only its cost.
+
+**Per-layer P50 (ms), FA4 off**:
+
+| layer | FP16 | FP8 dynamic | static+cuBLASLt | static+CUTLASS |
+|---|---:|---:|---:|---:|
+| backbone_double | 5.45 | 5.05 | 4.83 | **4.70** |
+| backbone_single | 4.46 | 4.85 | 4.70 | **3.72** |
+| action_double | 0.58 | 0.54 | 0.50 | 0.50 |
+| action_single | 0.53 | 0.51 | 0.46 | 0.46 |
+| **prefill (5+20)** | 116.4 | 122.2 | 118.1 | **97.9** |
+| denoise x1 | 13.6 | 12.8 | 11.6 | 11.7 |
+| prefill+10-step | 252 | 250 | 234 | **215** |
+
+Attention kernels unmoved (mot ~0.041ms, standard ~0.82-0.84ms).
+
+**Verdict — this Problem section's own hypothesis (a) vs (b) is
+resolved: the CUTLASS kernel swap, not the static scale, is what
+actually fixes ImageWAM's FP8 regression.**
+- Static scale alone recovers only a small slice: dynamic 122.2 ->
+  static+cuBLASLt 118.1 (-4.1ms), still slower than FP16 (116.4ms),
+  `backbone_single` still regressed (4.70 vs 4.46). The per-call amax
+  reduction was A real cost, not the dominant one.
+- The CUTLASS tile swap is what actually wins: static+CUTLASS prefill
+  **97.9ms, -16% vs FP16, -20% vs dynamic FP8** — almost entirely from
+  `backbone_single` (4.70 -> 3.72ms). `_pick_fp8_cutlass_variant`'s
+  provisional heuristic (Phase 2's own flagged caveat) is good enough
+  for backbone shapes as-is — it already beats FP16.
+- **Action_dit gets ZERO additional benefit from CUTLASS** (static+cuBLASLt
+  and static+CUTLASS are identical: 0.50/0.46ms both) — `_pick_fp8_cutlass_variant`'s
+  variant choice at `M=64` (action's own sequence length) remains
+  unvalidated and is a real, still-open question, but NOT the
+  bottleneck for today's headline backbone number — deprioritized, not
+  ignored (see Follow-up).
+- **Compared to NVFP4** (step 5: prefill 92.6ms, denoise 10.0ms):
+  static+CUTLASS FP8 (97.9ms prefill) is close but still behind on
+  prefill, and further behind on denoise (11.7 vs 10.0ms) — NVFP4
+  remains the single fastest precision tier measured so far. BUT its
+  correctness (0.989, borderline against the ORIGINAL 0.99 bar, only
+  cleared by this session's own bar-lowering) is meaningfully weaker
+  than static+CUTLASS FP8's rock-solid 0.999242 — `fp8_static_cutlass`
+  is now the leading candidate for an eventual default precision
+  (correctness margin favors it over NVFP4), pending real-checkpoint
+  validation of BOTH (OPT-001) before either becomes a real default.
+
+Modified files: `plan.md` (this write-up), `opportunities.md` (matching
+entry).
 Affected modules: none (measurement only).
-Observation method: cosine (>0.98) + per-layer P50 table, same style
-as every prior OPT-004 entry.
+Follow-up, not started: (a) retune/validate `_pick_fp8_cutlass_variant`
+at ActionDiT's own `M=64` shapes specifically (low priority — action
+layers are ~14ms of the ~116ms prefill total, not where the win is);
+(b) real-checkpoint correctness validation for `fp8_static_cutlass`
+once OPT-001 has real weights, same caveat already on record for
+NVFP4's own 0.989 result (random-weight, single-layer, no calibration
+data yet).
