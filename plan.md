@@ -2818,13 +2818,23 @@ left open, not closed).
   concerns (one loads `model.pt`'s transformer weights, the other runs
   a separate real image/text encoder) -- `ckpt_path` and
   `ae_model_path`/`flux2_src` are independently optional.
-- Live Qwen3 (a THIRD, NOT-attempted-here concern): `set_prompt`'s own
-  new signature accepts either a raw string (today's random-fill
-  behavior, unchanged) or precomputed `context`/`context_mask` --
-  wiring live Qwen3 later would only need adding a THIRD branch inside
-  `set_prompt` (encode string -> context via `transformers.Qwen3ForCausalLM`,
-  confirmed importable here), not a redesign of this plan's own
-  interface. Left as an explicit door, not implemented.
+- **Live Qwen3 -- CLOSED same day (2026-09-15), once real Qwen3-4B
+  weights were downloaded** (`Qwen/Qwen3-4B`, ~7.6GB, per explicit
+  user go-ahead). New `flash_rt/models/imagewam/text_encoder.py`
+  (`load_real_text_encoder`, `encode_prompts`) ports `imagewam.py`'s
+  own real `_encode_flux2_prompts` exactly: Qwen3's own chat template
+  (`enable_thinking=False`), tokenize to `max_length=512`, forward
+  with `output_hidden_states=True`, concatenate layers `[9,18,27]`
+  (`flux2.text_encoder.OUTPUT_LAYERS_QWEN3`, confirmed by reading that
+  module directly) -> `(1,512,3*2560)=(1,512,7680)`, matching
+  `JOINT_ATTENTION_DIM` exactly. `set_prompt`'s own THIRD branch
+  (`prompt_text` + `qwen3_model_spec` given at construction -> live
+  encode) added exactly as this plan's own interface already
+  anticipated -- no redesign needed. **This also confirms `x0=512`
+  is the real value** (Qwen3's own fixed `max_length`), not the
+  `x0=128` placeholder used everywhere in this project until now --
+  see `opportunities.md`'s own matching entry for the real-dims
+  correction this implies and what it exposed.
 
 ## Interface
 

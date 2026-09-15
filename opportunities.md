@@ -1963,10 +1963,47 @@ cleanly without the real `flux2` clone/AE checkpoint). New
 (OPT-001's real weights + this plan's real VAE) for the first time --
 passes end to end on this dev machine, finite `(64,7)` action output.
 
-**Still deferred, a real but separate decision**: live Qwen3-4B text
-encoding from a raw prompt STRING (as opposed to a precomputed
-`context`/`context_mask` pair, which this entry's own work already
-supports). `transformers.Qwen3ForCausalLM` imports fine in the new
-venv, but no Qwen3-4B checkpoint weights exist locally -- would need a
-fresh multi-GB download, a separate decision from everything done
-here.
+**Update, same day: live Qwen3-4B CLOSED too**, once real weights were
+downloaded (`Qwen/Qwen3-4B`, ~7.6GB, per explicit user go-ahead) to
+`/home/ljw/projects/pi0.5/models/qwen3_4b`. New
+`flash_rt/models/imagewam/text_encoder.py` (`load_real_text_encoder`,
+`encode_prompts`) ports `imagewam.py`'s own real `_encode_flux2_prompts`
+exactly (chat template, `max_length=512`, concatenate hidden layers
+`[9,18,27]` -> `(1,512,7680)`, confirmed against real
+`flux2.text_encoder.OUTPUT_LAYERS_QWEN3`). `set_prompt`'s own third
+branch (live encode when `qwen3_model_spec` was given at construction)
+verified end to end with RANDOM transformer weights: construction,
+real text encoding, graph capture, and `infer()` all succeeded,
+producing a finite `(64,7)` action tensor.
+
+**This also confirms `x0=512` is the real value** (Qwen3's own fixed
+`max_length`) -- `imagewam_thor_bench.py`, `imagewam_real_checkpoint_validation.py`,
+and `test_imagewam_checkpoint_loader.py` updated from the `x0=128`
+placeholder used everywhere in this project until now.
+
+**Open investigation, found while validating this correction, NOT YET
+RESOLVED**: `test_imagewam_checkpoint_loader.py`'s own
+`test_real_double_stream_layer_forward_finite` (one REAL-weight
+backbone layer, RANDOM activations) started producing `inf` at
+`x0=512` (previously passed at `x0=128`). Bisected across several
+`x0` values with real weights: 128/256/320/340/360 finite, but
+300/384/512 all `inf` -- NOT a monotonic "too big" threshold. A
+manual, step-by-step reproduction of the IDENTICAL kernel sequence
+(same weights, same `x0=512`, same random seed, with an explicit
+`torch.cuda.synchronize()` between every step) did NOT reproduce the
+failure -- suggesting this is not a straightforward numeric overflow
+in the math itself, but something tied to async kernel scheduling,
+buffer-reuse timing, or GEMM algorithm selection specific to the bulk
+(non-synchronized) call path `_double_stream_layer` actually uses.
+Reducing the test's own random-activation scale (0.1 -> 0.02) did NOT
+fix it, ruling out "just an unrepresentative large input" as the
+explanation. Real trained weights are required to reproduce this at
+all (not seen with random weights at the same shape) -- see this
+file's own "Real Thor result" cosine numbers above, which used the
+OLD `x0=128`/`a0=520` shape throughout, not yet re-verified at
+`x0=512`. **Do not trust `x0=512` as production-safe until this is
+root-caused** -- it may be specific to this synthetic-random-activation
+test (real Qwen3-encoded context has its own bounded statistics,
+untested in this exact isolated-layer path) or a genuine, real bug
+that real deployment would also hit. Needs follow-up before treating
+the `x0=512` correction as fully closed.
