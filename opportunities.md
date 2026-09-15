@@ -805,6 +805,66 @@ Do not trust an "Ada shows no win" result as the final word for any
 future launch-count-reduction work on this pipeline without a real
 Thor measurement.
 
+## Step 5: FP8/NVFP4 quantized GEMM — wired and Ada-verified for FP16, untestable numerically for FP8/NVFP4 on this machine
+
+`plan.md`'s own "OPT-004 step 5" plan, Phases 0-3 complete (Phase 4,
+real Thor measurement, still pending — needs the user). New
+`flash_rt/models/imagewam/quant_linear.py` promotes the benchmark
+scripts' own `_Fp8Linear`/`_Fp4Linear` pattern into real, reusable
+`Fp16Linear`/`Fp8Linear`/`Nvfp4Linear` wrapper classes; every one of
+`pipeline_thor.py`'s 21 weight-projection GEMM call sites now dispatches
+uniformly via `weights[key](x_ptr, out_ptr, m, stream)` instead of a
+raw pointer + `gemm.fp16_nn(...)` call. `imagewam_thor.py` gained a
+`precision: str = "fp16"` constructor param; `imagewam_thor_bench.py`
+gained a matching `IMAGEWAM_PRECISION` env var (same pattern as
+OPT-005's own `IMAGEWAM_USE_FA4`).
+
+**Two independent, unrelated reasons why FP8 and NVFP4 can be WIRED
+but not numerically VERIFIED on this dev machine** (Phase 0 only ruled
+out the kernels being architecturally Ada-bound — it did not anticipate
+either of these):
+
+- **FP8**: this venv's cuBLASLt (12.8.04, CUDA 12.8, Ada compute
+  capability (8,9)) fails `fp8_gemm_descale_fp16` with
+  `cublasLtMatmulAlgoGetHeuristic ... cuBLAS status 15` at EVERY shape
+  tried (down to 4x16x16) — a pre-existing, already-documented
+  environment gap (`plan.md`'s "Ada FP8 Environment Gap" section from
+  an earlier session), reproduced identically in the pre-existing
+  `imagewam_thor_fp8_bench.py`. Not a wiring bug, not fixable from this
+  project's code, not a hardware limitation — the user's own real Thor
+  run already produced real FP8 numbers with this exact kernel.
+- **NVFP4**: `flash_rt.flash_rt_fp4` (the compiled extension
+  `Nvfp4Linear` needs) is a separate `.so` that this Ada build does not
+  produce at all (`ModuleNotFoundError`, confirmed directly) — it only
+  exists in a `-DGPU_ARCH=110`/Blackwell build. Stronger than
+  "architecturally suboptimal": not importable here at all.
+
+New `tests/test_imagewam_quant_linear.py` follows
+`test_imagewam_fa4_backbone.py`'s own established pattern for exactly
+this situation: a real availability probe (a canary FP8 GEMM call for
+FP8, an import guard for NVFP4), clean `pytest.skip`/print-and-return
+when unavailable, rather than asserting a cosine bar that can never be
+cleared here. Both skip cleanly on this machine; the FP16 passthrough
+path (`Fp16Linear`) is fully exercised and verified (cosine=1.000000)
+by the existing test suite, including the three pre-existing test files
+(`test_imagewam_prefill.py`, `test_imagewam_denoise.py`,
+`test_imagewam_thor_real_wiring.py`) that needed mechanical updates to
+wrap their own raw-pointer weight dicts in `Fp16Linear` after this
+interface change.
+
+**Thor checklist (Phase 4, not yet run)**:
+1. `IMAGEWAM_PRECISION=fp8 python3 tests/test_imagewam_quant_linear.py` —
+   expect real cosine>0.99 numbers instead of the Ada SKIP lines.
+2. Same for `nvfp4` (`IMAGEWAM_PRECISION` is bench-only; the test file
+   itself auto-probes both, no env var needed there).
+3. `IMAGEWAM_PRECISION=fp8 python3 benchmarks/imagewam_thor_bench.py`
+   and again with `nvfp4`, compare per-layer P50 against the existing
+   FP16 baseline table above (117.0ms real-math prefill, post-OPT-004/
+   OPT-005).
+4. Record whichever of FP8/NVFP4 (if either) beats FP16 real-math
+   prefill, and by how much, following this file's own running-table
+   convention.
+
 # OPT-005
 
 Status: RESOLVED and wired in as an opt-in — verified on real Thor hardware for BOTH broadcast K/V (cosine=1.000000, rel_l2=0.000412, 4.09x) and real per-head K/V (cosine=1.000000, rel_l2=0.000427/0.000614, 3.75x standalone); folded into the full per-layer benchmark (commit `2a4079b`), confirming a real -10.5% prefill win on top of OPT-004's steps 1-3. Opt-in via `use_fa4=` (frontend) / `IMAGEWAM_USE_FA4=1` (bench script), default False since this dev machine's own Ada GPU has no FA4 runtime.

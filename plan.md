@@ -1733,40 +1733,83 @@ undershoots Thor's real potential the way pi0.5_ggml's did.
 
 ### Phase 1 — `quant_linear.py` + FP8 wiring, correctness only, small dims
 
-Phase Status: pending
+Phase Status: completed (wiring only — cosine bar NOT clearable here, see below)
 
 Goal: `Fp16Linear`/`Fp8Linear` implemented and cosine-verified against
 the FP16 real-math reference, small test dims, no speed measurement.
 Modified files: new `flash_rt/models/imagewam/quant_linear.py`;
-`pipeline_thor.py` (call-site interface change); new
-`tests/test_imagewam_quant_linear.py`.
+`pipeline_thor.py` (call-site interface change, every weight-projection
+GEMM now dispatches through `weights[key](x_ptr, out_ptr, m, stream)`,
+21 call sites); new `tests/test_imagewam_quant_linear.py`.
 Affected modules: `pipeline_thor.py`'s dispatch layer only — no
-weight-shape, attention, or AdaLN changes.
-Observation method: cosine check (>0.99) for one layer of each of the
-4 real-math layer types (double/single backbone, double/single
-action), FP8 vs. the already-trusted FP16 reference.
+weight-shape, attention, or AdaLN changes. Propagated to the three
+existing test files that build raw weight dicts directly
+(`test_imagewam_prefill.py`, `test_imagewam_denoise.py`,
+`test_imagewam_thor_real_wiring.py` — all wrapped in `Fp16Linear`,
+all still pass at cosine=1.000000 against their own tensor-level
+references, confirming the interface change is purely mechanical and
+introduces no new numerical behavior for the FP16 path).
+
+**New finding, not anticipated by Phase 0: FP8 is ALSO untestable for
+real numeric correctness on this dev machine**, for a reason unrelated
+to Phase 0's own kernel-architecture question. `fp8_gemm_descale_fp16`
+hits the pre-existing "Ada FP8 Environment Gap" (this file's own
+section above) at EVERY shape tried, including trivial ones (4x16x16)
+— confirmed by reproducing the identical failure in the pre-existing
+`imagewam_thor_fp8_bench.py`. `test_imagewam_quant_linear.py`'s own
+`test_fp8_linear_matches_fp16_reference` is written and correct but
+SKIPS cleanly on this machine (real canary probe, not a guess) rather
+than asserting a bar that cannot be cleared here — matches
+`test_imagewam_fa4_backbone.py`'s own established skip pattern for
+exactly this situation (a real kernel this dev machine cannot run).
+Observation method (needs Thor, Phase 4): cosine check (>0.99) for one
+layer of each of the 4 real-math layer types (double/single backbone,
+double/single action), FP8 vs. the already-trusted FP16 reference.
 
 ### Phase 2 — NVFP4 wiring, same bar
 
-Phase Status: pending
+Phase Status: completed (wiring only — same "needs Thor" caveat as Phase 1)
 
 Goal: `Nvfp4Linear`, same verification pattern as Phase 1.
-Modified files: `quant_linear.py`, tests.
+Modified files: `quant_linear.py`, `test_imagewam_quant_linear.py`.
 Affected modules: same as Phase 1.
-Observation method: same cosine bar, NVFP4 vs. FP16 reference.
+**Confirmed unavailable on this machine, more severely than Phase 0
+anticipated**: `flash_rt.flash_rt_fp4` (the compiled NVFP4 extension)
+does not exist in this build at all (`ModuleNotFoundError`), not just
+"architecturally suboptimal" — Phase 0 confirmed the KERNEL is
+Thor-native by design but didn't check whether the `.so` is even
+built for Ada. `Nvfp4Linear.__init__` imports it lazily so the module
+stays importable everywhere; `test_nvfp4_linear_matches_fp16_reference`
+skips cleanly via the same import-guard pattern already used by
+`imagewam_thor_fp4_bench.py` and `test_imagewam_fa4_backbone.py`.
+Observation method (needs Thor, Phase 4): same cosine bar, NVFP4 vs.
+FP16 reference.
 
 ### Phase 3 — frontend + per-layer benchmark integration
 
-Phase Status: pending
+Phase Status: completed (Ada wiring verified; per-layer numbers here are Ada, not Thor)
 
 Goal: `imagewam_thor.py`'s `precision=` param; `imagewam_thor_bench.py`'s
 matching toggle; real per-layer timing at real FLUX.2 dims (Ada first
 -- correctness doesn't need Thor, timing here is only a sanity check
 given OPT-004's own repeated Ada-underestimates-Thor pattern).
-Modified files: `imagewam_thor.py`, `imagewam_thor_bench.py`.
+Modified files: `imagewam_thor.py` (`precision: str = "fp16"` param,
+validated against `_PRECISIONS`, threaded into `_rnd_linear`);
+`imagewam_thor_bench.py` (`IMAGEWAM_PRECISION` env var, same pattern as
+the existing `IMAGEWAM_USE_FA4`, threaded into a new `_make_linear`
+helper used by all 17 weight-projection call sites across the 4
+`bench_*` functions).
 Affected modules: frontend construction, bench harness.
-Observation method: per-layer P50 table (FP16 vs FP8 vs NVFP4), same
-style as every other OPT-004 step's own table.
+Verified on this machine: `precision="fp16"` runs the full benchmark
+end to end (no regression from the interface change); `precision="fp8"`
+and `precision="nvfp4"` build weights correctly and fail EXACTLY at the
+documented environment gap (FP8 fails inside `_time_ms`'s warmup call,
+i.e. weight quantization succeeds and only the GEMM itself hits
+cuBLAS status 15; NVFP4 fails immediately at `Nvfp4Linear.__init__`'s
+import guard) — confirms the wiring is correct even though neither can
+produce a real number here.
+Observation method (needs Thor, Phase 4): per-layer P50 table (FP16 vs
+FP8 vs NVFP4), same style as every other OPT-004 step's own table.
 
 ### Phase 4 — real Thor measurement + close-out
 
