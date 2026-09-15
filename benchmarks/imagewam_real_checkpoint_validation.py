@@ -104,9 +104,13 @@ HIDDEN, HD, NH, MLP_HIDDEN, JOINT_ATTN_DIM = 3072, 128, 24, 9216, 7680
 ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH, ACTION_MLP_HIDDEN = 1024, 3072, 4096
 NUM_DOUBLE, NUM_SINGLE = 5, 20
 MAX_ACTION_HORIZON = 64
-X0, A0 = 128, 896  # text tokens, text+ref tokens
+X0, A0 = 128, 520  # text tokens, text+ref tokens
 NUM_ACTION = MAX_ACTION_HORIZON
-REF_H, REF_W = 24, 32  # A0 - X0 == 768 == REF_H * REF_W
+# CONFIRMED real (2026-09-15, real Thor + real FLUX.2-dev VAE against
+# real libero_spatial_no_noops_lerobot frames, 224x448 input -> 8x
+# VAE downsample + 2x2 patch merge -> 14x28 grid) -- superseding this
+# script's own earlier 24x32=768 (a 384x512 input guess). A0-X0==392==REF_H*REF_W.
+REF_H, REF_W = 14, 28
 
 
 def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:

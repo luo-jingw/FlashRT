@@ -312,6 +312,24 @@ class ImageWAMTorchFrontendThor:
             return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=True)
         raise ValueError(f"unknown precision {self._precision!r}")  # pragma: no cover -- validated in __init__
 
+    # OPT-004 step 6 follow-up (2026-09-15, real Thor measurement against
+    # the real FLUX.2-dev VAE on real LIBERO-fastwam frames): calibrating
+    # img_in's own activation scale against N(0, 0.1) noise (the
+    # blanket default below) is not just "a rough approximation" -- it
+    # is actively WRONG and measurably harmful. Real VAE-encoded image
+    # tokens have mean=-0.02, std=0.97 (holdout, `libero_spatial_no_noops_lerobot`,
+    # 224x448 input) -- an order of magnitude wider than this noise
+    # placeholder. cosine vs. the FP16 reference: 0.902 (N(0,0.1)
+    # calibration) vs. 0.99946 (real-token calibration). This is
+    # img_in's OWN entry-point distribution specifically, not a general
+    # fix for every downstream weight's own calibration input (see
+    # `_calibrate_fp8`'s own docstring for why those remain unvalidated
+    # placeholders) -- narrowly scoped to the one slot real ground
+    # truth now exists for.
+    _REAL_CALIB_STATS = {
+        "img_in.weight": (-0.02, 0.97),  # (mean, std), real VAE tokens, see above
+    }
+
     def _calibrate_fp8(self, d: dict) -> None:
         """OPT-004 step 6 (plan.md): freeze every `StaticFp8Linear`
         weight's activation scale ONCE, here, before `_capture_graph()`
@@ -330,23 +348,32 @@ class ImageWAMTorchFrontendThor:
         (m, k) its real call site actually uses (`m` from the site
         family -- backbone rows use `d["a0"]`, action_dit rows use
         `d["num_action"]`, matching `_autotune_gemm`'s own per-shape
-        convention in this same file), scale=0.1 to match this
+        convention in this same file). Default scale=0.1 to match this
         project's own established "realistic activation magnitude"
         convention (`test_imagewam_prefill.py`'s own `backbone_hidden`
-        scale, not the 0.02 weight-init scale).
+        scale, not the 0.02 weight-init scale) -- **KNOWN WRONG for
+        `img_in.weight` specifically, see `_REAL_CALIB_STATS` above**,
+        overridden there with the real measured (mean,std); every OTHER
+        slot still uses the unvalidated 0.1-scale placeholder, likely
+        similarly wrong but with no real ground truth yet to correct it
+        against (would need a real forward pass propagating actual
+        intermediate activations, not attempted here -- see
+        `opportunities.md`'s own "Real multi-sample calibration" entry).
         """
         if self._precision not in _STATIC_FP8_PRECISIONS:
             return
         a0, num_action = d["a0"], d["num_action"]
-        scratch_by_shape: dict[tuple[int, int], torch.Tensor] = {}
+        scratch_by_shape: dict[tuple, torch.Tensor] = {}
         for key, lin in self._weights.items():
             if not isinstance(lin, StaticFp8Linear):
                 continue
             m = a0 if key[0] == "backbone" else num_action
-            shape = (m, lin.k)
+            slot = key[-1]
+            mean, std = self._REAL_CALIB_STATS.get(slot, (0.0, 0.1))
+            shape = (m, lin.k, mean, std)
             x = scratch_by_shape.get(shape)
             if x is None:
-                x = torch.randn(*shape, dtype=FP16, device=DEV) * 0.1
+                x = torch.randn(m, lin.k, dtype=FP16, device=DEV) * std + mean
                 scratch_by_shape[shape] = x
             lin.calibrate(x.data_ptr(), m, 0)
         torch.cuda.synchronize()

@@ -26,15 +26,31 @@ therefore identical steady-state cost (confirmed by GemmRunner's own
 per-(op,M,N,K) cache: repeated identical-shape calls hit the same
 cached cuBLASLt algorithm).
 
-Sequence lengths are a representative choice, not a confirmed real
-ImageWAM deployment value (that number was never established in this
-project's research) -- kept at total=960 (a0=896 + num_action=64,
-64 = max_action_horizon from _imagewam_thor_spec.py) to stay under
-softmax_mot_joint_fp16's confirmed 1024-column ceiling (see
-csrc/kernels/softmax.cu: SM_MAX_COLS=1024 -- columns beyond that are
+**Sequence lengths CONFIRMED real (2026-09-15, real Thor + the real
+`FLUX.2-dev/ae.safetensors` VAE against real `libero_spatial_no_noops_lerobot`
+frames -- superseding this file's own earlier "representative, not
+confirmed" placeholder of `img_len=768` (a `384x512` input guess))**:
+`libero_spatial_no_noops_lerobot`'s own real eval preprocessing
+resizes each of its two camera views to `224x224` and concatenates
+them horizontally to `224x448` (matching `config.yaml`/
+`eval_libero_single.py`); the real VAE's own 8x spatial downsample +
+2x2 patch merge on that input produces a `14x28` token grid,
+`img_len=392` (NOT 768) -- confirmed by running the real VAE encoder
+on Thor. `x0=128` (text tokens) remains UNCONFIRMED, unchanged from
+this file's own original placeholder (no real measurement exists for
+it yet). `total=584` (`a0=520` + `num_action=64`, still under
+`softmax_mot_joint_fp16`'s confirmed 1024-column ceiling -- see
+`csrc/kernels/softmax.cu`: `SM_MAX_COLS=1024`, columns beyond that are
 silently never read by the single-warp-per-row reduction loop, which
 would make a >1024 timing number meaningless: the kernel would be
 doing LESS work than a correct implementation needs, not more).
+**Every OPT-004 step 5/6 table in `opportunities.md` was measured at
+the OLD, now-superseded `img_len=768`/`a0=896`/`total=960` shape** --
+those numbers are not invalidated (that shape ran, and the relative
+FP8/NVFP4/CUTLASS comparisons are still real results), but a fresh
+measurement at THIS shape is needed to know whether the same wins
+transfer (M dimension changes can shift which CUTLASS tile variant
+wins, see `quant_linear.py`'s own `_pick_fp8_cutlass_variant` caveat).
 """
 from __future__ import annotations
 
@@ -65,10 +81,11 @@ ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH, ACTION_MLP_HIDDEN = 1024, 3072, 4096
 NUM_DOUBLE, NUM_SINGLE = 5, 20
 MAX_ACTION_HORIZON = 64
 
-# Representative (not confirmed-real) sequence lengths, see module docstring.
-X0, A0 = 128, 896
+# CONFIRMED real img_len (392 = 14x28); x0 remains an unconfirmed
+# placeholder -- see module docstring's 2026-09-15 update.
+X0, A0 = 128, 520
 NUM_ACTION = MAX_ACTION_HORIZON
-TOTAL = A0 + NUM_ACTION  # 960, under the 1024 softmax ceiling
+TOTAL = A0 + NUM_ACTION  # 584, under the 1024 softmax ceiling
 
 WARMUP, ITERS = 15, 50
 
@@ -171,6 +188,18 @@ def _make_linear(gemm, n, k):
     raise ValueError(f"unknown IMAGEWAM_PRECISION={PRECISION!r}")
 
 
+# OPT-004 step 6 follow-up (2026-09-15, real Thor measurement, real
+# FLUX.2-dev VAE, real LIBERO-fastwam frames): N(0, 0.1) calibration
+# for img_in.weight's own activation is measurably WRONG, not just
+# approximate -- real VAE tokens have mean=-0.02, std=0.97 (an order
+# of magnitude wider); cosine vs. FP16 reference 0.902 (noise) vs.
+# 0.99946 (real tokens). Same fix as imagewam_thor.py's own
+# _calibrate_fp8 -- see that method's own docstring for the full
+# account, including why every OTHER slot still uses the unvalidated
+# 0.1 placeholder.
+_REAL_CALIB_STATS = {"img_in.weight": (-0.02, 0.97)}
+
+
 def _calibrate_static_fp8(weights, m):
     """Freeze every `StaticFp8Linear` weight's activation scale ONCE,
     before `_time_ms`'s own warmup loop -- OPT-004 step 6 (plan.md),
@@ -181,14 +210,17 @@ def _calibrate_static_fp8(weights, m):
     dominant sequence length). No-op for every other precision."""
     if PRECISION not in ("fp8_static", "fp8_static_cutlass"):
         return
-    scratch_by_k = {}
-    for lin in weights.values():
+    scratch_by_shape = {}
+    for key, lin in weights.items():
         if not isinstance(lin, StaticFp8Linear):
             continue
-        x = scratch_by_k.get(lin.k)
+        slot = key[-1]
+        mean, std = _REAL_CALIB_STATS.get(slot, (0.0, 0.1))
+        shape = (lin.k, mean, std)
+        x = scratch_by_shape.get(shape)
         if x is None:
-            x = torch.randn(m, lin.k, dtype=FP16, device=DEV) * 0.1
-            scratch_by_k[lin.k] = x
+            x = torch.randn(m, lin.k, dtype=FP16, device=DEV) * std + mean
+            scratch_by_shape[shape] = x
         lin.calibrate(x.data_ptr(), m, 0)
     torch.cuda.synchronize()
 
@@ -466,8 +498,8 @@ def main():
     print(f"Dims: hidden={HIDDEN} HD={HD} NH={NH} mlp_hidden={MLP_HIDDEN} "
           f"| action_hidden_dim={ACTION_HIDDEN_DIM} action_attn_width={ACTION_ATTN_WIDTH} "
           f"action_mlp_hidden={ACTION_MLP_HIDDEN}")
-    print(f"Seq: x0={X0} a0={A0} num_action={NUM_ACTION} total={TOTAL} "
-          f"(representative, not a confirmed real ImageWAM deployment length)")
+    print(f"Seq: x0={X0} (unconfirmed) a0={A0} num_action={NUM_ACTION} total={TOTAL} "
+          f"(img_len=392 CONFIRMED real, 2026-09-15 real Thor + real VAE measurement)")
     print(f"Real math (opportunities.md OPT-002): per-head K/V, QK-Norm, RoPE, "
           f"AdaLN, SiLU-GLU MLP, no-mask attention -- not the old approximation.")
     print(f"Warmup={WARMUP} iters={ITERS}, CUDA-event timing, P50/P90/mean in ms\n")
