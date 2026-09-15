@@ -93,7 +93,7 @@ precompute the RoPE tables via
 the graph as a small, fixed-address read-only buffer; nothing here
 allocates or recomputes them per replay.
 
-# Weight pointer keys this file expects
+# Weight dict values are CALLABLE linear ops, not raw pointers (OPT-004 step 5)
 =======================================================================
 
 See `flash_rt/frontends/torch/_imagewam_thor_spec.py` for the full
@@ -104,6 +104,20 @@ names). K/V weights are real per-head width (`hidden`/`action_attn_width`,
 NOT the old broadcast `HD` width); `*_query_norm`/`*_key_norm` are new
 QK-Norm scale weights; `*mlp0`/`mlp_in` widths are `mlp_hidden*2` (real
 SiLU-gated GLU).
+
+**`weights[key]` is a CALLABLE (`flash_rt.models.imagewam.quant_linear.Fp16Linear`/
+`Fp8Linear`/`Nvfp4Linear`), not a raw pointer int** (2026-09-14,
+`plan.md`'s "OPT-004 step 5" plan) — every weight-PROJECTION GEMM call
+site in this file is `key(slot)(x_ptr, out_ptr, m, stream)`, uniformly,
+regardless of precision; no branching on precision anywhere in this
+file. `imagewam_thor.py`'s own `_alloc_random_weights` constructs the
+selected linear-op class ONCE per weight (wrapping/quantizing the real
+weight there), based on its own `precision=` constructor parameter.
+Only weight-projection GEMMs go through this indirection — QK-Norm,
+RoPE, attention, `silu_glu_merged_fp16`, `ada_layer_norm_fp16`,
+`gate_res_fp16`, and the QKV-slice `_copy_slice` calls are UNCHANGED,
+still direct `fvk`/pointer calls (none of them are a GEMM against a
+learned weight matrix, so precision doesn't apply to them).
 
 **AdaLN modulation + gated residual now use FlashRT's own existing
 fused kernels (OPT-004 step 3, 2026-09-14)**: `fvk.ada_layer_norm_fp16`
@@ -294,12 +308,12 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     # --- text stream: freshly re-derived from raw context (kept
     # simplification, see the git history of this file / plan.md),
     # overwrites rows [0,x0) of combined ---
-    gemm.fp16_nn(bufs["context"], key("txt_in.weight"), combined, x0, hidden, joint_attention_dim, stream)
+    key("txt_in.weight")(bufs["context"], combined, x0, stream)
     txt_x = combined  # rows [0, x0)
 
     fvk.ada_layer_norm_fp16(txt_x, txt_scale1_t.data_ptr(), txt_shift1_t.data_ptr(), modded, x0, hidden, eps, stream)
     txt_qkv_merged = bufs["txt_qkv_merged"]  # (x0, 3*hidden)
-    gemm.fp16_nn(modded, key("txt_qkv.weight"), txt_qkv_merged, x0, 3 * hidden, hidden, stream)
+    key("txt_qkv.weight")(modded, txt_qkv_merged, x0, stream)
     _copy_slice(Q_O, txt_qkv_merged, x0, hidden, src_row_stride=3 * hidden)
     _copy_slice(K_cache, _col_ptr(txt_qkv_merged, hidden), x0, hidden, src_row_stride=3 * hidden)
     _copy_slice(V_cache, _col_ptr(txt_qkv_merged, 2 * hidden), x0, hidden, src_row_stride=3 * hidden)
@@ -316,7 +330,7 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     fvk.ada_layer_norm_fp16(img_x_ptr, img_scale1_t.data_ptr(), img_shift1_t.data_ptr(),
                              img_modded_ptr, img_len, hidden, eps, stream)
     img_qkv_merged = bufs["img_qkv_merged"]  # (img_len, 3*hidden)
-    gemm.fp16_nn(img_modded_ptr, key("img_qkv.weight"), img_qkv_merged, img_len, 3 * hidden, hidden, stream)
+    key("img_qkv.weight")(img_modded_ptr, img_qkv_merged, img_len, stream)
     _copy_slice(img_Q_ptr, img_qkv_merged, img_len, hidden, src_row_stride=3 * hidden)
     _copy_slice(img_K_ptr, _col_ptr(img_qkv_merged, hidden), img_len, hidden, src_row_stride=3 * hidden)
     _copy_slice(img_V_ptr, _col_ptr(img_qkv_merged, 2 * hidden), img_len, hidden, src_row_stride=3 * hidden)
@@ -334,27 +348,27 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
 
     # --- separate output projections, GATED residual ---
     proj = bufs["proj_scratch"]
-    gemm.fp16_nn(Q_O, key("txt_proj.weight"), proj, x0, hidden, hidden, stream)
+    key("txt_proj.weight")(Q_O, proj, x0, stream)
     fvk.gate_res_fp16(proj, txt_gate1_t.data_ptr(), txt_x, x0 * hidden, stream)
 
     img_proj_ptr = _ptr_offset(proj, x0, hidden)
-    gemm.fp16_nn(img_Q_ptr, key("img_proj.weight"), img_proj_ptr, img_len, hidden, hidden, stream)
+    key("img_proj.weight")(img_Q_ptr, img_proj_ptr, img_len, stream)
     fvk.gate_res_fp16(img_proj_ptr, img_gate1_t.data_ptr(), img_x_ptr, img_len * hidden, stream)
 
     # --- separate real SiLU-GLU MLPs, GATED residual ---
     fvk.ada_layer_norm_fp16(txt_x, txt_scale2_t.data_ptr(), txt_shift2_t.data_ptr(), modded, x0, hidden, eps, stream)
     txt_mlp_merged, txt_mlp_gated = bufs["txt_mlp_merged"], bufs["txt_mlp_gated"]
-    gemm.fp16_nn(modded, key("txt_mlp0.weight"), txt_mlp_merged, x0, mlp_hidden * 2, hidden, stream)
+    key("txt_mlp0.weight")(modded, txt_mlp_merged, x0, stream)
     fvk.silu_glu_merged_fp16(txt_mlp_merged, txt_mlp_gated, x0, mlp_hidden, stream)
-    gemm.fp16_nn(txt_mlp_gated, key("txt_mlp2.weight"), proj, x0, hidden, mlp_hidden, stream)
+    key("txt_mlp2.weight")(txt_mlp_gated, proj, x0, stream)
     fvk.gate_res_fp16(proj, txt_gate2_t.data_ptr(), txt_x, x0 * hidden, stream)
 
     fvk.ada_layer_norm_fp16(img_x_ptr, img_scale2_t.data_ptr(), img_shift2_t.data_ptr(),
                              img_modded_ptr, img_len, hidden, eps, stream)
     img_mlp_merged, img_mlp_gated = bufs["img_mlp_merged"], bufs["img_mlp_gated"]
-    gemm.fp16_nn(img_modded_ptr, key("img_mlp0.weight"), img_mlp_merged, img_len, mlp_hidden * 2, hidden, stream)
+    key("img_mlp0.weight")(img_modded_ptr, img_mlp_merged, img_len, stream)
     fvk.silu_glu_merged_fp16(img_mlp_merged, img_mlp_gated, img_len, mlp_hidden, stream)
-    gemm.fp16_nn(img_mlp_gated, key("img_mlp2.weight"), img_proj_ptr, img_len, hidden, mlp_hidden, stream)
+    key("img_mlp2.weight")(img_mlp_gated, img_proj_ptr, img_len, stream)
     fvk.gate_res_fp16(img_proj_ptr, img_gate2_t.data_ptr(), img_x_ptr, img_len * hidden, stream)
 
 
@@ -388,7 +402,7 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     fvk.ada_layer_norm_fp16(combined, scale_t.data_ptr(), shift_t.data_ptr(), modded, a0, hidden, eps, stream)
 
     qkv_merged = bufs["single_qkv_merged"]  # (a0, 3*hidden)
-    gemm.fp16_nn(modded, key("qkv.weight"), qkv_merged, a0, 3 * hidden, hidden, stream)
+    key("qkv.weight")(modded, qkv_merged, a0, stream)
     _copy_slice(Q_O, qkv_merged, a0, hidden, src_row_stride=3 * hidden)
     _copy_slice(K_cache, _col_ptr(qkv_merged, hidden), a0, hidden, src_row_stride=3 * hidden)
     _copy_slice(V_cache, _col_ptr(qkv_merged, 2 * hidden), a0, hidden, src_row_stride=3 * hidden)
@@ -398,15 +412,15 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     fvk.rope_apply_fp16_perhead(K_cache, rope_table, a0, NH, HD, stream)
 
     mlp_merged, mlp_gated = bufs["single_mlp_merged"], bufs["single_mlp_gated"]
-    gemm.fp16_nn(modded, key("mlp_in.weight"), mlp_merged, a0, mlp_hidden * 2, hidden, stream)
+    key("mlp_in.weight")(modded, mlp_merged, a0, stream)
     fvk.silu_glu_merged_fp16(mlp_merged, mlp_gated, a0, mlp_hidden, stream)
 
     attn.run("backbone", site_layer_idx, q_seq=a0, stream=stream)
 
     from_attn = bufs["proj_scratch"]
     from_mlp = bufs["proj_scratch2"]
-    gemm.fp16_nn(Q_O, key("attn_out_proj.weight"), from_attn, a0, hidden, hidden, stream)
-    gemm.fp16_nn(mlp_gated, key("mlp_down.weight"), from_mlp, a0, hidden, mlp_hidden, stream)
+    key("attn_out_proj.weight")(Q_O, from_attn, a0, stream)
+    key("mlp_down.weight")(mlp_gated, from_mlp, a0, stream)
     _add_inplace(from_attn, from_mlp, a0, hidden)
     fvk.gate_res_fp16(from_attn, gate_t.data_ptr(), combined, a0 * hidden, stream)
 
@@ -536,7 +550,7 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
     fvk.ada_layer_norm_fp16(action_x, scale1_t.data_ptr(), shift1_t.data_ptr(),
                              modded, num_action, action_hidden_dim, eps, stream)
     qkv_merged = bufs["action_qkv_merged"]  # (num_action, 3*action_attn_width)
-    gemm.fp16_nn(modded, key("qkv.weight"), qkv_merged, num_action, 3 * action_attn_width, action_hidden_dim, stream)
+    key("qkv.weight")(modded, qkv_merged, num_action, stream)
     _copy_slice(action_Q_ptr, qkv_merged, num_action, action_attn_width, src_row_stride=3 * action_attn_width)
     _copy_slice(action_K_ptr, _col_ptr(qkv_merged, action_attn_width), num_action, action_attn_width,
                 src_row_stride=3 * action_attn_width)
@@ -550,15 +564,15 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
     attn.run("mot", site_layer_idx, q_seq=num_action, kv_seq=dims["total"], stream=stream, x0=x0, a0=a0)
 
     proj = bufs["action_proj_scratch"]
-    gemm.fp16_nn(action_Q_ptr, key("proj.weight"), proj, num_action, action_hidden_dim, action_attn_width, stream)
+    key("proj.weight")(action_Q_ptr, proj, num_action, stream)
     fvk.gate_res_fp16(proj, gate1_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
 
     fvk.ada_layer_norm_fp16(action_x, scale2_t.data_ptr(), shift2_t.data_ptr(),
                              modded, num_action, action_hidden_dim, eps, stream)
     mlp_merged, mlp_gated = bufs["action_mlp_merged"], bufs["action_mlp_gated"]
-    gemm.fp16_nn(modded, key("mlp0.weight"), mlp_merged, num_action, action_mlp_hidden * 2, action_hidden_dim, stream)
+    key("mlp0.weight")(modded, mlp_merged, num_action, stream)
     fvk.silu_glu_merged_fp16(mlp_merged, mlp_gated, num_action, action_mlp_hidden, stream)
-    gemm.fp16_nn(mlp_gated, key("mlp2.weight"), proj, num_action, action_hidden_dim, action_mlp_hidden, stream)
+    key("mlp2.weight")(mlp_gated, proj, num_action, stream)
     fvk.gate_res_fp16(proj, gate2_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
 
 
@@ -589,7 +603,7 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     fvk.ada_layer_norm_fp16(action_x, scale_t.data_ptr(), shift_t.data_ptr(),
                              modded, num_action, action_hidden_dim, eps, stream)
     qkv_merged = bufs["action_qkv_merged"]  # (num_action, 3*action_attn_width)
-    gemm.fp16_nn(modded, key("qkv.weight"), qkv_merged, num_action, 3 * action_attn_width, action_hidden_dim, stream)
+    key("qkv.weight")(modded, qkv_merged, num_action, stream)
     _copy_slice(action_Q_ptr, qkv_merged, num_action, action_attn_width, src_row_stride=3 * action_attn_width)
     _copy_slice(action_K_ptr, _col_ptr(qkv_merged, action_attn_width), num_action, action_attn_width,
                 src_row_stride=3 * action_attn_width)
@@ -603,13 +617,13 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     attn.run("mot", site_layer_idx, q_seq=num_action, kv_seq=dims["total"], stream=stream, x0=x0, a0=a0)
 
     mlp_merged, mlp_gated = bufs["action_mlp_merged"], bufs["action_mlp_gated"]
-    gemm.fp16_nn(modded, key("mlp_in.weight"), mlp_merged, num_action, action_mlp_hidden * 2, action_hidden_dim, stream)
+    key("mlp_in.weight")(modded, mlp_merged, num_action, stream)
     fvk.silu_glu_merged_fp16(mlp_merged, mlp_gated, num_action, action_mlp_hidden, stream)
 
     from_attn = bufs["action_proj_scratch"]
     from_mlp = bufs["action_proj_scratch2"]
-    gemm.fp16_nn(action_Q_ptr, key("attn_out_proj.weight"), from_attn, num_action, action_hidden_dim, action_attn_width, stream)
-    gemm.fp16_nn(mlp_gated, key("mlp_down.weight"), from_mlp, num_action, action_hidden_dim, action_mlp_hidden, stream)
+    key("attn_out_proj.weight")(action_Q_ptr, from_attn, num_action, stream)
+    key("mlp_down.weight")(mlp_gated, from_mlp, num_action, stream)
     _add_inplace(from_attn, from_mlp, num_action, action_hidden_dim)
     fvk.gate_res_fp16(from_attn, gate_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
 

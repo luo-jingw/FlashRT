@@ -25,6 +25,7 @@ import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
 from flash_rt.models.imagewam.pipeline_real import compute_action_modulation, compute_shared_modulation
 from flash_rt.models.imagewam.pipeline_thor import _action_double_layer, _action_single_layer, _double_stream_layer, _single_stream_layer
+from flash_rt.models.imagewam.quant_linear import Fp16Linear
 from flash_rt.models.imagewam.real_action_expert import real_action_double_block_forward_fp16, real_action_single_block_forward_fp16
 from flash_rt.models.imagewam.real_double_stream_block import real_double_stream_block_forward_fp16
 from flash_rt.models.imagewam.real_single_stream_block import real_single_stream_block_forward_fp16
@@ -79,24 +80,27 @@ def test_double_stream_layer_matches_real_reference():
     torch.manual_seed(0)
     scale = 1.0 / (HD ** 0.5)
 
+    gemm = fvk.GemmRunner()
+
     context = _own(torch.randn(x0, joint_attention_dim, dtype=FP16, device=DEV) * 0.1)
     txt_in_w = _lin(hidden, joint_attention_dim, DEV)
     img = _own(torch.randn(img_len, hidden, dtype=FP16, device=DEV) * 0.1)
 
-    ref_w, ptr_w = {}, {("backbone", "double", 0, "txt_in.weight"): txt_in_w.data_ptr()}
+    ref_w, ptr_w = {}, {("backbone", "double", 0, "txt_in.weight"):
+                         Fp16Linear(gemm, txt_in_w.data_ptr(), hidden, joint_attention_dim)}
     for side in ("txt", "img"):
         q, k, v, fused = _fused_qkv(hidden, DEV)
         ref_w[f"{side}_qkv"] = torch.cat([q, k, v], dim=1)
-        ptr_w[("backbone", "double", 0, f"{side}_qkv.weight")] = fused.data_ptr()
+        ptr_w[("backbone", "double", 0, f"{side}_qkv.weight")] = Fp16Linear(gemm, fused.data_ptr(), 3 * hidden, hidden)
         proj = _lin(hidden, hidden, DEV)
         ref_w[f"{side}_proj"] = proj
-        ptr_w[("backbone", "double", 0, f"{side}_proj.weight")] = proj.data_ptr()
+        ptr_w[("backbone", "double", 0, f"{side}_proj.weight")] = Fp16Linear(gemm, proj.data_ptr(), hidden, hidden)
         mlp_in = _lin(mlp_hidden * 2, hidden, DEV)
         ref_w[f"{side}_mlp_in"] = mlp_in
-        ptr_w[("backbone", "double", 0, f"{side}_mlp0.weight")] = mlp_in.data_ptr()
+        ptr_w[("backbone", "double", 0, f"{side}_mlp0.weight")] = Fp16Linear(gemm, mlp_in.data_ptr(), mlp_hidden * 2, hidden)
         mlp_out = _lin(hidden, mlp_hidden, DEV)
         ref_w[f"{side}_mlp_out"] = mlp_out
-        ptr_w[("backbone", "double", 0, f"{side}_mlp2.weight")] = mlp_out.data_ptr()
+        ptr_w[("backbone", "double", 0, f"{side}_mlp2.weight")] = Fp16Linear(gemm, mlp_out.data_ptr(), hidden, mlp_hidden)
         qn = _norm_scale(HD, DEV)
         ref_w[f"{side}_query_norm"] = qn
         ptr_w[("backbone", "double", 0, f"{side}_query_norm")] = qn.data_ptr()
@@ -115,7 +119,6 @@ def test_double_stream_layer_matches_real_reference():
     mod_txt, mod_img, mod_single = compute_shared_modulation(timestep, mod_w, hidden)
     table = build_backbone_rope_table(x0, img_len, 1, axes_dim=AXES_DIM, theta=THETA, device=DEV)
 
-    gemm = fvk.GemmRunner()
     ctx = fvk.FvkContext()
 
     # Derive the exact same txt input both paths will use, via the
@@ -174,6 +177,8 @@ def test_single_stream_layer_matches_real_reference():
     torch.manual_seed(1)
     scale = 1.0 / (HD ** 0.5)
 
+    gemm = fvk.GemmRunner()
+
     q, k, v, fused = _fused_qkv(hidden, DEV)
     ref_w = {
         "qkv": torch.cat([q, k, v], dim=1),
@@ -184,10 +189,10 @@ def test_single_stream_layer_matches_real_reference():
         "key_norm": _norm_scale(HD, DEV),
     }
     ptr_w = {
-        ("backbone", "single", 0, "qkv.weight"): fused.data_ptr(),
-        ("backbone", "single", 0, "attn_out_proj.weight"): ref_w["attn_out"].data_ptr(),
-        ("backbone", "single", 0, "mlp_in.weight"): ref_w["mlp_in"].data_ptr(),
-        ("backbone", "single", 0, "mlp_down.weight"): ref_w["mlp_out"].data_ptr(),
+        ("backbone", "single", 0, "qkv.weight"): Fp16Linear(gemm, fused.data_ptr(), 3 * hidden, hidden),
+        ("backbone", "single", 0, "attn_out_proj.weight"): Fp16Linear(gemm, ref_w["attn_out"].data_ptr(), hidden, hidden),
+        ("backbone", "single", 0, "mlp_in.weight"): Fp16Linear(gemm, ref_w["mlp_in"].data_ptr(), mlp_hidden * 2, hidden),
+        ("backbone", "single", 0, "mlp_down.weight"): Fp16Linear(gemm, ref_w["mlp_out"].data_ptr(), hidden, mlp_hidden),
         ("backbone", "single", 0, "query_norm"): ref_w["query_norm"].data_ptr(),
         ("backbone", "single", 0, "key_norm"): ref_w["key_norm"].data_ptr(),
     }
@@ -203,7 +208,6 @@ def test_single_stream_layer_matches_real_reference():
     _, _, mod_single = compute_shared_modulation(timestep, mod_w, hidden)
     table = build_backbone_rope_table(3, 5, 1, axes_dim=AXES_DIM, theta=THETA, device=DEV)
 
-    gemm = fvk.GemmRunner()
     ctx = fvk.FvkContext()
 
     x = _own(torch.randn(total, hidden, dtype=FP16, device=DEV) * 0.1)
@@ -317,10 +321,10 @@ def test_action_double_and_single_layers_match_real_reference():
         "key_norm": _norm_scale(HD, DEV),
     }
     ptr_w = {
-        ("action_dit", "double", 0, "qkv.weight"): qkv_fused.data_ptr(),
-        ("action_dit", "double", 0, "proj.weight"): ref_w["proj"].data_ptr(),
-        ("action_dit", "double", 0, "mlp0.weight"): ref_w["mlp_in"].data_ptr(),
-        ("action_dit", "double", 0, "mlp2.weight"): ref_w["mlp_out"].data_ptr(),
+        ("action_dit", "double", 0, "qkv.weight"): Fp16Linear(gemm, qkv_fused.data_ptr(), 3 * attn_dim, action_hidden),
+        ("action_dit", "double", 0, "proj.weight"): Fp16Linear(gemm, ref_w["proj"].data_ptr(), action_hidden, attn_dim),
+        ("action_dit", "double", 0, "mlp0.weight"): Fp16Linear(gemm, ref_w["mlp_in"].data_ptr(), action_mlp_hidden * 2, action_hidden),
+        ("action_dit", "double", 0, "mlp2.weight"): Fp16Linear(gemm, ref_w["mlp_out"].data_ptr(), action_hidden, action_mlp_hidden),
         ("action_dit", "double", 0, "query_norm"): ref_w["query_norm"].data_ptr(),
         ("action_dit", "double", 0, "key_norm"): ref_w["key_norm"].data_ptr(),
     }
@@ -354,10 +358,10 @@ def test_action_double_and_single_layers_match_real_reference():
         "key_norm": _norm_scale(HD, DEV),
     }
     ptr_w2 = {
-        ("action_dit", "single", 0, "qkv.weight"): qkv_fused2.data_ptr(),
-        ("action_dit", "single", 0, "attn_out_proj.weight"): ref_w2["attn_out"].data_ptr(),
-        ("action_dit", "single", 0, "mlp_in.weight"): ref_w2["mlp_in"].data_ptr(),
-        ("action_dit", "single", 0, "mlp_down.weight"): ref_w2["mlp_out"].data_ptr(),
+        ("action_dit", "single", 0, "qkv.weight"): Fp16Linear(gemm, qkv_fused2.data_ptr(), 3 * attn_dim, action_hidden),
+        ("action_dit", "single", 0, "attn_out_proj.weight"): Fp16Linear(gemm, ref_w2["attn_out"].data_ptr(), action_hidden, attn_dim),
+        ("action_dit", "single", 0, "mlp_in.weight"): Fp16Linear(gemm, ref_w2["mlp_in"].data_ptr(), action_mlp_hidden * 2, action_hidden),
+        ("action_dit", "single", 0, "mlp_down.weight"): Fp16Linear(gemm, ref_w2["mlp_out"].data_ptr(), action_hidden, action_mlp_hidden),
         ("action_dit", "single", 0, "query_norm"): ref_w2["query_norm"].data_ptr(),
         ("action_dit", "single", 0, "key_norm"): ref_w2["key_norm"].data_ptr(),
     }

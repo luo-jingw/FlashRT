@@ -40,6 +40,7 @@ import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
 from flash_rt.models.imagewam.pipeline_real import compute_shared_modulation
 from flash_rt.models.imagewam.pipeline_thor import imagewam_prefill
+from flash_rt.models.imagewam.quant_linear import Fp16Linear
 from flash_rt.models.imagewam.rope import build_backbone_rope_table
 
 DEV = "cuda"
@@ -89,21 +90,30 @@ def test_prefill_runs_and_populates_kv_cache():
                 joint_attention_dim=joint_attention_dim, x0=x0, a0=a0,
                 num_layers_double=num_double, num_layers_single=num_single)
 
+    # gemm constructed before any weight so _fp16 below can wrap each
+    # weight in an Fp16Linear (OPT-004 step 5 -- weights dict values
+    # are now callables, not raw pointers; see pipeline_thor.py's own
+    # module docstring).
+    gemm = fvk.GemmRunner()
+
+    def _fp16(n, k):
+        return Fp16Linear(gemm, _lin(n, k).data_ptr(), n, k)
+
     weights = {}
     for L in range(num_double):
-        weights[("backbone", "double", L, "txt_in.weight")] = _lin(hidden, joint_attention_dim).data_ptr()
+        weights[("backbone", "double", L, "txt_in.weight")] = _fp16(hidden, joint_attention_dim)
         for prefix in ("txt", "img"):
-            weights[("backbone", "double", L, f"{prefix}_qkv.weight")] = _lin(3 * hidden, hidden).data_ptr()
-            weights[("backbone", "double", L, f"{prefix}_proj.weight")] = _lin(hidden, hidden).data_ptr()
-            weights[("backbone", "double", L, f"{prefix}_mlp0.weight")] = _lin(mlp_hidden * 2, hidden).data_ptr()
-            weights[("backbone", "double", L, f"{prefix}_mlp2.weight")] = _lin(hidden, mlp_hidden).data_ptr()
+            weights[("backbone", "double", L, f"{prefix}_qkv.weight")] = _fp16(3 * hidden, hidden)
+            weights[("backbone", "double", L, f"{prefix}_proj.weight")] = _fp16(hidden, hidden)
+            weights[("backbone", "double", L, f"{prefix}_mlp0.weight")] = _fp16(mlp_hidden * 2, hidden)
+            weights[("backbone", "double", L, f"{prefix}_mlp2.weight")] = _fp16(hidden, mlp_hidden)
             weights[("backbone", "double", L, f"{prefix}_query_norm")] = _norm_scale(HD).data_ptr()
             weights[("backbone", "double", L, f"{prefix}_key_norm")] = _norm_scale(HD).data_ptr()
     for L in range(num_single):
-        weights[("backbone", "single", L, "qkv.weight")] = _lin(3 * hidden, hidden).data_ptr()
-        weights[("backbone", "single", L, "mlp_in.weight")] = _lin(mlp_hidden * 2, hidden).data_ptr()
-        weights[("backbone", "single", L, "attn_out_proj.weight")] = _lin(hidden, hidden).data_ptr()
-        weights[("backbone", "single", L, "mlp_down.weight")] = _lin(hidden, mlp_hidden).data_ptr()
+        weights[("backbone", "single", L, "qkv.weight")] = _fp16(3 * hidden, hidden)
+        weights[("backbone", "single", L, "mlp_in.weight")] = _fp16(mlp_hidden * 2, hidden)
+        weights[("backbone", "single", L, "attn_out_proj.weight")] = _fp16(hidden, hidden)
+        weights[("backbone", "single", L, "mlp_down.weight")] = _fp16(hidden, mlp_hidden)
         weights[("backbone", "single", L, "query_norm")] = _norm_scale(HD).data_ptr()
         weights[("backbone", "single", L, "key_norm")] = _norm_scale(HD).data_ptr()
 
@@ -164,7 +174,6 @@ def test_prefill_runs_and_populates_kv_cache():
         use_perhead_kv=True, use_real_mot_mask=True,
     )
 
-    gemm = fvk.GemmRunner()
     imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, attn=backend,
                       mod_txt=mod_txt, mod_img=mod_img, mod_single=mod_single,
                       rope_table=rope_table.data_ptr())
