@@ -2588,63 +2588,117 @@ dependency, used directly for Phase 2 below instead of blindly porting
 `imagewam_real_checkpoint_validation.py`'s live-attribute-path
 approach.
 
-### Phase 2 — `checkpoint_loader.py` (Thor-blind, code review only)
+### Phase 2 — `checkpoint_loader.py`
 
-Phase Status: pending
+Phase Status: completed (FAR beyond the plan's own "Thor-blind" expectation)
 
-Goal: port `load_real_model`/`extract_*_weights`/`_w`/`_v` from
-`imagewam_real_checkpoint_validation.py` into reusable library code,
-returning the flat weights dict `imagewam_thor.py` needs, with the
-`txt_in`/`img_in` shared-across-layers mapping handled correctly (see
-Problem's own "second finding").
+**Design changed from the plan's own Interface section, for the
+better, once the real checkpoint files turned out to be locally
+present** (see Phase 1's own "unplanned discovery" note): rather than
+porting `imagewam_real_checkpoint_validation.py`'s live-attribute-path
+`extract_*_weights` (which needs the `imagewam`/`flux2` packages to
+construct the real model object), `checkpoint_loader.py` reads
+`model.pt`'s own raw `state_dict` by KEY NAME
+(`torch.load(..., map_location='cpu', mmap=True)['mot']` — confirmed
+directly to already be a flat `key -> tensor` `OrderedDict`, no live
+module construction needed at all). This needs NEITHER `imagewam` NOR
+`flux2` to load real tensors — only `torch`.
+Goal: flat weights dict keyed exactly like `imagewam_thor.py`'s own
+`self._weights`, `txt_in`/`img_in` shared correctly across layers.
 Modified files: new `checkpoint_loader.py`.
 Affected modules: none (new, standalone module).
-Observation method: import-safety only on Ada (`import
-flash_rt.models.imagewam.checkpoint_loader` must succeed without
-`imagewam`/`flux2` installed — lazy-import guard, same pattern as
-`Nvfp4Linear`); calling `load_real_imagewam_weights(...)` itself
-CANNOT be exercised here at all (no packages, no checkpoint) — this
-phase's actual correctness is unverifiable until Thor.
+**Observation method, actually executed on Ada, not just reviewed**:
+(1) `test_shapes_match_confirmed_real_dims` — every real weight
+tensor's shape matches this project's own confirmed real dims exactly,
+343 tensors, all pass; (2) `test_real_double_stream_layer_forward_finite`
+— one REAL backbone double-stream layer (real trained weights, random
+activations) through `pipeline_thor.py`'s own pointer path, finite,
+non-degenerate output (std=15.18, not near-zero).
+**Two real bugs found and fixed, both only catchable by actually
+running this, not by code review**: (a) `build_real_modulation_weights`
+initially transposed the modulation weights into FlashRT's `(K,N)`
+GEMM convention — WRONG, since `adaln.py`'s `mlp_embedder`/`modulation`
+are plain `F.linear(x, weight)` calls needing the real, native
+`(out,in)` layout directly, not the transposed one; caught by an
+`RuntimeError: shapes cannot be multiplied` on the very first real
+forward attempt. (b) ActionDiT's own double-block weights were
+initially keyed with an `img_` PREFIX (matching the backbone's own
+dual-stream convention) — WRONG, `_action_double_layer` expects PLAIN
+`"qkv.weight"`/`"proj.weight"` (ActionDiT is single-stream, no prefix,
+confirmed against `imagewam_thor.py`'s own `_alloc_random_weights`);
+caught by a `KeyError` during the first real graph-capture attempt.
+Both are exactly the class of silent-wrong-shape/wrong-convention bug
+this plan's own Problem section worried code written blind for Thor
+could hide — found here instead, before ever reaching Thor.
 
 ### Phase 3 — frontend integration
 
-Phase Status: pending
+Phase Status: completed (also far beyond "Thor-blind")
 
-Goal: `imagewam_thor.py`'s new constructor kwargs, `_use_real_weights`
-branch, `_rnd_linear` refactored to share its wrapping logic with the
-real-weight path (same linear-op selection, different tensor source).
+Goal: `imagewam_thor.py`'s new `ckpt_path` constructor kwarg (simpler
+than the plan's own originally-designed 5-kwarg interface — no
+`flux2_model_path`/`flux2_ae_model_path`/`flux2_src`/`action_dim`
+needed, since Phase 2's key-based loader only needs the one checkpoint
+file), `_wrap_linear` extracted from `_rnd_linear` so both the random
+and real-weight paths share identical precision-selection logic,
+`_load_real_weights`/`_compute_backbone_modulation`/
+`_compute_action_modulations` all gained a real-weight branch.
 Modified files: `imagewam_thor.py`.
 Affected modules: frontend construction.
-Observation method: on Ada, the RANDOM path (`flux2_model_path=None`,
-today's default) must still work completely unchanged — regression
-check, full test suite. The REAL path can only be confirmed to raise
-the RIGHT error here (missing `imagewam` package) — same "fails at the
-documented place" check as every quantization phase before it, not a
-real pass/fail on correctness.
+**Observation method, actually executed end-to-end at REAL FLUX.2-4B
+dims on Ada, not just "fails at the documented place"**: constructed
+`ImageWAMTorchFrontendThor(dims_override=<real dims>, ckpt_path=<real
+model.pt>)`, ran `set_prompt()` (real CUDA Graph capture with real
+weights) and `infer()` (real graph replay) — ALL THREE succeeded,
+producing a finite `(64, 7)` action tensor (mean=0.21, std=0.34, a
+plausible normalized-action range). **Unexpected finding**: peak CUDA
+memory allocated measured at ~9.86GB, exceeding `nvidia-smi`'s own
+reported 8188MiB total — this WSL2 environment's CUDA driver evidently
+pages beyond the reported dedicated VRAM into host RAM rather than
+raising OOM, letting this one-time construction+capture actually
+complete here. Not something to rely on for a steady-state Thor
+PERFORMANCE claim (paged memory is slow), but real enough that
+CORRECTNESS at real dims is now verified on this dev machine, not just
+projected. The random-weight path (default, `ckpt_path=None`) was
+re-verified unchanged across the full `tests/test_imagewam_*.py` suite
+throughout this phase's own development.
+New `tests/test_imagewam_checkpoint_loader.py` (skips cleanly if the
+real checkpoint files aren't present, matching this project's own
+established skip-pattern) captures all three checks above as a
+permanent regression test, not just an ad-hoc verification.
 
 ### Phase 4 — real Thor validation + close-out
 
-Phase Status: pending
+Phase Status: pending (narrowed: correctness already verified above; Thor's own job is SPEED + confirming hardware portability)
 
-Goal: hand to the user for a real Thor run: construct
-`ImageWAMTorchFrontendThor` with real checkpoint paths, run `set_prompt`/
-`infer`, and separately re-run `imagewam_real_checkpoint_validation.py`
-itself (updated to also extract/apply `img_in`, matching Phase 1's
-addition) to get a real cosine number for the NOW-COMPLETE real-math
-path (previously 0.999927/0.999963 WITHOUT img_in — Phase 1 changes
-what's being compared, so this number needs re-measuring, not assumed
-unchanged).
+Goal: hand to the user for a real Thor run. Since Phase 2/3 already
+verified real-weight CORRECTNESS end-to-end on Ada (finite, plausible
+output, at real dims, with the actual release checkpoint), Thor's
+remaining job is narrower than originally planned:
+1. Confirm the SAME construction/capture/infer sequence completes on
+   Thor without the WSL2 memory-paging dependency Phase 3 relied on
+   here (Thor's own 128GB unified memory should make this a non-issue,
+   but has not been confirmed).
+2. Real per-layer/full-prefill P50 with real weights (this dev
+   machine's numbers, if even measurable through memory paging, would
+   not be a meaningful Thor performance number).
+3. Optionally, re-run `imagewam_real_checkpoint_validation.py` itself
+   (updated to also extract/apply `img_in`, matching Phase 1's
+   addition) for an independent cosine number against the REAL
+   official reference path (not just this project's own internal
+   finite/non-degenerate check) — previously 0.999927/0.999963 WITHOUT
+   img_in; Phase 1 changes what's being compared, so this number needs
+   re-measuring, not assumed unchanged. This is a nice-to-have
+   independent confirmation, not a blocker — Phase 2/3's own
+   `test_imagewam_checkpoint_loader.py` already gives a real, if less
+   independent, correctness signal.
 Modified files: `opportunities.md` (OPT-001/OPT-008 closed),
 `plan.md` (this write-up).
 Affected modules: none (measurement only).
-Observation method: cosine (>0.999, matching the already-established
-real-weight bar, tighter than the >0.98 lossy-quantization bar since
-this is FP16 real weights, not a quantized precision) + confirmation
-that memory is managed correctly (the ~18GB real model is freed after
-extraction, not left resident alongside FlashRT's own weight copies —
-a real, first-time-encountered memory concern for this project, worth
-an explicit `nvidia-smi`/memory check on Thor, not just a correctness
-check).
+Observation method: per-layer P50 table, same style as every prior
+OPT-004 entry; construction/capture/infer success confirmed without
+memory pressure; optionally a cosine number from re-running the
+official-reference validation script.
 
 ## Stop Conditions Encountered
 

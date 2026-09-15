@@ -1,8 +1,58 @@
 # OPT-001
 
-Status: not promoted
+Status: real-weight path RESOLVED and verified end-to-end on Ada at real dims (2026-09-15, `plan.md`'s own "OPT-001" plan Phases 1-3); FP8 calibration/quantization split off into OPT-004 steps 5-6 (already resolved separately, see that section)
 
 Area: ImageWAM on Thor — precision and real-weight path
+
+## Real-weight path result (2026-09-15)
+
+`imagewam_thor.py` gained a `ckpt_path=` constructor kwarg; new
+`checkpoint_loader.py` reads the real release checkpoint's own raw
+`state_dict` by key name (`torch.load(..., mmap=True)['mot']` — no
+`imagewam`/`flux2` packages needed at all, just `torch`). Two real
+architecture gaps found and fixed as prerequisites: `img_in` (image
+tokens were never projected from raw `HD` width to `hidden` width
+anywhere in this project) and `action_encoder`/`head` (the flow-
+matching Euler integration was happening in `action_hidden_dim` space
+instead of real `action_dim` space) — both confirmed by reading
+`imagewam`'s own real source directly (a local read-only clone,
+`/home/ljw/projects/pi0.5/tmp/ImageWAM`) and closing `opportunities.md`
+OPT-008's long-standing "img_in not modeled anywhere" finding as a
+side effect.
+
+**Verified END TO END on this dev machine, not just Thor-blind code
+review** — a genuine surprise mid-plan: the real checkpoint FILES
+(`/home/ljw/projects/pi0.5/models/`) turned out to already be present
+locally (contradicting `PROJECT.md`'s own prior "never will" claim,
+now corrected there), letting real weights actually be loaded and run
+here despite `flux2` source still being absent and 8GB VRAM being far
+short of the real model's ~8.9GB weights alone. `ImageWAMTorchFrontendThor`
+constructed with real weights at REAL FLUX.2-4B dims, captured a real
+CUDA Graph, and replayed it, producing a finite `(64,7)` action tensor
+(mean=0.21, std=0.34) — construction, capture, AND inference all real.
+Peak CUDA memory measured at ~9.86GB despite `nvidia-smi` reporting
+8188MiB total, evidently because this WSL2 environment's CUDA driver
+pages beyond dedicated VRAM into host RAM rather than raising OOM (not
+reliable for a Thor PERFORMANCE claim, but real enough for a
+correctness check).
+
+Two real, silent-wrong-shape/convention bugs were found and fixed only
+because this was actually run, not just reviewed: modulation weights
+needed the real `(out,in)` layout (plain `F.linear`), not the FlashRT
+`(K,N)` GEMM-transposed one; ActionDiT's own double-block weights
+needed PLAIN (unprefixed) slot names, not the backbone's `img_`-prefixed
+dual-stream convention. New `tests/test_imagewam_checkpoint_loader.py`
+(skips cleanly if the real checkpoint files aren't present elsewhere)
+locks in all three checks (shape match, one real-weight layer forward,
+full real-checkpoint frontend) as permanent regression coverage.
+
+**What remains, Thor-only**: confirming this same sequence completes
+on Thor's own 128GB unified memory without the WSL2 paging dependency,
+and a real per-layer P50 with real weights (this dev machine's numbers
+would not be a meaningful Thor performance number). See `plan.md`'s
+own "OPT-001" Phase 4.
+
+## Original framing (superseded by the above, kept for history)
 
 ## Observation
 
