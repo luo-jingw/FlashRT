@@ -1037,6 +1037,45 @@ at ActionDiT's own `M=64` shapes (low priority, not where the win is);
 real-checkpoint correctness check for `fp8_static_cutlass` once OPT-001
 has real weights.
 
+## Real multi-sample calibration -- investigated, BLOCKED on a data mismatch, not started
+
+`_calibrate_fp8`'s own current implementation (`imagewam_thor.py`)
+freezes `StaticFp8Linear`'s activation scale from a disposable random
+tensor, not a real observation distribution -- the full house
+calibration mechanism (`docs/calibration.md`'s multi-sample/percentile
+approach, real per-model data) was never attempted, since no real
+observation data was reachable until now.
+
+Investigated using `JingwuLuo/LingBot-VA_RoboTwin_clibration_data` (HF,
+public, no token needed, 250 episodes, `actions_N.pt`/`latents_N.pt`/
+`obs_data_N.pt` per episode) as a real-data source. **Confirmed
+mismatch, not usable as-is**: this dataset is for a DIFFERENT model
+(`LingBot-VA`, a bimanual RoboTwin world-model target -- a separate
+project this user also works on, per this session's own cross-project
+memory) and a different action/task space than
+`ImageWAM-FLUX.2-4B-LIBERO`:
+- `actions_N.pt`: shape `(1,30,2,16,1)` bf16, range `[-1,1]` -- does
+  not reshape to LIBERO's confirmed `action_dim=7`, and `30` timesteps
+  != this project's own `num_action`/`max_action_horizon=64`.
+- `latents_N.pt`: shape `(1,48,2,24,20)` bf16 -- a 5D video-latent
+  shape, not this project's own `img_raw` 2D `(img_len, HD=128)`
+  per-token convention.
+- `obs_data_N.pt` DOES contain real, usable-shaped raw RGB frames
+  (`240x320x3` uint8, 3 camera views) and a real text `task` prompt
+  string per episode -- but encoding these into `img_raw`/`context`
+  the way this project's own `img_in`/`txt_in` expect still needs the
+  real VAE (`flux2` source, confirmed absent on this dev machine) and
+  the real Qwen3-4B text encoder (also not wired into this project's
+  own pipeline at all -- `_prepare_flux2_infer_text` is `imagewam`'s
+  own real preprocessing step, not something `pipeline_thor.py`
+  reimplements).
+
+Not attempted further without user direction: forcing a shape-mismatched
+or wrong-distribution tensor through `calibrate()` would produce a
+scale that LOOKS real but calibrates against the wrong thing --
+scientifically meaningless, worse than the current honest
+random-tensor placeholder (which is at least documented as such).
+
 # OPT-005
 
 Status: RESOLVED and wired in as an opt-in — verified on real Thor hardware for BOTH broadcast K/V (cosine=1.000000, rel_l2=0.000412, 4.09x) and real per-head K/V (cosine=1.000000, rel_l2=0.000427/0.000614, 3.75x standalone); folded into the full per-layer benchmark (commit `2a4079b`), confirming a real -10.5% prefill win on top of OPT-004's steps 1-3. Opt-in via `use_fa4=` (frontend) / `IMAGEWAM_USE_FA4=1` (bench script), default False since this dev machine's own Ada GPU has no FA4 runtime.

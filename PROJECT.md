@@ -27,21 +27,29 @@ this fork covers Jetson AGX Thor (sm_110).
 
 ## Environment
 
-- Platform / hardware: local development machine, 8GB VRAM / 32GB RAM
-  (too small to hold ImageWAM's own weights — see below); target
-  deployment hardware is Jetson AGX Thor (sm_110), accessed separately,
-  not on this machine.
+- Platform / hardware: local development machine, 8GB VRAM (`nvidia-smi`
+  reported) / 23GB RAM, WSL2 (`Linux 5.15.167.4-microsoft-standard-WSL2+`);
+  target deployment hardware is Jetson AGX Thor (sm_110), accessed
+  separately, not on this machine.
 - Shared with (other users or projects on the same account or machine):
   none known.
 - Constraints imposed by the environment: ImageWAM's FLUX.2-4B variant
   needs roughly 18GB of weights alone (FLUX.2-4B backbone + Qwen3-4B
-  text encoder + VAE, bf16) before activation memory — this does not
-  fit the local machine's 8GB VRAM. Local work is limited to
-  component-level testing that does not require the full model
-  resident on one GPU (e.g. the Qwen3-4B text-context precompute path
-  on CPU, or the VAE/patch-tokenization path alone); end-to-end
-  verification of the full pipeline happens on separate, larger
-  hardware.
+  text encoder + VAE, bf16) / ~8.9GB for just the transformer weights
+  this project's own pipeline actually loads (fp16, no VAE/text
+  encoder) — either way, more than the local machine's 8GB VRAM.
+  **Refined 2026-09-15 (OPT-001)**: this is a SOFT limit, not a hard
+  one, on this specific WSL2 environment — `torch.cuda.max_memory_allocated()`
+  reached ~9.86GB during a real end-to-end construct/capture/infer run
+  without raising `OutOfMemoryError`, because this environment's CUDA
+  driver pages beyond the reported dedicated VRAM into host RAM rather
+  than failing. It technically completes, but at a catastrophic cost
+  (~13.6s per `infer()` call, vs. the same math's own per-layer-bench
+  timing which sums to well under 1s) — for any correctness check that
+  doesn't care about latency, the full real-weight pipeline CAN now run
+  here; for anything timing-sensitive, still use the per-layer-isolated
+  benchmarks (`imagewam_thor_bench.py`, one layer type resident at a
+  time) or hand off to Thor.
 - Local FlashRT build: usable for kernel-correctness testing on this
   machine's Ada (sm_89) GPU, not for Thor-specific performance
   (correctness only — new kernels here are not FP8-specific, so this
@@ -154,11 +162,23 @@ Do not record token values or other secrets here.
   writing new kernels from scratch and testing with randomly
   initialized weights before any real checkpoint or calibration data
   is involved.
-- Current work (see `plan.md`) uses randomly initialized weights, not
-  a downloaded checkpoint, and explicitly excludes FP8 quantization,
-  calibration, and accuracy validation. These are deferred, not
-  abandoned — they require real weights and calibration data this
-  stage does not use.
+- **Superseded 2026-09-15**: the note that used to stand here ("current
+  work uses randomly initialized weights... explicitly excludes FP8
+  quantization, calibration") is no longer accurate. Real checkpoint
+  loading is DONE (`opportunities.md` OPT-001, `plan.md`'s own
+  "OPT-001" plan, Phases 1-3 completed, verified end-to-end on this
+  machine). FP8/NVFP4 quantized GEMM (dynamic, static-scale, and
+  static-scale+CUTLASS) is DONE with real Thor numbers (`opportunities.md`
+  OPT-004 steps 5-6). What is genuinely still deferred: the FULL house
+  calibration mechanism (`docs/calibration.md`'s multi-sample/
+  percentile calibration against real OBSERVATION data, not just a
+  disposable random tensor) — `_calibrate_fp8`'s own current
+  implementation freezes a scale from random noise, not a real
+  activation distribution; upgrading this needs real per-model
+  observation data whose tensor shapes actually match this project's
+  own `img_raw`/`context`/`action_latent` conventions, still an open
+  question as of this note (see `opportunities.md` OPT-004's own
+  calibration entry for the exact gap and what was tried).
 - **Confirmed end goal (2026-09-14, explicit user direction): this
   targets real Thor deployment, not an indefinitely-scoped structural
   dry run.** `pipeline_thor.py`/`_imagewam_thor_spec.py`/

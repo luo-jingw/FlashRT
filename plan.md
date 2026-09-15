@@ -1532,7 +1532,7 @@ current active one.
 
 # Plan: OPT-004 step 5 — FP8/NVFP4 quantized GEMM for ImageWAM
 
-Plan Status: approved
+Plan Status: completed (all 4 phases done, real Thor results recorded)
 
 ## Problem
 
@@ -1887,7 +1887,7 @@ existing scope, not a full-pipeline end-to-end check).
 
 # Plan: OPT-004 step 6 — static-scale CUTLASS FP8 for ImageWAM
 
-Plan Status: approved
+Plan Status: completed (all 4 phases done, real Thor results recorded)
 
 ## Problem
 
@@ -1947,6 +1947,18 @@ choice, both of which are meaningful and measurable even against
 random weights (a fixed random tensor has a real, stable amax, same as
 this project's own existing FP8/NVFP4 correctness tests already rely
 on). Full calibration is OPT-001's job once a real checkpoint exists.
+**Update 2026-09-15**: OPT-001's real checkpoint (weights) now exists
+and loads on this machine, but real multi-sample calibration needs
+real per-episode OBSERVATION data too (images/text/actions actually
+flowing through the model), a DIFFERENT thing from checkpoint weights
+-- investigated using a real HF dataset the user pointed at
+(`JingwuLuo/LingBot-VA_RoboTwin_clibration_data`), found to be shaped
+for a different model (`LingBot-VA`, bimanual RoboTwin, incompatible
+action/latent shapes) and not directly usable without the real VAE/
+Qwen3 text encoder this project still doesn't have wired in either way
+-- see `opportunities.md`'s own "Real multi-sample calibration"
+entry (OPT-004) for the full account. Still blocked, now on a data
+source, not on a missing checkpoint.
 
 **Consistent with `PROJECT.md`'s own standing division-of-labor
 instruction**: FP8 testing belongs on Thor, not on this Ada dev
@@ -2679,9 +2691,18 @@ remaining job is narrower than originally planned:
    Thor without the WSL2 memory-paging dependency Phase 3 relied on
    here (Thor's own 128GB unified memory should make this a non-issue,
    but has not been confirmed).
-2. Real per-layer/full-prefill P50 with real weights (this dev
-   machine's numbers, if even measurable through memory paging, would
-   not be a meaningful Thor performance number).
+2. Real per-layer/full-prefill P50 with real weights. **Measured on
+   this dev machine anyway, to have a concrete before/after**: full
+   `set_prompt()`+`infer()` end to end, real weights, real dims —
+   median 13.6 SECONDS per `infer()` call (8 samples, 12.9-14.0s),
+   ~9.86GB peak allocated against an 8GB card — confirms the WSL2
+   paging theory catastrophically dominates (per-layer-isolated
+   benchmarks at the same shapes sum to well under 1s: backbone
+   prefill 224ms + one denoise step 13.4ms, `imagewam_thor_bench.py`'s
+   own numbers). This dev-machine number is NOT a Thor performance
+   number — it is a memory-paging artifact, kept here only to make
+   clear WHY Thor's own number (no paging expected, 128GB unified
+   memory) is the one that actually matters.
 3. Optionally, re-run `imagewam_real_checkpoint_validation.py` itself
    (updated to also extract/apply `img_in`, matching Phase 1's
    addition) for an independent cosine number against the REAL
