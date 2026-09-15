@@ -34,7 +34,9 @@ def test_encode_prompts_real_shape():
 
     assert context.shape == (1, 512, 7680), f"expected (1,512,7680), got {tuple(context.shape)}"
     assert mask.shape == (1, 512)
-    assert context.dtype == torch.float16
+    assert context.dtype == torch.bfloat16, (
+        "opportunities.md OPT-001 'FP16 residual overflow': context must stay BF16, "
+        "not FP16 -- see text_encoder.py's own encode_prompts docstring")
     assert mask.dtype == torch.bool
     assert torch.isfinite(context).all(), "real Qwen3 encode produced NaN/Inf"
     num_real = mask.sum().item()

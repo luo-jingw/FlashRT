@@ -29,6 +29,7 @@ import torch
 
 DEV = "cuda"
 FP16 = torch.float16
+BF16 = torch.bfloat16
 
 _CKPT_PATH = "/home/ljw/projects/pi0.5/models/imagewam_flux2_4b_libero/model.pt"
 _CKPT_AVAILABLE = os.path.exists(_CKPT_PATH)
@@ -102,7 +103,7 @@ def test_real_double_stream_layer_forward_finite():
     )
     from flash_rt.models.imagewam.pipeline_real import compute_shared_modulation
     from flash_rt.models.imagewam.pipeline_thor import _double_stream_layer
-    from flash_rt.models.imagewam.quant_linear import Fp16Linear
+    from flash_rt.models.imagewam.quant_linear import Bf16OutLinear, Fp16Linear
     from flash_rt.models.imagewam.rope import build_backbone_rope_table
 
     sd = load_real_imagewam_state_dict(_CKPT_PATH)
@@ -127,6 +128,13 @@ def test_real_double_stream_layer_forward_finite():
             tg = t.to(DEV)
             keepalive.append(tg)
             weights[key] = tg.data_ptr()
+        elif slot in ("txt_in.weight", "img_in.weight"):
+            # OPT-001 "FP16 residual overflow" fix -- see Bf16OutLinear's
+            # own docstring in quant_linear.py.
+            n, k = t.shape[1], t.shape[0]
+            tg = t.to(DEV, dtype=BF16).contiguous()
+            keepalive.append(tg)
+            weights[key] = Bf16OutLinear(gemm, tg.data_ptr(), n, k)
         else:
             n, k = t.shape[1], t.shape[0]
             tg = t.to(DEV).contiguous()
@@ -155,10 +163,13 @@ def test_real_double_stream_layer_forward_finite():
     torch.manual_seed(0)
     # Random inputs at real dims -- only the WEIGHTS are real here (see
     # module docstring); this checks the loaded weights flow correctly
-    # through the real math, not semantic output quality.
-    context = (torch.randn(X0, JOINT_ATTN_DIM, device=DEV) * 0.5).to(FP16)
-    img_raw = (torch.randn(img_len, HD, device=DEV) * 0.5).to(FP16)
-    combined = torch.zeros(A0, HIDDEN, dtype=FP16, device=DEV)
+    # through the real math, not semantic output quality. `context`/
+    # `img_raw`/`combined` are BF16 (OPT-001 "FP16 residual overflow"),
+    # matching `Bf16OutLinear`'s own dtype requirement and the real
+    # persistent-residual buffer's real range need.
+    context = (torch.randn(X0, JOINT_ATTN_DIM, device=DEV) * 0.5).to(BF16)
+    img_raw = (torch.randn(img_len, HD, device=DEV) * 0.5).to(BF16)
+    combined = torch.zeros(A0, HIDDEN, dtype=BF16, device=DEV)
     table = build_backbone_rope_table(X0, img_len, 1, device=DEV)
     bufs = {
         "context": context.data_ptr(), "img_raw": img_raw.data_ptr(), "backbone_hidden": combined.data_ptr(),

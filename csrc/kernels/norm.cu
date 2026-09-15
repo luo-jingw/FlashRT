@@ -1016,6 +1016,78 @@ void ada_layer_norm_fp16(const __half* x, const __half* scale, const __half* shi
         x, scale, shift, out, dim, eps);
 }
 
+// Same op, but `x` (the persistent residual being normalized) is BF16
+// instead of FP16 -- ImageWAM real-Qwen3-conditioning fix
+// (opportunities.md OPT-001 "FP16 residual overflow"): real Thor
+// measurement showed the real backbone's own residual stream
+// legitimately reaches ~120000 in magnitude at the real x0=512
+// sequence length with real Qwen3-4B text conditioning, which FP16
+// (max ~65504) cannot hold at all; BF16 has FP32's exponent range at
+// the same 2 bytes/elem. `scale`/`shift` (small, already-bounded AdaLN
+// modulation vectors) and `out` (the normalized value, always O(1-10)
+// once LayerNorm has divided out the residual's own scale) both stay
+// FP16 -- only the wide-range residual READ needs BF16.
+__global__ void ada_layer_norm_bf16in_fp16out_kernel(const __nv_bfloat16* __restrict__ x,
+                                                      const __half* __restrict__ scale,
+                                                      const __half* __restrict__ shift,
+                                                      __half* __restrict__ out,
+                                                      int dim, float eps) {
+    int row = blockIdx.x;
+    const __nv_bfloat162* x2 = reinterpret_cast<const __nv_bfloat162*>(x + row * dim);
+    const __half2* sc2 = reinterpret_cast<const __half2*>(scale);
+    const __half2* sh2 = reinterpret_cast<const __half2*>(shift);
+    __half2* out2 = reinterpret_cast<__half2*>(out + row * dim);
+    int dim2 = dim >> 1;
+
+    extern __shared__ float shared[];
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
+        __nv_bfloat162 val = x2[i];
+        local_sum += __bfloat162float(val.x) + __bfloat162float(val.y);
+    }
+    float val = local_sum;
+    for (int o = 16; o > 0; o >>= 1) val += __shfl_xor_sync(0xffffffff, val, o);
+    int lane = threadIdx.x & 31, wid = threadIdx.x >> 5;
+    if (!lane) shared[wid] = val;
+    __syncthreads();
+    if (!wid) { val = (lane < (blockDim.x >> 5)) ? shared[lane] : 0;
+                for (int o = 16; o > 0; o >>= 1) val += __shfl_xor_sync(0xffffffff, val, o); }
+    __syncthreads(); if (!threadIdx.x) shared[0] = val; __syncthreads();
+    float mean = shared[0] / dim;
+
+    float local_var = 0.0f;
+    for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
+        __nv_bfloat162 v = x2[i];
+        float d0 = __bfloat162float(v.x) - mean, d1 = __bfloat162float(v.y) - mean;
+        local_var += d0 * d0 + d1 * d1;
+    }
+    val = local_var;
+    for (int o = 16; o > 0; o >>= 1) val += __shfl_xor_sync(0xffffffff, val, o);
+    if (!lane) shared[wid] = val;
+    __syncthreads();
+    if (!wid) { val = (lane < (blockDim.x >> 5)) ? shared[lane] : 0;
+                for (int o = 16; o > 0; o >>= 1) val += __shfl_xor_sync(0xffffffff, val, o); }
+    __syncthreads(); if (!threadIdx.x) shared[0] = val; __syncthreads();
+    float inv_std = rsqrtf(shared[0] / dim + eps);
+
+    for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
+        __nv_bfloat162 xv = x2[i];
+        __half2 sv = sc2[i], hv = sh2[i];
+        float n0 = (__bfloat162float(xv.x) - mean) * inv_std;
+        float n1 = (__bfloat162float(xv.y) - mean) * inv_std;
+        float v0 = n0 * (1.0f + __half2float(sv.x)) + __half2float(hv.x);
+        float v1 = n1 * (1.0f + __half2float(sv.y)) + __half2float(hv.y);
+        out2[i] = __halves2half2(__float2half(v0), __float2half(v1));
+    }
+}
+
+void ada_layer_norm_bf16in_fp16out(const __nv_bfloat16* x, const __half* scale, const __half* shift,
+                                    __half* out, int seq_len, int dim, float eps,
+                                    cudaStream_t stream) {
+    ada_layer_norm_bf16in_fp16out_kernel<<<seq_len, 256, 256 * sizeof(float), stream>>>(
+        x, scale, shift, out, dim, eps);
+}
+
 
 // ---- Public Orin/INT8 helpers restored for API compatibility ----
 template<typename T>

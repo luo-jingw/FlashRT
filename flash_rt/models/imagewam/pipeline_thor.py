@@ -140,11 +140,29 @@ directly, without re-running any Python).
 
 `bufs` keys (pipeline-owned scratch, pre-allocated once by the
 frontend, fp16 throughout unless noted):
-    context           (max_txt_seq, joint_attention_dim)  -- input
-    backbone_hidden   (a0, hidden)   -- the persistent residual
-    modded_scratch    (a0, hidden)   -- `ada_layer_norm_fp16`'s own
-                                         fused output, reused by every
-                                         sub-block
+    context           (max_txt_seq, joint_attention_dim)  -- BF16 (real
+                                         Qwen3-4B text conditioning can
+                                         legitimately reach ~120000 in
+                                         magnitude once fed through the
+                                         real backbone's own trained
+                                         weights at real x0=512 --
+                                         opportunities.md OPT-001 "FP16
+                                         residual overflow" -- FP16's
+                                         ~65504 ceiling cannot hold
+                                         that; BF16 has FP32's exponent
+                                         range at the same 2 bytes/elem)
+    backbone_hidden   (a0, hidden)   -- BF16, the persistent residual,
+                                         same reason as `context` above
+                                         (this is what `context`/
+                                         `img_raw` get projected INTO
+                                         via `txt_in`/`img_in`, so it
+                                         inherits the same range need)
+    modded_scratch    (a0, hidden)   -- FP16 (unaffected): every
+                                         `ada_layer_norm_bf16in_fp16out`
+                                         call re-normalizes the wide-
+                                         range residual back to O(1-10)
+                                         before writing here, reused by
+                                         every sub-block
     txt_qkv_merged/img_qkv_merged  (x0 or img_len, 3*hidden)  -- fused
                       Q/K/V GEMM scratch (OPT-004 step 2), sliced by
                       `_copy_slice` into Q_O/K_cache/V_cache
@@ -332,7 +350,11 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     key("txt_in.weight")(bufs["context"], combined, x0, stream)
     txt_x = combined  # rows [0, x0)
 
-    fvk.ada_layer_norm_fp16(txt_x, txt_scale1_t.data_ptr(), txt_shift1_t.data_ptr(), modded, x0, hidden, eps, stream)
+    # ada_layer_norm_bf16in_fp16out (not the plain _fp16 kernel): `txt_x`
+    # aliases `combined`, the persistent BF16 residual buffer -- see
+    # this function's own docstring and opportunities.md OPT-001 "FP16
+    # residual overflow" for why FP16 cannot hold this buffer's values.
+    fvk.ada_layer_norm_bf16in_fp16out(txt_x, txt_scale1_t.data_ptr(), txt_shift1_t.data_ptr(), modded, x0, hidden, eps, stream)
     txt_qkv_merged = bufs["txt_qkv_merged"]  # (x0, 3*hidden)
     key("txt_qkv.weight")(modded, txt_qkv_merged, x0, stream)
     _copy_slice(Q_O, txt_qkv_merged, x0, hidden, src_row_stride=3 * hidden)
@@ -358,7 +380,7 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     # counterpart to keep in sync, same as txt_in's own call above).
     key("img_in.weight")(bufs["img_raw"], img_x_ptr, img_len, stream)
 
-    fvk.ada_layer_norm_fp16(img_x_ptr, img_scale1_t.data_ptr(), img_shift1_t.data_ptr(),
+    fvk.ada_layer_norm_bf16in_fp16out(img_x_ptr, img_scale1_t.data_ptr(), img_shift1_t.data_ptr(),
                              img_modded_ptr, img_len, hidden, eps, stream)
     img_qkv_merged = bufs["img_qkv_merged"]  # (img_len, 3*hidden)
     key("img_qkv.weight")(img_modded_ptr, img_qkv_merged, img_len, stream)
@@ -380,27 +402,27 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     # --- separate output projections, GATED residual ---
     proj = bufs["proj_scratch"]
     key("txt_proj.weight")(Q_O, proj, x0, stream)
-    fvk.gate_res_fp16(proj, txt_gate1_t.data_ptr(), txt_x, x0 * hidden, stream)
+    fvk.gate_res_bf16res(proj, txt_gate1_t.data_ptr(), txt_x, x0 * hidden, stream)
 
     img_proj_ptr = _ptr_offset(proj, x0, hidden)
     key("img_proj.weight")(img_Q_ptr, img_proj_ptr, img_len, stream)
-    fvk.gate_res_fp16(img_proj_ptr, img_gate1_t.data_ptr(), img_x_ptr, img_len * hidden, stream)
+    fvk.gate_res_bf16res(img_proj_ptr, img_gate1_t.data_ptr(), img_x_ptr, img_len * hidden, stream)
 
     # --- separate real SiLU-GLU MLPs, GATED residual ---
-    fvk.ada_layer_norm_fp16(txt_x, txt_scale2_t.data_ptr(), txt_shift2_t.data_ptr(), modded, x0, hidden, eps, stream)
+    fvk.ada_layer_norm_bf16in_fp16out(txt_x, txt_scale2_t.data_ptr(), txt_shift2_t.data_ptr(), modded, x0, hidden, eps, stream)
     txt_mlp_merged, txt_mlp_gated = bufs["txt_mlp_merged"], bufs["txt_mlp_gated"]
     key("txt_mlp0.weight")(modded, txt_mlp_merged, x0, stream)
     fvk.silu_glu_merged_fp16(txt_mlp_merged, txt_mlp_gated, x0, mlp_hidden, stream)
     key("txt_mlp2.weight")(txt_mlp_gated, proj, x0, stream)
-    fvk.gate_res_fp16(proj, txt_gate2_t.data_ptr(), txt_x, x0 * hidden, stream)
+    fvk.gate_res_bf16res(proj, txt_gate2_t.data_ptr(), txt_x, x0 * hidden, stream)
 
-    fvk.ada_layer_norm_fp16(img_x_ptr, img_scale2_t.data_ptr(), img_shift2_t.data_ptr(),
+    fvk.ada_layer_norm_bf16in_fp16out(img_x_ptr, img_scale2_t.data_ptr(), img_shift2_t.data_ptr(),
                              img_modded_ptr, img_len, hidden, eps, stream)
     img_mlp_merged, img_mlp_gated = bufs["img_mlp_merged"], bufs["img_mlp_gated"]
     key("img_mlp0.weight")(img_modded_ptr, img_mlp_merged, img_len, stream)
     fvk.silu_glu_merged_fp16(img_mlp_merged, img_mlp_gated, img_len, mlp_hidden, stream)
     key("img_mlp2.weight")(img_mlp_gated, img_proj_ptr, img_len, stream)
-    fvk.gate_res_fp16(img_proj_ptr, img_gate2_t.data_ptr(), img_x_ptr, img_len * hidden, stream)
+    fvk.gate_res_bf16res(img_proj_ptr, img_gate2_t.data_ptr(), img_x_ptr, img_len * hidden, stream)
 
 
 def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
@@ -430,7 +452,7 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     ptrs = attn.get_slot_ptrs("backbone", site_layer_idx)
     Q_O, K_cache, V_cache = ptrs["Q"], ptrs["K"], ptrs["V"]
 
-    fvk.ada_layer_norm_fp16(combined, scale_t.data_ptr(), shift_t.data_ptr(), modded, a0, hidden, eps, stream)
+    fvk.ada_layer_norm_bf16in_fp16out(combined, scale_t.data_ptr(), shift_t.data_ptr(), modded, a0, hidden, eps, stream)
 
     qkv_merged = bufs["single_qkv_merged"]  # (a0, 3*hidden)
     key("qkv.weight")(modded, qkv_merged, a0, stream)
@@ -453,7 +475,7 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     key("attn_out_proj.weight")(Q_O, from_attn, a0, stream)
     key("mlp_down.weight")(mlp_gated, from_mlp, a0, stream)
     _add_inplace(from_attn, from_mlp, a0, hidden)
-    fvk.gate_res_fp16(from_attn, gate_t.data_ptr(), combined, a0 * hidden, stream)
+    fvk.gate_res_bf16res(from_attn, gate_t.data_ptr(), combined, a0 * hidden, stream)
 
 
 def imagewam_encode_once(ctx, fvk, gemm, bufs, weights, dims, stream=0):

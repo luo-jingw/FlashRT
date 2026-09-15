@@ -2061,16 +2061,104 @@ directly and confirmed harmless to the math, see below):
     extreme Qwen3 activation is real and expected (attention-sink
     tokens commonly reach this magnitude) and is not itself dangerous.
 
-**Conclusion: `x0=512` is correct and safe.** The `nan` was this local
-8GB dev machine running out of VRAM while trying to hold the full real
-25-layer backbone + real VAE + real Qwen3-4B simultaneously -- not a
-bug in `pipeline_thor.py`'s math, not a bug in `x0=512`, and not
-something Thor (with ample memory) should ever hit. The real Thor
-validation already on record above (`Backbone cosine=0.999927`,
-2026-09-14) was run on Thor hardware for exactly this reason -- full
-real-weight, real-scale validation was never expected to fit in 8GB
-locally; the smaller single/two-layer real-weight checks above are
-this dev machine's own ceiling for what it CAN validate directly.
-Re-run the full three-real-components-at-once check on Thor (ample
-memory) before shipping, as the actual confirmation this note was
-originally asking for -- not as a bug hunt.
+**Conclusion at the time (2026-09-15, this dev machine only): `x0=512`
+is correct, the `nan` was this local 8GB dev machine running out of
+VRAM.** That local diagnosis was itself correct as far as it went (the
+8.56GB-vs-8.19GB measurement was real and reproducible), but it was
+**INCOMPLETE** -- it explained why THIS MACHINE produced `nan`, not
+why the model itself would. Superseded by the real Thor run below,
+which ruled out memory entirely and found the real, deeper cause.
+
+---
+
+**CORRECTED, same day, real Thor run (ample memory, no VRAM overcommit
+possible)**: the user re-ran the exact same full three-real-components
+e2e (real checkpoint, real VAE, real Qwen3-4B, x0=512, 25-layer
+backbone) on Thor. It ALSO produced `nan` -- finite=False -- despite
+Thor having plenty of memory. This conclusively rules out the VRAM
+explanation above as the (sole) cause. Full real Thor findings:
+
+- **The OFFICIAL ImageWAM reference model itself (real bf16
+  `imagewam_prefill`), on the exact same real LIBERO instruction and
+  real VAE-encoded frame, produced absmax=**119808** in its own
+  backbone residual** -- already past FP16's ~65504 ceiling, in the
+  REFERENCE model, not just in FlashRT's kernels. The reference itself
+  is finite because it runs in bf16 (FP32's exponent range); FlashRT's
+  own `imagewam_prefill_real`/`pipeline_thor.py` serving path, entirely
+  FP16-resident, produced `nan` on the identical input -- the previous
+  cosine=0.9999 real-checkpoint validations on record above all used
+  synthetic `N(0,1)`-scale random context at the OLD `x0=128`, never
+  exercising real Qwen3's actual activation range, which is why they
+  never caught this.
+- Isolated to a single backbone double-stream layer with the real
+  Qwen3 context: only **row 0** (the chat template's own first special
+  token -- a well-documented LLM "attention sink") goes to `Inf`; every
+  other row (real content and padding alike) stays finite. Checked and
+  ruled out as NOT a bug in the txt|img seam / join logic (join-point
+  cosine=1.000000 against the reference) and NOT the `txt_in` GEMM
+  itself (that GEMM's own FP32-accumulated output for row 0 is only
+  ~8736, nowhere near overflow) -- clamping the real context to
+  `[-256,256]` before `txt_in` made the whole layer finite (txt
+  absmax=53088, right at FP16's edge), confirming the overflow builds
+  up inside the double-stream block's own AdaLN/MLP/residual chain
+  from that one large starting value, not at the entry projection.
+  Combined with the official model's own 119808 figure, this shows the
+  overflow accumulates further still across the FULL 25-layer stack.
+- FA4 vs the plain cuBLAS-composed attention kernel: both ruled out as
+  the cause (`test_imagewam_fa4_backbone`, real serving shape a0=904,
+  cosine=1.000000 rel_l2=0.000616 either way; a real-weight+real-VAE
+  run with `use_fa4=True` and RANDOM context stayed finite). The `nan`
+  under real Qwen3 context happens identically whether attention runs
+  through FA4 or cuBLAS -- it is not an attention-kernel bug.
+
+**Root cause, confirmed: this is a genuine FP16 dynamic-range
+limitation, not a data race, not a masking bug, not an attention-
+kernel bug, and not (only) a local-machine memory artifact.** Real
+Qwen3-4B text conditioning, once fed through the real trained backbone
+at the real `x0=512` sequence length, legitimately drives the
+persistent residual stream to magnitudes FP16 (max ~65504) cannot
+represent at all (~120000, per the official reference's own bf16
+trace) -- the official model tolerates this because it runs in bf16
+(same exponent range as FP32); FlashRT's entirely-FP16-resident
+serving path cannot.
+
+**Fix, implemented same day**: promote ONLY the persistent backbone
+residual buffer (`bufs["backbone_hidden"]`, plus the `context`/
+`img_raw` buffers that write into it via `txt_in`/`img_in`) from FP16
+to **BF16** -- same 2 bytes/element (no memory or bandwidth cost over
+FP16), FP32's exponent range. Everything else (every weight, every
+post-AdaLayerNorm activation, QKV, attention Q/K/V, MLP intermediates)
+stays FP16 -- real Thor tracing already showed those are all
+comfortably bounded (O(1-400)) regardless of the residual's own scale,
+since AdaLayerNorm re-normalizes on every read. New kernels:
+`ada_layer_norm_bf16in_fp16out` (`csrc/kernels/norm.cu`) and
+`gate_res_bf16res` (`csrc/kernels/decoder_fused.cu`), both structural
+copies of their existing FP16 counterparts with only the residual I/O
+retyped to `__nv_bfloat16`. New `Bf16OutLinear`
+(`flash_rt/models/imagewam/quant_linear.py`) wraps the ALREADY-EXISTING
+`GemmRunner.bf16_nn`/`autotune_bf16_nn` (this project had a complete
+BF16 GEMM path already, just unused by ImageWAM) for `txt_in.weight`/
+`img_in.weight` specifically, applied regardless of `self._precision`
+(orthogonal to the FP8/NVFP4 quantization study track). `text_encoder.py`/
+`vae_encoder.py` now return BF16 directly instead of downcasting to
+FP16 (removes the exact round-trip that silently produced the
+overflow). Verified locally: the isolated single-real-layer test that
+used to intermittently produce `inf` (see the FP16-margin note above)
+now passes robustly across repeated runs; the full real-checkpoint (25
+real layers, random context) and real-checkpoint+real-VAE frontend
+tests still pass. The definitive check -- real weights + real VAE +
+real Qwen3 together at x0=512, ample memory -- needs to be re-run on
+Thor with this fix; not yet confirmed there as of this entry.
+
+Scope note: ActionDiT's own residual stream was NOT touched -- its
+conditioning comes from the small `action_dim=7` encoder + shared
+timestep embedding, not from Qwen3's context, and the user's own
+diagnosis (row-0-only Inf, backbone-layer-isolated) pointed at the
+backbone specifically. `benchmarks/imagewam_real_checkpoint_validation.py`'s
+own reference-comparison harness (`imagewam_prefill_real`, `pipeline_real.py`)
+also stays FP16-only and unchanged -- it deliberately feeds
+synthetic `N(0,1)`-scale random tensors, not real Qwen3-scale context
+(see that script's own docstring), so it never exercised this bug and
+doesn't need the fix to keep validating what it validates (per-layer
+math correctness against a PyTorch reference at a realistic but
+non-extreme scale).

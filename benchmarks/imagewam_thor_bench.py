@@ -72,11 +72,18 @@ from flash_rt.models.imagewam.pipeline_thor import (
     _double_stream_layer,
     _single_stream_layer,
 )
-from flash_rt.models.imagewam.quant_linear import Fp16Linear, Fp8Linear, Nvfp4Linear, StaticFp8Linear
+from flash_rt.models.imagewam.quant_linear import (
+    Bf16OutLinear,
+    Fp16Linear,
+    Fp8Linear,
+    Nvfp4Linear,
+    StaticFp8Linear,
+)
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 
 DEV = "cuda"
 FP16 = torch.float16
+BF16 = torch.bfloat16
 F32 = torch.float32
 
 # Real confirmed dims (_imagewam_thor_spec.py).
@@ -177,6 +184,16 @@ def _time_ms(fn, warmup=WARMUP, iters=ITERS) -> tuple[float, float, float]:
     return p50, p90, statistics.mean(times)
 
 
+def _make_bf16out_linear(gemm, n, k):
+    """`txt_in.weight`/`img_in.weight` specifically -- OPT-001 "FP16
+    residual overflow" (opportunities.md), mirrors imagewam_thor.py's
+    own `_rnd_bf16out_linear`. Applied regardless of IMAGEWAM_PRECISION,
+    unlike `_make_linear` -- see `Bf16OutLinear`'s own docstring."""
+    t = (torch.randn(n, k, dtype=torch.float32, device=DEV) * 0.02).to(BF16).t().contiguous()
+    _keepalive.append(t)
+    return Bf16OutLinear(gemm, t.data_ptr(), n, k)
+
+
 def _make_linear(gemm, n, k):
     """Build the weight-projection linear op selected by IMAGEWAM_PRECISION
     -- OPT-004 step 5, mirrors imagewam_thor.py's own `_rnd_linear`."""
@@ -245,6 +262,18 @@ def _autotune(gemm, shapes):
     torch.cuda.synchronize()
 
 
+def _autotune_bf16(gemm, shapes):
+    """Same as `_autotune` but for `txt_in`/`img_in`'s own `bf16_nn`
+    (OPT-001 "FP16 residual overflow") -- a distinct GemmRunner cache
+    key from `fp16_nn`'s, needs its own autotune call."""
+    for m, n, k in shapes:
+        x = torch.zeros(m, k, dtype=BF16, device=DEV)
+        w = torch.zeros(k, n, dtype=BF16, device=DEV)
+        out = torch.zeros(m, n, dtype=BF16, device=DEV)
+        gemm.autotune_bf16_nn(x.data_ptr(), w.data_ptr(), out.data_ptr(), m, n, k, 16)
+    torch.cuda.synchronize()
+
+
 def _make_1layer_backend(*, kind: str):
     """A 1-layer AttentionSpec/backend for isolated per-layer-type timing."""
     max_seq = A0 if kind == "backbone" else TOTAL
@@ -282,8 +311,8 @@ def bench_backbone_double():
     gemm = fvk.GemmRunner()
     img_len = A0 - X0
     weights = {
-        ("backbone", "double", 0, "txt_in.weight"): _make_linear(gemm, HIDDEN, JOINT_ATTN_DIM),
-        ("backbone", "double", 0, "img_in.weight"): _make_linear(gemm, HIDDEN, HD),
+        ("backbone", "double", 0, "txt_in.weight"): _make_bf16out_linear(gemm, HIDDEN, JOINT_ATTN_DIM),
+        ("backbone", "double", 0, "img_in.weight"): _make_bf16out_linear(gemm, HIDDEN, HD),
     }
     for prefix in ("txt", "img"):
         weights[("backbone", "double", 0, f"{prefix}_qkv.weight")] = _make_linear(gemm, 3 * HIDDEN, HIDDEN)
@@ -295,9 +324,12 @@ def bench_backbone_double():
     dims = dict(hidden=HIDDEN, HD=HD, NH=NH, mlp_hidden=MLP_HIDDEN,
                 joint_attention_dim=JOINT_ATTN_DIM, x0=X0, a0=A0)
     bufs = {
-        "context": _rand(X0, JOINT_ATTN_DIM).data_ptr(),
-        "img_raw": _rand(img_len, HD, scale=0.1).data_ptr(),
-        "backbone_hidden": _rand(A0, HIDDEN, scale=0.1).data_ptr(),
+        # BF16, not FP16 -- OPT-001 "FP16 residual overflow" (opportunities.md):
+        # `context`/`img_raw`/`backbone_hidden` must match `Bf16OutLinear`'s
+        # dtype requirement (matches imagewam_thor.py's own frontend buffers).
+        "context": _rand(X0, JOINT_ATTN_DIM, dtype=BF16).data_ptr(),
+        "img_raw": _rand(img_len, HD, dtype=BF16, scale=0.1).data_ptr(),
+        "backbone_hidden": _rand(A0, HIDDEN, dtype=BF16, scale=0.1).data_ptr(),
         "modded_scratch": _zeros(A0, HIDDEN).data_ptr(),
         "txt_qkv_merged": _zeros(X0, 3 * HIDDEN).data_ptr(),
         "img_qkv_merged": _zeros(img_len, 3 * HIDDEN).data_ptr(),
@@ -317,10 +349,13 @@ def bench_backbone_double():
     mod_txt, mod_img, _ = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, HIDDEN)
     table = build_backbone_rope_table(X0, img_len, 1, device=DEV)
     _calibrate_static_fp8(weights, A0)
+    _autotune_bf16(gemm, {
+        (X0, HIDDEN, JOINT_ATTN_DIM),  # txt_in
+        (img_len, HIDDEN, HD),          # img_in (OPT-001/OPT-008)
+    })
     _autotune(gemm, {
-        (X0, HIDDEN, JOINT_ATTN_DIM), (X0, 3 * HIDDEN, HIDDEN), (X0, HIDDEN, HIDDEN),
+        (X0, 3 * HIDDEN, HIDDEN), (X0, HIDDEN, HIDDEN),
         (X0, MLP_HIDDEN * 2, HIDDEN), (X0, HIDDEN, MLP_HIDDEN),
-        (img_len, HIDDEN, HD),  # img_in (OPT-001/OPT-008)
         (img_len, 3 * HIDDEN, HIDDEN), (img_len, HIDDEN, HIDDEN), (img_len, MLP_HIDDEN * 2, HIDDEN),
         (img_len, HIDDEN, MLP_HIDDEN),
     })
@@ -345,7 +380,7 @@ def bench_backbone_single():
     }
     dims = dict(hidden=HIDDEN, HD=HD, NH=NH, mlp_hidden=MLP_HIDDEN, a0=A0)
     bufs = {
-        "backbone_hidden": _rand(A0, HIDDEN, scale=0.1).data_ptr(),
+        "backbone_hidden": _rand(A0, HIDDEN, dtype=BF16, scale=0.1).data_ptr(),
         "modded_scratch": _zeros(A0, HIDDEN).data_ptr(),
         "single_qkv_merged": _zeros(A0, 3 * HIDDEN).data_ptr(),
         "single_mlp_merged": _zeros(A0, MLP_HIDDEN * 2).data_ptr(),

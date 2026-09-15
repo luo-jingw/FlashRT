@@ -59,7 +59,13 @@ from flash_rt.models.imagewam.pipeline_real import (
     compute_action_modulation,
     compute_shared_modulation,
 )
-from flash_rt.models.imagewam.quant_linear import Fp8Linear, Fp16Linear, Nvfp4Linear, StaticFp8Linear
+from flash_rt.models.imagewam.quant_linear import (
+    Bf16OutLinear,
+    Fp8Linear,
+    Fp16Linear,
+    Nvfp4Linear,
+    StaticFp8Linear,
+)
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 
 _PRECISIONS = ("fp16", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass")
@@ -70,6 +76,7 @@ _STATIC_FP8_PRECISIONS = ("fp8_static", "fp8_static_cutlass")
 
 DEV = "cuda"
 FP16 = torch.float16
+BF16 = torch.bfloat16
 F32 = torch.float32
 
 _DEFAULT_DIMS = dict(
@@ -268,9 +275,20 @@ class ImageWAMTorchFrontendThor:
             d["action_mlp_hidden"], d["num_action"])
         action_dim = d["action_dim"]
 
-        shapes = {
+        # txt_in/img_in are BF16-in/out (`Bf16OutLinear`, OPT-001 "FP16
+        # residual overflow") -- autotuned separately via autotune_bf16_nn
+        # below, a distinct GemmRunner cache key from fp16_nn's.
+        bf16_shapes = {
             (x0, hidden, joint_attention_dim),      # txt_in
             (img_len, hidden, HD),                    # img_in (OPT-001/OPT-008)
+        }
+        for m, n, k in bf16_shapes:
+            x = torch.zeros(m, k, dtype=BF16, device=DEV)
+            w = torch.zeros(k, n, dtype=BF16, device=DEV)
+            out = torch.zeros(m, n, dtype=BF16, device=DEV)
+            self._gemm.autotune_bf16_nn(x.data_ptr(), w.data_ptr(), out.data_ptr(), m, n, k, 16)
+
+        shapes = {
             (x0, 3 * hidden, hidden),                 # txt_qkv (OPT-004 step 2, fused)
             (x0, hidden, hidden),                      # txt_proj
             (x0, mlp_hidden * 2, hidden),               # txt_mlp0
@@ -313,6 +331,14 @@ class ImageWAMTorchFrontendThor:
         """
         w = self._own(torch.randn(k, n, dtype=FP16, device=DEV) * 0.02)
         return self._wrap_linear(w, n, k)
+
+    def _rnd_bf16out_linear(self, n: int, k: int) -> Bf16OutLinear:
+        """`_rnd_linear`'s counterpart for `txt_in.weight`/`img_in.weight`
+        specifically -- see `Bf16OutLinear`'s own docstring (opportunities.md
+        OPT-001 "FP16 residual overflow"). Applied regardless of
+        `self._precision`, unlike `_rnd_linear` -> `_wrap_linear`."""
+        w = self._own(torch.randn(k, n, dtype=BF16, device=DEV) * 0.02)
+        return Bf16OutLinear(self._gemm, w.data_ptr(), n, k)
 
     def _wrap_linear(self, w: torch.Tensor, n: int, k: int):
         """Wrap an already-materialized `(k,n)` fp16 CUDA weight tensor
@@ -409,8 +435,8 @@ class ImageWAMTorchFrontendThor:
         joint_attention_dim = d["joint_attention_dim"]
         weights = {}
         for L in range(d["num_layers_double"]):
-            weights[("backbone", "double", L, "txt_in.weight")] = self._rnd_linear(hidden, joint_attention_dim)
-            weights[("backbone", "double", L, "img_in.weight")] = self._rnd_linear(hidden, HD)
+            weights[("backbone", "double", L, "txt_in.weight")] = self._rnd_bf16out_linear(hidden, joint_attention_dim)
+            weights[("backbone", "double", L, "img_in.weight")] = self._rnd_bf16out_linear(hidden, HD)
             for prefix in ("txt", "img"):
                 weights[("backbone", "double", L, f"{prefix}_qkv.weight")] = self._rnd_linear(3 * hidden, hidden)
                 weights[("backbone", "double", L, f"{prefix}_proj.weight")] = self._rnd_linear(hidden, hidden)
@@ -482,6 +508,17 @@ class ImageWAMTorchFrontendThor:
             if slot.endswith("_norm") or slot == "action_encoder.bias":
                 tg = self._own(t.to(DEV))
                 value = tg.data_ptr()
+            elif key[0] == "backbone" and slot in ("txt_in.weight", "img_in.weight"):
+                # OPT-001 "FP16 residual overflow" fix -- see Bf16OutLinear's
+                # own docstring. `t` is already the real checkpoint weight,
+                # FP16 (checkpoint_loader.py's own uniform convention) --
+                # upcasting FP16->BF16 here loses nothing meaningful (this
+                # weight's own absmax is ~0.26, comfortably exact in FP16
+                # already; the only reason for BF16 is the OUTPUT range,
+                # not this weight's own precision).
+                n, k = t.shape[1], t.shape[0]
+                tg = self._own(t.to(DEV, dtype=BF16).contiguous())
+                value = Bf16OutLinear(self._gemm, tg.data_ptr(), n, k)
             else:
                 n, k = t.shape[1], t.shape[0]  # already (K,N) convention, see checkpoint_loader._w
                 tg = self._own(t.to(DEV).contiguous())
@@ -498,9 +535,16 @@ class ImageWAMTorchFrontendThor:
             d["action_hidden_dim"], d["action_attn_width"], d["action_mlp_hidden"], d["num_action"])
         action_dim = d["action_dim"]
         z = lambda *shape: self._own(torch.zeros(*shape, dtype=FP16, device=DEV))
-        self._context = self._own(torch.zeros(x0, joint_attention_dim, dtype=FP16, device=DEV))
-        self._backbone_hidden = self._own(torch.zeros(a0, hidden, dtype=FP16, device=DEV))
-        self._img_raw = self._own(torch.zeros(img_len, HD, dtype=FP16, device=DEV))
+        # BF16, not FP16 -- OPT-001 "FP16 residual overflow" (opportunities.md):
+        # real Qwen3-4B text conditioning, once projected through the real
+        # trained backbone at real x0=512, legitimately drives this
+        # persistent residual buffer to ~120000 in magnitude, which FP16
+        # (max ~65504) cannot represent. `context`/`img_raw` need the same
+        # dtype since they feed `combined` directly via `txt_in`/`img_in`
+        # (`Bf16OutLinear`, see that class's own docstring).
+        self._context = self._own(torch.zeros(x0, joint_attention_dim, dtype=BF16, device=DEV))
+        self._backbone_hidden = self._own(torch.zeros(a0, hidden, dtype=BF16, device=DEV))
+        self._img_raw = self._own(torch.zeros(img_len, HD, dtype=BF16, device=DEV))
         # OPT-001: real action_dim width (e.g. 7), not action_hidden_dim
         # -- see imagewam_denoise_step's own docstring.
         self._action_latent = self._own(torch.zeros(num_action, action_dim, dtype=F32, device=DEV))
@@ -662,12 +706,12 @@ class ImageWAMTorchFrontendThor:
             if context_mask is None:
                 raise ValueError("set_prompt(context=...) requires context_mask too "
                                   "(matches imagewam.py's own _prepare_flux2_infer_text)")
-            self._context.copy_(context.to(device=DEV, dtype=FP16))
+            self._context.copy_(context.to(device=DEV, dtype=BF16))
         elif self._qwen3 is not None and prompt_text is not None:
             from flash_rt.models.imagewam.text_encoder import encode_prompts
             model, tokenizer = self._qwen3
             real_context, _real_mask = encode_prompts(model, tokenizer, [prompt_text])
-            self._context.copy_(real_context[0].to(device=DEV))
+            self._context.copy_(real_context[0].to(device=DEV, dtype=BF16))
         else:
             self._context.normal_()
         if self._graph is None:
@@ -695,7 +739,7 @@ class ImageWAMTorchFrontendThor:
         if self._ae is not None and "view1" in observation:
             from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
             tokens = encode_to_tokens(self._ae, observation["view1"], observation.get("view2"))
-            self._img_raw.copy_(tokens[0])
+            self._img_raw.copy_(tokens[0].to(dtype=BF16))
         else:
             self._img_raw.normal_()
         self._action_latent.normal_()

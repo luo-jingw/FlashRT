@@ -5,6 +5,7 @@
 
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 #include <cuda_fp8.h>
 #include <cublas_v2.h>
 #include <cublasLt.h>
@@ -162,6 +163,31 @@ void geglu_fp8_static_fp16(const __half* merged, __nv_fp8_e4m3* out,
 void gate_res_fp16(const __half* gemm_out, const __half* gate,
                     __half* residual, int n, cudaStream_t stream) {
     gate_res_fp16_kernel<<<(n + 255)/256, 256, 0, stream>>>(gemm_out, gate, residual, n);
+}
+
+// ── Gate x residual, BF16-resident residual (ImageWAM real Qwen3
+// text-conditioning fix, opportunities.md OPT-001 "FP16 residual
+// overflow"): identical math to gate_res_fp16_kernel above, but the
+// persistent residual accumulator is BF16 (same exponent range as
+// FP32, no memory-bandwidth cost over FP16) instead of FP16 -- real
+// Thor measurement showed the real backbone's own residual stream
+// legitimately reaches ~120000 in magnitude once real Qwen3-4B text
+// conditioning is used at the real x0=512 sequence length, which FP16
+// (max ~65504) cannot represent at all. `gemm_out`/`gate` (this
+// layer's own fresh, already layer-normed contribution) stay FP16 --
+// only the RUNNING SUM needs the wider range.
+__global__ void gate_res_bf16res_kernel(const __half* __restrict__ gemm_out,
+                                         const __half* __restrict__ gate,
+                                         __nv_bfloat16* __restrict__ residual, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float r = __bfloat162float(residual[i]) + __half2float(gemm_out[i]) * __half2float(gate[i]);
+    residual[i] = __float2bfloat16(r);
+}
+
+void gate_res_bf16res(const __half* gemm_out, const __half* gate,
+                       __nv_bfloat16* residual, int n, cudaStream_t stream) {
+    gate_res_bf16res_kernel<<<(n + 255)/256, 256, 0, stream>>>(gemm_out, gate, residual, n);
 }
 
 void adarms_fp16(const __half* x, const __half* style,

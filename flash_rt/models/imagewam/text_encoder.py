@@ -29,6 +29,7 @@ import torch
 
 DEV = "cuda"
 FP16 = torch.float16
+BF16 = torch.bfloat16
 
 _OUTPUT_LAYERS_QWEN3 = [9, 18, 27]
 _MAX_LENGTH = 512
@@ -53,7 +54,16 @@ def encode_prompts(model, tokenizer, prompts: list[str]) -> tuple[torch.Tensor, 
     `imagewam.py`'s own `_encode_flux2_prompts` exactly (chat template,
     `enable_thinking=False`; tokenize to a fixed `max_length=512`;
     forward with `output_hidden_states=True`; concatenate layers
-    `[9, 18, 27]`). `context`: `(B, 512, 3*hidden_dim)` fp16 CUDA.
+    `[9, 18, 27]`). `context`: `(B, 512, 3*hidden_dim)` **BF16** CUDA
+    (real Thor measurement, opportunities.md OPT-001 "FP16 residual
+    overflow": real token positions -- e.g. the chat-template's own
+    first special token, a well-known LLM "attention sink" -- reach
+    absmax~16000 in the model's native bf16; once fed through
+    `ImageWAMTorchFrontendThor`'s real trained `txt_in` weight and
+    accumulated across the real 25-layer backbone's residual stream,
+    the running sum legitimately reaches ~120000, which FP16's ~65504
+    ceiling cannot hold at all -- this function used to downcast to
+    FP16 here, which is what silently produced that overflow).
     `context_mask`: `(B, 512)` bool CUDA (`1` for real tokens, `0` for
     padding -- this project's own `context_mask` input, declared in
     `_imagewam_thor_spec.py` but never previously load-bearing)."""
@@ -77,4 +87,4 @@ def encode_prompts(model, tokenizer, prompts: list[str]) -> tuple[torch.Tensor, 
                      output_hidden_states=True, use_cache=False)
     hidden = torch.stack([outputs.hidden_states[k] for k in _OUTPUT_LAYERS_QWEN3], dim=1)
     hidden = hidden.permute(0, 2, 1, 3).reshape(hidden.shape[0], hidden.shape[2], -1)  # b c l d -> b l (c d)
-    return hidden.to(dtype=FP16), attention_mask.to(dtype=torch.bool)
+    return hidden.to(dtype=BF16), attention_mask.to(dtype=torch.bool)

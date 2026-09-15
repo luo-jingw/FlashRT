@@ -6,6 +6,7 @@
 
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 #include <cuda_fp8.h>
 #include <cublas_v2.h>
 
@@ -30,6 +31,12 @@ void geglu_fp8_static_fp16(const __half* merged, __nv_fp8_e4m3* out,
 // C7 last layer: gate × residual (no norm)
 void gate_res_fp16(const __half* gemm_out, const __half* gate,
                     __half* residual, int n, cudaStream_t stream = 0);
+
+// Same, but the residual accumulator is BF16 (wider exponent range,
+// same 2 bytes/elem) -- ImageWAM real-Qwen3-conditioning fix, see the
+// .cu file's own comment.
+void gate_res_bf16res(const __half* gemm_out, const __half* gate,
+                       __nv_bfloat16* residual, int n, cudaStream_t stream = 0);
 
 // Final step: AdaRMSNorm → FP16 output + gate
 void adarms_fp16(const __half* x, const __half* style,

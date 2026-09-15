@@ -40,6 +40,7 @@ import torch
 
 DEV = "cuda"
 FP16 = torch.float16
+BF16 = torch.bfloat16
 
 
 def load_real_ae(ae_model_path: str, flux2_src: str, *, device: str = DEV,
@@ -98,8 +99,14 @@ def _prep_view(view: torch.Tensor, out_hw: tuple[int, int], device: str, dtype: 
 @torch.no_grad()
 def encode_to_tokens(ae, view1: torch.Tensor, view2: torch.Tensor | None = None,
                       *, out_hw: tuple[int, int] = (224, 224)) -> torch.Tensor:
-    """Real image -> real `(1, img_len, HD)` fp16 CUDA tokens, ready to
-    copy into `img_raw` directly.
+    """Real image -> real `(1, img_len, HD)` **BF16** CUDA tokens, ready
+    to copy into `img_raw` directly. BF16 here isn't about THIS
+    tensor's own range -- real VAE tokens are small (absmax~4.7-4.9,
+    confirmed against real Thor measurement) -- it's so `img_raw`
+    matches `img_in.weight`'s own `Bf16OutLinear` dtype requirement
+    (`GemmRunner.bf16_nn` needs `A`/`B`/`D` all the same dtype; see
+    opportunities.md OPT-001 "FP16 residual overflow", which is driven
+    entirely by real Qwen3 TEXT conditioning, not the image tokens).
 
     `view1`/`view2`: `(H,W,3)` uint8 tensors, one or two real camera
     views. With two views, concatenated horizontally AFTER each is
@@ -121,4 +128,4 @@ def encode_to_tokens(ae, view1: torch.Tensor, view2: torch.Tensor | None = None,
 
     z = ae.encode(x)  # (1, HD, latent_h, latent_w) -- real 2x2 patch-merge + BatchNorm baked in
     tokens = z.permute(0, 2, 3, 1).reshape(z.shape[0], -1, z.shape[1])  # (1, img_len, HD)
-    return tokens.to(dtype=FP16)
+    return tokens.to(dtype=BF16)

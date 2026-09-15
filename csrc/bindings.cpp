@@ -2014,6 +2014,13 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
             reinterpret_cast<__half*>(residual), n, to_stream(stream));
     }, py::arg("gemm_out"), py::arg("gate"), py::arg("residual"), py::arg("n"), py::arg("stream") = 0);
 
+    // BF16-resident residual variant (ImageWAM real-Qwen3-conditioning
+    // fix, opportunities.md OPT-001) -- same op, wider-range accumulator.
+    m.def("gate_res_bf16res", [](uintptr_t gemm_out, uintptr_t gate, uintptr_t residual, int n, uintptr_t stream) {
+        gate_res_bf16res(reinterpret_cast<const __half*>(gemm_out), reinterpret_cast<const __half*>(gate),
+            reinterpret_cast<__nv_bfloat16*>(residual), n, to_stream(stream));
+    }, py::arg("gemm_out"), py::arg("gate"), py::arg("residual"), py::arg("n"), py::arg("stream") = 0);
+
     m.def("adarms_fp16", [](uintptr_t x, uintptr_t style, uintptr_t out, uintptr_t gate_out,
             int S, int D, uintptr_t stream) {
         adarms_fp16(reinterpret_cast<const __half*>(x), reinterpret_cast<const __half*>(style),
@@ -2646,6 +2653,21 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
         extern void ada_layer_norm_fp16(const __half*, const __half*, const __half*,
                                          __half*, int, int, float, cudaStream_t);
         ada_layer_norm_fp16(reinterpret_cast<const __half*>(x),
+                             reinterpret_cast<const __half*>(scale),
+                             reinterpret_cast<const __half*>(shift),
+                             reinterpret_cast<__half*>(out),
+                             seq_len, dim, eps, to_stream(stream));
+    }, py::arg("x"), py::arg("scale"), py::arg("shift"),
+       py::arg("out"), py::arg("seq_len"), py::arg("dim"),
+       py::arg("eps") = 1e-5f, py::arg("stream") = 0);
+
+    // Same op, `x` (the persistent residual) is BF16 instead of FP16
+    // (ImageWAM real-Qwen3-conditioning fix, opportunities.md OPT-001).
+    m.def("ada_layer_norm_bf16in_fp16out", [](uintptr_t x, uintptr_t scale, uintptr_t shift,
+                                     uintptr_t out, int seq_len, int dim, float eps, uintptr_t stream) {
+        extern void ada_layer_norm_bf16in_fp16out(const __nv_bfloat16*, const __half*, const __half*,
+                                         __half*, int, int, float, cudaStream_t);
+        ada_layer_norm_bf16in_fp16out(reinterpret_cast<const __nv_bfloat16*>(x),
                              reinterpret_cast<const __half*>(scale),
                              reinterpret_cast<const __half*>(shift),
                              reinterpret_cast<__half*>(out),

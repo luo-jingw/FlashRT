@@ -59,6 +59,7 @@ import flash_rt.flash_rt_kernels as fvk
 
 DEV = "cuda"
 FP16 = torch.float16
+BF16 = torch.bfloat16
 F8 = torch.float8_e4m3fn
 
 
@@ -92,6 +93,41 @@ class Fp16Linear:
 
     def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
         self.gemm.fp16_nn(x_ptr, self.weight_ptr, out_ptr, m, self.n, self.k, stream)
+
+
+class Bf16OutLinear:
+    """`out[M,N]` (BF16) `= x[M,K]` (BF16) `@ W[K,N]` (BF16) --
+    ImageWAM real-Qwen3-conditioning fix (opportunities.md OPT-001 "FP16
+    residual overflow"). Used ONLY for `txt_in.weight`/`img_in.weight`
+    (the two projections that WRITE the persistent backbone residual
+    buffer directly, before any layer even runs) -- every other
+    weight-projection GEMM in `pipeline_thor.py` still reads/writes
+    plain FP16 via `Fp16Linear` (or a quantized variant), since real
+    Thor tracing showed only the residual accumulator itself ever
+    reaches magnitudes FP16 cannot hold (~120000 with real Qwen3-4B
+    text conditioning at x0=512); everything downstream of each layer's
+    own AdaLayerNorm (which re-normalizes back to O(1-10) regardless of
+    the residual's own scale) stays comfortably FP16-safe.
+
+    Applied regardless of `self._precision` (unlike `Fp16Linear`/
+    `Fp8Linear`/etc., which are selected BY `self._precision`) --
+    quantizing this one small entry-point GEMM is orthogonal to, and
+    would not fix, the residual-overflow problem this class exists for.
+    Uses `GemmRunner.bf16_nn`, which (like `fp16_nn`) requires `A`/`B`/`D`
+    all be the same dtype -- so the real weight is cast to BF16 once at
+    construction (see `imagewam_thor.py`'s `_wrap_bf16out_linear`), and
+    the caller (`pipeline_thor.py`) must pass a BF16 `x_ptr` (the real
+    Qwen3/VAE-encoded `context`/`img_raw` buffers) and a BF16 `out_ptr`
+    (the `backbone_hidden` residual buffer).
+    """
+
+    def __init__(self, gemm, weight_ptr: int, n: int, k: int):
+        self.gemm = gemm
+        self.weight_ptr = int(weight_ptr)
+        self.n, self.k = int(n), int(k)
+
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
+        self.gemm.bf16_nn(x_ptr, self.weight_ptr, out_ptr, m, self.n, self.k, stream)
 
 
 class Fp8Linear:
