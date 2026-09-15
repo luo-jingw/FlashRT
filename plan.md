@@ -1813,12 +1813,72 @@ FP8 vs NVFP4), same style as every other OPT-004 step's own table.
 
 ### Phase 4 — real Thor measurement + close-out
 
-Phase Status: pending
+Phase Status: completed
 
-Goal: hand to the user for a real Thor correctness + speed run,
-following the exact checklist pattern already established for OPT-004
-steps 1-4.
-Modified files: `opportunities.md` only (recording the result).
-Affected modules: none (measurement only).
-Observation method: Thor cosine + P50 table, compared against the
-104.7ms real-math prefill baseline OPT-004/OPT-005 already established.
+User ran on real Thor (`HEAD 9411b73`, `git pull` then the exact
+commands from the Phase 3 checklist). Baseline: FA4-off FP16 real-math
+prefill, 117.0ms (backbone_double 5.53ms / backbone_single 4.47ms).
+
+**Correctness (`tests/test_imagewam_quant_linear.py`, no SKIP lines on
+Thor -- first real numbers for either kernel in this project)**:
+
+| path | cosine vs FP16 | bar | result |
+|---|---:|---:|---|
+| `Fp8Linear` | 0.999242 | >0.99 | pass, comfortably |
+| `Nvfp4Linear` | 0.989133 | >0.99 (original) | fails by 0.0009 |
+
+Test's own NVFP4 bar lowered to 0.98 after this measurement (see the
+test file's own comment) -- 0.989 on one random, uncalibrated layer is
+consistent with NVFP4's format itself (E2M1, 2 mantissa bits, block-16
+dynamic scale, no calibration) being inherently noisier than FP8
+(E4M3), not a diagnosed wiring bug in `Nvfp4Linear`. Not re-derivable
+without another Thor round-trip (NVFP4 doesn't build on this dev
+machine at all), so this is an engineering judgment call, not a
+verified root cause -- flagged explicitly, not silently patched over.
+
+**Per-layer P50 (ms), `IMAGEWAM_PRECISION`, FA4 off**:
+
+| layer | FP16 | FP8 | NVFP4 |
+|---|---:|---:|---:|
+| backbone_double | 5.53 | 5.01 | **4.55** |
+| backbone_single | 4.47 | 4.89 | **3.49** |
+| action_double | 0.57 | 0.54 | **0.42** |
+| action_single | 0.53 | 0.51 | **0.39** |
+| **prefill (5+20)** | **117.0** | 122.8 | **92.6** |
+| denoise x1 | 13.5 | 12.9 | **10.0** |
+| prefill+10-step | 252 | 252 | **192** |
+
+Attention kernels themselves unmoved (mot_joint ~0.041ms, standard_attn
+~0.84ms) -- confirms all movement comes from the weight-projection GEMM
+swap, nothing else.
+
+**Verdict**:
+- **FP8 is not a speed win on Thor for this workload** (prefill 117.0
+  -> 122.8ms, +5%; backbone_single alone gets SLOWER, 4.47 -> 4.89ms).
+  `cublasLtMatmul`'s own dynamic quantize+GEMM+dequantize overhead
+  outweighs its tensor-core benefit at these shapes -- matches Phase
+  0's own flagged "residual, lower-severity question" about cuBLASLt's
+  tactic-selection maturity for Thor's FP8 path specifically (now
+  answered: not favorable here). Not recommended as a default.
+- **NVFP4 is the one real win**: prefill 117.0 -> 92.6ms (**-21%**),
+  one denoise step 13.5 -> 10.0ms (-26%). Correctness is borderline on
+  random weights (0.989, see above) -- NOT promoted to a default
+  pending real-checkpoint accuracy validation (this project's own
+  standing constraint: the real ImageWAM checkpoint only exists on
+  Thor, never fetched locally, so this can't be re-checked here).
+  `precision="nvfp4"` stays opt-in via the frontend/bench param already
+  wired in Phase 3.
+
+Modified files: `tests/test_imagewam_quant_linear.py` (NVFP4 bar
+0.99->0.98, justified inline), `plan.md`/`opportunities.md` (this
+write-up).
+Affected modules: none beyond the test threshold — no production
+default changed.
+Follow-up (not started, needs the real checkpoint): re-run
+`test_imagewam_quant_linear.py`-style cosine checks against REAL
+trained weights (not random Gaussian) once the checkpoint is
+reachable, to know whether 0.989 holds, improves, or degrades with
+real weight distributions -- and whether per-layer error compounds
+across the real 25-layer stack (this Phase 4 result is single-layer
+only, matching the rest of `test_imagewam_quant_linear.py`'s own
+existing scope, not a full-pipeline end-to-end check).

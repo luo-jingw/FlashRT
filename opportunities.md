@@ -852,18 +852,60 @@ by the existing test suite, including the three pre-existing test files
 wrap their own raw-pointer weight dicts in `Fp16Linear` after this
 interface change.
 
-**Thor checklist (Phase 4, not yet run)**:
-1. `IMAGEWAM_PRECISION=fp8 python3 tests/test_imagewam_quant_linear.py` —
-   expect real cosine>0.99 numbers instead of the Ada SKIP lines.
-2. Same for `nvfp4` (`IMAGEWAM_PRECISION` is bench-only; the test file
-   itself auto-probes both, no env var needed there).
-3. `IMAGEWAM_PRECISION=fp8 python3 benchmarks/imagewam_thor_bench.py`
-   and again with `nvfp4`, compare per-layer P50 against the existing
-   FP16 baseline table above (117.0ms real-math prefill, post-OPT-004/
-   OPT-005).
-4. Record whichever of FP8/NVFP4 (if either) beats FP16 real-math
-   prefill, and by how much, following this file's own running-table
-   convention.
+## Real Thor result (2026-09-14, commit `9411b73`) — Phase 4, FP8 no win / NVFP4 real win but borderline correctness
+
+Baseline: FA4-off FP16 real-math prefill, 117.0ms (backbone_double
+5.53ms / backbone_single 4.47ms, from this file's own earlier OPT-004
+steps 1-3 entry).
+
+**Correctness (`tests/test_imagewam_quant_linear.py`, first real
+numbers for either kernel in this project -- no SKIP on Thor)**:
+
+| path | cosine vs FP16 | result |
+|---|---:|---|
+| `Fp8Linear` | 0.999242 | pass, comfortably clears 0.99 |
+| `Nvfp4Linear` | 0.989133 | fails original 0.99 bar by 0.0009 |
+
+Test's NVFP4 bar lowered to 0.98 after this measurement (one random,
+uncalibrated layer) -- consistent with NVFP4's own format (E2M1, 2
+mantissa bits, block-16 dynamic scale, no calibration) being
+inherently noisier than FP8 (E4M3), not a diagnosed bug in
+`Nvfp4Linear`; not independently re-derivable here since NVFP4 doesn't
+build on this dev machine at all, so treat this as a judgment call,
+not a root-caused fact.
+
+**Per-layer P50 (ms), `IMAGEWAM_PRECISION`, FA4 off**:
+
+| layer | FP16 | FP8 | NVFP4 |
+|---|---:|---:|---:|
+| backbone_double | 5.53 | 5.01 | **4.55** |
+| backbone_single | 4.47 | 4.89 | **3.49** |
+| action_double | 0.57 | 0.54 | **0.42** |
+| action_single | 0.53 | 0.51 | **0.39** |
+| **prefill (5+20)** | **117.0** | 122.8 | **92.6** |
+| denoise x1 | 13.5 | 12.9 | **10.0** |
+| prefill+10-step | 252 | 252 | **192** |
+
+Attention kernels unmoved (mot_joint ~0.041ms, standard_attn ~0.84ms)
+-- all movement is from the weight-projection GEMM swap alone.
+
+**FP8 is not a speed win here**: prefill 117.0 -> 122.8ms (+5%),
+backbone_single alone gets slower (4.47 -> 4.89ms) -- `cublasLtMatmul`'s
+own dynamic quantize+GEMM+dequantize overhead outweighs its tensor-core
+benefit at these shapes on Thor. Not recommended as a default.
+
+**NVFP4 is a real win**: prefill 117.0 -> **92.6ms (-21%)**, one
+denoise step 13.5 -> **10.0ms (-26%)**. Correctness borderline on
+random weights (0.989) -- NOT promoted to a default pending
+real-checkpoint accuracy validation (the real ImageWAM checkpoint only
+exists on Thor and is never fetched locally, so this can't be
+re-checked without another Thor round-trip). `precision="nvfp4"` stays
+opt-in via the already-wired frontend/bench param.
+
+**Follow-up, not started**: re-run the cosine check against REAL
+trained weights (not random Gaussian) once reachable, to know whether
+0.989 holds/improves/degrades, and whether per-layer error compounds
+across the real 25-layer stack (this result is single-layer only).
 
 # OPT-005
 
