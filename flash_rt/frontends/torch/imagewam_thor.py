@@ -55,10 +55,14 @@ import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
 from flash_rt.models.imagewam.pipeline_real import compute_action_modulation, compute_shared_modulation
-from flash_rt.models.imagewam.quant_linear import Fp8Linear, Fp16Linear, Nvfp4Linear
+from flash_rt.models.imagewam.quant_linear import Fp8Linear, Fp16Linear, Nvfp4Linear, StaticFp8Linear
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 
-_PRECISIONS = ("fp16", "fp8", "nvfp4")
+_PRECISIONS = ("fp16", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass")
+# OPT-004 step 6 (plan.md): the two `StaticFp8Linear` variants need a
+# one-time calibration call in set_prompt() before graph capture (see
+# _calibrate_fp8 below) -- everything else needs no such step.
+_STATIC_FP8_PRECISIONS = ("fp8_static", "fp8_static_cutlass")
 
 DEV = "cuda"
 FP16 = torch.float16
@@ -268,7 +272,50 @@ class ImageWAMTorchFrontendThor:
             return Fp8Linear(w.data_ptr(), n, k)
         if self._precision == "nvfp4":
             return Nvfp4Linear(w.data_ptr(), n, k)
+        if self._precision == "fp8_static":
+            return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=False)
+        if self._precision == "fp8_static_cutlass":
+            return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=True)
         raise ValueError(f"unknown precision {self._precision!r}")  # pragma: no cover -- validated in __init__
+
+    def _calibrate_fp8(self, d: dict) -> None:
+        """OPT-004 step 6 (plan.md): freeze every `StaticFp8Linear`
+        weight's activation scale ONCE, here, before `_capture_graph()`
+        -- a captured CUDA Graph replays identical kernel launches
+        forever, so the scale must already be fixed by the time capture
+        starts (see `StaticFp8Linear`'s own docstring for the ordering
+        contract this calls into). No-op for every other precision.
+
+        Deliberately NOT a full forward pass through
+        `imagewam_prefill`/`imagewam_denoise_loop` threaded with a
+        "calibration mode" flag (`pipeline_real.py`'s own real
+        activations don't exist yet at this random-weight dry-run
+        stage anyway, see `plan.md`'s own "deliberately not in scope"
+        note) -- each `StaticFp8Linear` is calibrated in isolation
+        against a disposable random activation of the SAME shape
+        (m, k) its real call site actually uses (`m` from the site
+        family -- backbone rows use `d["a0"]`, action_dit rows use
+        `d["num_action"]`, matching `_autotune_gemm`'s own per-shape
+        convention in this same file), scale=0.1 to match this
+        project's own established "realistic activation magnitude"
+        convention (`test_imagewam_prefill.py`'s own `backbone_hidden`
+        scale, not the 0.02 weight-init scale).
+        """
+        if self._precision not in _STATIC_FP8_PRECISIONS:
+            return
+        a0, num_action = d["a0"], d["num_action"]
+        scratch_by_shape: dict[tuple[int, int], torch.Tensor] = {}
+        for key, lin in self._weights.items():
+            if not isinstance(lin, StaticFp8Linear):
+                continue
+            m = a0 if key[0] == "backbone" else num_action
+            shape = (m, lin.k)
+            x = scratch_by_shape.get(shape)
+            if x is None:
+                x = torch.randn(*shape, dtype=FP16, device=DEV) * 0.1
+                scratch_by_shape[shape] = x
+            lin.calibrate(x.data_ptr(), m, 0)
+        torch.cuda.synchronize()
 
     def _rnd_norm_scale(self, HD: int) -> int:
         """QK-Norm scale, real-checkpoint-typical positive bias (avoids
@@ -443,6 +490,7 @@ class ImageWAMTorchFrontendThor:
             return
         self._context.normal_()
         if self._graph is None:
+            self._calibrate_fp8(self.dims)
             self._capture_graph()
         self._current_prompt = prompt_text
 

@@ -52,7 +52,7 @@ from flash_rt.models.imagewam.pipeline_thor import (
     _double_stream_layer,
     _single_stream_layer,
 )
-from flash_rt.models.imagewam.quant_linear import Fp16Linear, Fp8Linear, Nvfp4Linear
+from flash_rt.models.imagewam.quant_linear import Fp16Linear, Fp8Linear, Nvfp4Linear, StaticFp8Linear
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 
 DEV = "cuda"
@@ -93,6 +93,15 @@ USE_FA4 = os.environ.get("IMAGEWAM_USE_FA4", "0") == "1"
 # quant_linear.py's own module docstring. Needs real Thor hardware to
 # produce meaningful timing/correctness numbers for anything but
 # "fp16": `IMAGEWAM_PRECISION=fp8 python3 imagewam_thor_bench.py`.
+#
+# OPT-004 step 6 (plan.md): "fp8_static"/"fp8_static_cutlass" add a
+# one-time `.calibrate()` call before this file's own `_autotune`/
+# `_time_ms` (see `_calibrate_static_fp8` below) -- static, calibrate-
+# once activation scale instead of Fp8Linear's per-call dynamic one;
+# "_cutlass" additionally swaps the GEMM itself to
+# `cutlass_fp8_sq`/`_wide`/`_t1` (Thor-only, same `ENABLE_SM100_CUTLASS`
+# gate NVFP4 already uses). Both untestable on this Ada machine for the
+# same reasons as "fp8" above.
 PRECISION = os.environ.get("IMAGEWAM_PRECISION", "fp16")
 
 _keepalive = []
@@ -155,7 +164,33 @@ def _make_linear(gemm, n, k):
         return Fp8Linear(w.data_ptr(), n, k)
     if PRECISION == "nvfp4":
         return Nvfp4Linear(w.data_ptr(), n, k)
+    if PRECISION == "fp8_static":
+        return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=False)
+    if PRECISION == "fp8_static_cutlass":
+        return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=True)
     raise ValueError(f"unknown IMAGEWAM_PRECISION={PRECISION!r}")
+
+
+def _calibrate_static_fp8(weights, m):
+    """Freeze every `StaticFp8Linear` weight's activation scale ONCE,
+    before `_time_ms`'s own warmup loop -- OPT-004 step 6 (plan.md),
+    mirrors `imagewam_thor.py`'s own `_calibrate_fp8` (same
+    representative-M simplification: one M per layer-type family, not
+    per exact call site inside that layer -- these bench functions are
+    already split by family, so `m` is just that function's own
+    dominant sequence length). No-op for every other precision."""
+    if PRECISION not in ("fp8_static", "fp8_static_cutlass"):
+        return
+    scratch_by_k = {}
+    for lin in weights.values():
+        if not isinstance(lin, StaticFp8Linear):
+            continue
+        x = scratch_by_k.get(lin.k)
+        if x is None:
+            x = torch.randn(m, lin.k, dtype=FP16, device=DEV) * 0.1
+            scratch_by_k[lin.k] = x
+        lin.calibrate(x.data_ptr(), m, 0)
+    torch.cuda.synchronize()
 
 
 def _autotune(gemm, shapes):
@@ -239,6 +274,7 @@ def bench_backbone_double():
     }
     mod_txt, mod_img, _ = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, HIDDEN)
     table = build_backbone_rope_table(X0, img_len, 1, device=DEV)
+    _calibrate_static_fp8(weights, A0)
     _autotune(gemm, {
         (X0, HIDDEN, JOINT_ATTN_DIM), (X0, 3 * HIDDEN, HIDDEN), (X0, HIDDEN, HIDDEN),
         (X0, MLP_HIDDEN * 2, HIDDEN), (X0, HIDDEN, MLP_HIDDEN),
@@ -283,6 +319,7 @@ def bench_backbone_single():
     }
     _, _, mod_single = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, HIDDEN)
     table = build_backbone_rope_table(X0, A0 - X0, 1, device=DEV)
+    _calibrate_static_fp8(weights, A0)
     _autotune(gemm, {
         (A0, 3 * HIDDEN, HIDDEN), (A0, HIDDEN, HIDDEN), (A0, MLP_HIDDEN * 2, HIDDEN), (A0, HIDDEN, MLP_HIDDEN),
     })
@@ -324,6 +361,7 @@ def bench_action_double():
     }
     mod_double, _ = compute_action_modulation(torch.ones(1, device=DEV), mod_w, ACTION_HIDDEN_DIM)
     action_table = build_action_rope_table(NUM_ACTION, device=DEV)
+    _calibrate_static_fp8(weights, NUM_ACTION)
     _autotune(gemm, {
         (NUM_ACTION, 3 * ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM),
         (NUM_ACTION, ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH),
@@ -369,6 +407,7 @@ def bench_action_single():
     }
     _, mod_single = compute_action_modulation(torch.ones(1, device=DEV), mod_w, ACTION_HIDDEN_DIM)
     action_table = build_action_rope_table(NUM_ACTION, device=DEV)
+    _calibrate_static_fp8(weights, NUM_ACTION)
     _autotune(gemm, {
         (NUM_ACTION, 3 * ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM),
         (NUM_ACTION, ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH),
