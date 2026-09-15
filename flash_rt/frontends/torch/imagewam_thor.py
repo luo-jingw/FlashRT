@@ -94,6 +94,7 @@ class ImageWAMTorchFrontendThor:
                  use_fa4: bool = False, precision: str = "fp16",
                  ckpt_path: str | None = None,
                  ae_model_path: str | None = None, flux2_src: str | None = None,
+                 qwen3_model_spec: str | None = None,
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
@@ -107,6 +108,14 @@ class ImageWAMTorchFrontendThor:
         if ae_model_path is not None:
             from flash_rt.models.imagewam.vae_encoder import load_real_ae
             self._ae = load_real_ae(ae_model_path, flux2_src)
+        # Live Qwen3 text encoding (real VAE + text-context wiring
+        # plan's own deferred item, closed once real Qwen3-4B weights
+        # were downloaded -- see opportunities.md). Independent of
+        # ae_model_path/ckpt_path; loaded here once, used in set_prompt().
+        self._qwen3 = None
+        if qwen3_model_spec is not None:
+            from flash_rt.models.imagewam.text_encoder import load_real_text_encoder
+            self._qwen3 = load_real_text_encoder(qwen3_model_spec)
         # OPT-004 step 5 (plan.md): every weight-projection GEMM in
         # pipeline_thor.py dispatches through weights[key](...), a
         # callable built here by _rnd_linear -- "nvfp4" requires a
@@ -629,20 +638,23 @@ class ImageWAMTorchFrontendThor:
                     context: torch.Tensor | None = None,
                     context_mask: torch.Tensor | None = None) -> None:
         """Random-fills the text-context input (default), OR loads a
-        real precomputed `context`/`context_mask` pair, then captures
-        the graph (real VAE + text-context wiring plan, Phase 2).
+        real precomputed `context`/`context_mask` pair, OR (if this
+        frontend was constructed with `qwen3_model_spec=`) live-encodes
+        `prompt_text` through the real Qwen3 text encoder -- then
+        captures the graph. Matches `imagewam.py`'s own real
+        `_prepare_flux2_infer_text`: a raw prompt XOR a precomputed
+        `context`/`context_mask` pair, never both.
 
-        No live Qwen3-4B forward from a raw prompt STRING -- ImageWAM's
-        own real `_prepare_flux2_infer_text` (read directly,
-        `imagewam.py`) accepts EITHER a raw prompt (live encode) OR a
-        precomputed `context`/`context_mask` pair as an explicit
-        alternative; this frontend implements only the second, lower-
-        risk branch (no live Qwen3-4B weights available locally to
-        test against -- see this plan's own "Live Qwen3" note, a
-        deliberately left-open door, not attempted here). `prompt_text`
-        alone (today's original behavior, unchanged) only distinguishes
-        cache hits from misses and random-fills `context`.
+        `context_mask` is accepted (matching the real interface and
+        `_imagewam_thor_spec.py`'s own declared input shape) but NOT
+        YET consumed by `pipeline_thor.py`'s own attention math --
+        every context row is still treated as valid regardless of
+        padding, a pre-existing, separately-documented gap (see that
+        module's own docstring), not something this change fixes.
         """
+        if prompt_text is not None and context is not None:
+            raise ValueError("set_prompt: prompt_text and context are mutually exclusive "
+                              "(matches imagewam.py's own _prepare_flux2_infer_text)")
         cache_key = (prompt_text, context is not None)
         if cache_key == self._current_prompt:
             return
@@ -651,6 +663,11 @@ class ImageWAMTorchFrontendThor:
                 raise ValueError("set_prompt(context=...) requires context_mask too "
                                   "(matches imagewam.py's own _prepare_flux2_infer_text)")
             self._context.copy_(context.to(device=DEV, dtype=FP16))
+        elif self._qwen3 is not None and prompt_text is not None:
+            from flash_rt.models.imagewam.text_encoder import encode_prompts
+            model, tokenizer = self._qwen3
+            real_context, _real_mask = encode_prompts(model, tokenizer, [prompt_text])
+            self._context.copy_(real_context[0].to(device=DEV))
         else:
             self._context.normal_()
         if self._graph is None:

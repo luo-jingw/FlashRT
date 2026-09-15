@@ -78,9 +78,11 @@ def test_backbone_ref_masked_small_shape():
 
 
 def test_backbone_ref_masked_real_dims():
-    """Real ImageWAM dims: x0=128 text tokens, 896 total (128 text +
-    768 ref-image tokens, matching A0-X0=768 already used everywhere)."""
-    X0, A0 = 128, 896
+    """Real ImageWAM dims: x0=512 text tokens (Qwen3's own real
+    max_length, confirmed via flux2.text_encoder.MAX_LENGTH and
+    _imagewam_thor_spec.py's own declared context shape), 904 total
+    (512 text + 392 real ref-image tokens, opportunities.md OPT-001)."""
+    X0, A0 = 512, 904
     Q, K, V, out, scale = _run(A0, NH=24, HD=128, x0=X0, seed=1)
     ref = _ref_backbone_ref_masked(Q, K, V, scale, X0, A0)
     cos = _cosine(ref, out)

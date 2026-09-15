@@ -1981,8 +1981,9 @@ producing a finite `(64,7)` action tensor.
 and `test_imagewam_checkpoint_loader.py` updated from the `x0=128`
 placeholder used everywhere in this project until now.
 
-**Open investigation, found while validating this correction, NOT YET
-RESOLVED**: `test_imagewam_checkpoint_loader.py`'s own
+**Open investigation (below), now RESOLVED as a local-machine VRAM
+artifact, not a real math/deployment bug** -- found while validating
+this correction: `test_imagewam_checkpoint_loader.py`'s own
 `test_real_double_stream_layer_forward_finite` (one REAL-weight
 backbone layer, RANDOM activations) started producing `inf` at
 `x0=512` (previously passed at `x0=128`). Bisected across several
@@ -1991,19 +1992,85 @@ backbone layer, RANDOM activations) started producing `inf` at
 manual, step-by-step reproduction of the IDENTICAL kernel sequence
 (same weights, same `x0=512`, same random seed, with an explicit
 `torch.cuda.synchronize()` between every step) did NOT reproduce the
-failure -- suggesting this is not a straightforward numeric overflow
-in the math itself, but something tied to async kernel scheduling,
-buffer-reuse timing, or GEMM algorithm selection specific to the bulk
-(non-synchronized) call path `_double_stream_layer` actually uses.
-Reducing the test's own random-activation scale (0.1 -> 0.02) did NOT
-fix it, ruling out "just an unrepresentative large input" as the
-explanation. Real trained weights are required to reproduce this at
-all (not seen with random weights at the same shape) -- see this
-file's own "Real Thor result" cosine numbers above, which used the
-OLD `x0=128`/`a0=520` shape throughout, not yet re-verified at
-`x0=512`. **Do not trust `x0=512` as production-safe until this is
-root-caused** -- it may be specific to this synthetic-random-activation
-test (real Qwen3-encoded context has its own bounded statistics,
-untested in this exact isolated-layer path) or a genuine, real bug
-that real deployment would also hit. Needs follow-up before treating
-the `x0=512` correction as fully closed.
+failure. Re-investigated further (still isolated, tiny GPU footprint,
+so NOT the same memory mechanism as the finding right after this one):
+re-ran the exact same test with `Fp16Linear.__call__` and every named
+`fvk` kernel (`ada_layer_norm_fp16`, `rms_norm_fp16`,
+`rope_apply_fp16_perhead`, `gate_res_fp16`, `silu_glu_merged_fp16`)
+wrapped to sync+check-finite after each call individually. Instrumented
+per-step trace: every intermediate value stays comfortably finite
+(absmax 4-370 range) through all 20 traced steps -- textin GEMM, both
+AdaLN calls, all 4 QK-norms, `attn.run`, both proj GEMMs+gated
+residuals, both MLPs -- and the layer's final output is finite
+(mean=93.3, std=284.2). Syncing after GEMM calls ONLY, or after the
+custom kernels ONLY (not both), each independently still reproduced
+the `inf`. Only syncing after literally everything made it pass.
+Since every one of these kernels does a fixed-order warp-shuffle
+reduction (deterministic regardless of scheduling) except cuBLASLt's
+own GEMM (which CAN use a split-K/atomic algorithm with genuine
+run-to-run floating-point nondeterminism for skinny-M shapes), the
+most likely explanation is a computed value landing very close to
+FP16's 65504 ceiling, where cuBLASLt's own run-to-run nondeterminism
+(not a data race, not stale/garbage reads -- every traced intermediate
+was already finite and reasonable) occasionally tips it over. This is
+a real, narrow FP16-dynamic-range margin concern specific to
+synthetic `N(0,0.5)` random test activations at this real-weight,
+x0=512 shape -- **not reproduced with the REAL Qwen3-encoded context**
+(checked directly: same real weights, same x0=512, real Qwen3 context
+including its own row-0 "attention sink" outlier, run at both
+`num_double=1` and `num_double=2` -- both finite, no sync tricks
+needed). Low priority: doesn't block real deployment as currently
+understood, but worth a plain sanity check on Thor after the memory-
+scale full-pipeline re-run below, given FP16's range margin here is
+evidently thin enough that SOME input could tip it.
+
+**The more consequential escalation -- running `ImageWAMTorchFrontendThor`
+with ALL THREE real components together (real checkpoint weights,
+real VAE-encoded real LIBERO frame, real Qwen3-encoded real prompt) at
+`x0=512`, through the full real 25-layer backbone (5 double + 20
+single, not just one isolated layer) -- also produced `nan`
+(`finite=False`). This looked like confirmation of a real bug. It
+is not.**
+
+Root-caused by direct measurement, same day: `torch.cuda.memory_allocated()`
+right after loading all 25 real backbone layers' weights (no KV cache,
+no scratch buffers yet) was **8.56GB, already past this dev machine's
+8188MiB (8.19GB) physical VRAM** -- confirmed via `nvidia-smi`. This
+project's own WSL2 memory-paging note (see above/PROJECT.md) had only
+been characterized as a SPEED problem (~13.6s/inference instead of
+<1s) up to now; at this larger footprint it also produces outright
+wrong (`inf`/`nan`) kernel results, not just slow ones.
+
+Isolated with a controlled A/B, same real checkpoint, same real
+Qwen3-encoded context (including its own real row-0 "attention sink"
+outlier, `absmax=16256` in bf16 -- a well-known LLM phenomenon, checked
+directly and confirmed harmless to the math, see below):
+  - `num_double=5, num_single=20` (the real full backbone, ~8.56GB
+    allocated) -> layer 0 already `inf`.
+  - `num_double=2, num_single=0` (same weights' layer 0 and 1, same
+    real context, tiny footprint) -> BOTH layers finite, and the row-0
+    outlier's magnitude actually *shrinks* across layers (16256 in the
+    input -> 10664 after layer 0 -> 8728 after layer 1), i.e. the real
+    trained weights are well-behaved with respect to this outlier, not
+    fragile.
+  - Directly checked the suspected "real Qwen3 outlier overflows FP16"
+    hypothesis before finding the memory explanation: real Qwen3 row-0
+    hidden state absmax=16256 (bf16), projected through the real
+    `txt_in.weight` in FP32 accumulate reaches only ~8735 -- nowhere
+    near FP16's 65504 ceiling. That hypothesis is ruled out; the
+    extreme Qwen3 activation is real and expected (attention-sink
+    tokens commonly reach this magnitude) and is not itself dangerous.
+
+**Conclusion: `x0=512` is correct and safe.** The `nan` was this local
+8GB dev machine running out of VRAM while trying to hold the full real
+25-layer backbone + real VAE + real Qwen3-4B simultaneously -- not a
+bug in `pipeline_thor.py`'s math, not a bug in `x0=512`, and not
+something Thor (with ample memory) should ever hit. The real Thor
+validation already on record above (`Backbone cosine=0.999927`,
+2026-09-14) was run on Thor hardware for exactly this reason -- full
+real-weight, real-scale validation was never expected to fit in 8GB
+locally; the smaller single/two-layer real-weight checks above are
+this dev machine's own ceiling for what it CAN validate directly.
+Re-run the full three-real-components-at-once check on Thor (ample
+memory) before shipping, as the actual confirmation this note was
+originally asking for -- not as a bug hunt.

@@ -36,9 +36,10 @@ _CKPT_AVAILABLE = os.path.exists(_CKPT_PATH)
 HIDDEN, HD, NH, MLP_HIDDEN, JOINT_ATTN_DIM = 3072, 128, 24, 9216, 7680
 ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH, ACTION_MLP_HIDDEN, ACTION_DIM = 1024, 3072, 4096, 7
 NUM_DOUBLE, NUM_SINGLE = 5, 20
-# CONFIRMED real img_len=392 (14x28), see opportunities.md's OPT-001
-# entry (2026-09-15) -- superseding the earlier 768/896 guess.
-X0, A0 = 128, 520
+# CONFIRMED real img_len=392 (14x28) and x0=512 (Qwen3's own real
+# max_length), see opportunities.md's OPT-001/OPT-008 entries
+# (2026-09-15) -- superseding the earlier 128/768/896 guesses.
+X0, A0 = 512, 904
 
 _FLUX2_SRC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "third_party", "flux2", "src")
 _AE_PATH = "/home/ljw/projects/pi0.5/models/flux2_klein_4b/ae.safetensors"

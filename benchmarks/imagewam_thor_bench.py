@@ -36,9 +36,13 @@ them horizontally to `224x448` (matching `config.yaml`/
 `eval_libero_single.py`); the real VAE's own 8x spatial downsample +
 2x2 patch merge on that input produces a `14x28` token grid,
 `img_len=392` (NOT 768) -- confirmed by running the real VAE encoder
-on Thor. `x0=128` (text tokens) remains UNCONFIRMED, unchanged from
-this file's own original placeholder (no real measurement exists for
-it yet). `total=584` (`a0=520` + `num_action=64`, still under
+on Thor. **`x0=512` also CONFIRMED real** (2026-09-15, real Qwen3-4B
+text encoding): `imagewam.py`'s own `_encode_flux2_prompts` tokenizes
+to a fixed `max_length=512` (confirmed via `flux2.text_encoder.MAX_LENGTH`
+and independently via `_imagewam_thor_spec.py`'s own declared
+`context` input shape `(512, joint_attention_dim)`) -- superseding
+this file's own earlier `x0=128` placeholder. `total=968` (`a0=904` +
+`num_action=64`, still under
 `softmax_mot_joint_fp16`'s confirmed 1024-column ceiling -- see
 `csrc/kernels/softmax.cu`: `SM_MAX_COLS=1024`, columns beyond that are
 silently never read by the single-warp-per-row reduction loop, which
@@ -81,11 +85,13 @@ ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH, ACTION_MLP_HIDDEN = 1024, 3072, 4096
 NUM_DOUBLE, NUM_SINGLE = 5, 20
 MAX_ACTION_HORIZON = 64
 
-# CONFIRMED real img_len (392 = 14x28); x0 remains an unconfirmed
-# placeholder -- see module docstring's 2026-09-15 update.
-X0, A0 = 128, 520
+# CONFIRMED real img_len (392 = 14x28) AND real x0 (512 = Qwen3's own
+# max_length, confirmed via flux2.text_encoder.MAX_LENGTH and
+# _imagewam_thor_spec.py's own declared context shape -- see
+# opportunities.md's OPT-008 text-encoder entry, 2026-09-15).
+X0, A0 = 512, 904
 NUM_ACTION = MAX_ACTION_HORIZON
-TOTAL = A0 + NUM_ACTION  # 584, under the 1024 softmax ceiling
+TOTAL = A0 + NUM_ACTION  # 968, under the 1024 softmax ceiling
 
 WARMUP, ITERS = 15, 50
 
@@ -498,8 +504,8 @@ def main():
     print(f"Dims: hidden={HIDDEN} HD={HD} NH={NH} mlp_hidden={MLP_HIDDEN} "
           f"| action_hidden_dim={ACTION_HIDDEN_DIM} action_attn_width={ACTION_ATTN_WIDTH} "
           f"action_mlp_hidden={ACTION_MLP_HIDDEN}")
-    print(f"Seq: x0={X0} (unconfirmed) a0={A0} num_action={NUM_ACTION} total={TOTAL} "
-          f"(img_len=392 CONFIRMED real, 2026-09-15 real Thor + real VAE measurement)")
+    print(f"Seq: x0={X0} a0={A0} num_action={NUM_ACTION} total={TOTAL} "
+          f"(x0/img_len CONFIRMED real, 2026-09-15 real Thor + real VAE/Qwen3 measurement)")
     print(f"Real math (opportunities.md OPT-002): per-head K/V, QK-Norm, RoPE, "
           f"AdaLN, SiLU-GLU MLP, no-mask attention -- not the old approximation.")
     print(f"Warmup={WARMUP} iters={ITERS}, CUDA-event timing, P50/P90/mean in ms\n")
