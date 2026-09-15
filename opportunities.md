@@ -1534,7 +1534,7 @@ worth reopening elsewhere.
 
 # OPT-008
 
-Status: real VAE-encode cost added to all local/Thor full-pipeline benchmarks; exposed a real gap in `pipeline_thor.py` itself (no `img_in` weight modeled)
+Status: real VAE-encode cost added to all local/Thor full-pipeline benchmarks; the `img_in` gap this exposed is now FIXED (OPT-001 Phase 1, 2026-09-15) — the VAE encoder ITSELF (the conv-based image tokenizer producing raw HD-width image tokens) is still not modeled in `pipeline_thor.py`/`imagewam_thor.py`, only in standalone benchmark scripts (`_imagewam_vae_stub.py`) — that part remains open
 
 Area: VAE encoder (input-image tokenization) — previously excluded from every full-pipeline speed number with no clear justification; now included
 
