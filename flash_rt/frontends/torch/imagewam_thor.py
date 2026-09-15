@@ -91,7 +91,8 @@ class ImageWAMTorchFrontendThor:
     """
 
     def __init__(self, checkpoint_dir=None, *, dims_override: dict | None = None,
-                 use_fa4: bool = False, precision: str = "fp16", **kwargs):
+                 use_fa4: bool = False, precision: str = "fp16",
+                 ckpt_path: str | None = None, **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
             raise ValueError(f"precision={precision!r} -- must be one of {_PRECISIONS}")
@@ -122,13 +123,29 @@ class ImageWAMTorchFrontendThor:
         self._gemm = fvk.GemmRunner()
         self._autotune_gemm(d)
 
-        self._weights = self._alloc_random_weights(d)
+        # OPT-001 (plan.md): ckpt_path switches every weight/modulation
+        # source from random to the real checkpoint's own tensors --
+        # precision selection (self._precision) is UNCHANGED and
+        # ORTHOGONAL either way, same as OPT-004 step 5's own design.
+        real_mod = None
+        if ckpt_path is not None:
+            from flash_rt.models.imagewam.checkpoint_loader import (
+                build_real_modulation_weights, load_real_imagewam_state_dict,
+            )
+            sd = load_real_imagewam_state_dict(ckpt_path)
+            self._weights = self._load_real_weights(d, sd)
+            real_mod = build_real_modulation_weights(sd)
+            del sd
+        else:
+            self._weights = self._alloc_random_weights(d)
         self._bufs = self._alloc_buffers(d)
         self._rope_table = self._own(build_backbone_rope_table(
             d["x0"], d["a0"] - d["x0"], 1, device=DEV))
         self._action_rope_table = self._own(build_action_rope_table(d["num_action"], device=DEV))
-        self._mod_txt, self._mod_img, self._mod_single = self._compute_backbone_modulation(d)
-        self._action_mods, self._head_mods = self._compute_action_modulations(d)
+        self._mod_txt, self._mod_img, self._mod_single = self._compute_backbone_modulation(
+            d, real_mod=real_mod["backbone"] if real_mod else None)
+        self._action_mods, self._head_mods = self._compute_action_modulations(
+            d, real_mod=real_mod["action"] if real_mod else None)
 
         num_layers = d["num_layers_double"] + d["num_layers_single"]
         HD, hidden = d["HD"], d["hidden"]
@@ -275,6 +292,14 @@ class ImageWAMTorchFrontendThor:
         which precision ultimately uses it.
         """
         w = self._own(torch.randn(k, n, dtype=FP16, device=DEV) * 0.02)
+        return self._wrap_linear(w, n, k)
+
+    def _wrap_linear(self, w: torch.Tensor, n: int, k: int):
+        """Wrap an already-materialized `(k,n)` fp16 CUDA weight tensor
+        in the `self._precision`-selected linear-op object -- the part
+        of `_rnd_linear` that's shared with `_load_real_weights` (OPT-001),
+        which sources `w` from the real checkpoint instead of
+        `torch.randn`. `w` must already be `self._own`'d by the caller."""
         if self._precision == "fp16":
             return Fp16Linear(self._gemm, w.data_ptr(), n, k)
         if self._precision == "fp8":
@@ -379,6 +404,45 @@ class ImageWAMTorchFrontendThor:
             weights[("action_dit", "single", L, "key_norm")] = self._rnd_norm_scale(HD)
         return weights
 
+    def _load_real_weights(self, d: dict, sd: dict) -> dict:
+        """OPT-001 (plan.md): real checkpoint counterpart to
+        `_alloc_random_weights` -- same structural shape (same 4-tuple
+        keys), sourced from `checkpoint_loader.build_real_weights`
+        instead of `torch.randn`. `sd` is the checkpoint's own flat
+        state_dict (`checkpoint_loader.load_real_imagewam_state_dict`'s
+        own return value), already loaded once by the caller.
+
+        Norm scales and `action_encoder.bias` stay raw CUDA pointers
+        (same convention as `_rnd_norm_scale`); every other value goes
+        through `_wrap_linear` so precision selection stays uniform and
+        orthogonal to weight source, exactly like `_rnd_linear`.
+        """
+        from flash_rt.models.imagewam.checkpoint_loader import build_real_weights
+
+        raw = build_real_weights(
+            sd, num_double=d["num_layers_double"], num_single=d["num_layers_single"],
+            action_num_double=d["action_num_layers_double"], action_num_single=d["action_num_layers_single"],
+            action_attn_width=d["action_attn_width"])
+
+        weights = {}
+        seen_shared: dict[int, object] = {}  # id(cpu tensor) -> wrapped/ptr, for shared txt_in/img_in
+        for key, t in raw.items():
+            slot = key[-1]
+            cpu_id = id(t)
+            if cpu_id in seen_shared:
+                weights[key] = seen_shared[cpu_id]
+                continue
+            if slot.endswith("_norm") or slot == "action_encoder.bias":
+                tg = self._own(t.to(DEV))
+                value = tg.data_ptr()
+            else:
+                n, k = t.shape[1], t.shape[0]  # already (K,N) convention, see checkpoint_loader._w
+                tg = self._own(t.to(DEV).contiguous())
+                value = self._wrap_linear(tg, n, k)
+            weights[key] = value
+            seen_shared[cpu_id] = value
+        return weights
+
     def _alloc_buffers(self, d: dict) -> dict:
         hidden, mlp_hidden, x0, a0, HD = d["hidden"], d["mlp_hidden"], d["x0"], d["a0"], d["HD"]
         img_len = a0 - x0
@@ -422,22 +486,30 @@ class ImageWAMTorchFrontendThor:
             "action_mlp_gated": z(num_action, amh).data_ptr(),
         }
 
-    def _compute_backbone_modulation(self, d: dict):
+    def _compute_backbone_modulation(self, d: dict, *, real_mod: dict | None = None):
         """Backbone's own AdaLN modulation, computed ONCE: real
         inference always conditions the reference/context encode on a
         FIXED timestep=0 (confirmed against the real checkpoint run,
         `benchmarks/imagewam_real_checkpoint_validation.py`'s own
         `video_timestep = torch.zeros(1)`), so this never needs
         recomputing per replay -- see pipeline_thor.py's own docstring.
+
+        `real_mod`: OPT-001, the real `mod_w` dict from
+        `checkpoint_loader.build_real_modulation_weights()["backbone"]`
+        -- when given, used INSTEAD of random weights (moved to CUDA
+        here, same as every other real-weight tensor in this file).
         """
         hidden = d["hidden"]
-        mod_w = {
-            "time_in_w1": self._own(torch.randn(hidden, 256, dtype=torch.float32, device=DEV) * 0.02),
-            "time_in_w2": self._own(torch.randn(hidden, hidden, dtype=torch.float32, device=DEV) * 0.02),
-            "mod_double_txt": self._own(torch.randn(6 * hidden, hidden, dtype=torch.float32, device=DEV) * 0.02),
-            "mod_double_img": self._own(torch.randn(6 * hidden, hidden, dtype=torch.float32, device=DEV) * 0.02),
-            "mod_single": self._own(torch.randn(3 * hidden, hidden, dtype=torch.float32, device=DEV) * 0.02),
-        }
+        if real_mod is not None:
+            mod_w = {k: self._own(v.to(DEV)) for k, v in real_mod.items()}
+        else:
+            mod_w = {
+                "time_in_w1": self._own(torch.randn(hidden, 256, dtype=torch.float32, device=DEV) * 0.02),
+                "time_in_w2": self._own(torch.randn(hidden, hidden, dtype=torch.float32, device=DEV) * 0.02),
+                "mod_double_txt": self._own(torch.randn(6 * hidden, hidden, dtype=torch.float32, device=DEV) * 0.02),
+                "mod_double_img": self._own(torch.randn(6 * hidden, hidden, dtype=torch.float32, device=DEV) * 0.02),
+                "mod_single": self._own(torch.randn(3 * hidden, hidden, dtype=torch.float32, device=DEV) * 0.02),
+            }
         timestep = self._own(torch.zeros(1, dtype=torch.float32, device=DEV))
         mod_txt, mod_img, mod_single = compute_shared_modulation(timestep, mod_w, hidden)
         for group in (mod_txt[0], mod_txt[1], mod_img[0], mod_img[1], mod_single):
@@ -445,24 +517,31 @@ class ImageWAMTorchFrontendThor:
                 self._own(t)
         return mod_txt, mod_img, mod_single
 
-    def _compute_action_modulations(self, d: dict):
+    def _compute_action_modulations(self, d: dict, *, real_mod: dict | None = None):
         """ActionDiT's own AdaLN modulation, ONE tuple PER DENOISE STEP:
         its conditioning timestep changes every step (flow-matching
         schedule, `1.0 -> 0.0` uniform), but `step` is itself a
         compile-time Python constant during CUDA Graph capture, so
         every step's own modulation is ALSO a compile-time constant --
         precomputed here, once, never recomputed per replay.
+
+        `real_mod`: OPT-001, the real `mod_w` dict from
+        `checkpoint_loader.build_real_modulation_weights()["action"]`
+        (includes `head_adaln`) -- when given, used instead of random.
         """
         ahd = d["action_hidden_dim"]
-        mod_w = {
-            "time_in_w1": self._own(torch.randn(ahd, 256, dtype=torch.float32, device=DEV) * 0.02),
-            "time_in_w2": self._own(torch.randn(ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
-            "mod_double": self._own(torch.randn(6 * ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
-            "mod_single": self._own(torch.randn(3 * ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
-            # OPT-001: head's own AdaLN modulation (shift/scale only, no
-            # gate -- see adaln.head_modulation's own docstring).
-            "head_adaln": self._own(torch.randn(2 * ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
-        }
+        if real_mod is not None:
+            mod_w = {k: self._own(v.to(DEV)) for k, v in real_mod.items()}
+        else:
+            mod_w = {
+                "time_in_w1": self._own(torch.randn(ahd, 256, dtype=torch.float32, device=DEV) * 0.02),
+                "time_in_w2": self._own(torch.randn(ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
+                "mod_double": self._own(torch.randn(6 * ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
+                "mod_single": self._own(torch.randn(3 * ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
+                # OPT-001: head's own AdaLN modulation (shift/scale only, no
+                # gate -- see adaln.head_modulation's own docstring).
+                "head_adaln": self._own(torch.randn(2 * ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
+            }
         dt = d["dt"]
         mods, head_mods = [], []
         for step in range(d["num_denoise_steps"]):
