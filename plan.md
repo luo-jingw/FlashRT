@@ -2302,7 +2302,7 @@ data yet).
 
 # Plan: OPT-001 — real ImageWAM checkpoint loading into the served frontend
 
-Plan Status: approved
+Plan Status: completed (all 4 phases done, real Thor results recorded)
 
 ## Problem
 
@@ -2681,7 +2681,7 @@ permanent regression test, not just an ad-hoc verification.
 
 ### Phase 4 — real Thor validation + close-out
 
-Phase Status: mostly completed (items 1-2 answered with real Thor numbers, 2026-09-15; item 3 and the new calibration/shape follow-ups below remain)
+Phase Status: completed (all 3 items answered with real Thor numbers, 2026-09-15)
 
 Goal: hand to the user for a real Thor run. Since Phase 2/3 already
 verified real-weight CORRECTNESS end-to-end on Ada (finite, plausible
@@ -2697,18 +2697,20 @@ remaining job is narrower than originally planned:
    deployment shape** (see below): real Thor `infer()` median 172.8ms
    at `img_len=392` vs. 231.1ms at the OLD `img_len=768` guess — real
    weights, real shapes, CUDA Graph, FP16.
-3. Still open: re-run `imagewam_real_checkpoint_validation.py` itself
-   (updated to also extract/apply `img_in`, matching Phase 1's
-   addition, AND to the corrected `REF_H,REF_W=14,28` shape, both
-   already applied to this script) for an independent cosine number
-   against the REAL official reference path (not just this project's
-   own internal finite/non-degenerate check) — previously
-   0.999927/0.999963 WITHOUT img_in; Phase 1 changes what's being
-   compared, so this number needs
-   re-measuring, not assumed unchanged. This is a nice-to-have
-   independent confirmation, not a blocker — Phase 2/3's own
-   `test_imagewam_checkpoint_loader.py` already gives a real, if less
-   independent, correctness signal.
+3. **Answered**: re-ran `imagewam_real_checkpoint_validation.py`
+   (updated to the corrected `REF_H,REF_W=14,28` shape and to include
+   `img_in`) against the REAL official reference path — backbone
+   cosine=**0.999918**, ActionDiT cosine=**0.999962** (essentially
+   unchanged from the earlier 0.999927/0.999963 measured at the old
+   24x32/no-`img_in` shape — confirms neither the shape correction nor
+   the `img_in` addition broke anything against the real reference).
+   Also re-ran `test_imagewam_quant_linear.py` on Thor (no SKIP, four
+   real cosines, all matching earlier Thor numbers exactly) and the
+   full OPT-004 step 5/6 FP8/NVFP4/CUTLASS comparison at the corrected
+   `img_len=392` shape (see `opportunities.md`'s own matching entry
+   for the full table — relative rankings changed meaningfully from
+   the 768-token measurement: dynamic FP8 now beats FP16, and the
+   CUTLASS-over-static-cuBLASLt gap shrank from ~20ms to ~1ms).
 Modified files: `opportunities.md` (OPT-001/OPT-008 closed),
 `plan.md` (this write-up).
 Affected modules: none (measurement only).

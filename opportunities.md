@@ -1,6 +1,6 @@
 # OPT-001
 
-Status: real-weight path RESOLVED and verified end-to-end on Ada at real dims (2026-09-15, `plan.md`'s own "OPT-001" plan Phases 1-3); FP8 calibration/quantization split off into OPT-004 steps 5-6 (already resolved separately, see that section)
+Status: RESOLVED end to end, including real Thor validation (2026-09-15, `plan.md`'s own "OPT-001" plan, all 4 phases complete); FP8 calibration/quantization split off into OPT-004 steps 5-6 (already resolved separately, see that section)
 
 Area: ImageWAM on Thor — precision and real-weight path
 
@@ -154,12 +154,53 @@ Qwen3 -- `txt_in` still reads a random `context`; real text-side
 calibration/encoding needs Qwen3-4B or the training-time
 `qwen_text_cache`, neither wired in).
 
-**Follow-up, Thor-only**: re-measure the OPT-004 step 5/6 FP8/NVFP4/
-CUTLASS comparison table at this corrected `img_len=392` shape (M
-dimension changes can shift which CUTLASS tile variant wins, per
-`quant_linear.py`'s own `_pick_fp8_cutlass_variant` caveat) -- the
-768-token table's own relative wins are not assumed to transfer
-unchanged.
+**Follow-up, Thor-only — DONE (2026-09-15, same commit)**: re-measured
+the OPT-004 step 5/6 FP8/NVFP4/CUTLASS comparison at the corrected
+`img_len=392` shape. **Relative rankings changed from the 768-token
+table**:
+
+| layer | FP16 | FP8 dynamic | FP8 static | FP8 static+CUTLASS | NVFP4 |
+|---|---:|---:|---:|---:|---:|
+| backbone_double | 3.93 | 3.88 | 3.69 | 3.27 | **3.00** |
+| backbone_single | 2.57 | 2.24 | **2.15** | 2.19 | **2.02** |
+| action_double | 0.54 | 0.46 | 0.47 | 0.45 | **0.40** |
+| action_single | 0.52 | 0.46 | 0.43 | 0.40 | **0.35** |
+| **prefill (5+20)** | 71.1 | 64.3 | 61.4 | 60.2 | **55.4** |
+| denoise x1 | 13.1 | 11.6 | 10.9 | 10.2 | **9.1** |
+| prefill+10-step | 202 | 180 | 170 | 163 | **146** |
+
+Attention kernels: mot 0.037ms (unchanged), standard/backbone attn
+0.15ms (down from 0.82-0.84ms at `a0=896` -- the O(a0^2) attention cost
+shrank with the smaller sequence).
+
+- **At 768 tokens, dynamic FP8 was SLOWER than FP16** (this file's own
+  OPT-004 step 6 entry). **At 392 tokens, dynamic FP8 is now FASTER
+  than FP16** (64.3 vs 71.1ms) -- the per-call amax-reduction overhead
+  that dominated at the larger shape matters less at the smaller one.
+- **The CUTLASS-over-static-cuBLASLt gap shrank dramatically**: 768
+  tokens had CUTLASS beating static-cuBLASLt by ~20ms (97.9 vs
+  118.1ms); at 392 tokens the gap is 1.2ms (60.2 vs 61.4ms), and
+  `backbone_single` is actually slightly SLOWER with CUTLASS (2.19 vs
+  2.15ms) -- confirms `_pick_fp8_cutlass_variant`'s own flagged caveat
+  that its shape-based heuristic doesn't necessarily transfer to
+  smaller M; the CUTLASS win is real but shape-dependent, not a free
+  lunch at every M.
+- **NVFP4 remains the fastest precision at both shapes**, ranking
+  unchanged.
+
+**Full-pipeline re-validation, `REF_H,REF_W=14,28` + `img_in`**: backbone
+cosine=**0.999918** (was 0.999927 at the old 24x32 grid, no `img_in`),
+ActionDiT cosine=**0.999962** (was 0.999963) -- output shape `(520,3072)`
+matches `a0=520`. Adding the real grid + `img_in` barely moved cosine;
+confirms neither broke anything.
+
+**`test_imagewam_quant_linear.py` on Thor**: no SKIP, four real cosines
+-- `Fp8Linear` 0.999242, `StaticFp8Linear(cublaslt)` 0.999242,
+`StaticFp8Linear(cutlass)` 0.999242, `Nvfp4Linear` 0.989133 (all
+unchanged from earlier Thor runs -- this test is still small-shape
+random weights and does NOT exercise `img_in`'s own `N(-0.02,0.97)`
+calibration path; that 0.99946 number remains the standalone holdout
+measurement above, not re-verified through this test file).
 
 # OPT-002
 
