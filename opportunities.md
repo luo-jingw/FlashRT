@@ -90,6 +90,77 @@ weights to calibrate.
 Promote to a plan once real ImageWAM weights are available on the
 target machine and the current structural plan's phases are complete.
 
+## Real Thor result (2026-09-15) — correct calibration dataset, confirmed real deployment shape, real VAE timing
+
+User located the CORRECT real dataset for this project (the earlier
+"Real multi-sample calibration" entry below misidentified
+`JingwuLuo/LingBot-VA_RoboTwin_clibration_data` as the candidate and
+found it shape-mismatched — that finding stands for THAT dataset, but
+was the wrong one to be looking at): `yuanty/LIBERO-fastwam` (HF), the
+FastWAM-preprocessed set ImageWAM's own README actually points at,
+subset `libero_spatial_no_noops_lerobot` — Franka, 434 episodes /
+53229 frames / 10 tasks, real LIBERO language instructions, two
+512x512x3 camera views (AV1, 20fps), `action: (T,7)`, `state: (T,8)`.
+
+**Confirmed real deployment image-token shape, superseding the
+768-token (`384x512` input) guess used everywhere in this project
+until now**: real eval preprocessing (`config.yaml`/
+`eval_libero_single.py`) resizes each camera view to `224x224` and
+concatenates horizontally to `224x448`. The real official
+`FLUX.2-dev/ae.safetensors` VAE (`x*2/255-1` preprocessing, matching
+eval) encodes this to a `(B,128,14,28)` latent -> `(B,392,128)` packed
+tokens: **`img_len=392` (14x28), not 768**. VAE encode itself: real
+Thor P50 **41.0ms** for `224x448`. `benchmarks/imagewam_thor_bench.py`
+and `imagewam_real_checkpoint_validation.py` both updated to this
+confirmed shape (`a0=520`, `total=584`); every prior OPT-004 step 5/6
+table below was measured at the OLD 768/896/960 shape -- still real
+results, but not yet re-confirmed at this one (see Thor checklist
+below).
+
+**FP8 `img_in` calibration, holdout real VAE tokens vs. the FP16
+reference** -- the first real activation-distribution measurement this
+project has ever had for anything:
+
+| calibration source | act_scale | cosine vs FP16 |
+|---|---:|---:|
+| `N(0, 0.1)` noise (this project's own placeholder, all along) | 0.00102 | **0.902** |
+| real VAE tokens (mean=-0.02, std=0.97, absmax=4.91) | 0.01086 | **0.99946** |
+
+Real tokens are an order of magnitude wider than the 0.1-scale
+placeholder this project's own `_calibrate_fp8`/`_calibrate_static_fp8`
+used everywhere -- clipping real activations, not just "approximating"
+them. Fixed: both functions now special-case `img_in.weight`'s own
+calibration input to `N(-0.02, 0.97)` (the real measured stats),
+documented inline as a narrow, single-slot fix -- every OTHER weight's
+own calibration input (txt_qkv, mlp0, ActionDiT's own weights, etc.)
+still uses the same unvalidated 0.1-scale placeholder, likely similarly
+wrong, with no real ground truth yet to correct it against (would need
+a full real forward pass propagating real intermediate activations,
+a larger redesign not attempted here).
+
+**Real-weight FP16 `infer()` at the corrected 392-token shape** (CUDA
+Graph, `img_raw` still per-step `normal_()` -- real GEMM shapes, not
+real VAE tokens plugged into the graph itself):
+
+| shape | median infer() |
+|---|---:|
+| img_len=768 (old) | 231.1 ms |
+| img_len=392 (confirmed real) | **172.8 ms** |
+
+Peak allocated 9.99GB (same order as the 768-token shape's own 9.86GB
+-- no additional WSL2 paging from the shape change). With the real VAE
+folded into the full pipeline: ~41 + 173 ≈ **214ms** (still without
+Qwen3 -- `txt_in` still reads a random `context`; real text-side
+calibration/encoding needs Qwen3-4B or the training-time
+`qwen_text_cache`, neither wired in).
+
+**Follow-up, Thor-only**: re-measure the OPT-004 step 5/6 FP8/NVFP4/
+CUTLASS comparison table at this corrected `img_len=392` shape (M
+dimension changes can shift which CUTLASS tile variant wins, per
+`quant_linear.py`'s own `_pick_fp8_cutlass_variant` caveat) -- the
+768-token table's own relative wins are not assumed to transfer
+unchanged.
+
 # OPT-002
 
 Status: kernel-level RESOLVED for both backbone block types (verified
@@ -1037,7 +1108,17 @@ at ActionDiT's own `M=64` shapes (low priority, not where the win is);
 real-checkpoint correctness check for `fp8_static_cutlass` once OPT-001
 has real weights.
 
-## Real multi-sample calibration -- investigated, BLOCKED on a data mismatch, not started
+## Real multi-sample calibration -- WRONG dataset identified below; see OPT-001's own 2026-09-15 entry for the correct one and the actual fix
+
+**Superseded**: the dataset investigated in this entry
+(`JingwuLuo/LingBot-VA_RoboTwin_clibration_data`) was the wrong one --
+it belongs to a DIFFERENT model (`LingBot-VA`). The CORRECT dataset
+(`yuanty/LIBERO-fastwam`, per ImageWAM's own README) was found and
+used for a real single-slot calibration fix (`img_in.weight`) -- see
+OPT-001's own "Real Thor result (2026-09-15)" entry above for the
+real numbers and what got fixed. This entry's own shape-mismatch
+finding for the WRONG dataset is kept below for the record, not
+because it's still the open question.
 
 `_calibrate_fp8`'s own current implementation (`imagewam_thor.py`)
 freezes `StaticFp8Linear`'s activation scale from a disposable random

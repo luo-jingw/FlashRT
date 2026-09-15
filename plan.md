@@ -2681,34 +2681,30 @@ permanent regression test, not just an ad-hoc verification.
 
 ### Phase 4 — real Thor validation + close-out
 
-Phase Status: pending (narrowed: correctness already verified above; Thor's own job is SPEED + confirming hardware portability)
+Phase Status: mostly completed (items 1-2 answered with real Thor numbers, 2026-09-15; item 3 and the new calibration/shape follow-ups below remain)
 
 Goal: hand to the user for a real Thor run. Since Phase 2/3 already
 verified real-weight CORRECTNESS end-to-end on Ada (finite, plausible
 output, at real dims, with the actual release checkpoint), Thor's
 remaining job is narrower than originally planned:
-1. Confirm the SAME construction/capture/infer sequence completes on
-   Thor without the WSL2 memory-paging dependency Phase 3 relied on
-   here (Thor's own 128GB unified memory should make this a non-issue,
-   but has not been confirmed).
-2. Real per-layer/full-prefill P50 with real weights. **Measured on
-   this dev machine anyway, to have a concrete before/after**: full
-   `set_prompt()`+`infer()` end to end, real weights, real dims —
-   median 13.6 SECONDS per `infer()` call (8 samples, 12.9-14.0s),
-   ~9.86GB peak allocated against an 8GB card — confirms the WSL2
-   paging theory catastrophically dominates (per-layer-isolated
-   benchmarks at the same shapes sum to well under 1s: backbone
-   prefill 224ms + one denoise step 13.4ms, `imagewam_thor_bench.py`'s
-   own numbers). This dev-machine number is NOT a Thor performance
-   number — it is a memory-paging artifact, kept here only to make
-   clear WHY Thor's own number (no paging expected, 128GB unified
-   memory) is the one that actually matters.
-3. Optionally, re-run `imagewam_real_checkpoint_validation.py` itself
+1. **Answered**: construct/capture/infer completes on Thor without
+   this dev machine's own WSL2 memory-paging dependency — confirmed
+   (real Thor run, 172.8ms median `infer()` at the corrected `img_len=392`
+   shape, ~9.99GB peak allocated, "no additional paging" per the user's
+   own report — Thor's 128GB unified memory handles this cleanly, as
+   expected).
+2. **Answered, and simultaneously used to confirm the corrected real
+   deployment shape** (see below): real Thor `infer()` median 172.8ms
+   at `img_len=392` vs. 231.1ms at the OLD `img_len=768` guess — real
+   weights, real shapes, CUDA Graph, FP16.
+3. Still open: re-run `imagewam_real_checkpoint_validation.py` itself
    (updated to also extract/apply `img_in`, matching Phase 1's
-   addition) for an independent cosine number against the REAL
-   official reference path (not just this project's own internal
-   finite/non-degenerate check) — previously 0.999927/0.999963 WITHOUT
-   img_in; Phase 1 changes what's being compared, so this number needs
+   addition, AND to the corrected `REF_H,REF_W=14,28` shape, both
+   already applied to this script) for an independent cosine number
+   against the REAL official reference path (not just this project's
+   own internal finite/non-degenerate check) — previously
+   0.999927/0.999963 WITHOUT img_in; Phase 1 changes what's being
+   compared, so this number needs
    re-measuring, not assumed unchanged. This is a nice-to-have
    independent confirmation, not a blocker — Phase 2/3's own
    `test_imagewam_checkpoint_loader.py` already gives a real, if less
