@@ -92,10 +92,21 @@ class ImageWAMTorchFrontendThor:
 
     def __init__(self, checkpoint_dir=None, *, dims_override: dict | None = None,
                  use_fa4: bool = False, precision: str = "fp16",
-                 ckpt_path: str | None = None, **kwargs):
+                 ckpt_path: str | None = None,
+                 ae_model_path: str | None = None, flux2_src: str | None = None,
+                 **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
             raise ValueError(f"precision={precision!r} -- must be one of {_PRECISIONS}")
+        # Real VAE + text-context wiring plan: independent of ckpt_path
+        # (OPT-001) -- one loads real transformer weights, this loads a
+        # real image encoder. Loaded here (once), used inside infer().
+        if (ae_model_path is None) != (flux2_src is None):
+            raise ValueError("ae_model_path and flux2_src must be given together, or not at all")
+        self._ae = None
+        if ae_model_path is not None:
+            from flash_rt.models.imagewam.vae_encoder import load_real_ae
+            self._ae = load_real_ae(ae_model_path, flux2_src)
         # OPT-004 step 5 (plan.md): every weight-projection GEMM in
         # pipeline_thor.py dispatches through weights[key](...), a
         # callable built here by _rnd_linear -- "nvfp4" requires a
@@ -614,43 +625,62 @@ class ImageWAMTorchFrontendThor:
                                    action_rope_table=self._action_rope_table.data_ptr())
         self._graph = graph
 
-    def set_prompt(self, prompt_text: str) -> None:
-        """Random-fills the text-context input, then captures the graph.
+    def set_prompt(self, prompt_text: str | None = None, *,
+                    context: torch.Tensor | None = None,
+                    context_mask: torch.Tensor | None = None) -> None:
+        """Random-fills the text-context input (default), OR loads a
+        real precomputed `context`/`context_mask` pair, then captures
+        the graph (real VAE + text-context wiring plan, Phase 2).
 
-        No real Qwen3-4B forward, no calibration-cache lookup: ImageWAM's
-        own config always sets `load_text_encoder: false` (see
-        `_imagewam_thor_spec.py`), so `context`/`context_mask` are inputs
-        this integration never computes from a real prompt string --
-        `prompt_text` only distinguishes cache hits from misses, same as
-        the generic template's `set_prompt`, minus the actual embedding
-        step it would otherwise do.
+        No live Qwen3-4B forward from a raw prompt STRING -- ImageWAM's
+        own real `_prepare_flux2_infer_text` (read directly,
+        `imagewam.py`) accepts EITHER a raw prompt (live encode) OR a
+        precomputed `context`/`context_mask` pair as an explicit
+        alternative; this frontend implements only the second, lower-
+        risk branch (no live Qwen3-4B weights available locally to
+        test against -- see this plan's own "Live Qwen3" note, a
+        deliberately left-open door, not attempted here). `prompt_text`
+        alone (today's original behavior, unchanged) only distinguishes
+        cache hits from misses and random-fills `context`.
         """
-        if prompt_text == self._current_prompt:
+        cache_key = (prompt_text, context is not None)
+        if cache_key == self._current_prompt:
             return
-        self._context.normal_()
+        if context is not None:
+            if context_mask is None:
+                raise ValueError("set_prompt(context=...) requires context_mask too "
+                                  "(matches imagewam.py's own _prepare_flux2_infer_text)")
+            self._context.copy_(context.to(device=DEV, dtype=FP16))
+        else:
+            self._context.normal_()
         if self._graph is None:
             self._calibrate_fp8(self.dims)
             self._capture_graph()
-        self._current_prompt = prompt_text
+        self._current_prompt = cache_key
 
     def infer(self, observation: dict) -> dict:
-        """Replay the captured graph with a new (random) observation.
+        """Replay the captured graph with a new observation.
 
-        `observation` is accepted for interface parity but its contents
-        are not used: the real image-encode step is a VAE forward, out
-        of scope (see `imagewam_encode_once`'s own docstring) -- `img_raw`
-        (HD-width raw image tokens, OPT-001/OPT-008's own `img_in`
-        projection consumes this every replay) is random-filled here in
-        place of a real encoded observation, standing in for whatever a
-        real VAE would have produced. `backbone_hidden`'s own image rows
-        are now WRITTEN by `img_in.weight` inside the graph itself, not
-        filled directly here (that was only ever a stand-in for the
-        projection this frontend didn't model yet).
+        `observation` random-fills `img_raw` by default (unchanged
+        placeholder, standing in for whatever a real VAE would have
+        produced) UNLESS this frontend was constructed with
+        `ae_model_path=`/`flux2_src=` AND `observation` contains a real
+        `"view1"` (optionally `"view2"`) camera frame -- then the real
+        VAE (`vae_encoder.encode_to_tokens`) runs OUTSIDE the captured
+        graph (plain PyTorch/`flux2`-dependent code has no business
+        being captured) and its result is copied into `img_raw` before
+        `.replay()`. `backbone_hidden`'s own image rows are WRITTEN by
+        `img_in.weight` inside the graph itself either way, not filled
+        directly here.
         """
-        del observation
         if self._graph is None:
             raise RuntimeError("call set_prompt() before infer()")
-        self._img_raw.normal_()
+        if self._ae is not None and "view1" in observation:
+            from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
+            tokens = encode_to_tokens(self._ae, observation["view1"], observation.get("view2"))
+            self._img_raw.copy_(tokens[0])
+        else:
+            self._img_raw.normal_()
         self._action_latent.normal_()
         self._action_latent.mul_(0.01)
         self._graph.replay()

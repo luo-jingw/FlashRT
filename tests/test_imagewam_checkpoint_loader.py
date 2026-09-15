@@ -36,7 +36,13 @@ _CKPT_AVAILABLE = os.path.exists(_CKPT_PATH)
 HIDDEN, HD, NH, MLP_HIDDEN, JOINT_ATTN_DIM = 3072, 128, 24, 9216, 7680
 ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH, ACTION_MLP_HIDDEN, ACTION_DIM = 1024, 3072, 4096, 7
 NUM_DOUBLE, NUM_SINGLE = 5, 20
-X0, A0 = 128, 896
+# CONFIRMED real img_len=392 (14x28), see opportunities.md's OPT-001
+# entry (2026-09-15) -- superseding the earlier 768/896 guess.
+X0, A0 = 128, 520
+
+_FLUX2_SRC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "third_party", "flux2", "src")
+_AE_PATH = "/home/ljw/projects/pi0.5/models/flux2_klein_4b/ae.safetensors"
+_VAE_AVAILABLE = os.path.isdir(_FLUX2_SRC) and os.path.isfile(_AE_PATH)
 
 
 def test_shapes_match_confirmed_real_dims():
@@ -216,6 +222,45 @@ def test_full_frontend_with_real_checkpoint():
           f"mean={actions.mean():.4f} std={actions.std():.4f}")
 
 
+def test_full_frontend_with_real_checkpoint_and_real_vae():
+    """The strongest check in this project so far: real transformer
+    weights (OPT-001) AND a real VAE-encoded real camera frame
+    (real VAE + text-context wiring plan) together, end to end --
+    construction, `set_prompt()`, `infer({"view1":...,"view2":...})`.
+    Needs BOTH the real checkpoint and the real `flux2` clone + AE
+    checkpoint; skips cleanly if either is missing."""
+    if not (_CKPT_AVAILABLE and _VAE_AVAILABLE):
+        import pytest
+        pytest.skip(f"needs both the real checkpoint ({_CKPT_PATH}) and the real "
+                    f"flux2 clone/AE checkpoint ({_FLUX2_SRC}, {_AE_PATH})")
+
+    import numpy as np
+
+    from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
+
+    real_dims = dict(
+        hidden=HIDDEN, HD=HD, NH=NH, mlp_hidden=MLP_HIDDEN, joint_attention_dim=JOINT_ATTN_DIM,
+        x0=X0, a0=A0, num_layers_double=NUM_DOUBLE, num_layers_single=NUM_SINGLE,
+        action_hidden_dim=ACTION_HIDDEN_DIM, action_attn_width=ACTION_ATTN_WIDTH,
+        action_mlp_hidden=ACTION_MLP_HIDDEN, action_dim=ACTION_DIM,
+        num_action=64, total=A0 + 64,
+        action_num_layers_double=NUM_DOUBLE, action_num_layers_single=NUM_SINGLE,
+        dt=1.0 / 10, num_denoise_steps=10,
+    )
+    frontend = ImageWAMTorchFrontendThor(dims_override=real_dims, precision="fp16", ckpt_path=_CKPT_PATH,
+                                          ae_model_path=_AE_PATH, flux2_src=_FLUX2_SRC)
+    frontend.set_prompt("real checkpoint + real vae smoke test")
+
+    view1 = torch.zeros(224, 224, 3, dtype=torch.uint8, device=DEV)
+    view2 = torch.zeros(224, 224, 3, dtype=torch.uint8, device=DEV)
+    out = frontend.infer({"view1": view1, "view2": view2})
+    actions = out["actions"]
+    assert actions.shape == (64, ACTION_DIM)
+    assert np.isfinite(actions).all(), "real-checkpoint + real-VAE infer() produced NaN/Inf"
+    print(f"PASS: full real-checkpoint + real-VAE frontend, actions shape={actions.shape}, "
+          f"mean={actions.mean():.4f} std={actions.std():.4f}")
+
+
 if __name__ == "__main__":
     if not _CKPT_AVAILABLE:
         print(f"SKIPPED: real checkpoint not present at {_CKPT_PATH}")
@@ -223,4 +268,8 @@ if __name__ == "__main__":
         test_shapes_match_confirmed_real_dims()
         test_real_double_stream_layer_forward_finite()
         test_full_frontend_with_real_checkpoint()
+        if not _VAE_AVAILABLE:
+            print(f"SKIPPED combined VAE test: flux2 clone/AE checkpoint not present")
+        else:
+            test_full_frontend_with_real_checkpoint_and_real_vae()
         print("PASS")
