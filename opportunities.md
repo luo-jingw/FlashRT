@@ -907,6 +907,40 @@ trained weights (not random Gaussian) once reachable, to know whether
 0.989 holds/improves/degrades, and whether per-layer error compounds
 across the real 25-layer stack (this result is single-layer only).
 
+## Step 6: static-scale CUTLASS FP8 — wired and Ada-verified, needs Thor
+
+Direct follow-up to step 5's own FP8 letdown (+5% regression). Every
+OTHER FlashRT Thor model (Pi0.5/GROOT/Motus, `docs/calibration.md`)
+gets a real FP8 win via a static, calibrate-once activation scale +
+`cutlass_fp8_sq`/`_wide`/`_t1` (hand-tuned CUTLASS tile configs) instead
+of ImageWAM's per-call dynamic scale + `cublasLtMatmul`. New
+`StaticFp8Linear` (`quant_linear.py`) adds both, independently
+switchable (`use_cutlass=False`/`True`) so a real Thor measurement can
+tell which one actually explains the regression. `imagewam_thor.py`
+gained `precision="fp8_static"`/`"fp8_static_cutlass"` + a
+`_calibrate_fp8()` step in `set_prompt()` before graph capture (a
+captured graph can't re-issue the host sync a dynamic scale would
+need); `imagewam_thor_bench.py` got the matching one-time
+`.calibrate()` hook. `cutlass_fp8_sq`/`_wide`/`_t1` are gated behind the
+SAME `ENABLE_SM100_CUTLASS` flag NVFP4 already uses successfully on the
+user's Thor build — likely already present there, no new cmake flag
+expected.
+
+Bug found and fixed during implementation: `cutlass_fp8_*` takes
+`alpha` as a host float (unlike `fp8_gemm_descale_fp16`'s device
+pointers) — reading it via `.item()` inside `__call__` would force a
+host sync on every graph replay, incompatible with CUDA Graph capture.
+Fixed by precomputing `alpha` once inside `calibrate()`, before any
+capture, using `np.float32(a)*np.float32(b)` per `docs/calibration.md`'s
+own documented f32-not-f64 rule.
+
+Fully verified on Ada for wiring correctness (both variants fail at
+exactly the documented, already-understood points -- cuBLASLt env gap
+for `use_cutlass=False`, missing `cutlass_fp8_*` symbols for `True` --
+not new bugs); real correctness/speed needs Thor. See `plan.md`'s own
+"OPT-004 step 6" Phase 4 for the exact 4-way Thor checklist (FP16 vs
+dynamic-FP8 vs static-FP8+cuBLASLt vs static-FP8+CUTLASS).
+
 # OPT-005
 
 Status: RESOLVED and wired in as an opt-in — verified on real Thor hardware for BOTH broadcast K/V (cosine=1.000000, rel_l2=0.000412, 4.09x) and real per-head K/V (cosine=1.000000, rel_l2=0.000427/0.000614, 3.75x standalone); folded into the full per-layer benchmark (commit `2a4079b`), confirming a real -10.5% prefill win on top of OPT-004's steps 1-3. Opt-in via `use_fa4=` (frontend) / `IMAGEWAM_USE_FA4=1` (bench script), default False since this dev machine's own Ada GPU has no FA4 runtime.

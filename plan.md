@@ -1887,7 +1887,7 @@ existing scope, not a full-pipeline end-to-end check).
 
 # Plan: OPT-004 step 6 — static-scale CUTLASS FP8 for ImageWAM
 
-Plan Status: pending
+Plan Status: approved
 
 ## Problem
 
@@ -2102,27 +2102,42 @@ entire point of OPT-004 step 5's own uniform-callable interface.
 
 ### Phase 1 — `StaticFp8Linear`, static scale only, KEEP `fp8_gemm_descale_fp16`
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: isolate the static-vs-dynamic-scale variable alone, with no
 CUTLASS kernel change, so the eventual Thor result can distinguish
 "static scale fixed it" from "CUTLASS kernel fixed it" instead of
 conflating both in one measurement.
-Modified files: `quant_linear.py` (`StaticFp8Linear` with
-`use_cutlass=False` hardcoded for this phase — the `use_cutlass` param
-itself can be added now or in Phase 2, whichever keeps this phase's
-diff smaller); `tests/test_imagewam_quant_linear.py`.
+Modified files: `quant_linear.py` (`StaticFp8Linear`, both
+`use_cutlass=False`/`True` added together — the class needed both
+branches from the start to share `_quantize_weight`/`calibrate`/
+`__call__`, so splitting them into separate phases would have meant
+rewriting the same methods twice); `tests/test_imagewam_quant_linear.py`.
+**Bug found and fixed while writing this phase, not anticipated by the
+plan's own Interface section**: `cutlass_fp8_sq`/`_wide`/`_t1` take
+`alpha` as a host `float` parameter, unlike `fp8_gemm_descale_fp16`
+(device pointers) — computing it via `self.act_scale.item()` INSIDE
+`__call__` would force a host sync on every graph replay, which a
+captured CUDA Graph cannot do. Fixed by computing `_alpha_host` ONCE
+inside `calibrate()` (before any capture), using `np.float32(a) *
+np.float32(b)` per `docs/calibration.md §2.3`'s own documented f32-not-f64
+rule (a real historical Pi0.5 regression, 0.9992 -> 0.9878, cited
+there) — `__call__` only reads the precomputed host float.
 Affected modules: none beyond `quant_linear.py`'s own additive class.
-Observation method: on Ada, confirm `calibrate()` correctly freezes a
-scale and `__call__` raises before it's set (pure Python logic,
-testable without a working cuBLASLt FP8 GEMM); the actual GEMM call
-still hits the known Ada cuBLASLt gap and SKIPs exactly like `Fp8Linear`
-already does — this phase is NOT expected to produce a real number
-here, only correct wiring.
+Observation method: verified directly on Ada (not just via the test
+file) — `calibrate()` succeeds (no cuBLASLt involved, just
+`quantize_fp8_device_fp16`'s amax kernel), `__call__` before
+`calibrate()` raises, `calibrate()` after a `__call__` attempt raises,
+and the actual GEMM call hits the documented Ada cuBLASLt gap
+(`cublasLtMatmulAlgoGetHeuristic status 15`) exactly like `Fp8Linear`
+already does — confirmed NOT a wiring bug. `tests/test_imagewam_quant_linear.py`'s
+new `test_static_fp8_linear_cublaslt_matches_fp16_reference` SKIPs
+cleanly via the same real-probe pattern as every other quantized test
+in that file.
 
 ### Phase 2 — CUTLASS kernel swap (`use_cutlass=True`)
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `StaticFp8Linear(..., use_cutlass=True)` dispatches through
 `cutlass_fp8_sq`/`_wide`/`_t1` (variant chosen by shape, following
@@ -2134,27 +2149,66 @@ else, unlike NVFP4's separate `flash_rt.flash_rt_fp4` extension — no
 import to guard, just an attribute check) and raises a clear
 `RuntimeError` if absent, matching `Nvfp4Linear`'s own established
 "clear error, not a wiring bug" pattern.
+**Confirmed by reading `csrc/gemm/cutlass_sm100.cu`'s own
+`cutlass_run_impl` directly**: weight B is read `[N,K]` row-major
+(`stride_B` packed for `{N,K,1}`) — the SAME out-major convention
+`Nvfp4Linear` already transposes into via `.t().contiguous()`, NOT this
+project's usual `(K,N)` convention `Fp8Linear`/`fp8_gemm_descale_fp16`
+use. `StaticFp8Linear.__init__` branches on `use_cutlass` to build the
+weight in whichever layout that backend needs.
+`_pick_fp8_cutlass_variant(n, k)` added as an explicitly-flagged
+PROVISIONAL heuristic (wide-N -> `_wide`, else `_sq`) — unlike
+`fp4_utils.py`'s own `pick_variant` (calibrated against a real
+profiling sweep), this one is not yet validated against real Thor
+per-layer timing; Phase 4 should confirm or retune it, not treat it as
+settled (per this project's own standing "no hardcoded kernel params
+without validating at the real production shape" rule).
 Modified files: `quant_linear.py`.
 Affected modules: none beyond `quant_linear.py`.
-Observation method: on Ada, confirm the `hasattr` probe correctly
-reports absence (this build has no `cutlass_fp8_*` symbols, confirmed
-in Problem above) and raises the documented error, not a crash.
-Real correctness/existence check needs Thor.
+Observation method: verified directly on Ada — `use_cutlass=True`
+raises the documented `RuntimeError` immediately at construction (this
+build genuinely has no `cutlass_fp8_*` symbols, confirmed via
+`hasattr`), not a crash. `test_static_fp8_linear_cutlass_matches_fp16_reference`
+SKIPs cleanly via its own separate probe. Real correctness/existence
+check needs Thor.
 
 ### Phase 3 — frontend + bench integration
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `imagewam_thor.py`'s `_calibrate_fp8()` + `precision="fp8_static"`;
 `imagewam_thor_bench.py`'s matching one-time `.calibrate()` hook.
-Modified files: `imagewam_thor.py`, `imagewam_thor_bench.py`.
+Modified files: `imagewam_thor.py` (`_PRECISIONS` gains
+`"fp8_static"`/`"fp8_static_cutlass"`; new `_calibrate_fp8()` called
+from `set_prompt()` right before `_capture_graph()`); `imagewam_thor_bench.py`
+(new `_calibrate_static_fp8(weights, m)`, called once per `bench_*`
+function right before its own `_autotune(...)` call, matching that
+function's own established one-time-setup placement).
+**Design simplification, consistent with the plan's own "deliberately
+not in scope" note**: calibration measures a disposable random
+activation of the correct `(m, k)` shape per weight rather than
+threading a "calibration mode" through `pipeline_thor.py`'s real
+forward — `m` picked per LAYER-TYPE FAMILY (backbone -> `a0`,
+action_dit -> `num_action`), not per exact call site (txt vs img vs
+single all share one `a0` proxy in `imagewam_thor.py`) — this is
+already a random-weight dry run with no real distribution to calibrate
+against, so a per-family proxy is proportionate; a real calibration
+pass belongs to OPT-001, once a real checkpoint exists.
 Affected modules: frontend construction/lifecycle, bench harness.
-Observation method: on Ada, `precision="fp16"` must still work
-unchanged (regression check); `precision="fp8_static"` must build
-weights and reach exactly the documented cuBLASLt gap at `calibrate()`
-time or at first `__call__` (not earlier, not a different error) —
-same "fails at the right, already-understood place" check already
-established for `fp8`/`nvfp4` in OPT-004 step 5's own Phase 3.
+Observation method: verified directly on Ada — `precision="fp16"`
+still builds/runs/infers unchanged (regression check, `test_imagewam_frontend.py`
+and the full `tests/test_imagewam_*.py` suite all still pass or skip
+exactly as before); `precision="fp8_static"` builds weights,
+`calibrate()` succeeds, and `set_prompt()` reaches the documented
+cuBLASLt gap inside `_capture_graph()`'s own warmup pass (not earlier,
+not a different error); `precision="fp8_static_cutlass"` raises the
+documented CUTLASS-unavailable error immediately during `__init__`
+(weight construction), before `set_prompt()` is ever called — matches
+Phase 2's own finding that this build has no `cutlass_fp8_*` symbols at
+all. Same two checks reproduced independently in
+`benchmarks/imagewam_thor_bench.py` via `IMAGEWAM_PRECISION=fp8_static`/
+`fp8_static_cutlass`. GPU memory/disk checked clean before and after
+(no leaked processes, `nvidia-smi`/`df` unchanged).
 
 ### Phase 4 — real Thor measurement + close-out
 
