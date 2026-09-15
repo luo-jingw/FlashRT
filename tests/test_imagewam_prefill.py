@@ -102,6 +102,7 @@ def test_prefill_runs_and_populates_kv_cache():
     weights = {}
     for L in range(num_double):
         weights[("backbone", "double", L, "txt_in.weight")] = _fp16(hidden, joint_attention_dim)
+        weights[("backbone", "double", L, "img_in.weight")] = _fp16(hidden, HD)
         for prefix in ("txt", "img"):
             weights[("backbone", "double", L, f"{prefix}_qkv.weight")] = _fp16(3 * hidden, hidden)
             weights[("backbone", "double", L, f"{prefix}_proj.weight")] = _fp16(hidden, hidden)
@@ -122,11 +123,15 @@ def test_prefill_runs_and_populates_kv_cache():
     # all-zero row has zero variance, which is a degenerate input for
     # LayerNorm (this project's real per-block norm, replacing the old
     # unweighted-RMS-norm-only approximation) that a real encoded
-    # observation would never actually produce.
+    # observation would never actually produce. Now overwritten by
+    # img_in.weight's own GEMM before any LayerNorm reads it (OPT-001/
+    # OPT-008) -- kept non-degenerate anyway for defense in depth.
     backbone_hidden = _rand(a0, hidden, scale=0.1)
+    img_raw = _rand(a0 - x0, HD, scale=0.1)
     bufs = {
         "context": context.data_ptr(),
         "backbone_hidden": backbone_hidden.data_ptr(),
+        "img_raw": img_raw.data_ptr(),
         "modded_scratch": _zeros(a0, hidden).data_ptr(),
         "txt_qkv_merged": _zeros(x0, 3 * hidden).data_ptr(),
         "img_qkv_merged": _zeros(a0 - x0, 3 * hidden).data_ptr(),

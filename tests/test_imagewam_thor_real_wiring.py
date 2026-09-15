@@ -84,10 +84,15 @@ def test_double_stream_layer_matches_real_reference():
 
     context = _own(torch.randn(x0, joint_attention_dim, dtype=FP16, device=DEV) * 0.1)
     txt_in_w = _lin(hidden, joint_attention_dim, DEV)
-    img = _own(torch.randn(img_len, hidden, dtype=FP16, device=DEV) * 0.1)
+    img_in_w = _lin(hidden, HD, DEV)
+    img_raw = _own(torch.randn(img_len, HD, dtype=FP16, device=DEV) * 0.1)
 
-    ref_w, ptr_w = {}, {("backbone", "double", 0, "txt_in.weight"):
-                         Fp16Linear(gemm, txt_in_w.data_ptr(), hidden, joint_attention_dim)}
+    ref_w, ptr_w = {}, {
+        ("backbone", "double", 0, "txt_in.weight"):
+            Fp16Linear(gemm, txt_in_w.data_ptr(), hidden, joint_attention_dim),
+        ("backbone", "double", 0, "img_in.weight"):
+            Fp16Linear(gemm, img_in_w.data_ptr(), hidden, HD),
+    }
     for side in ("txt", "img"):
         q, k, v, fused = _fused_qkv(hidden, DEV)
         ref_w[f"{side}_qkv"] = torch.cat([q, k, v], dim=1)
@@ -121,10 +126,14 @@ def test_double_stream_layer_matches_real_reference():
 
     ctx = fvk.FvkContext()
 
-    # Derive the exact same txt input both paths will use, via the
-    # SAME gemm.fp16_nn call the pointer path itself makes.
+    # Derive the exact same txt/img inputs both paths will use, via the
+    # SAME gemm.fp16_nn calls the pointer path itself makes (OPT-001/
+    # OPT-008: img now needs its own img_in projection first, mirroring
+    # txt_in's own already-established pattern here).
     txt_input = _own(torch.zeros(x0, hidden, dtype=FP16, device=DEV))
     gemm.fp16_nn(context.data_ptr(), txt_in_w.data_ptr(), txt_input.data_ptr(), x0, hidden, joint_attention_dim, 0)
+    img = _own(torch.zeros(img_len, hidden, dtype=FP16, device=DEV))
+    gemm.fp16_nn(img_raw.data_ptr(), img_in_w.data_ptr(), img.data_ptr(), img_len, hidden, HD, 0)
 
     txt_ref, img_ref = real_double_stream_block_forward_fp16(
         gemm, ctx, txt_input.clone(), img.clone(), ref_w, mod_txt, mod_img, table, NH, HD, hidden, mlp_hidden, scale)
@@ -146,9 +155,11 @@ def test_double_stream_layer_matches_real_reference():
     )
 
     combined = _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV))
-    combined[x0:a0] = img
+    # No pre-set of combined[x0:a0] needed: _double_stream_layer's own
+    # img_in.weight call now writes it from img_raw (OPT-001/OPT-008).
     bufs = {
         "context": context.data_ptr(),
+        "img_raw": img_raw.data_ptr(),
         "backbone_hidden": combined.data_ptr(),
         "modded_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
         "txt_qkv_merged": _own(torch.zeros(x0, 3 * hidden, dtype=FP16, device=DEV)).data_ptr(),

@@ -217,7 +217,7 @@ class ImageWAMTorchFrontendThor:
         autotune call per distinct shape below covers every layer of
         that type -- not one call per layer.
         """
-        hidden, mlp_hidden = d["hidden"], d["mlp_hidden"]
+        hidden, mlp_hidden, HD = d["hidden"], d["mlp_hidden"], d["HD"]
         joint_attention_dim = d["joint_attention_dim"]
         x0, a0 = d["x0"], d["a0"]
         img_len = a0 - x0
@@ -227,6 +227,7 @@ class ImageWAMTorchFrontendThor:
 
         shapes = {
             (x0, hidden, joint_attention_dim),      # txt_in
+            (img_len, hidden, HD),                    # img_in (OPT-001/OPT-008)
             (x0, 3 * hidden, hidden),                 # txt_qkv (OPT-004 step 2, fused)
             (x0, hidden, hidden),                      # txt_proj
             (x0, mlp_hidden * 2, hidden),               # txt_mlp0
@@ -329,6 +330,7 @@ class ImageWAMTorchFrontendThor:
         weights = {}
         for L in range(d["num_layers_double"]):
             weights[("backbone", "double", L, "txt_in.weight")] = self._rnd_linear(hidden, joint_attention_dim)
+            weights[("backbone", "double", L, "img_in.weight")] = self._rnd_linear(hidden, HD)
             for prefix in ("txt", "img"):
                 weights[("backbone", "double", L, f"{prefix}_qkv.weight")] = self._rnd_linear(3 * hidden, hidden)
                 weights[("backbone", "double", L, f"{prefix}_proj.weight")] = self._rnd_linear(hidden, hidden)
@@ -362,7 +364,7 @@ class ImageWAMTorchFrontendThor:
         return weights
 
     def _alloc_buffers(self, d: dict) -> dict:
-        hidden, mlp_hidden, x0, a0 = d["hidden"], d["mlp_hidden"], d["x0"], d["a0"]
+        hidden, mlp_hidden, x0, a0, HD = d["hidden"], d["mlp_hidden"], d["x0"], d["a0"], d["HD"]
         img_len = a0 - x0
         joint_attention_dim = d["joint_attention_dim"]
         ahd, aaw, amh, num_action = (
@@ -370,10 +372,12 @@ class ImageWAMTorchFrontendThor:
         z = lambda *shape: self._own(torch.zeros(*shape, dtype=FP16, device=DEV))
         self._context = self._own(torch.zeros(x0, joint_attention_dim, dtype=FP16, device=DEV))
         self._backbone_hidden = self._own(torch.zeros(a0, hidden, dtype=FP16, device=DEV))
+        self._img_raw = self._own(torch.zeros(img_len, HD, dtype=FP16, device=DEV))
         self._action_latent = self._own(torch.zeros(num_action, ahd, dtype=F32, device=DEV))
         return {
             "context": self._context.data_ptr(),
             "backbone_hidden": self._backbone_hidden.data_ptr(),
+            "img_raw": self._img_raw.data_ptr(),
             "modded_scratch": z(a0, hidden).data_ptr(),
             "txt_qkv_merged": z(x0, 3 * hidden).data_ptr(),
             "img_qkv_merged": z(img_len, 3 * hidden).data_ptr(),
@@ -499,17 +503,19 @@ class ImageWAMTorchFrontendThor:
 
         `observation` is accepted for interface parity but its contents
         are not used: the real image-encode step is a VAE forward, out
-        of scope (see `imagewam_encode_once`'s own docstring) -- the
-        image rows of `backbone_hidden` are random-filled here in place
-        of a real encoded observation, standing in for whatever a real
-        VAE would have produced.
+        of scope (see `imagewam_encode_once`'s own docstring) -- `img_raw`
+        (HD-width raw image tokens, OPT-001/OPT-008's own `img_in`
+        projection consumes this every replay) is random-filled here in
+        place of a real encoded observation, standing in for whatever a
+        real VAE would have produced. `backbone_hidden`'s own image rows
+        are now WRITTEN by `img_in.weight` inside the graph itself, not
+        filled directly here (that was only ever a stand-in for the
+        projection this frontend didn't model yet).
         """
         del observation
         if self._graph is None:
             raise RuntimeError("call set_prompt() before infer()")
-        x0, a0 = self.dims["x0"], self.dims["a0"]
-        img_rows = self._backbone_hidden[x0:a0]
-        img_rows.normal_()
+        self._img_raw.normal_()
         self._action_latent.normal_()
         self._action_latent.mul_(0.01)
         self._graph.replay()

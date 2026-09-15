@@ -243,7 +243,10 @@ def bench_backbone_double():
     ctx, attn = _make_1layer_backend(kind="backbone")
     gemm = fvk.GemmRunner()
     img_len = A0 - X0
-    weights = {("backbone", "double", 0, "txt_in.weight"): _make_linear(gemm, HIDDEN, JOINT_ATTN_DIM)}
+    weights = {
+        ("backbone", "double", 0, "txt_in.weight"): _make_linear(gemm, HIDDEN, JOINT_ATTN_DIM),
+        ("backbone", "double", 0, "img_in.weight"): _make_linear(gemm, HIDDEN, HD),
+    }
     for prefix in ("txt", "img"):
         weights[("backbone", "double", 0, f"{prefix}_qkv.weight")] = _make_linear(gemm, 3 * HIDDEN, HIDDEN)
         weights[("backbone", "double", 0, f"{prefix}_proj.weight")] = _make_linear(gemm, HIDDEN, HIDDEN)
@@ -255,6 +258,7 @@ def bench_backbone_double():
                 joint_attention_dim=JOINT_ATTN_DIM, x0=X0, a0=A0)
     bufs = {
         "context": _rand(X0, JOINT_ATTN_DIM).data_ptr(),
+        "img_raw": _rand(img_len, HD, scale=0.1).data_ptr(),
         "backbone_hidden": _rand(A0, HIDDEN, scale=0.1).data_ptr(),
         "modded_scratch": _zeros(A0, HIDDEN).data_ptr(),
         "txt_qkv_merged": _zeros(X0, 3 * HIDDEN).data_ptr(),
@@ -278,6 +282,7 @@ def bench_backbone_double():
     _autotune(gemm, {
         (X0, HIDDEN, JOINT_ATTN_DIM), (X0, 3 * HIDDEN, HIDDEN), (X0, HIDDEN, HIDDEN),
         (X0, MLP_HIDDEN * 2, HIDDEN), (X0, HIDDEN, MLP_HIDDEN),
+        (img_len, HIDDEN, HD),  # img_in (OPT-001/OPT-008)
         (img_len, 3 * HIDDEN, HIDDEN), (img_len, HIDDEN, HIDDEN), (img_len, MLP_HIDDEN * 2, HIDDEN),
         (img_len, HIDDEN, MLP_HIDDEN),
     })

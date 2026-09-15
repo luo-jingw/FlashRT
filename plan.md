@@ -2492,16 +2492,32 @@ distinct paths the generic single-directory template has no slot for.
 
 ### Phase 1 — `img_in` wiring (prerequisite, Ada-testable)
 
-Phase Status: pending
+Phase Status: completed
 
+**Stop Condition resolved, NOT triggered**: `real_double_stream_block_forward_fp16`
+needed NO modification. Confirmed by reading its own "Real order"
+derivation directly: it takes BOTH `txt` and `img` already at `hidden`
+width (real FLUX.2's `DoubleStreamBlock` itself has no `img_in`/`txt_in`
+step — those are OUTER transformer-level projections, applied once,
+outside every block). `test_imagewam_thor_real_wiring.py` already had
+to do this exact manual pre-step for `txt_in` (a raw `gemm.fp16_nn`
+call before invoking the reference) — `img_in` needed the identical
+treatment, not a reference-function change. Cosine stayed 1.000000
+exactly, confirming the new GEMM call is bit-correct.
 Goal: `img_in.weight` modeled in `pipeline_thor.py`, verified with
 random weights exactly like every other mechanism this session (no
 real checkpoint needed — this is pure structural correctness: does the
 new GEMM call run, produce finite output, and not disturb anything
 already verified).
-Modified files: `pipeline_thor.py`, `imagewam_thor.py`,
-`tests/test_imagewam_prefill.py`, `test_imagewam_denoise.py`,
-`test_imagewam_thor_real_wiring.py`, `benchmarks/imagewam_thor_bench.py`.
+Modified files: `pipeline_thor.py` (new call site in `_double_stream_layer`,
+right before the image stream's own AdaLN, mirroring `txt_in.weight`'s
+call exactly); `imagewam_thor.py` (`img_in.weight` slot per double
+layer, new `img_raw` (img_len, HD) buffer, `infer()` now fills `img_raw`
+instead of `backbone_hidden`'s image rows directly, `_autotune_gemm`
+covers the new shape); `tests/test_imagewam_prefill.py`,
+`test_imagewam_denoise.py`, `test_imagewam_thor_real_wiring.py`,
+`benchmarks/imagewam_thor_bench.py` (all gained `img_in.weight` +
+`img_raw`, matching pattern).
 Affected modules: backbone double-stream layer, frontend buffer
 allocation, every test/bench file that builds its own `backbone_hidden`/
 image content directly.
@@ -2509,10 +2525,9 @@ Observation method: full `tests/test_imagewam_*.py` suite still passes
 (regression check on everything img_in touches downstream: AdaLN,
 attention, MLP all read from the SAME `combined`/`img_x_ptr` buffer
 img_in now writes into first); `test_imagewam_thor_real_wiring.py`'s
-own cosine-vs-reference checks stay at 1.000000 (the reference must
-ALSO gain an `img_in` step, or this phase would be comparing apples to
-oranges — see Stop Conditions below if this reveals `real_double_stream_block_forward_fp16`
-itself needs the same addition, which would expand this phase's scope).
+own cosine-vs-reference checks stay at 1.000000, confirmed via its own
+matching manual pre-step for `img_in` (see this phase's own "Stop
+Condition resolved" note above — no reference-function change needed).
 
 ### Phase 2 — `checkpoint_loader.py` (Thor-blind, code review only)
 
@@ -2574,7 +2589,6 @@ check).
 
 ## Stop Conditions Encountered
 
-None yet — Phase 1's own Observation method above flags a possible
-scope expansion (whether `pipeline_real.py`'s reference functions also
-need an `img_in` step) to check for during that phase, not yet
-confirmed one way or the other.
+None. Phase 1's own flagged possible scope expansion (whether
+`pipeline_real.py`'s reference functions also need an `img_in` step)
+resolved NO — see that phase's own "Stop Condition resolved" note.

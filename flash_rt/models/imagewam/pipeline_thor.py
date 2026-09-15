@@ -327,6 +327,16 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     img_K_ptr = _ptr_offset(K_cache, x0, hidden)
     img_V_ptr = _ptr_offset(V_cache, x0, hidden)
 
+    # OPT-001/OPT-008: real `transformer.img_in` projection, HD-width
+    # raw image tokens -> hidden width, mirroring `txt_in.weight`'s own
+    # call above exactly (same "kept simplification" of re-deriving
+    # every layer rather than once outside the loop -- see that call's
+    # own comment; `real_double_stream_block_forward_fp16` itself takes
+    # BOTH txt and img pre-projected, matching real FLUX.2's own
+    # DoubleStreamBlock scope, so this call site has no reference-side
+    # counterpart to keep in sync, same as txt_in's own call above).
+    key("img_in.weight")(bufs["img_raw"], img_x_ptr, img_len, stream)
+
     fvk.ada_layer_norm_fp16(img_x_ptr, img_scale1_t.data_ptr(), img_shift1_t.data_ptr(),
                              img_modded_ptr, img_len, hidden, eps, stream)
     img_qkv_merged = bufs["img_qkv_merged"]  # (img_len, 3*hidden)
