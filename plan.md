@@ -2724,3 +2724,207 @@ official-reference validation script.
 None. Phase 1's own flagged possible scope expansion (whether
 `pipeline_real.py`'s reference functions also need an `img_in` step)
 resolved NO — see that phase's own "Stop Condition resolved" note.
+
+---
+
+# Plan: real VAE encoder + text-context wiring into the served frontend
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+`imagewam_thor.py.infer()` ignores its own `observation` argument
+entirely and random-fills `img_raw` every replay (a placeholder for
+"whatever a real VAE would have produced," per that method's own
+docstring). `set_prompt()` similarly never encodes `prompt_text` --
+`context` is random-filled once at construction and never touched
+again. Both are honest, documented placeholders, not bugs -- but they
+mean this frontend has never processed a single real pixel or real
+instruction string.
+
+**Corrected assumption, found while investigating this plan**:
+`black-forest-labs/flux2` (the real FLUX.2 model-definition source)
+was documented THROUGHOUT this project (`PROJECT.md`, `plan.md`,
+`quant_linear.py`'s own docstrings) as "not cloneable/absent on this
+dev machine." This is FALSE -- `git clone https://github.com/black-forest-labs/flux2.git`
+succeeds directly from this sandboxed environment, and pins to the
+EXACT commit (`50fe516...`) this project's own docs have referenced by
+hash for weeks without ever having the source locally. This unblocks
+using the REAL `flux2.autoencoder.AutoEncoder` class directly, rather
+than reverse-engineering an approximation.
+
+**Second correction, found the same way**: `imagewam.py`'s own real
+VAE loading path (`AutoEncoder(AutoEncoderParams())` + `load_sft`)
+uses `flux2`'s OWN `autoencoder.py` class -- NOT `diffusers.AutoencoderKLFlux2`
+(the class `model_index.json` names, which is a SEPARATE, incomplete
+diffusers port: it defines an identical `self.bn` BatchNorm2d
+submodule but never wires it into its own public `encode()`, and never
+applies the real 2x2 patch-merge either). Verified directly on this
+machine: encoding a real LIBERO frame through `diffusers.AutoencoderKLFlux2.encode().latent_dist.mode()`
+gives mean=-0.031/std=1.72/absmax=8.31 (WRONG -- no patch-merge, no
+BN); through the REAL `flux2.autoencoder.AutoEncoder.encode()` gives
+mean=-0.012/std=0.973/absmax=4.72 -- matching the user's own real Thor
+measurement (mean=-0.02, std=0.97, absmax=4.91) almost exactly. The
+real class is a hard requirement, not a convenience.
+
+### Problem
+
+No code path in this project encodes a real image into `img_raw` or
+accepts a real/precomputed text context into `context` -- every
+inference is 100% synthetic on both counts.
+
+### Measurable goal
+
+`imagewam_thor.py` gains an opt-in real path: given `ae_model_path`/
+`flux2_src`, `infer(observation)` encodes a REAL image through the
+REAL `flux2.autoencoder.AutoEncoder` into `img_raw` before graph
+replay; given a precomputed `context`/`context_mask` tensor pair
+(matching `imagewam.py`'s own `_prepare_flux2_infer_text` interface
+exactly -- it already accepts this as an alternative to live encoding),
+`set_prompt()` loads it into `context` instead of random-filling.
+Live Qwen3-4B encoding (a raw prompt STRING, not precomputed
+embeddings) is explicitly OUT OF SCOPE for this plan -- no local
+Qwen3-4B weights exist yet, and downloading them is a separate,
+larger decision (see Structure below for exactly where that door is
+left open, not closed).
+
+## Structure
+
+- NEW `flash_rt/models/imagewam/vae_encoder.py` -- OWNS real VAE
+  loading (`load_real_ae`, lazy-imports `flux2.autoencoder`, mirroring
+  `Nvfp4Linear`'s own guarded-import pattern for a not-always-present
+  dependency) and real encoding (`encode_to_tokens`: resize-per-view +
+  concat + `x*2/255-1` + `ae.encode(x)` -- replicates
+  `imagewam._encode_flux2_image_tokens`'s own exact real order,
+  confirmed by reading it directly). Returns real `(1, img_len, HD)`
+  fp16 CUDA tokens, ready to copy into `img_raw` directly -- no
+  FlashRT-side change needed to consume it.
+- `flash_rt/frontends/torch/imagewam_thor.py` -- OWNS the encode-once-
+  per-call lifecycle: `infer(observation)` calls the real VAE (NEW,
+  when `ae_model_path` was given at construction) OUTSIDE the captured
+  CUDA Graph (plain PyTorch/`flux2`-dependent code has no business
+  being captured), then copies the result into the ALREADY-CAPTURED
+  graph's own `img_raw` buffer before `.replay()` -- same "real work
+  happens once per call, feeds a fixed-address buffer the graph reads"
+  pattern this file's own AdaLN/RoPE precompute already established,
+  just per-CALL instead of per-construction. `set_prompt()` gains an
+  optional `context`/`context_mask` param pair, copied into the
+  existing `context` buffer when given (no graph recapture needed --
+  same buffer, same address, just real values instead of random ones).
+- `flash_rt/models/imagewam/checkpoint_loader.py` -- UNCHANGED. Real
+  checkpoint weights and real VAE/text encoding are independent
+  concerns (one loads `model.pt`'s transformer weights, the other runs
+  a separate real image/text encoder) -- `ckpt_path` and
+  `ae_model_path`/`flux2_src` are independently optional.
+- Live Qwen3 (a THIRD, NOT-attempted-here concern): `set_prompt`'s own
+  new signature accepts either a raw string (today's random-fill
+  behavior, unchanged) or precomputed `context`/`context_mask` --
+  wiring live Qwen3 later would only need adding a THIRD branch inside
+  `set_prompt` (encode string -> context via `transformers.Qwen3ForCausalLM`,
+  confirmed importable here), not a redesign of this plan's own
+  interface. Left as an explicit door, not implemented.
+
+## Interface
+
+```python
+# flash_rt/models/imagewam/vae_encoder.py
+def load_real_ae(ae_model_path: str, flux2_src: str, device="cuda", dtype=torch.bfloat16):
+    """Lazy-imports flux2.autoencoder (sys.path.insert(0, flux2_src) if
+    not already importable), loads AutoEncoder(AutoEncoderParams())
+    from `ae_model_path` (safetensors) via strict state_dict load.
+    Raises RuntimeError with a clear message (not an ImportError) if
+    flux2_src doesn't actually contain the flux2 package -- same
+    "clear error, not a wiring bug" pattern as Nvfp4Linear/StaticFp8Linear."""
+
+def encode_to_tokens(ae, view1: torch.Tensor, view2: torch.Tensor | None = None,
+                      *, out_hw=(224, 224)) -> torch.Tensor:
+    """view1/view2: (H,W,3) uint8 CUDA or CPU tensors (one or two camera
+    views -- ImageWAM's own real convention concatenates two 224x224
+    views into one 224x448 input, confirmed against real LIBERO-fastwam
+    preprocessing). Returns (1, img_len, HD) fp16 CUDA tokens, already
+    packed (2x2 patch-merge + BatchNorm, matching flux2.autoencoder.AutoEncoder.encode
+    exactly) -- ready to `.copy_()` into img_raw directly."""
+```
+
+`imagewam_thor.py` changes:
+```python
+def __init__(self, ..., ae_model_path: str | None = None, flux2_src: str | None = None, ...):
+    # all-or-nothing with each other, independent of ckpt_path (OPT-001)
+    self._ae = load_real_ae(ae_model_path, flux2_src) if ae_model_path else None
+
+def set_prompt(self, prompt_text: str | None = None, *,
+                context: torch.Tensor | None = None, context_mask: torch.Tensor | None = None):
+    # context/context_mask given -> self._context.copy_(context); random-fill otherwise (unchanged)
+
+def infer(self, observation: dict) -> dict:
+    if self._ae is not None and "view1" in observation:
+        tokens = encode_to_tokens(self._ae, observation["view1"], observation.get("view2"))
+        self._img_raw.copy_(tokens[0])
+    else:
+        self._img_raw.normal_()  # unchanged placeholder
+    ...  # self._graph.replay() unchanged
+```
+
+## Flow
+
+1. Construction: `ae_model_path`/`flux2_src` given -> `load_real_ae`
+   loads the real AE once, kept resident (bf16, small: encoder-only
+   params, not the full ~7.7GB base FLUX.2 DiT -- just the AE's own
+   weights from `ae.safetensors`).
+2. `set_prompt`: real `context`/`context_mask` given -> copied into
+   the existing buffer; graph capture proceeds unchanged either way
+   (same buffer address, same shape, only the VALUES differ before
+   vs. after this change).
+3. Per `infer()` call: real observation given -> VAE encode (plain
+   PyTorch, real weights, OUTSIDE the graph) -> copy into `img_raw` ->
+   `.replay()`. No real observation given -> unchanged random-fill
+   placeholder, so nothing breaks for existing callers.
+
+## Code Mapping
+
+| module | file | task |
+|---|---|---|
+| real VAE load + encode | `flash_rt/models/imagewam/vae_encoder.py` (new) | `load_real_ae`, `encode_to_tokens` |
+| frontend lifecycle | `flash_rt/frontends/torch/imagewam_thor.py` | `ae_model_path`/`flux2_src` ctor params, `set_prompt`'s new optional context params, `infer`'s new real-encode branch |
+| correctness test | `tests/test_imagewam_vae_encoder.py` (new) | real AE load + encode, checked against the real Thor stats (mean/std/absmax) already on record; skips cleanly if `flux2_src`/`ae.safetensors` aren't reachable |
+| record | `opportunities.md` | new entry once measured |
+
+## Implementation Phases
+
+### Phase 1 — `vae_encoder.py`, verified against real Thor stats
+
+Phase Status: pending
+
+Goal: `load_real_ae`/`encode_to_tokens` correctly load the real AE and
+reproduce the real preprocessing order, checked against the real
+Thor-measured stats (mean=-0.02, std=0.97, absmax=4.91) as ground
+truth -- NOT a cosine check (no independent reference implementation
+exists locally to compare against), a statistical sanity check.
+Modified files: new `vae_encoder.py`, new `tests/test_imagewam_vae_encoder.py`.
+Observation method: run directly on this dev machine (real `flux2`
+clone, real `ae.safetensors`, a real downloaded LIBERO-fastwam frame)
+-- already done ad-hoc while investigating this plan (mean=-0.012,
+std=0.973, absmax=4.72); this phase formalizes it as a permanent test.
+
+### Phase 2 — frontend integration
+
+Phase Status: pending
+
+Goal: `imagewam_thor.py`'s new ctor params + `set_prompt`/`infer`
+branches.
+Modified files: `imagewam_thor.py`.
+Observation method: regression check (existing random-fill behavior
+unchanged when the new params aren't given) + a real end-to-end run
+(real VAE encode -> real `img_raw` -> existing captured graph -> real
+weights via OPT-001's own `ckpt_path`, if available -- combining both
+opt-in real paths for the first time).
+
+### Phase 3 — close-out
+
+Phase Status: pending
+
+Goal: record what real image/text wiring achieves and what's still
+missing (live Qwen3, still deferred).
+Modified files: `opportunities.md`.
