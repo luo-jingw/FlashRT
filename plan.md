@@ -2729,7 +2729,7 @@ resolved NO — see that phase's own "Stop Condition resolved" note.
 
 # Plan: real VAE encoder + text-context wiring into the served frontend
 
-Plan Status: approved
+Plan Status: completed (all 3 phases done)
 
 ## Problem
 
@@ -2895,7 +2895,7 @@ def infer(self, observation: dict) -> dict:
 
 ### Phase 1 — `vae_encoder.py`, verified against real Thor stats
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `load_real_ae`/`encode_to_tokens` correctly load the real AE and
 reproduce the real preprocessing order, checked against the real
@@ -2910,21 +2910,28 @@ std=0.973, absmax=4.72); this phase formalizes it as a permanent test.
 
 ### Phase 2 — frontend integration
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `imagewam_thor.py`'s new ctor params + `set_prompt`/`infer`
 branches.
 Modified files: `imagewam_thor.py`.
 Observation method: regression check (existing random-fill behavior
-unchanged when the new params aren't given) + a real end-to-end run
-(real VAE encode -> real `img_raw` -> existing captured graph -> real
-weights via OPT-001's own `ckpt_path`, if available -- combining both
-opt-in real paths for the first time).
+unchanged when the new params aren't given, confirmed) + a real
+end-to-end run combining BOTH opt-in real paths for the first time:
+real weights (OPT-001's own `ckpt_path`) AND a real VAE-encoded real
+LIBERO-fastwam camera frame, through the SAME captured CUDA Graph,
+producing a finite `(64,7)` action tensor. New
+`test_full_frontend_with_real_checkpoint_and_real_vae` in
+`tests/test_imagewam_checkpoint_loader.py` locks this in as permanent
+regression coverage (needs both real resources, skips cleanly
+otherwise). Also fixed that test file's own stale `A0=896` constant
+(superseded by OPT-001's own confirmed `img_len=392` correction) while
+here.
 
 ### Phase 3 — close-out
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: record what real image/text wiring achieves and what's still
 missing (live Qwen3, still deferred).
-Modified files: `opportunities.md`.
+Modified files: `opportunities.md` (new entry).

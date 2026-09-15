@@ -1695,7 +1695,7 @@ worth reopening elsewhere.
 
 # OPT-008
 
-Status: real VAE-encode cost added to all local/Thor full-pipeline benchmarks; the `img_in` gap this exposed is now FIXED (OPT-001 Phase 1, 2026-09-15) — the VAE encoder ITSELF (the conv-based image tokenizer producing raw HD-width image tokens) is still not modeled in `pipeline_thor.py`/`imagewam_thor.py`, only in standalone benchmark scripts (`_imagewam_vae_stub.py`) — that part remains open
+Status: real VAE-encode cost added to all local/Thor full-pipeline benchmarks; the `img_in` gap this exposed is FIXED (OPT-001 Phase 1); the VAE encoder ITSELF is NOW wired into the served frontend (2026-09-15, `plan.md`'s own "real VAE encoder + text-context wiring" plan, all 3 phases done) — see this file's own new entry below
 
 Area: VAE encoder (input-image tokenization) — previously excluded from every full-pipeline speed number with no clear justification; now included
 
@@ -1906,3 +1906,67 @@ precedent) instead of `torch.compile`. The `img_in` gap in
 `pipeline_thor.py` itself is a separate, smaller follow-up worth its
 own promotion once real VAE integration (not just a speed stub) is
 in scope.
+
+## Real VAE encoder + text-context wiring — DONE (2026-09-15), including a corrected environment assumption and a wrong-reference-class bug caught before it shipped
+
+`imagewam_thor.py.infer()` now has a real path: given `ae_model_path`/
+`flux2_src` at construction, a real image (`observation["view1"]`,
+optionally `"view2"`) is encoded through the REAL FLUX.2 VAE outside
+the captured CUDA Graph and copied into `img_raw` before `.replay()`.
+`set_prompt()` now accepts a real precomputed `context`/`context_mask`
+pair (matching `imagewam.py`'s own `_prepare_flux2_infer_text`
+interface exactly) as an alternative to random-filling `context`.
+
+**Two corrected assumptions found while building this, both material**:
+- **`black-forest-labs/flux2` (the real FLUX.2 source) IS clonable
+  from this sandboxed dev machine** -- `PROJECT.md`, `plan.md`, and
+  this file itself had assumed for weeks that it wasn't reachable
+  (based on it never having been tried, not on a confirmed failure).
+  `git clone` succeeds directly and pins to the EXACT commit
+  (`50fe5162777813d869182b139e83b10743caef15`) this project's own docs
+  have referenced by hash the whole time without a local checkout.
+- **`diffusers.AutoencoderKLFlux2` (the class `model_index.json`
+  names) is NOT what real ImageWAM inference actually uses.**
+  `imagewam.py`'s own real VAE construction calls
+  `flux2.autoencoder.AutoEncoder(AutoEncoderParams())` directly --  a
+  DIFFERENT class. Confirmed the two are not interchangeable by
+  running both on this dev machine against a real
+  `libero_spatial_no_noops_lerobot` frame: the diffusers class gives
+  mean=-0.031/std=1.72/absmax=8.31 (it defines an identical `self.bn`
+  BatchNorm2d submodule but never calls it inside its own public
+  `encode()`, and skips the real 2x2 patch-merge entirely); the REAL
+  `flux2.autoencoder.AutoEncoder.encode()` gives
+  mean=-0.012/std=0.973/absmax=4.72 -- matching the user's own real
+  Thor measurement (mean=-0.02, std=0.97, absmax=4.91, this file's own
+  OPT-001 entry above) almost exactly. Using the diffusers class would
+  have shipped a plausible-looking but wrong VAE encoder; caught before
+  it reached any real code path.
+
+New isolated venv (`FlashRT/.venv`) built for this work: the shared
+`third_party/openpi/.venv` (used by every prior session this project)
+has `lerobot==0.4.4` pinned to `diffusers<0.36.0`, but
+`diffusers.AutoencoderKLFlux2`'s own real target (unused here, see
+above, but still needed diffusers>=0.37 to import at all before this
+was diagnosed) forced the choice between breaking `lerobot` in the
+shared venv or building a separate one -- built a separate one
+(`torch==2.14.0+cu130`, `pybind11==3.1.0`, both confirmed ABI-compatible
+with the existing `flash_rt_kernels.so` after a rebuild -- same Python
+3.11.13, ~30s incremental build). `flash_rt_kernels` rebuilt once,
+verified working from BOTH venvs afterward (same `.so` output path,
+same CUDA arch/build flags).
+
+New `flash_rt/models/imagewam/vae_encoder.py` (`load_real_ae`,
+`encode_to_tokens`) and `tests/test_imagewam_vae_encoder.py` (skips
+cleanly without the real `flux2` clone/AE checkpoint). New
+`test_full_frontend_with_real_checkpoint_and_real_vae` in
+`test_imagewam_checkpoint_loader.py` combines BOTH opt-in real paths
+(OPT-001's real weights + this plan's real VAE) for the first time --
+passes end to end on this dev machine, finite `(64,7)` action output.
+
+**Still deferred, a real but separate decision**: live Qwen3-4B text
+encoding from a raw prompt STRING (as opposed to a precomputed
+`context`/`context_mask` pair, which this entry's own work already
+supports). `transformers.Qwen3ForCausalLM` imports fine in the new
+venv, but no Qwen3-4B checkpoint weights exist locally -- would need a
+fresh multi-GB download, a separate decision from everything done
+here.
