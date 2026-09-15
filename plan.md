@@ -2285,3 +2285,296 @@ layers are ~14ms of the ~116ms prefill total, not where the win is);
 once OPT-001 has real weights, same caveat already on record for
 NVFP4's own 0.989 result (random-weight, single-layer, no calibration
 data yet).
+
+---
+
+# Plan: OPT-001 — real ImageWAM checkpoint loading into the served frontend
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+`imagewam_thor.py`'s `checkpoint_dir` constructor param is accepted and
+IGNORED (`del checkpoint_dir` in `__init__`) — every weight is
+random-filled by `_rnd_linear`/`_rnd_norm_scale`. Real checkpoint
+loading was explicitly deferred, not abandoned (`PROJECT.md`'s own
+"Confirmed end goal" section). The precondition for promoting it
+(`opportunities.md` OPT-001: "once real ImageWAM weights are available
+on the target machine") is now met — the user has
+`yuyangalin/ImageWAM-FLUX.2-4B-LIBERO` downloaded on Thor, and
+`benchmarks/imagewam_real_checkpoint_validation.py` already validated
+the exact extraction path this plan reuses (backbone cosine=0.999927,
+ActionDiT cosine=0.999963, `plan.md`'s own "Real-Checkpoint Validation"
+section above).
+
+**New finding, not anticipated before reading the validation script in
+detail**: real loading requires an `img_in` projection
+(`model.video_expert.transformer.img_in.weight`, shape `(HIDDEN, HD)`
+in real `nn.Linear` `(out,in)` convention — confirmed directly from the
+validation script's own `img_in_w = _w(model.video_expert.transformer.img_in.weight)`
++ `gemm.fp16_nn(img_flat, img_in_w, img_hidden, A0-X0, HIDDEN, HD, 0)`
+call) that **NEITHER `pipeline_thor.py` NOR `pipeline_real.py` model at
+all** (confirmed via `grep -n "img_in" flash_rt/models/imagewam/pipeline_thor.py
+flash_rt/models/imagewam/pipeline_real.py` — zero matches in both).
+Image tokens currently enter `backbone_hidden` already assumed to be at
+`hidden` (3072) width; the real checkpoint's image tokens are `HD`
+(128) width and need this projection first, exactly mirroring
+`txt_in.weight`'s own already-modeled role for text tokens (same
+`(K,N)` GEMM convention, `K=HD` instead of `K=joint_attention_dim`).
+Loading real weights without this would silently feed the transformer
+un-projected image content — wrong output, not a crash. This closes
+`opportunities.md` OPT-008's own long-standing "img_in not modeled
+anywhere" finding as a real PREREQUISITE of this plan, not a
+separate/later item.
+
+**Second finding**: the real checkpoint has exactly ONE `txt_in`/`img_in`
+weight (`model.video_expert.transformer.txt_in`/`img_in`, singular, not
+indexed by layer), but `imagewam_thor.py`'s own `_alloc_random_weights`
+currently builds a SEPARATE random `txt_in.weight` per double-layer
+index `L` (harmless with random weights — every layer already gets
+independent noise either way — but a real-weight loader must map ALL
+`L` layers' `("backbone","double",L,"txt_in.weight")`/`"img_in.weight"`
+keys to the SAME loaded tensor/linear-op instance, not `L` independent
+copies).
+
+### Problem
+
+No code path exists to load `model.pt`'s real trained weights into
+`imagewam_thor.py`'s `self._weights` dict. This is fundamentally
+DIFFERENT risk from every quantization plan before it: loading requires
+the real `imagewam`/`flux2` Python packages (only importable on Thor,
+confirmed absent on this dev machine), the real ~18GB bf16 model
+resident in GPU memory during extraction, and the actual checkpoint
+file — NONE of which exist here. Code written for this plan can be
+reviewed but not executed at all locally, unlike every prior plan this
+session (which could at least exercise wiring/ordering logic on Ada
+even when the real GEMM/kernel itself hit a known environment gap).
+
+### Measurable goal
+
+`ImageWAMTorchFrontendThor` loads real trained weights from the actual
+release checkpoint when given real paths, producing backbone/ActionDiT
+outputs matching `imagewam_real_checkpoint_validation.py`'s own
+already-established cosine bar (>0.999) against the real PyTorch
+reference — reusing that script's own `load_real_model`/`extract_*_weights`
+functions rather than re-deriving the checkpoint's real attribute paths
+from scratch. `img_in` wiring (the prerequisite) verified independently
+on Ada with random weights, same rigor as every other `pipeline_thor.py`
+mechanism change this session.
+
+## Structure
+
+- `flash_rt/models/imagewam/pipeline_thor.py` — gains ONE new
+  weight-projection call site (`img_in.weight`, mirroring `txt_in.weight`'s
+  own call exactly) inside `_double_stream_layer`. OWNS: the image
+  stream's very first step, now analogous to the text stream's.
+- `flash_rt/frontends/torch/imagewam_thor.py` — OWNS the raw-image-token
+  buffer (`bufs["img_raw"]`, `(img_len, HD)`, replacing today's
+  "backbone_hidden's image rows start already at hidden width" random
+  fill) and the `img_in.weight` slot in both the random-weight AND
+  real-weight paths. Random-weight dry run: `img_raw` gets random
+  `HD`-width noise instead of `backbone_hidden`'s image rows getting
+  random `hidden`-width noise directly.
+- NEW `flash_rt/models/imagewam/checkpoint_loader.py` — OWNS the real
+  extraction, PORTED (not re-derived) from
+  `benchmarks/imagewam_real_checkpoint_validation.py`'s own
+  `load_real_model`/`extract_backbone_double_weights`/
+  `extract_backbone_single_weights`/`extract_action_double_weights`/
+  `extract_action_single_weights`/`_w`/`_v` — all `imagewam`/`flux2`
+  imports LAZY (inside the loader function), matching `Nvfp4Linear`'s
+  own guarded-import pattern, so this module stays importable on this
+  dev machine. Frees the real ~18GB PyTorch model immediately after
+  extraction (`del model; torch.cuda.empty_cache()`) — never kept
+  resident once FlashRT's own fp16 copies exist.
+- `imagewam_thor.py.__init__` — gains real-checkpoint constructor
+  params (see Interface — NOT the generic template's single
+  `checkpoint_dir`, since ImageWAM's real loading needs 4 distinct
+  paths + `action_dim`, confirmed from `load_real_model`'s own
+  signature); when provided, calls the new loader instead of
+  `_alloc_random_weights`, then wraps each raw fp16 tensor in the
+  SAME `Fp16Linear`/`StaticFp8Linear`/etc. selected by `precision`,
+  exactly like `_rnd_linear` already does — precision selection is
+  ORTHOGONAL to weight source, unchanged from OPT-004 step 5's own
+  design.
+
+State ownership: the loader module owns NOTHING persistent — it is a
+pure function returning a flat dict of fp16 tensors (or raises), same
+lifecycle as `_rnd_linear`'s own tensors (immediately wrapped and kept
+alive by `imagewam_thor.py`'s own `self._keepalive`).
+
+## Interface
+
+```python
+# flash_rt/models/imagewam/pipeline_thor.py, inside _double_stream_layer,
+# added right before the existing "text stream" block:
+key("img_in.weight")(bufs["img_raw"], img_x_ptr, img_len, stream)
+# mirrors key("txt_in.weight")(bufs["context"], combined, x0, stream)
+# exactly -- same (K,N)=(_,HD) vs (_,joint_attention_dim) convention,
+# writes into backbone_hidden's own image-row region instead of a
+# fresh buffer (img_x_ptr is already an offset into `combined`).
+
+# flash_rt/models/imagewam/checkpoint_loader.py (new)
+def load_real_imagewam_weights(*, flux2_model_path: str, flux2_ae_model_path: str,
+                                ckpt_path: str, flux2_src: str, action_dim: int,
+                                num_double: int, num_single: int,
+                                action_num_double: int, action_num_single: int) -> dict:
+    """Lazy-imports `imagewam`/`flux2` (raises a clear RuntimeError if
+    absent, matching Nvfp4Linear's own pattern). Returns a dict keyed
+    EXACTLY like imagewam_thor.py's own `weights` dict (same 4-tuples),
+    values are raw fp16 torch.Tensor (NOT yet wrapped in Fp16Linear/etc
+    -- the frontend does that, same division of labor as _rnd_linear).
+    txt_in.weight/img_in.weight map ALL num_double layer indices to the
+    SAME tensor object (see Problem's own "second finding"). Frees the
+    real ~18GB model before returning.
+    """
+```
+
+`imagewam_thor.py.__init__` signature change:
+```python
+def __init__(self, checkpoint_dir=None, *, dims_override=None, use_fa4=False,
+             precision="fp16",
+             # NEW, all-or-nothing (real loading needs every one of
+             # these; partial real-checkpoint kwargs is a usage error,
+             # not a silent partial-random fallback):
+             flux2_model_path: str | None = None, flux2_ae_model_path: str | None = None,
+             ckpt_path: str | None = None, flux2_src: str | None = None,
+             action_dim: int | None = None,
+             **kwargs):
+    ...
+    real_kwargs = (flux2_model_path, flux2_ae_model_path, ckpt_path, flux2_src, action_dim)
+    if any(k is not None for k in real_kwargs) and not all(k is not None for k in real_kwargs):
+        raise ValueError("real-checkpoint loading needs ALL of flux2_model_path/"
+                          "flux2_ae_model_path/ckpt_path/flux2_src/action_dim, or none")
+    self._use_real_weights = flux2_model_path is not None
+```
+`checkpoint_dir` itself stays accepted-but-unused (interface parity
+with the generic template, unchanged from today) — the real params are
+new, explicit, separately named kwargs, not overloaded onto
+`checkpoint_dir`, since ImageWAM's real loading genuinely needs 4
+distinct paths the generic single-directory template has no slot for.
+
+## Flow
+
+1. `__init__` validates the all-or-nothing real-checkpoint kwargs.
+2. If real: call `load_real_imagewam_weights(...)` once, get the flat
+   raw-tensor dict; wrap every value in the `precision`-selected
+   linear-op class (same helper `_rnd_linear` already uses internally,
+   refactored to accept a pre-existing weight pointer instead of always
+   allocating a random one — see Code Mapping).
+3. If random (today's path, unchanged): `_alloc_random_weights` as
+   before, now ALSO allocating `img_in.weight` per double layer and
+   `img_raw`'s random content.
+4. `_alloc_buffers` gains `img_raw` (real path: left uninitialized,
+   filled by a real VAE eventually — OUT OF SCOPE, same as `context`'s
+   own "no real Qwen3 forward" status today; random path: random-filled
+   at each `infer()` call, replacing today's direct `backbone_hidden`
+   image-row fill).
+5. `_double_stream_layer` calls `img_in.weight` first, exactly where
+   `txt_in.weight` already runs, before AdaLN.
+6. Graph capture/replay: UNCHANGED mechanism — real vs. random weights
+   are indistinguishable to the captured graph (same pointers, same
+   shapes), exactly like precision selection already is.
+
+## Code Mapping
+
+| module | file | task |
+|---|---|---|
+| img_in wiring | `flash_rt/models/imagewam/pipeline_thor.py` | new call site in `_double_stream_layer` |
+| img_in wiring (random path) | `flash_rt/frontends/torch/imagewam_thor.py` | `img_in.weight` slot, `img_raw` buffer |
+| img_in wiring (tests) | `tests/test_imagewam_prefill.py`, `test_imagewam_denoise.py`, `test_imagewam_thor_real_wiring.py`, `benchmarks/imagewam_thor_bench.py` | add `img_in.weight`/`img_raw` to each weights/bufs dict |
+| real extraction | `flash_rt/models/imagewam/checkpoint_loader.py` (new) | ported from `imagewam_real_checkpoint_validation.py` |
+| real loading integration | `flash_rt/frontends/torch/imagewam_thor.py` | new constructor kwargs, `_use_real_weights` branch |
+| record | `opportunities.md` OPT-001/OPT-008 | closed once measured |
+
+## Implementation Phases
+
+### Phase 1 — `img_in` wiring (prerequisite, Ada-testable)
+
+Phase Status: pending
+
+Goal: `img_in.weight` modeled in `pipeline_thor.py`, verified with
+random weights exactly like every other mechanism this session (no
+real checkpoint needed — this is pure structural correctness: does the
+new GEMM call run, produce finite output, and not disturb anything
+already verified).
+Modified files: `pipeline_thor.py`, `imagewam_thor.py`,
+`tests/test_imagewam_prefill.py`, `test_imagewam_denoise.py`,
+`test_imagewam_thor_real_wiring.py`, `benchmarks/imagewam_thor_bench.py`.
+Affected modules: backbone double-stream layer, frontend buffer
+allocation, every test/bench file that builds its own `backbone_hidden`/
+image content directly.
+Observation method: full `tests/test_imagewam_*.py` suite still passes
+(regression check on everything img_in touches downstream: AdaLN,
+attention, MLP all read from the SAME `combined`/`img_x_ptr` buffer
+img_in now writes into first); `test_imagewam_thor_real_wiring.py`'s
+own cosine-vs-reference checks stay at 1.000000 (the reference must
+ALSO gain an `img_in` step, or this phase would be comparing apples to
+oranges — see Stop Conditions below if this reveals `real_double_stream_block_forward_fp16`
+itself needs the same addition, which would expand this phase's scope).
+
+### Phase 2 — `checkpoint_loader.py` (Thor-blind, code review only)
+
+Phase Status: pending
+
+Goal: port `load_real_model`/`extract_*_weights`/`_w`/`_v` from
+`imagewam_real_checkpoint_validation.py` into reusable library code,
+returning the flat weights dict `imagewam_thor.py` needs, with the
+`txt_in`/`img_in` shared-across-layers mapping handled correctly (see
+Problem's own "second finding").
+Modified files: new `checkpoint_loader.py`.
+Affected modules: none (new, standalone module).
+Observation method: import-safety only on Ada (`import
+flash_rt.models.imagewam.checkpoint_loader` must succeed without
+`imagewam`/`flux2` installed — lazy-import guard, same pattern as
+`Nvfp4Linear`); calling `load_real_imagewam_weights(...)` itself
+CANNOT be exercised here at all (no packages, no checkpoint) — this
+phase's actual correctness is unverifiable until Thor.
+
+### Phase 3 — frontend integration
+
+Phase Status: pending
+
+Goal: `imagewam_thor.py`'s new constructor kwargs, `_use_real_weights`
+branch, `_rnd_linear` refactored to share its wrapping logic with the
+real-weight path (same linear-op selection, different tensor source).
+Modified files: `imagewam_thor.py`.
+Affected modules: frontend construction.
+Observation method: on Ada, the RANDOM path (`flux2_model_path=None`,
+today's default) must still work completely unchanged — regression
+check, full test suite. The REAL path can only be confirmed to raise
+the RIGHT error here (missing `imagewam` package) — same "fails at the
+documented place" check as every quantization phase before it, not a
+real pass/fail on correctness.
+
+### Phase 4 — real Thor validation + close-out
+
+Phase Status: pending
+
+Goal: hand to the user for a real Thor run: construct
+`ImageWAMTorchFrontendThor` with real checkpoint paths, run `set_prompt`/
+`infer`, and separately re-run `imagewam_real_checkpoint_validation.py`
+itself (updated to also extract/apply `img_in`, matching Phase 1's
+addition) to get a real cosine number for the NOW-COMPLETE real-math
+path (previously 0.999927/0.999963 WITHOUT img_in — Phase 1 changes
+what's being compared, so this number needs re-measuring, not assumed
+unchanged).
+Modified files: `opportunities.md` (OPT-001/OPT-008 closed),
+`plan.md` (this write-up).
+Affected modules: none (measurement only).
+Observation method: cosine (>0.999, matching the already-established
+real-weight bar, tighter than the >0.98 lossy-quantization bar since
+this is FP16 real weights, not a quantized precision) + confirmation
+that memory is managed correctly (the ~18GB real model is freed after
+extraction, not left resident alongside FlashRT's own weight copies —
+a real, first-time-encountered memory concern for this project, worth
+an explicit `nvidia-smi`/memory check on Thor, not just a correctness
+check).
+
+## Stop Conditions Encountered
+
+None yet — Phase 1's own Observation method above flags a possible
+scope expansion (whether `pipeline_real.py`'s reference functions also
+need an `img_in` step) to check for during that phase, not yet
+confirmed one way or the other.
