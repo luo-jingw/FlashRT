@@ -77,6 +77,24 @@ def modulation(vec: torch.Tensor, lin_weight: torch.Tensor, double: bool):
     return (chunks[:3], chunks[3:]) if double else (chunks[:3], None)
 
 
+def head_modulation(vec: torch.Tensor, lin_weight: torch.Tensor):
+    """Port of the real `Flux2ActionHead.adaLN_modulation` (OPT-001,
+    `imagewam/models/backbones/action_dit_flux2.py`, read directly):
+    `nn.Sequential(SiLU, Linear(hidden_dim, 2*hidden_dim, bias=False))`
+    -- shift/scale ONLY, no gate, since this is a FINAL output layer
+    (`Flux2ActionHead.forward`: `linear((1+scale)*norm_final(x)+shift)`),
+    not a residual block -- there is nothing to gate. Same shape as
+    `modulation()` above with `multiplier=2`, which that function
+    doesn't support (only 3 or 6), hence this separate small helper
+    rather than a `modulation()` parameter.
+    vec: (B, dim). lin_weight: (2*dim, dim). Returns (shift, scale)."""
+    out = F.linear(F.silu(vec), lin_weight)
+    if out.ndim == 2:
+        out = out[:, None, :]
+    shift, scale = out.chunk(2, dim=-1)
+    return shift, scale
+
+
 def layer_norm_no_affine_fp16(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """Real `elementwise_affine=False` LayerNorm via the existing,
     already-verified `layer_norm_no_affine_fp16` FlashRT kernel.

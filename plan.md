@@ -2529,6 +2529,65 @@ own cosine-vs-reference checks stay at 1.000000, confirmed via its own
 matching manual pre-step for `img_in` (see this phase's own "Stop
 Condition resolved" note above — no reference-function change needed).
 
+**Scope extended mid-phase to a second, already-anticipated gap:
+`action_encoder`/`head`**. While inspecting the real checkpoint's own
+key names (see below), read `imagewam/models/backbones/action_dit_flux2.py`
+directly (this project's local read-only `ImageWAM` clone,
+`PROJECT.md`'s own "Onboarding" note) and `imagewam.py`'s own
+`infer_action_flux2`, confirming definitively: `latents_action` (this
+project's `bufs["action_latent"]`) lives at real `action_dim` width
+(7 for LIBERO), re-encoded to `action_hidden_dim` EVERY denoise step
+via `action_encoder` (a real Linear WITH bias — the only biased weight
+in this project) before the per-layer blocks, and decoded back down to
+`action_dim` via `head` (AdaLN, no gate — a final layer, not a
+residual block) AFTER them, with the Euler/flow-matching integration
+happening in `action_dim` space, not `action_hidden_dim` space as
+`pipeline_thor.py` previously assumed. This was already flagged as a
+known placeholder in both `pipeline_thor.py`'s and `pipeline_real.py`'s
+own existing comments ("same status as OPT-001") — not a surprise
+requiring new triage, just confirmation it was time to fix it, folded
+into this phase per explicit user approval rather than opened as a
+separate one.
+
+New `adaln.head_modulation` (shift/scale only, no gate — `modulation()`
+doesn't support `multiplier=2`) and `pipeline_real.compute_action_head_modulation`
+(a small standalone function, NOT a 3rd return value on
+`compute_action_modulation`, to avoid rippling into
+`test_imagewam_pipeline_full_real.py`'s unrelated own scope — see that
+function's own docstring for the reasoning). `pipeline_thor.py`'s
+`imagewam_denoise_step` gained the real encode (`gpu_cast_fp32_to_fp16`
+→ `action_encoder.weight` GEMM → `add_bias_fp16`) and decode
+(`ada_layer_norm_fp16` → `head.linear.weight` GEMM) wrapper around the
+UNCHANGED per-layer block loop; `imagewam_denoise_loop`/`imagewam_thor.py`
+thread a new `head_mods` list alongside the existing `action_mods`.
+`_action_double_layer`/`_action_single_layer` and every test that calls
+them DIRECTLY (`test_imagewam_thor_real_wiring.py`'s action tests,
+`imagewam_thor_bench.py`'s `bench_action_double`/`bench_action_single`)
+needed NO change — the encode/decode wrapper lives one level up, in
+`imagewam_denoise_step`, not inside the per-layer functions.
+New standalone `tests/test_imagewam_action_encoder_head.py` (cosine
+vs. plain-PyTorch `F.linear`, both small and real dims, cosine=1.000000)
+verifies the two new primitives in isolation, matching this project's
+own narrow-kernel-test convention rather than folding into the bigger
+full-pipeline wiring test. `test_imagewam_frontend.py`'s own assertion
+updated: `infer()` now correctly returns real `action_dim`-width
+output (a real correctness improvement, not just a test fix — this
+project's `infer()` was previously returning meaningless
+`action_hidden_dim`-width "actions").
+
+**Unplanned but highly consequential discovery made while investigating
+this**: the real checkpoint FILES are actually present on this dev
+machine (`/home/ljw/projects/pi0.5/models/`), contradicting `PROJECT.md`'s
+own prior "never will" claim (now corrected there). `imagewam` package
+imports here too. `flux2` source is still absent, and 8GB VRAM still
+can't hold the ~18-23GB real model, so a real forward pass still needs
+Thor — but `torch.load(..., map_location='cpu', mmap=True)` on
+`model.pt` (9GB, fits this machine's 20GB free RAM) gives REAL,
+VERIFIED state_dict key names and shapes with zero `flux2`/`imagewam`
+dependency, used directly for Phase 2 below instead of blindly porting
+`imagewam_real_checkpoint_validation.py`'s live-attribute-path
+approach.
+
 ### Phase 2 — `checkpoint_loader.py` (Thor-blind, code review only)
 
 Phase Status: pending

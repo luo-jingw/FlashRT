@@ -18,7 +18,11 @@ import torch
 
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
-from flash_rt.models.imagewam.pipeline_real import compute_action_modulation, compute_shared_modulation
+from flash_rt.models.imagewam.pipeline_real import (
+    compute_action_head_modulation,
+    compute_action_modulation,
+    compute_shared_modulation,
+)
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
 from flash_rt.models.imagewam.quant_linear import Fp16Linear
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
@@ -65,13 +69,14 @@ def test_denoise_loop_runs_and_advances_latent():
     total = a0 + num_action
     action_hidden_dim, action_mlp_hidden = 96, 128
     action_attn_width = hidden  # required: shared per-head geometry with the backbone
+    action_dim = 7  # OPT-001: real LIBERO 7-DoF action width
     num_denoise_steps = 2
 
     dims = dict(hidden=hidden, HD=HD, NH=NH, mlp_hidden=mlp_hidden,
                 joint_attention_dim=joint_attention_dim, x0=x0, a0=a0,
                 num_layers_double=num_double, num_layers_single=num_single,
                 action_hidden_dim=action_hidden_dim, action_attn_width=action_attn_width,
-                action_mlp_hidden=action_mlp_hidden,
+                action_mlp_hidden=action_mlp_hidden, action_dim=action_dim,
                 num_action=num_action, total=total,
                 action_num_layers_double=num_double, action_num_layers_single=num_single,
                 dt=1.0 / num_denoise_steps, num_denoise_steps=num_denoise_steps)
@@ -81,7 +86,13 @@ def test_denoise_loop_runs_and_advances_latent():
     def _fp16(n, k):
         return Fp16Linear(gemm, _lin(n, k).data_ptr(), n, k)
 
-    weights = {}
+    weights = {
+        # OPT-001: real action_encoder (WITH bias)/head, once per
+        # denoise step, not per layer.
+        ("action_dit", "shared", 0, "action_encoder.weight"): _fp16(action_hidden_dim, action_dim),
+        ("action_dit", "shared", 0, "action_encoder.bias"): _rand(action_hidden_dim).data_ptr(),
+        ("action_dit", "shared", 0, "head.linear.weight"): _fp16(action_dim, action_hidden_dim),
+    }
     for L in range(num_double):
         weights[("backbone", "double", L, "txt_in.weight")] = _fp16(hidden, joint_attention_dim)
         weights[("backbone", "double", L, "img_in.weight")] = _fp16(hidden, HD)
@@ -117,7 +128,7 @@ def test_denoise_loop_runs_and_advances_latent():
     # comment (an all-zero/all-equal row is a degenerate LayerNorm input).
     backbone_hidden = _rand(a0, hidden, scale=0.1)
     img_raw = _rand(a0 - x0, HD, scale=0.1)
-    action_latent = _rand(num_action, action_hidden_dim, dtype=F32, scale=0.01)
+    action_latent = _rand(num_action, action_dim, dtype=F32, scale=0.01)
     bufs = {
         "context": context.data_ptr(),
         "backbone_hidden": backbone_hidden.data_ptr(),
@@ -136,6 +147,9 @@ def test_denoise_loop_runs_and_advances_latent():
         "proj_scratch": _zeros(a0, hidden).data_ptr(),
         "proj_scratch2": _zeros(a0, hidden).data_ptr(),
         "action_latent": action_latent.data_ptr(),
+        "action_latent_fp16": _zeros(num_action, action_dim).data_ptr(),
+        "velocity": _zeros(num_action, action_dim).data_ptr(),
+        "head_modded": _zeros(num_action, action_hidden_dim).data_ptr(),
         "action_hidden": _zeros(num_action, action_hidden_dim).data_ptr(),
         "action_modded": _zeros(num_action, action_hidden_dim).data_ptr(),
         "action_proj_scratch": _zeros(num_action, action_hidden_dim).data_ptr(),
@@ -160,14 +174,16 @@ def test_denoise_loop_runs_and_advances_latent():
         "time_in_w2": torch.randn(action_hidden_dim, action_hidden_dim, dtype=F32, device=DEV) * 0.02,
         "mod_double": torch.randn(6 * action_hidden_dim, action_hidden_dim, dtype=F32, device=DEV) * 0.02,
         "mod_single": torch.randn(3 * action_hidden_dim, action_hidden_dim, dtype=F32, device=DEV) * 0.02,
+        "head_adaln": torch.randn(2 * action_hidden_dim, action_hidden_dim, dtype=F32, device=DEV) * 0.02,
     }
     dt = dims["dt"]
-    action_mods = []
+    action_mods, head_mods = [], []
     for step in range(num_denoise_steps):
         action_timestep = 1.0 - step * dt
-        m_double, m_single = compute_action_modulation(
-            torch.full((1,), action_timestep, device=DEV), act_mod_w, action_hidden_dim)
+        timestep = torch.full((1,), action_timestep, device=DEV)
+        m_double, m_single = compute_action_modulation(timestep, act_mod_w, action_hidden_dim)
         action_mods.append((m_double, m_single))
+        head_mods.append(compute_action_head_modulation(timestep, act_mod_w, action_hidden_dim))
     action_rope_table = build_action_rope_table(num_action, device=DEV)
 
     spec = make_imagewam_attention_spec(max_prefix_seq=a0, max_total_seq=total,
@@ -200,7 +216,8 @@ def test_denoise_loop_runs_and_advances_latent():
 
     latent_before = action_latent.clone()
     imagewam_denoise_loop(ctx, fvk, gemm, bufs, weights, dims, stream=0, attn=backend,
-                           action_mods=action_mods, action_rope_table=action_rope_table.data_ptr())
+                           action_mods=action_mods, head_mods=head_mods,
+                           action_rope_table=action_rope_table.data_ptr())
     torch.cuda.synchronize()
 
     assert torch.isfinite(action_latent).all(), "action_latent has NaN/Inf after denoise loop"

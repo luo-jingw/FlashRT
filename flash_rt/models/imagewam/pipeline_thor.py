@@ -165,8 +165,18 @@ frontend, fp16 throughout unless noted):
                       share this one buffer -- never live at once)
     action_proj_scratch                    (num_action, action_hidden_dim)
     action_mlp_merged/action_mlp_gated     (num_action, action_mlp_hidden*2 / action_mlp_hidden)
-    action_latent     (num_action, action_hidden_dim), F32 -- the
-                       running flow-matching state
+    action_latent     (num_action, action_dim), F32 -- the running
+                       flow-matching state (OPT-001: real action_dim
+                       width, e.g. 7 for LIBERO -- NOT action_hidden_dim;
+                       see imagewam_denoise_step's own docstring for the
+                       real action_encoder/head encode-decode wrapper
+                       this now needs every step)
+    action_latent_fp16 (num_action, action_dim), fp16 -- cast scratch
+                       for action_encoder's own GEMM input
+    velocity          (num_action, action_dim), fp16 -- head's own
+                       GEMM output, this step's Euler velocity
+    head_modded       (num_action, action_hidden_dim) -- head's own
+                       AdaLN-modulated scratch before its final Linear
 """
 from __future__ import annotations
 
@@ -259,6 +269,17 @@ def _fuse_mod_group(shift, scale, gate, seq: int, dim: int):
     scale_t = scale[0, 0].to(torch.float16).contiguous()
     gate_t = gate[0, 0].to(torch.float16).expand(seq, dim).contiguous()
     return shift_t, scale_t, gate_t
+
+
+def _fuse_mod_pair(shift, scale):
+    """Same as `_fuse_mod_group` but for a GATE-LESS AdaLN pair (OPT-001,
+    `adaln.head_modulation`'s own output) -- no `(seq,dim)` broadcast
+    materialize needed since there's no `gate_res_fp16` call downstream,
+    just `ada_layer_norm_fp16`'s own internally-broadcast `(dim,)` scale/
+    shift. Same dangling-pointer caller contract as `_fuse_mod_group`."""
+    shift_t = shift[0, 0].to(torch.float16).contiguous()
+    scale_t = scale[0, 0].to(torch.float16).contiguous()
+    return shift_t, scale_t
 
 
 def _add_inplace(dst_ptr: int, src_ptr: int, seq: int, dim: int) -> None:
@@ -520,12 +541,14 @@ def imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None
 # fresh ActionDiT Q/K/V before every `attn.run` call; rows `[0, a0)`
 # are left exactly as prefill last wrote them.
 #
-# ActionDiT has no declared output-projection head to a real small
-# action_dim (no real `action_encoder`/output head modeled here -- see
-# opportunities.md's `imagewam_full_forward_real` docstring for the
-# same documented placeholder) -- this pipeline treats the ActionDiT's
-# own final hidden state as the velocity directly, same width as
-# `bufs["action_latent"]`.
+# OPT-001: real `action_encoder`/`head` now modeled -- see
+# `imagewam_denoise_step`'s own docstring for the encode/decode wrapper
+# around these per-layer block functions. `pipeline_real.py`'s
+# `imagewam_full_forward_real` still uses the OLD action_hidden_dim-
+# width placeholder this comment used to describe -- that's a SEPARATE
+# wiring-test reference for that module's own scope (see this file's
+# git history), not compared against this pointer-based path for that
+# specific mechanism, and intentionally left as-is.
 
 
 def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_layer_idx, stream, attn,
@@ -639,35 +662,62 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
 
 
 def imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=0, *, attn=None,
-                           mod_double=None, mod_single=None, action_rope_table=None):
+                           mod_double=None, mod_single=None, head_mod=None, action_rope_table=None):
     """One flow-matching Euler step of the ActionDiT denoise loop.
 
     `step` is a plain Python int -- a compile-time constant during CUDA
     Graph capture (this project's own dt schedule is a fixed uniform
-    `1.0 / num_denoise_steps`). `mod_double`/`mod_single` are THIS
-    STEP's own precomputed AdaLN modulation (ActionDiT's conditioning
-    timestep changes every step, but since `step` is itself a
-    compile-time constant, so is every step's timestep -- the caller
-    precomputes one modulation tuple PER STEP before capture, see
-    module docstring, and `imagewam_denoise_loop` below selects the
+    `1.0 / num_denoise_steps`). `mod_double`/`mod_single`/`head_mod` are
+    THIS STEP's own precomputed AdaLN modulation (ActionDiT's
+    conditioning timestep changes every step, but since `step` is
+    itself a compile-time constant, so is every step's timestep -- the
+    caller precomputes one modulation tuple PER STEP before capture,
+    see module docstring, and `imagewam_denoise_loop` below selects the
     right one per iteration).
 
-    Required `dims` keys (beyond `imagewam_prefill`'s): action_hidden_dim,
-    action_attn_width (must equal `hidden`), HD, action_mlp_hidden, x0, a0,
-    total, num_action, action_num_layers_double, action_num_layers_single, dt.
+    OPT-001: real `action_encoder`/`head` wrapper around the per-layer
+    blocks, ported from `imagewam/models/backbones/action_dit_flux2.py`'s
+    own `pre_dit`/`post_dit` (read directly, confirmed against the real
+    checkpoint's own `mixtures.action.{action_encoder,head}.*` keys):
+    `latents_action` (this pipeline's `bufs["action_latent"]`) lives at
+    real `action_dim` width (e.g. 7 for LIBERO), NOT `action_hidden_dim`
+    -- `action_encoder` (a real Linear WITH bias, the only biased
+    weight in this whole project) re-projects the CURRENT noisy state
+    up to `action_hidden_dim` every step (`pre_dit`), the per-layer
+    blocks below run entirely at `action_hidden_dim` width unchanged,
+    and `head` (AdaLN, no gate, since it's a final layer not a residual
+    block -- see `adaln.head_modulation`'s own docstring) projects the
+    result back down to `action_dim` width as this step's velocity
+    (`post_dit`) before the Euler update -- confirmed against
+    `imagewam.py`'s own `infer_action_flux2`: `latents_action =
+    scheduler.step(pred_action, ...)` integrates in `action_dim` space,
+    not `action_hidden_dim` space.
+
+    Required `dims` keys (beyond `imagewam_prefill`'s): action_dim,
+    action_hidden_dim, action_attn_width (must equal `hidden`), HD,
+    action_mlp_hidden, x0, a0, total, num_action,
+    action_num_layers_double, action_num_layers_single, dt.
     """
     if attn is None:
         raise ValueError("imagewam_denoise_step requires an ImageWAMAttnBackend via attn=")
-    if mod_double is None or mod_single is None or action_rope_table is None:
+    if mod_double is None or mod_single is None or head_mod is None or action_rope_table is None:
         raise ValueError(
-            "imagewam_denoise_step requires mod_double/mod_single/action_rope_table -- see "
+            "imagewam_denoise_step requires mod_double/mod_single/head_mod/action_rope_table -- see "
             "flash_rt.models.imagewam.pipeline_real.compute_action_modulation / "
+            "compute_action_head_modulation / "
             "flash_rt.models.imagewam.rope.build_action_rope_table")
     num_action = dims["num_action"]
+    action_dim = dims["action_dim"]
     action_hidden_dim = dims["action_hidden_dim"]
-    n = num_action * action_hidden_dim
+    eps = 1e-6
+    key = lambda slot: weights[("action_dit", "shared", 0, slot)]
 
-    fvk.gpu_cast_fp32_to_fp16(bufs["action_latent"], bufs["action_hidden"], n, stream)
+    # --- encode: real action_latent (f32, action_dim) -> action_hidden
+    # (fp16, action_hidden_dim) via action_encoder (the one biased
+    # weight in this project) ---
+    fvk.gpu_cast_fp32_to_fp16(bufs["action_latent"], bufs["action_latent_fp16"], num_action * action_dim, stream)
+    key("action_encoder.weight")(bufs["action_latent_fp16"], bufs["action_hidden"], num_action, stream)
+    fvk.add_bias_fp16(bufs["action_hidden"], key("action_encoder.bias"), num_action, action_hidden_dim, stream)
 
     num_double = dims["action_num_layers_double"]
     for layer_idx in range(num_double):
@@ -677,19 +727,32 @@ def imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=0, *
         _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, i, num_double + i, stream, attn,
                               mod_single, action_rope_table)
 
-    fvk.gpu_euler_step(bufs["action_latent"], bufs["action_hidden"],
-                        num_action, action_hidden_dim, dims["dt"], 0, stream)
+    # --- decode: real head (AdaLN, no gate, + Linear) -> velocity
+    # (fp16, action_dim); Euler step in action_dim space, matching
+    # imagewam.py's own infer_action_flux2 exactly ---
+    head_shift_t, head_scale_t = _fuse_mod_pair(*head_mod)
+    fvk.ada_layer_norm_fp16(bufs["action_hidden"], head_scale_t.data_ptr(), head_shift_t.data_ptr(),
+                             bufs["head_modded"], num_action, action_hidden_dim, eps, stream)
+    key("head.linear.weight")(bufs["head_modded"], bufs["velocity"], num_action, stream)
+
+    fvk.gpu_euler_step(bufs["action_latent"], bufs["velocity"],
+                        num_action, action_dim, dims["dt"], 0, stream)
 
 
 def imagewam_denoise_loop(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None,
-                           action_mods=None, action_rope_table=None):
+                           action_mods=None, head_mods=None, action_rope_table=None):
     """The whole flow-matching denoise loop -- what the frontend
     captures as ONE CUDA Graph together with `imagewam_prefill`.
 
-    `action_mods`: a list of `(mod_double, mod_single)` tuples, one per
+    `action_mods`: a list of `(mod_double, mod_single)` tuples;
+    `head_mods`: a list of `(shift, scale)` tuples -- both one per
     denoise step (`dims["num_denoise_steps"]` entries), precomputed
     ONCE by the caller before capture -- see module docstring.
     """
+    if head_mods is None:
+        raise ValueError(
+            "imagewam_denoise_loop requires head_mods -- see "
+            "flash_rt.models.imagewam.pipeline_real.compute_action_head_modulation")
     if action_mods is None or action_rope_table is None:
         raise ValueError(
             "imagewam_denoise_loop requires action_mods/action_rope_table -- see "
@@ -697,5 +760,5 @@ def imagewam_denoise_loop(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn
     for step in range(dims["num_denoise_steps"]):
         mod_double, mod_single = action_mods[step]
         imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=stream, attn=attn,
-                               mod_double=mod_double, mod_single=mod_single,
+                               mod_double=mod_double, mod_single=mod_single, head_mod=head_mods[step],
                                action_rope_table=action_rope_table)

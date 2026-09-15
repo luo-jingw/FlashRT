@@ -48,7 +48,7 @@ from __future__ import annotations
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
-from flash_rt.models.imagewam.adaln import mlp_embedder, modulation, timestep_embedding_real
+from flash_rt.models.imagewam.adaln import head_modulation, mlp_embedder, modulation, timestep_embedding_real
 from flash_rt.models.imagewam.real_action_expert import (
     real_action_double_block_forward_fp16,
     real_action_single_block_forward_fp16,
@@ -131,6 +131,27 @@ def imagewam_prefill_real(
     if collect_kv_cache:
         return combined, kv_cache
     return combined
+
+
+def compute_action_head_modulation(timestep: torch.Tensor, weights: dict, hidden: int):
+    """OPT-001: `Flux2ActionHead`'s own AdaLN modulation (shift, scale
+    only, no gate -- see `head_modulation`'s own docstring), computed
+    from the SAME `vec` `compute_action_modulation` derives, but kept
+    as its own small standalone function rather than a 3rd return value
+    there -- `compute_action_modulation`'s existing 2-tuple return is a
+    shared dependency of `test_imagewam_pipeline_full_real.py` (which
+    has no use for head's own modulation, that test's own scope is
+    `imagewam_full_forward_real`'s already-documented action_hidden_dim-
+    width placeholder, unrelated to this fix); recomputing `vec` here
+    is trivial (see adaln.py's own docstring: "a handful of KB...
+    negligible") and keeps that signature untouched.
+    `weights` keys: `time_in_w1`, `time_in_w2` (SAME ActionDiT `time_in`
+    weights `compute_action_modulation` already needs), `head_adaln`
+    (`(2*hidden,hidden)`, `Flux2ActionHead.adaLN_modulation`'s own
+    Linear weight). Returns `(shift, scale)`."""
+    emb = timestep_embedding_real(timestep)
+    vec = mlp_embedder(emb, weights["time_in_w1"], weights["time_in_w2"])
+    return head_modulation(vec, weights["head_adaln"])
 
 
 def compute_action_modulation(timestep: torch.Tensor, weights: dict, hidden: int):

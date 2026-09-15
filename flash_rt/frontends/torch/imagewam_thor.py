@@ -54,7 +54,11 @@ import torch
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
-from flash_rt.models.imagewam.pipeline_real import compute_action_modulation, compute_shared_modulation
+from flash_rt.models.imagewam.pipeline_real import (
+    compute_action_head_modulation,
+    compute_action_modulation,
+    compute_shared_modulation,
+)
 from flash_rt.models.imagewam.quant_linear import Fp8Linear, Fp16Linear, Nvfp4Linear, StaticFp8Linear
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 
@@ -72,6 +76,7 @@ _DEFAULT_DIMS = dict(
     hidden=256, HD=128, NH=2, mlp_hidden=384, joint_attention_dim=64,
     x0=3, a0=8, num_layers_double=2, num_layers_single=3,
     action_hidden_dim=128, action_attn_width=256, action_mlp_hidden=192,
+    action_dim=7,  # OPT-001: real LIBERO 7-DoF action width
     num_action=4, total=12,
     action_num_layers_double=2, action_num_layers_single=3,
     dt=0.5, num_denoise_steps=2,
@@ -123,7 +128,7 @@ class ImageWAMTorchFrontendThor:
             d["x0"], d["a0"] - d["x0"], 1, device=DEV))
         self._action_rope_table = self._own(build_action_rope_table(d["num_action"], device=DEV))
         self._mod_txt, self._mod_img, self._mod_single = self._compute_backbone_modulation(d)
-        self._action_mods = self._compute_action_modulations(d)
+        self._action_mods, self._head_mods = self._compute_action_modulations(d)
 
         num_layers = d["num_layers_double"] + d["num_layers_single"]
         HD, hidden = d["HD"], d["hidden"]
@@ -224,6 +229,7 @@ class ImageWAMTorchFrontendThor:
         ahd, aaw, amh, num_action = (
             d["action_hidden_dim"], d["action_attn_width"],
             d["action_mlp_hidden"], d["num_action"])
+        action_dim = d["action_dim"]
 
         shapes = {
             (x0, hidden, joint_attention_dim),      # txt_in
@@ -244,6 +250,8 @@ class ImageWAMTorchFrontendThor:
             (num_action, ahd, aaw),                            # action proj/attn_out_proj
             (num_action, amh * 2, ahd),                         # action mlp0/mlp_in
             (num_action, ahd, amh),                              # action mlp2/mlp_down
+            (num_action, ahd, action_dim),                        # action_encoder (OPT-001)
+            (num_action, action_dim, ahd),                         # head.linear (OPT-001)
         }
         for m, n, k in shapes:
             x = torch.zeros(m, k, dtype=FP16, device=DEV)
@@ -347,6 +355,14 @@ class ImageWAMTorchFrontendThor:
             weights[("backbone", "single", L, "key_norm")] = self._rnd_norm_scale(HD)
 
         ahd, aaw, amh = d["action_hidden_dim"], d["action_attn_width"], d["action_mlp_hidden"]
+        action_dim = d["action_dim"]
+        # OPT-001: real action_encoder (WITH bias, the one biased weight
+        # in this project) / head, once per denoise step, not per layer
+        # -- see imagewam_denoise_step's own docstring.
+        weights[("action_dit", "shared", 0, "action_encoder.weight")] = self._rnd_linear(ahd, action_dim)
+        weights[("action_dit", "shared", 0, "action_encoder.bias")] = self._own(
+            (torch.randn(ahd, dtype=torch.float32, device=DEV) * 0.02).to(FP16)).data_ptr()
+        weights[("action_dit", "shared", 0, "head.linear.weight")] = self._rnd_linear(action_dim, ahd)
         for L in range(d["action_num_layers_double"]):
             weights[("action_dit", "double", L, "qkv.weight")] = self._rnd_linear(3 * aaw, ahd)
             weights[("action_dit", "double", L, "proj.weight")] = self._rnd_linear(ahd, aaw)
@@ -369,11 +385,14 @@ class ImageWAMTorchFrontendThor:
         joint_attention_dim = d["joint_attention_dim"]
         ahd, aaw, amh, num_action = (
             d["action_hidden_dim"], d["action_attn_width"], d["action_mlp_hidden"], d["num_action"])
+        action_dim = d["action_dim"]
         z = lambda *shape: self._own(torch.zeros(*shape, dtype=FP16, device=DEV))
         self._context = self._own(torch.zeros(x0, joint_attention_dim, dtype=FP16, device=DEV))
         self._backbone_hidden = self._own(torch.zeros(a0, hidden, dtype=FP16, device=DEV))
         self._img_raw = self._own(torch.zeros(img_len, HD, dtype=FP16, device=DEV))
-        self._action_latent = self._own(torch.zeros(num_action, ahd, dtype=F32, device=DEV))
+        # OPT-001: real action_dim width (e.g. 7), not action_hidden_dim
+        # -- see imagewam_denoise_step's own docstring.
+        self._action_latent = self._own(torch.zeros(num_action, action_dim, dtype=F32, device=DEV))
         return {
             "context": self._context.data_ptr(),
             "backbone_hidden": self._backbone_hidden.data_ptr(),
@@ -383,6 +402,9 @@ class ImageWAMTorchFrontendThor:
             "img_qkv_merged": z(img_len, 3 * hidden).data_ptr(),
             "single_qkv_merged": z(a0, 3 * hidden).data_ptr(),
             "action_qkv_merged": z(num_action, 3 * aaw).data_ptr(),
+            "action_latent_fp16": z(num_action, action_dim).data_ptr(),
+            "velocity": z(num_action, action_dim).data_ptr(),
+            "head_modded": z(num_action, ahd).data_ptr(),
             "txt_mlp_merged": z(x0, mlp_hidden * 2).data_ptr(),
             "txt_mlp_gated": z(x0, mlp_hidden).data_ptr(),
             "img_mlp_merged": z(img_len, mlp_hidden * 2).data_ptr(),
@@ -437,9 +459,12 @@ class ImageWAMTorchFrontendThor:
             "time_in_w2": self._own(torch.randn(ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
             "mod_double": self._own(torch.randn(6 * ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
             "mod_single": self._own(torch.randn(3 * ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
+            # OPT-001: head's own AdaLN modulation (shift/scale only, no
+            # gate -- see adaln.head_modulation's own docstring).
+            "head_adaln": self._own(torch.randn(2 * ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
         }
         dt = d["dt"]
-        mods = []
+        mods, head_mods = [], []
         for step in range(d["num_denoise_steps"]):
             action_timestep = 1.0 - step * dt
             timestep = self._own(torch.full((1,), action_timestep, dtype=torch.float32, device=DEV))
@@ -451,7 +476,11 @@ class ImageWAMTorchFrontendThor:
             for t in mod_single:
                 self._own(t)
             mods.append((mod_double, mod_single))
-        return mods
+            head_shift, head_scale = compute_action_head_modulation(timestep, mod_w, ahd)
+            self._own(head_shift)
+            self._own(head_scale)
+            head_mods.append((head_shift, head_scale))
+        return mods, head_mods
 
     def _capture_graph(self) -> None:
         s = torch.cuda.Stream()
@@ -464,7 +493,7 @@ class ImageWAMTorchFrontendThor:
                                   mod_single=self._mod_single, rope_table=self._rope_table.data_ptr())
                 imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, self._weights,
                                        self.dims, stream=s.cuda_stream, attn=self._attn,
-                                       action_mods=self._action_mods,
+                                       action_mods=self._action_mods, head_mods=self._head_mods,
                                        action_rope_table=self._action_rope_table.data_ptr())
         torch.cuda.current_stream().wait_stream(s)
         graph = torch.cuda.CUDAGraph()
@@ -475,7 +504,7 @@ class ImageWAMTorchFrontendThor:
                               mod_single=self._mod_single, rope_table=self._rope_table.data_ptr())
             imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, self._weights,
                                    self.dims, stream=s.cuda_stream, attn=self._attn,
-                                   action_mods=self._action_mods,
+                                   action_mods=self._action_mods, head_mods=self._head_mods,
                                    action_rope_table=self._action_rope_table.data_ptr())
         self._graph = graph
 

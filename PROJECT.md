@@ -174,11 +174,25 @@ Do not record token values or other secrets here.
   verified real-math building blocks for that convergence, not a
   separate destination in themselves.
 - **Real checkpoint testing happens ONLY on Thor, never on this
-  machine — this has been stated multiple times, stop re-asking.** The
-  user has HF access and has already downloaded
-  `yuyangalin/ImageWAM-FLUX.2-4B-LIBERO` on the Thor machine; this dev
-  machine has no checkpoint, no `imagewam` package, and no `flux2`
-  package, and never will for this project's normal workflow. Any
+  machine — this has been stated multiple times, stop re-asking.**
+  **Correction (2026-09-15): the claim "this dev machine has no
+  checkpoint... and never will" is FALSE, discovered while planning
+  OPT-001.** The actual checkpoint FILES are present locally
+  (`/home/ljw/projects/pi0.5/models/flux2_klein_4b/` — base FLUX.2
+  safetensors + AE, 7.7GB; `/home/ljw/projects/pi0.5/models/imagewam_flux2_4b_libero/model.pt`
+  — the real ImageWAM-LIBERO fine-tune, 9GB, plus `config.yaml`), and
+  the `imagewam` Python package IS importable here
+  (`PYTHONPATH=/home/ljw/projects/pi0.5/tmp/ImageWAM/src`). What is
+  STILL true and still blocks a real forward pass on this machine: (a)
+  `flux2` (the actual FLUX.2 model-definition code from
+  `black-forest-labs/flux2`) is NOT cloned anywhere on this machine —
+  `imagewam`'s own `ImageWAM.from_flux2_klein_pretrained` hard-depends
+  on it; (b) the full model needs ~18-23GB resident, this machine has
+  8GB VRAM (`nvidia-smi` confirmed). So: checkpoint files can be
+  inspected directly (state_dict keys/shapes via `torch.load(...,
+  map_location='cpu', mmap=True)` — confirmed working, no `flux2`/`imagewam`
+  needed, ~9GB fits in this machine's 20GB free RAM without moving
+  anything to GPU) but a real forward pass still needs Thor. Any
   real-checkpoint-dependent verification is written here (dev machine)
   as a script/test with clear instructions, then handed to the user to
   run on Thor and report back — see `benchmarks/imagewam_real_checkpoint_validation.py`

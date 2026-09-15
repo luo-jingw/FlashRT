@@ -32,7 +32,10 @@ def test_set_prompt_then_repeated_infer():
         latencies.append(time.perf_counter() - t0)
 
         actions = result["actions"]
-        assert actions.shape == (frontend.dims["num_action"], frontend.dims["action_hidden_dim"])
+        # OPT-001: infer() now returns real action_dim width (e.g. 7),
+        # not action_hidden_dim -- see imagewam_denoise_step's own
+        # docstring for the real action_encoder/head encode-decode.
+        assert actions.shape == (frontend.dims["num_action"], frontend.dims["action_dim"])
         assert np.isfinite(actions).all(), "infer() produced NaN/Inf actions"
         if last_actions is not None:
             assert not np.array_equal(actions, last_actions), (
