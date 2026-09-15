@@ -228,6 +228,32 @@ Do not record token values or other secrets here.
   `model.load_checkpoint` reported `missing_keys=0 unexpected_keys=0`
   (the LoRA-merge branch flagged as a possible complication was a
   non-issue for this release).
+- **Correction (2026-09-15): `black-forest-labs/flux2` IS clonable
+  from THIS dev machine too** — `git clone https://github.com/black-forest-labs/flux2.git`
+  succeeds directly and pins to the exact commit above without ever
+  having had a local checkout before. Cloned at
+  `FlashRT/third_party/flux2` (gitignored, matching `third_party/cutlass`'s
+  own convention). This unlocked a real VAE encoder locally — see
+  `opportunities.md`'s own "Real VAE encoder + text-context wiring"
+  entry (OPT-008) for what that found (the real
+  `flux2.autoencoder.AutoEncoder` class is NOT the same as
+  `diffusers.AutoencoderKLFlux2`, despite `model_index.json` naming the
+  latter) and `plan.md`'s matching plan for what got built.
+- **New isolated venv, `FlashRT/.venv`** (gitignored, separate from the
+  shared `third_party/openpi/.venv` every prior session used): needed
+  because that shared venv's `lerobot==0.4.4` pins `diffusers<0.36.0`,
+  incompatible with what the real VAE work needed. Built via `uv venv
+  --python 3.11.13 .venv` + `uv pip install -e ".[torch]" diffusers
+  transformers pybind11 einops av opencv-python-headless
+  huggingface_hub` (torch resolved to `2.14.0+cu130`, pybind11 to
+  `3.1.0` — both confirmed working here and ABI-compatible with the
+  existing `flash_rt_kernels.so`, same Python 3.11.13). Rebuild
+  `flash_rt_kernels` against this venv with the same slim-build cmake
+  recipe below, pointing `-DPython3_EXECUTABLE`/`-Dpybind11_DIR` at
+  `.venv`'s own copies — verified the rebuilt `.so` still works from
+  BOTH venvs afterward (same output path, same CUDA arch/build flags).
+  Use THIS venv (not the shared one) for any work touching
+  `diffusers`/`transformers`/the real VAE.
 
 ## Onboarding
 
