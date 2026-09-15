@@ -5,6 +5,8 @@ __pycache__/
 *.egg-info/
 dist/
 .eggs/
+.venv/
+uv.lock
 
 # Build artifacts
 build/
@@ -44,6 +46,7 @@ internal-tests/
 internal-docs/
 notes/
 third_party/cutlass
+third_party/flux2
 /artifacts/omega_e0m3/*.pt
 
 # CANN graph-fusion and op-check reports, written into the working
