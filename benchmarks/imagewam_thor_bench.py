@@ -52,6 +52,7 @@ from flash_rt.models.imagewam.pipeline_thor import (
     _double_stream_layer,
     _single_stream_layer,
 )
+from flash_rt.models.imagewam.quant_linear import Fp16Linear, Fp8Linear, Nvfp4Linear
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 
 DEV = "cuda"
@@ -82,6 +83,17 @@ WARMUP, ITERS = 15, 50
 # on Thor to fold that win into the backbone_double/backbone_single
 # numbers below.
 USE_FA4 = os.environ.get("IMAGEWAM_USE_FA4", "0") == "1"
+
+# OPT-004 step 5: FP8/NVFP4 quantized GEMM (plan.md). Opt-in via env
+# var, same reasoning as IMAGEWAM_USE_FA4 -- this dev machine can
+# WIRE both paths but cannot numerically verify either one locally
+# (FP8: pre-existing Ada cuBLASLt gap, `cublasLtMatmulAlgoGetHeuristic`
+# status 15 at every shape; NVFP4: flash_rt.flash_rt_fp4 is a
+# Blackwell/Thor-only compiled extension, not built on Ada) -- see
+# quant_linear.py's own module docstring. Needs real Thor hardware to
+# produce meaningful timing/correctness numbers for anything but
+# "fp16": `IMAGEWAM_PRECISION=fp8 python3 imagewam_thor_bench.py`.
+PRECISION = os.environ.get("IMAGEWAM_PRECISION", "fp16")
 
 _keepalive = []
 
@@ -131,6 +143,19 @@ def _time_ms(fn, warmup=WARMUP, iters=ITERS) -> tuple[float, float, float]:
     p50 = times[len(times) // 2]
     p90 = times[int(len(times) * 0.9)]
     return p50, p90, statistics.mean(times)
+
+
+def _make_linear(gemm, n, k):
+    """Build the weight-projection linear op selected by IMAGEWAM_PRECISION
+    -- OPT-004 step 5, mirrors imagewam_thor.py's own `_rnd_linear`."""
+    w = _lin(n, k)
+    if PRECISION == "fp16":
+        return Fp16Linear(gemm, w.data_ptr(), n, k)
+    if PRECISION == "fp8":
+        return Fp8Linear(w.data_ptr(), n, k)
+    if PRECISION == "nvfp4":
+        return Nvfp4Linear(w.data_ptr(), n, k)
+    raise ValueError(f"unknown IMAGEWAM_PRECISION={PRECISION!r}")
 
 
 def _autotune(gemm, shapes):
@@ -183,12 +208,12 @@ def bench_backbone_double():
     ctx, attn = _make_1layer_backend(kind="backbone")
     gemm = fvk.GemmRunner()
     img_len = A0 - X0
-    weights = {("backbone", "double", 0, "txt_in.weight"): _lin(HIDDEN, JOINT_ATTN_DIM).data_ptr()}
+    weights = {("backbone", "double", 0, "txt_in.weight"): _make_linear(gemm, HIDDEN, JOINT_ATTN_DIM)}
     for prefix in ("txt", "img"):
-        weights[("backbone", "double", 0, f"{prefix}_qkv.weight")] = _lin(3 * HIDDEN, HIDDEN).data_ptr()
-        weights[("backbone", "double", 0, f"{prefix}_proj.weight")] = _lin(HIDDEN, HIDDEN).data_ptr()
-        weights[("backbone", "double", 0, f"{prefix}_mlp0.weight")] = _lin(MLP_HIDDEN * 2, HIDDEN).data_ptr()
-        weights[("backbone", "double", 0, f"{prefix}_mlp2.weight")] = _lin(HIDDEN, MLP_HIDDEN).data_ptr()
+        weights[("backbone", "double", 0, f"{prefix}_qkv.weight")] = _make_linear(gemm, 3 * HIDDEN, HIDDEN)
+        weights[("backbone", "double", 0, f"{prefix}_proj.weight")] = _make_linear(gemm, HIDDEN, HIDDEN)
+        weights[("backbone", "double", 0, f"{prefix}_mlp0.weight")] = _make_linear(gemm, MLP_HIDDEN * 2, HIDDEN)
+        weights[("backbone", "double", 0, f"{prefix}_mlp2.weight")] = _make_linear(gemm, HIDDEN, MLP_HIDDEN)
         weights[("backbone", "double", 0, f"{prefix}_query_norm")] = _norm_scale(HD).data_ptr()
         weights[("backbone", "double", 0, f"{prefix}_key_norm")] = _norm_scale(HD).data_ptr()
     dims = dict(hidden=HIDDEN, HD=HD, NH=NH, mlp_hidden=MLP_HIDDEN,
@@ -232,10 +257,10 @@ def bench_backbone_single():
     ctx, attn = _make_1layer_backend(kind="backbone")
     gemm = fvk.GemmRunner()
     weights = {
-        ("backbone", "single", 0, "qkv.weight"): _lin(3 * HIDDEN, HIDDEN).data_ptr(),
-        ("backbone", "single", 0, "mlp_in.weight"): _lin(MLP_HIDDEN * 2, HIDDEN).data_ptr(),
-        ("backbone", "single", 0, "attn_out_proj.weight"): _lin(HIDDEN, HIDDEN).data_ptr(),
-        ("backbone", "single", 0, "mlp_down.weight"): _lin(HIDDEN, MLP_HIDDEN).data_ptr(),
+        ("backbone", "single", 0, "qkv.weight"): _make_linear(gemm, 3 * HIDDEN, HIDDEN),
+        ("backbone", "single", 0, "mlp_in.weight"): _make_linear(gemm, MLP_HIDDEN * 2, HIDDEN),
+        ("backbone", "single", 0, "attn_out_proj.weight"): _make_linear(gemm, HIDDEN, HIDDEN),
+        ("backbone", "single", 0, "mlp_down.weight"): _make_linear(gemm, HIDDEN, MLP_HIDDEN),
         ("backbone", "single", 0, "query_norm"): _norm_scale(HD).data_ptr(),
         ("backbone", "single", 0, "key_norm"): _norm_scale(HD).data_ptr(),
     }
@@ -273,10 +298,10 @@ def bench_action_double():
     ctx, attn = _make_1layer_backend(kind="mot")
     gemm = fvk.GemmRunner()
     weights = {
-        ("action_dit", "double", 0, "qkv.weight"): _lin(3 * ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
-        ("action_dit", "double", 0, "proj.weight"): _lin(ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH).data_ptr(),
-        ("action_dit", "double", 0, "mlp0.weight"): _lin(ACTION_MLP_HIDDEN * 2, ACTION_HIDDEN_DIM).data_ptr(),
-        ("action_dit", "double", 0, "mlp2.weight"): _lin(ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN).data_ptr(),
+        ("action_dit", "double", 0, "qkv.weight"): _make_linear(gemm, 3 * ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM),
+        ("action_dit", "double", 0, "proj.weight"): _make_linear(gemm, ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH),
+        ("action_dit", "double", 0, "mlp0.weight"): _make_linear(gemm, ACTION_MLP_HIDDEN * 2, ACTION_HIDDEN_DIM),
+        ("action_dit", "double", 0, "mlp2.weight"): _make_linear(gemm, ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN),
         ("action_dit", "double", 0, "query_norm"): _norm_scale(HD).data_ptr(),
         ("action_dit", "double", 0, "key_norm"): _norm_scale(HD).data_ptr(),
     }
@@ -317,10 +342,10 @@ def bench_action_single():
     ctx, attn = _make_1layer_backend(kind="mot")
     gemm = fvk.GemmRunner()
     weights = {
-        ("action_dit", "single", 0, "qkv.weight"): _lin(3 * ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM).data_ptr(),
-        ("action_dit", "single", 0, "mlp_in.weight"): _lin(ACTION_MLP_HIDDEN * 2, ACTION_HIDDEN_DIM).data_ptr(),
-        ("action_dit", "single", 0, "attn_out_proj.weight"): _lin(ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH).data_ptr(),
-        ("action_dit", "single", 0, "mlp_down.weight"): _lin(ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN).data_ptr(),
+        ("action_dit", "single", 0, "qkv.weight"): _make_linear(gemm, 3 * ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM),
+        ("action_dit", "single", 0, "mlp_in.weight"): _make_linear(gemm, ACTION_MLP_HIDDEN * 2, ACTION_HIDDEN_DIM),
+        ("action_dit", "single", 0, "attn_out_proj.weight"): _make_linear(gemm, ACTION_HIDDEN_DIM, ACTION_ATTN_WIDTH),
+        ("action_dit", "single", 0, "mlp_down.weight"): _make_linear(gemm, ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN),
         ("action_dit", "single", 0, "query_norm"): _norm_scale(HD).data_ptr(),
         ("action_dit", "single", 0, "key_norm"): _norm_scale(HD).data_ptr(),
     }

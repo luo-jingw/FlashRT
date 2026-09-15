@@ -55,7 +55,10 @@ import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
 from flash_rt.models.imagewam.pipeline_real import compute_action_modulation, compute_shared_modulation
+from flash_rt.models.imagewam.quant_linear import Fp8Linear, Fp16Linear, Nvfp4Linear
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
+
+_PRECISIONS = ("fp16", "fp8", "nvfp4")
 
 DEV = "cuda"
 FP16 = torch.float16
@@ -79,8 +82,18 @@ class ImageWAMTorchFrontendThor:
     """
 
     def __init__(self, checkpoint_dir=None, *, dims_override: dict | None = None,
-                 use_fa4: bool = False, **kwargs):
+                 use_fa4: bool = False, precision: str = "fp16", **kwargs):
         del checkpoint_dir, kwargs
+        if precision not in _PRECISIONS:
+            raise ValueError(f"precision={precision!r} -- must be one of {_PRECISIONS}")
+        # OPT-004 step 5 (plan.md): every weight-projection GEMM in
+        # pipeline_thor.py dispatches through weights[key](...), a
+        # callable built here by _rnd_linear -- "nvfp4" requires a
+        # Blackwell/Thor build (flash_rt.flash_rt_fp4) and will raise a
+        # clear RuntimeError from Nvfp4Linear's own constructor on any
+        # other machine (see quant_linear.py's own module docstring),
+        # not here.
+        self._precision = precision
         self._keepalive = []
         self.dims = dict(_DEFAULT_DIMS)
         if dims_override:
@@ -234,13 +247,28 @@ class ImageWAMTorchFrontendThor:
             self._gemm.autotune_fp16_nn(x.data_ptr(), w.data_ptr(), out.data_ptr(), m, n, k, 16)
         torch.cuda.synchronize()
 
-    def _rnd_linear(self, n: int, k: int) -> int:
+    def _rnd_linear(self, n: int, k: int):
         """Real GEMM (K,N) convention: `n` = output width, `k` = input
-        width, stored as (k, n) so `gemm.fp16_nn` reads it directly (a
-        real checkpoint's own (out,in) `nn.Linear` weight would need
-        `.t().contiguous()` at load time -- see `CosmosEdgeThor`'s own
-        precedent)."""
-        return self._own(torch.randn(k, n, dtype=FP16, device=DEV) * 0.02).data_ptr()
+        width, stored as (k, n) (a real checkpoint's own (out,in)
+        `nn.Linear` weight would need `.t().contiguous()` at load time
+        -- see `CosmosEdgeThor`'s own precedent). Returns a linear-op
+        OBJECT (`Fp16Linear`/`Fp8Linear`/`Nvfp4Linear`, selected by
+        `self._precision`), NOT a raw pointer -- OPT-004 step 5
+        (`plan.md`): `pipeline_thor.py`'s own weight-projection call
+        sites are `weights[key](x_ptr, out_ptr, m, stream)` uniformly.
+        The real FP16 weight is always materialized first (quantized
+        classes read it once, at construction, to build their own
+        quantized copy) and kept alive via `self._own` regardless of
+        which precision ultimately uses it.
+        """
+        w = self._own(torch.randn(k, n, dtype=FP16, device=DEV) * 0.02)
+        if self._precision == "fp16":
+            return Fp16Linear(self._gemm, w.data_ptr(), n, k)
+        if self._precision == "fp8":
+            return Fp8Linear(w.data_ptr(), n, k)
+        if self._precision == "nvfp4":
+            return Nvfp4Linear(w.data_ptr(), n, k)
+        raise ValueError(f"unknown precision {self._precision!r}")  # pragma: no cover -- validated in __init__
 
     def _rnd_norm_scale(self, HD: int) -> int:
         """QK-Norm scale, real-checkpoint-typical positive bias (avoids
