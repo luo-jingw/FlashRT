@@ -1882,3 +1882,294 @@ real weight distributions -- and whether per-layer error compounds
 across the real 25-layer stack (this Phase 4 result is single-layer
 only, matching the rest of `test_imagewam_quant_linear.py`'s own
 existing scope, not a full-pipeline end-to-end check).
+
+---
+
+# Plan: OPT-004 step 6 — static-scale CUTLASS FP8 for ImageWAM
+
+Plan Status: pending
+
+## Problem
+
+### Current
+
+`Fp8Linear` (`flash_rt/models/imagewam/quant_linear.py`) measures a
+fresh activation scale on EVERY call (`quantize_fp8_device_fp16`, a
+full GPU amax reduction over `M*K` elements) and dispatches the GEMM
+through `fp8_gemm_descale_fp16` (`csrc/kernels/decoder_fused.cu:310`,
+`cublasLtMatmul`). Real Thor measurement (this file's own "OPT-004
+step 5 Phase 4" section above, `opportunities.md`'s matching entry):
+prefill 117.0ms (FP16) -> 122.8ms (FP8), a **+5% regression**, with
+`backbone_single` alone getting slower (4.47 -> 4.89ms).
+
+Every OTHER FlashRT Thor model (Pi0.5, GROOT, Motus — `docs/calibration.md`)
+gets a REAL FP8 win instead, using a structurally different mechanism:
+- **Static, calibrate-once activation scales.** `_measure_scale_gpu`
+  (`flash_rt/hardware/thor/shared_primitives.py:598`) calls the exact
+  same `quantize_fp8_device_fp16` kernel `Fp8Linear` already uses — but
+  ONCE, during a calibration forward pass in `set_prompt`, before CUDA
+  Graph capture. Every subsequent forward (every graph replay) uses
+  `quantize_fp8_static_fp16` (scale-and-clamp only, no amax reduction)
+  with the frozen scale. `Fp8Linear` pays the full amax-reduction cost
+  on every single forward instead of once.
+- **`cutlass_fp8_sq`/`_wide`/`_t1`** (`csrc/gemm/cutlass_sm100.cu`,
+  tile configs hand-tuned for the Pi0.5/GROOT shape mix) instead of
+  `cublasLtMatmul`. Confirmed via `dir(flash_rt.flash_rt_kernels)` on
+  this dev machine: these symbols are ABSENT here (this build has no
+  `cutlass_fp8_*` entries at all) — confirmed via `csrc/bindings.cpp`
+  that they are `#ifdef ENABLE_SM100_CUTLASS`, and `CMakeLists.txt:42-44`
+  that this flag auto-enables for `GPU_ARCH=110` (Thor) — the EXACT
+  same gate NVFP4 already uses. Since NVFP4 (`flash_rt.flash_rt_fp4`)
+  already imported and ran successfully on the user's real Thor build
+  (this file's own "OPT-004 step 5 Phase 4" result), `cutlass_fp8_*`
+  is very likely ALSO already present in that same build — no new
+  cmake flag expected, only new Python wiring.
+
+`fp8_gemm_descale_fp16` itself already caches its cuBLASLt algorithm
+choice per `(M,N,K)` shape (`g_lt_cache`, confirmed by reading
+`decoder_fused.cu` directly) — so the heuristic search is NOT the
+per-call cost. The two real, avoidable overheads are (a) the per-call
+amax reduction and (b) whatever gap remains between cuBLASLt's cached
+tactic and a hand-tuned CUTLASS tile for these specific shapes; this
+plan isolates and measures both separately rather than assuming which
+one dominates.
+
+**Deliberately NOT in scope**: the full house calibration mechanism
+(`docs/calibration.md`'s multi-sample/percentile calibration, on-disk
+calibration cache keyed by checkpoint hash, `_recalibrate_with_real_data`).
+`opportunities.md` OPT-001 already states real calibration is
+meaningless before a real checkpoint exists on this project's own
+target (`imagewam_thor.py` still allocates 100% random weights,
+`checkpoint_dir` is accepted and ignored) — building that
+infrastructure now would calibrate against noise. This plan borrows
+only the STATIC-vs-DYNAMIC-SCALE mechanism and the CUTLASS kernel
+choice, both of which are meaningful and measurable even against
+random weights (a fixed random tensor has a real, stable amax, same as
+this project's own existing FP8/NVFP4 correctness tests already rely
+on). Full calibration is OPT-001's job once a real checkpoint exists.
+
+**Consistent with `PROJECT.md`'s own standing division-of-labor
+instruction**: FP8 testing belongs on Thor, not on this Ada dev
+machine (confirmed cuBLASLt environment gap, `CUBLAS_STATUS_NOT_SUPPORTED`
+at every shape). Nothing in this plan tries to make FP8 numerically run
+here — code is written and reviewed on Ada, correctness/speed is
+measured on Thor, exactly like OPT-004 step 5 before it.
+
+### Problem
+
+No path exists to freeze ImageWAM's FP8 activation scale before graph
+capture, and no path exists to route ImageWAM's FP8 GEMM through the
+same CUTLASS kernel family every other FlashRT Thor model uses instead
+of `cublasLtMatmul`. Both are needed to know whether ImageWAM's FP8
+regression is a fixable wiring choice (this project not using FlashRT's
+own house mechanism) or a real, structural property of ImageWAM's GEMM
+shapes.
+
+### Measurable goal
+
+A new `StaticFp8Linear` class + a one-time pre-capture calibration
+step in `imagewam_thor.py.set_prompt()`, isolating TWO independently
+switchable changes (static scale; CUTLASS kernel), each verified for
+correctness (cosine vs. the FP16 reference, same >0.98 lossy-precision
+bar this file's own OPT-004-step-5 Phase 4 section established for
+NVFP4) and for real per-layer/full-prefill speed on Thor, against the
+existing 117.0ms FP16 / 122.8ms dynamic-FP8 baselines.
+
+## Structure
+
+- `flash_rt/models/imagewam/quant_linear.py` — gains `StaticFp8Linear`,
+  additive alongside the existing `Fp16Linear`/`Fp8Linear`/`Nvfp4Linear`
+  (the dynamic `Fp8Linear` is NOT removed — it stays the "no
+  pre-capture calibration step needed" fallback, and remains this
+  project's only way to exercise FP8 outside a graph-capturing
+  frontend, e.g. directly from `benchmarks/imagewam_thor_bench.py`'s
+  own non-graph-captured per-layer functions). OWNS: one-time weight
+  quantization (reused from `Fp8Linear`'s own pattern), a new
+  `calibrate(x_ptr, m, stream)` method that measures and FREEZES the
+  activation scale (called once, before any `__call__`), and the
+  actual GEMM dispatch (switchable between `fp8_gemm_descale_fp16` and
+  `cutlass_fp8_sq`/`_wide`/`_t1` — see Phase split below).
+- `flash_rt/frontends/torch/imagewam_thor.py` — OWNS the calibration
+  LIFECYCLE: `precision="fp8_static"` constructs `StaticFp8Linear`
+  weights (uncalibrated); a new `_calibrate_fp8()` step runs once
+  inside `set_prompt()`, BEFORE `_capture_graph()` (mirrors
+  `pi05_thor.py`'s own `_calibrate` timing exactly — activation scales
+  must be fixed before the graph that will replay them is captured,
+  since a captured graph replays the exact same kernel launches with
+  the exact same arguments every time).
+- `benchmarks/imagewam_thor_bench.py` — OWNS per-layer speed
+  measurement without a captured graph. Since there is no `set_prompt`
+  here, calibration is a one-time call inserted before `_time_ms`'s own
+  warmup loop (matching `_autotune`'s own existing placement pattern in
+  this file — a one-time, pre-timing setup step).
+- `csrc/`/`CMakeLists.txt` — UNCHANGED. `cutlass_fp8_sq`/`_wide`/`_t1`
+  already exist, gated by the same flag NVFP4 already uses
+  successfully on the user's Thor build; no new kernel, no new build
+  flag expected (confirm in Phase 2, do not assume).
+
+State ownership: `StaticFp8Linear`'s activation-scale tensor is owned
+by the instance itself (`self.act_scale`, a 1-element float32 device
+tensor allocated once at construction, WRITTEN once by `calibrate()`,
+READ (never written) by every subsequent `__call__` during capture and
+replay) — same "small, fixed-address, read-only during replay" pattern
+`imagewam_thor.py`'s own AdaLN/RoPE precomputed buffers already use
+(module docstring, "AdaLN modulation and RoPE tables are precomputed
+ONCE... passed into the captured graph as small, fixed-address
+read-only buffers").
+
+## Interface
+
+```python
+# flash_rt/models/imagewam/quant_linear.py
+class StaticFp8Linear:
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int, *, use_cutlass: bool = False):
+        ...  # quantizes weight once (same as Fp8Linear); use_cutlass picks
+             # cutlass_fp8_sq/_wide/_t1 (shape-based, see pick_variant-style
+             # heuristic in fp4_utils.py) vs. fp8_gemm_descale_fp16 --
+             # lazy-imports/probes cutlass_fp8_* the same way Nvfp4Linear
+             # lazy-imports flash_rt.flash_rt_fp4, raising a clear
+             # RuntimeError if use_cutlass=True on a build without it.
+        self.act_scale: torch.Tensor  # 1-elem float32, uninitialized until calibrate()
+        self._calibrated = False
+
+    def calibrate(self, x_ptr: int, m: int, stream: int = 0) -> None:
+        """Measure and FREEZE the activation scale from one representative
+        forward (same random dry-run input this project already uses
+        everywhere -- NOT real calibration data, see Problem's own
+        'deliberately not in scope' note). Idempotent-unsafe by design:
+        calling twice silently re-freezes a different scale, which would
+        silently invalidate an already-captured graph -- callers MUST
+        calibrate before capture, never after. Raises RuntimeError if
+        called after __call__ has already run once (cheap guard, catches
+        the ordering bug at the source instead of producing silently
+        wrong replay output)."""
+        ...
+
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
+        if not self._calibrated:
+            raise RuntimeError("StaticFp8Linear.__call__ before calibrate()")
+        ...  # quantize_fp8_static_fp16(x, act_scale) -> GEMM (fp8_gemm_descale_fp16 or cutlass_fp8_*)
+```
+
+`imagewam_thor.py` gains:
+```python
+def _calibrate_fp8(self) -> None:
+    """Runs once in set_prompt(), before _capture_graph(). Walks every
+    StaticFp8Linear in self._weights.values() and calls .calibrate()
+    with the SAME random dry-run activations _capture_graph()'s own
+    warmup passes would otherwise produce on the fly -- one throwaway
+    imagewam_prefill/imagewam_denoise_loop pass with calibration mode
+    on, mirroring pi05_thor.py's own _calibrate structure (one forward
+    pass that visits every quantization point) rather than calibrating
+    each StaticFp8Linear in isolation."""
+```
+
+`pipeline_thor.py`: UNCHANGED. `key(slot)(x_ptr, out_ptr, m, stream)`
+already doesn't care which linear-op class it's calling — this is the
+entire point of OPT-004 step 5's own uniform-callable interface.
+
+## Flow
+
+1. `imagewam_thor.py.__init__` with `precision="fp8_static"`: every
+   weight-projection slot gets a `StaticFp8Linear` (weight quantized
+   immediately, activation scale left uninitialized).
+2. `set_prompt()` (first call only, same gate as today's
+   `if self._graph is None`): `self._context.normal_()` (existing) →
+   NEW `self._calibrate_fp8()` (runs one full forward with calibration
+   mode on every `StaticFp8Linear`, freezing every activation scale) →
+   `self._capture_graph()` (existing, now captures kernel launches that
+   read an already-frozen scale).
+3. `infer()`: UNCHANGED — `self._graph.replay()`. Every `StaticFp8Linear.__call__`
+   inside the replayed graph reads its own frozen `act_scale`, no amax
+   reduction, no re-calibration, ever.
+4. Bench harness (`imagewam_thor_bench.py`, no graph capture): each
+   `bench_*` function calls `.calibrate()` once per `StaticFp8Linear`
+   weight right after building `weights`, before `_time_ms`'s warmup —
+   isolates "calibration is a one-time cost, not part of steady state,"
+   matching how a real captured-graph deployment would actually pay it.
+
+## Code Mapping
+
+| module | file | task |
+|---|---|---|
+| static-scale + CUTLASS linear op | `flash_rt/models/imagewam/quant_linear.py` | new `StaticFp8Linear`, additive |
+| calibration lifecycle | `flash_rt/frontends/torch/imagewam_thor.py` | new `_calibrate_fp8()`, called from `set_prompt()` before `_capture_graph()`; `precision="fp8_static"` added to `_PRECISIONS` |
+| bench calibration hook | `benchmarks/imagewam_thor_bench.py` | one-time `.calibrate()` call before each `bench_*`'s `_time_ms` |
+| correctness test | `tests/test_imagewam_quant_linear.py` | new `test_static_fp8_linear_matches_fp16_reference` (cutlass variant probed separately from the cuBLASLt variant — two independent availability checks, since a build can have one without the other in principle even though Phase 0's own research says they're gated together) |
+| record | `opportunities.md` OPT-004 | new "step 6" entry once measured |
+
+## Implementation Phases
+
+### Phase 1 — `StaticFp8Linear`, static scale only, KEEP `fp8_gemm_descale_fp16`
+
+Phase Status: pending
+
+Goal: isolate the static-vs-dynamic-scale variable alone, with no
+CUTLASS kernel change, so the eventual Thor result can distinguish
+"static scale fixed it" from "CUTLASS kernel fixed it" instead of
+conflating both in one measurement.
+Modified files: `quant_linear.py` (`StaticFp8Linear` with
+`use_cutlass=False` hardcoded for this phase — the `use_cutlass` param
+itself can be added now or in Phase 2, whichever keeps this phase's
+diff smaller); `tests/test_imagewam_quant_linear.py`.
+Affected modules: none beyond `quant_linear.py`'s own additive class.
+Observation method: on Ada, confirm `calibrate()` correctly freezes a
+scale and `__call__` raises before it's set (pure Python logic,
+testable without a working cuBLASLt FP8 GEMM); the actual GEMM call
+still hits the known Ada cuBLASLt gap and SKIPs exactly like `Fp8Linear`
+already does — this phase is NOT expected to produce a real number
+here, only correct wiring.
+
+### Phase 2 — CUTLASS kernel swap (`use_cutlass=True`)
+
+Phase Status: pending
+
+Goal: `StaticFp8Linear(..., use_cutlass=True)` dispatches through
+`cutlass_fp8_sq`/`_wide`/`_t1` (variant chosen by shape, following
+`fp4_utils.py`'s own `pick_variant`-style heuristic, adapted to
+ImageWAM's own GEMM shapes rather than Pi0.5's) instead of
+`fp8_gemm_descale_fp16`. Lazy-probes `hasattr(fvk, "cutlass_fp8_sq")`
+(these symbols live in the SAME `flash_rt_kernels` module as everything
+else, unlike NVFP4's separate `flash_rt.flash_rt_fp4` extension — no
+import to guard, just an attribute check) and raises a clear
+`RuntimeError` if absent, matching `Nvfp4Linear`'s own established
+"clear error, not a wiring bug" pattern.
+Modified files: `quant_linear.py`.
+Affected modules: none beyond `quant_linear.py`.
+Observation method: on Ada, confirm the `hasattr` probe correctly
+reports absence (this build has no `cutlass_fp8_*` symbols, confirmed
+in Problem above) and raises the documented error, not a crash.
+Real correctness/existence check needs Thor.
+
+### Phase 3 — frontend + bench integration
+
+Phase Status: pending
+
+Goal: `imagewam_thor.py`'s `_calibrate_fp8()` + `precision="fp8_static"`;
+`imagewam_thor_bench.py`'s matching one-time `.calibrate()` hook.
+Modified files: `imagewam_thor.py`, `imagewam_thor_bench.py`.
+Affected modules: frontend construction/lifecycle, bench harness.
+Observation method: on Ada, `precision="fp16"` must still work
+unchanged (regression check); `precision="fp8_static"` must build
+weights and reach exactly the documented cuBLASLt gap at `calibrate()`
+time or at first `__call__` (not earlier, not a different error) —
+same "fails at the right, already-understood place" check already
+established for `fp8`/`nvfp4` in OPT-004 step 5's own Phase 3.
+
+### Phase 4 — real Thor measurement + close-out
+
+Phase Status: pending
+
+Goal: hand to the user for a real Thor run comparing FOUR configurations
+at identical shapes: FP16 (117.0ms), dynamic FP8 (122.8ms, already
+measured), static-scale FP8 + `cublasLtMatmul` (Phase 1's own
+contribution isolated), static-scale FP8 + CUTLASS (Phase 1+2 combined,
+the actual house-mechanism equivalent). If static-scale-only already
+recovers most of the gap, the CUTLASS kernel choice matters less than
+expected; if only the CUTLASS swap does, cuBLASLt's own chosen tactic
+is the real bottleneck at these shapes, not the calibration overhead.
+Modified files: `opportunities.md` (recording the 4-way result),
+`plan.md` (this section's own Phase 4 write-up).
+Affected modules: none (measurement only).
+Observation method: cosine (>0.98) + per-layer P50 table, same style
+as every prior OPT-004 entry.
