@@ -1,10 +1,12 @@
-"""`quant_linear.py`'s `Fp8Linear`/`Nvfp4Linear` correctness (plan.md's
-"OPT-004 step 5" Phase 1/2: cosine>0.99 against the FP16 reference,
-small dims, no speed measurement).
+"""`quant_linear.py`'s `Fp8Linear`/`Nvfp4Linear`/`StaticFp8Linear`
+correctness (plan.md's "OPT-004 step 5" Phase 1/2 for the first two;
+"OPT-004 step 6" Phase 1/2 for `StaticFp8Linear`'s two GEMM-backend
+variants: cosine>0.99 against the FP16 reference, small dims, no speed
+measurement).
 
-**Both precisions are UNTESTABLE on this project's own dev machine
-(Ada sm_89), for two independent reasons** -- see `quant_linear.py`'s
-own module docstring for the full account:
+**All of these are UNTESTABLE for real numeric correctness on this
+project's own dev machine (Ada sm_89), for independent reasons** -- see
+`quant_linear.py`'s own module docstring for the full account:
 
 - FP8: this venv's cuBLASLt (12.8.04, CUDA 12.8, Ada compute
   capability (8,9)) returns `cublasLtMatmulAlgoGetHeuristic failed
@@ -26,7 +28,7 @@ hardware to actually verify the cosine>0.99 bar.
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
-from flash_rt.models.imagewam.quant_linear import Fp16Linear, Fp8Linear, Nvfp4Linear
+from flash_rt.models.imagewam.quant_linear import Fp16Linear, Fp8Linear, Nvfp4Linear, StaticFp8Linear
 
 DEV = "cuda"
 FP16 = torch.float16
@@ -68,8 +70,40 @@ def _probe_nvfp4_available():
         return False, str(e)
 
 
+def _probe_static_fp8_cublaslt_available():
+    """Same cuBLASLt env gap as Fp8Linear, but exercised through
+    StaticFp8Linear's own calibrate()->__call__ ordering (OPT-004 step
+    6 plan Phase 1) -- a real canary, not a guess."""
+    try:
+        w = _lin(16, 16)
+        lin = StaticFp8Linear(w.data_ptr(), 16, 16, use_cutlass=False)
+        x = _own(torch.randn(4, 16, dtype=FP16, device=DEV) * 0.1)
+        out = _own(torch.zeros(4, 16, dtype=FP16, device=DEV))
+        lin.calibrate(x.data_ptr(), 4, 0)
+        lin(x.data_ptr(), out.data_ptr(), 4, 0)
+        torch.cuda.synchronize()
+        return True, None
+    except RuntimeError as e:
+        return False, str(e)
+
+
+def _probe_static_fp8_cutlass_available():
+    """OPT-004 step 6 plan Phase 2 -- separate probe from the cuBLASLt
+    variant above, per the plan's own Code Mapping note: a build could
+    in principle have one without the other even though Phase 0/this
+    plan's own research says they're gated together in practice."""
+    try:
+        w = _lin(16, 16)
+        StaticFp8Linear(w.data_ptr(), 16, 16, use_cutlass=True)
+        return True, None
+    except RuntimeError as e:
+        return False, str(e)
+
+
 _FP8_AVAILABLE, _FP8_REASON = _probe_fp8_available()
 _NVFP4_AVAILABLE, _NVFP4_REASON = _probe_nvfp4_available()
+_STATIC_FP8_AVAILABLE, _STATIC_FP8_REASON = _probe_static_fp8_cublaslt_available()
+_STATIC_FP8_CUTLASS_AVAILABLE, _STATIC_FP8_CUTLASS_REASON = _probe_static_fp8_cutlass_available()
 
 
 def _cosine(a, b):
@@ -144,6 +178,57 @@ def test_nvfp4_linear_matches_fp16_reference():
     assert cos > 0.98, f"cosine too low: {cos}"
 
 
+def test_static_fp8_linear_cublaslt_matches_fp16_reference():
+    """OPT-004 step 6 plan Phase 1: static (calibrate-once) scale,
+    still `fp8_gemm_descale_fp16`/cuBLASLt -- isolates the scale change
+    alone from the CUTLASS kernel change (next test)."""
+    if not _STATIC_FP8_AVAILABLE:
+        import pytest
+        pytest.skip(f"Static FP8 (cuBLASLt) not available on this machine (known Ada "
+                    f"cuBLASLt environment gap, see quant_linear.py's module docstring): "
+                    f"{_STATIC_FP8_REASON}")
+
+    torch.manual_seed(0)
+    m, n, k = 8, 64, 96
+    w, x, ref_out = _reference_and_ptrs(m, n, k)
+
+    lin = StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=False)
+    lin.calibrate(x.data_ptr(), m, 0)
+    out = _own(torch.zeros(m, n, dtype=FP16, device=DEV))
+    lin(x.data_ptr(), out.data_ptr(), m, 0)
+    torch.cuda.synchronize()
+
+    cos = _cosine(out, ref_out)
+    print(f"StaticFp8Linear(cublaslt) vs Fp16Linear reference: cosine={cos:.6f}")
+    assert cos > 0.99, f"cosine too low: {cos}"
+
+
+def test_static_fp8_linear_cutlass_matches_fp16_reference():
+    """OPT-004 step 6 plan Phase 2: static scale + cutlass_fp8_sq/_wide/_t1
+    -- the actual house-mechanism-equivalent path. Thor-only build
+    (ENABLE_SM100_CUTLASS), same gate NVFP4 already uses; this dev
+    machine's build has neither, confirmed via the probe above."""
+    if not _STATIC_FP8_CUTLASS_AVAILABLE:
+        import pytest
+        pytest.skip(f"cutlass_fp8_sq/_wide/_t1 not available on this machine "
+                    f"(Thor/Blackwell-only build, ENABLE_SM100_CUTLASS): "
+                    f"{_STATIC_FP8_CUTLASS_REASON}")
+
+    torch.manual_seed(0)
+    m, n, k = 8, 64, 96
+    w, x, ref_out = _reference_and_ptrs(m, n, k)
+
+    lin = StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=True)
+    lin.calibrate(x.data_ptr(), m, 0)
+    out = _own(torch.zeros(m, n, dtype=FP16, device=DEV))
+    lin(x.data_ptr(), out.data_ptr(), m, 0)
+    torch.cuda.synchronize()
+
+    cos = _cosine(out, ref_out)
+    print(f"StaticFp8Linear(cutlass) vs Fp16Linear reference: cosine={cos:.6f}")
+    assert cos > 0.99, f"cosine too low: {cos}"
+
+
 if __name__ == "__main__":
     if not _FP8_AVAILABLE:
         print(f"SKIPPED fp8: {_FP8_REASON}")
@@ -154,5 +239,15 @@ if __name__ == "__main__":
         print(f"SKIPPED nvfp4: {_NVFP4_REASON}")
     else:
         test_nvfp4_linear_matches_fp16_reference()
+
+    if not _STATIC_FP8_AVAILABLE:
+        print(f"SKIPPED static_fp8(cublaslt): {_STATIC_FP8_REASON}")
+    else:
+        test_static_fp8_linear_cublaslt_matches_fp16_reference()
+
+    if not _STATIC_FP8_CUTLASS_AVAILABLE:
+        print(f"SKIPPED static_fp8(cutlass): {_STATIC_FP8_CUTLASS_REASON}")
+    else:
+        test_static_fp8_linear_cutlass_matches_fp16_reference()
 
     print("DONE (see SKIPPED lines above for anything not actually verified here)")
