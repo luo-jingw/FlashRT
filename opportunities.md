@@ -2306,7 +2306,35 @@ unaffected) and validates `ref_h*ref_w == img_len` before building the
 RoPE table; every REAL-dims call site (`tests/test_imagewam_checkpoint_loader.py`'s
 two full-frontend tests, `benchmarks/imagewam_thor_bench.py`'s
 backbone benchmarks) now passes the real `REF_H=14, REF_W=28`
-explicitly. **Not yet re-verified on Thor** -- needs the same three-
-real-components repro, checking img cosine specifically this time (txt
-was already confirmed fixed by the previous entry; only img was ever
-in question).
+explicitly.
+
+**CONFIRMED on real Thor, same day: this closes the whole OPT-001/OPT-002
+real-accuracy investigation.** Re-ran the three-real-components repro
+with `ref_h=14, ref_w=28` passed explicitly in `dims_override`
+(required -- the frontend still silently defaults to the flat grid
+otherwise, see the fast-fail guard added below):
+
+| | before (flat 392x1 grid) | after (real 14x28 grid) |
+|---|---|---|
+| `backbone_hidden` absmax | 119808 | 119808 (unchanged, already matched) |
+| cosine all / txt / img | 0.985 / 0.998 / 0.910 | **0.999966 / 0.999966 / 0.999966** |
+
+All three bugs found this session (FP16 residual overflow -> BF16
+fix; `txt_in`/`img_in` re-derived every layer -> projected once;
+flat image RoPE grid -> real 14x28) are now independently confirmed
+fixed, together, on real Thor hardware, against the real official
+model, with real Qwen3-4B text conditioning and a real VAE-encoded
+real LIBERO frame, at the real `x0=512` sequence length. This is the
+strongest accuracy confirmation this project has had for the actual
+served `pipeline_thor.py` path (as opposed to `pipeline_real.py`'s
+separate reference implementation, which was already known-good).
+
+**Footgun closed same day**: since the frontend still silently
+defaults to the flat placeholder when `ref_h`/`ref_w` aren't given
+(kept for the toy/default dims' own backward compatibility), a real
+caller could still forget to pass them and silently regress back to
+img cosine~0.91 without any crash -- exactly what already happened
+once. `ImageWAMTorchFrontendThor.__init__` now raises `ValueError`
+immediately (before touching the multi-GB checkpoint file) if
+`ckpt_path` is given without `ref_h`/`ref_w` in `dims_override`;
+structural/random-weight dry runs (`ckpt_path=None`) are unaffected.

@@ -145,6 +145,24 @@ class ImageWAMTorchFrontendThor:
             raise ValueError(
                 f"HD={d['HD']} -- real 4-axis RoPE (axes_dim=(32,32,32,32)) sums to a "
                 f"fixed 128; HD is not a free structural-test parameter")
+        if ckpt_path is not None and ("ref_h" not in d or "ref_w" not in d):
+            # `ref_h`/`ref_w`: the REAL image RoPE needs the actual 2D
+            # patch grid (14x28 for the real confirmed 224x448 input,
+            # NOT a flat (img_len, 1) placeholder) -- bug found
+            # 2026-09-15 via a real Thor cosine comparison against the
+            # official model (opportunities.md OPT-002's correction):
+            # this silent fallback previously cost 0.09 of cosine
+            # similarity (img=0.91 vs 0.999966 with the real grid)
+            # without ever crashing. Checked here, BEFORE loading the
+            # (multi-GB) checkpoint below, so a real-checkpoint caller
+            # that forgot this fails fast, not after a slow load.
+            # Structural/random-weight dry runs (ckpt_path=None) keep
+            # the silent flat-grid default below -- no accuracy claim
+            # there to silently break.
+            raise ValueError(
+                "ckpt_path given without ref_h/ref_w in dims_override -- the real "
+                "image RoPE grid (14x28 for the real confirmed 224x448 input) must "
+                "be passed explicitly for real-checkpoint accuracy")
 
         self._ctx = fvk.FvkContext()
         self._gemm = fvk.GemmRunner()
@@ -168,16 +186,10 @@ class ImageWAMTorchFrontendThor:
         self._bufs = self._alloc_buffers(d)
         # `ref_h`/`ref_w`: the REAL image RoPE needs the actual 2D patch
         # grid (14x28 for the real confirmed 224x448 input, NOT a flat
-        # (img_len, 1) "392x1" placeholder) -- bug found 2026-09-15 via a
-        # real Thor cosine comparison against the official model
-        # (opportunities.md OPT-002's correction): this frontend was the
-        # only real call site still using the flat placeholder (every
-        # `pipeline_real.py`-based reference script/test already used
-        # the real `REF_H=14, REF_W=28`, which is why this went
-        # uncaught -- see that entry for the full account). Defaults to
-        # the OLD flat placeholder so the toy/default dims (no real 2D
-        # image structure) are unaffected; real callers MUST pass
-        # `ref_h`/`ref_w` explicitly via `dims_override` (e.g. 14/28).
+        # (img_len, 1) "392x1" placeholder) -- see the ckpt_path check
+        # above for the full account (opportunities.md OPT-002's
+        # correction). Defaults to the OLD flat placeholder so the toy/
+        # default dims (no real 2D image structure) are unaffected.
         img_len = d["a0"] - d["x0"]
         ref_h = d.get("ref_h", img_len)
         ref_w = d.get("ref_w", 1)
