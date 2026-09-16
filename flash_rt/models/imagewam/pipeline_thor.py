@@ -319,7 +319,6 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     HD = dims["HD"]
     NH = dims["NH"]
     mlp_hidden = dims["mlp_hidden"]
-    joint_attention_dim = dims["joint_attention_dim"]
     x0 = dims["x0"]
     a0 = dims["a0"]
     img_len = a0 - x0
@@ -344,10 +343,29 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     ptrs = attn.get_slot_ptrs("backbone", layer_idx)
     Q_O, K_cache, V_cache = ptrs["Q"], ptrs["K"], ptrs["V"]  # real per-head width (hidden)
 
-    # --- text stream: freshly re-derived from raw context (kept
-    # simplification, see the git history of this file / plan.md),
-    # overwrites rows [0,x0) of combined ---
-    key("txt_in.weight")(bufs["context"], combined, x0, stream)
+    # --- text stream: PERSISTENT residual, rows [0,x0) of combined.
+    # `txt_in`/`img_in` are projected ONCE, by `imagewam_prefill`,
+    # before this loop even starts -- NOT here, and NOT per layer.
+    # (Bug found + fixed 2026-09-15, real Thor run against the official
+    # bf16 reference: this function used to re-run `txt_in`/`img_in`
+    # from RAW `context`/`img_raw` at the top of EVERY double-stream
+    # layer, overwriting whatever the PREVIOUS layer's attn+MLP had
+    # just written -- so only the LAST double-stream layer's own
+    # one-shot transform of the raw input ever survived into the
+    # single-stream layers, discarding 4 of the 5 real double-stream
+    # layers' worth of depth for both streams. The real FLUX.2 model
+    # (`third_party/flux2/src/flux2/model.py`: `img = self.img_in(x);
+    # txt = self.txt_in(ctx)` BEFORE `for block in self.double_blocks`)
+    # projects once and carries the SAME evolving residual through
+    # every block, exactly like `img_x_ptr` here was already (correctly)
+    # documented as doing -- this was never actually true for either
+    # stream until this fix. Real-Thor cosine vs the official model
+    # went from all=0.559/txt=0.548/img=0.907 (with the bug) to
+    # verify-pending (this fix, not yet re-measured on Thor) --
+    # opportunities.md OPT-001 has the full account. `checkpoint_loader.py`'s
+    # own "txt_in/img_in shared across every double layer" finding
+    # (ONE real tensor, not L copies) is what made the one-time-call
+    # correct without any weight-loading change.)
     txt_x = combined  # rows [0, x0)
 
     # ada_layer_norm_bf16in_fp16out (not the plain _fp16 kernel): `txt_x`
@@ -363,22 +381,16 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     fvk.rms_norm_fp16(Q_O, key("txt_query_norm"), Q_O, x0 * NH, HD, eps, stream)
     fvk.rms_norm_fp16(K_cache, key("txt_key_norm"), K_cache, x0 * NH, HD, eps, stream)
 
-    # --- image stream: persistent residual, rows [x0,a0) of combined ---
+    # --- image stream: PERSISTENT residual, rows [x0,a0) of combined.
+    # `img_in` is projected ONCE, by `imagewam_prefill`, before this
+    # loop -- see `txt_x`'s own comment above for the bug this fixes
+    # (2026-09-15, opportunities.md OPT-001) and why this is correct
+    # now that it's a one-time call, not a per-layer one.
     img_x_ptr = _ptr_offset(combined, x0, hidden)
     img_modded_ptr = _ptr_offset(modded, x0, hidden)
     img_Q_ptr = _ptr_offset(Q_O, x0, hidden)
     img_K_ptr = _ptr_offset(K_cache, x0, hidden)
     img_V_ptr = _ptr_offset(V_cache, x0, hidden)
-
-    # OPT-001/OPT-008: real `transformer.img_in` projection, HD-width
-    # raw image tokens -> hidden width, mirroring `txt_in.weight`'s own
-    # call above exactly (same "kept simplification" of re-deriving
-    # every layer rather than once outside the loop -- see that call's
-    # own comment; `real_double_stream_block_forward_fp16` itself takes
-    # BOTH txt and img pre-projected, matching real FLUX.2's own
-    # DoubleStreamBlock scope, so this call site has no reference-side
-    # counterpart to keep in sync, same as txt_in's own call above).
-    key("img_in.weight")(bufs["img_raw"], img_x_ptr, img_len, stream)
 
     fvk.ada_layer_norm_bf16in_fp16out(img_x_ptr, img_scale1_t.data_ptr(), img_shift1_t.data_ptr(),
                              img_modded_ptr, img_len, hidden, eps, stream)
@@ -502,6 +514,13 @@ def imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None
     per-layer KV cache the later denoise loop reads through the "mot"
     attention site.
 
+    Projects `txt_in`/`img_in` from raw `context`/`img_raw` ONCE, here,
+    before any layer runs -- matches the real FLUX.2 model exactly
+    (fixed 2026-09-15, opportunities.md OPT-001; `_double_stream_layer`
+    used to redo this every layer, a real bug found via a real-Thor
+    comparison against the official model, see that function's own
+    docstring).
+
     Required `dims` keys: hidden, HD, NH, mlp_hidden, joint_attention_dim,
     x0, a0, num_layers_double, num_layers_single.
 
@@ -527,6 +546,26 @@ def imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None
             "imagewam_prefill requires mod_txt/mod_img/mod_single/rope_table -- see "
             "flash_rt.models.imagewam.pipeline_real.compute_shared_modulation / "
             "flash_rt.models.imagewam.rope.build_backbone_rope_table")
+
+    # `txt_in`/`img_in` projected ONCE here, before any double-stream
+    # layer runs -- matches the real FLUX.2 model exactly (`model.py`:
+    # `img = self.img_in(x); txt = self.txt_in(ctx)` BEFORE
+    # `for block in self.double_blocks`). Bug fix, 2026-09-15
+    # (opportunities.md OPT-001): `_double_stream_layer` used to redo
+    # this at the top of EVERY layer, discarding the previous layer's
+    # entire output -- see that function's own docstring for the full
+    # account. `txt_in.weight`/`img_in.weight` are the SAME real tensor
+    # for every `layer_idx` (`checkpoint_loader.py`'s own "shared
+    # across every double layer" finding), so `layer_idx=0` is correct
+    # here regardless of `num_layers_double`.
+    x0, a0 = dims["x0"], dims["a0"]
+    hidden = dims["hidden"]
+    img_len = a0 - x0
+    combined = bufs["backbone_hidden"]
+    weights[("backbone", "double", 0, "txt_in.weight")](bufs["context"], combined, x0, stream)
+    weights[("backbone", "double", 0, "img_in.weight")](
+        bufs["img_raw"], _ptr_offset(combined, x0, hidden), img_len, stream)
+
     num_double = dims["num_layers_double"]
     for layer_idx in range(num_double):
         _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream, attn,

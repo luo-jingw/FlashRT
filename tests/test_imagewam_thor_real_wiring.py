@@ -33,6 +33,7 @@ from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbon
 
 DEV = "cuda"
 FP16 = torch.float16
+BF16 = torch.bfloat16
 F32 = torch.float32
 AXES_DIM = (32, 32, 32, 32)
 THETA = 2000
@@ -154,9 +155,29 @@ def test_double_stream_layer_matches_real_reference():
         use_perhead_kv=True, use_real_mot_mask=True,
     )
 
-    combined = _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV))
-    # No pre-set of combined[x0:a0] needed: _double_stream_layer's own
-    # img_in.weight call now writes it from img_raw (OPT-001/OPT-008).
+    # BF16, not FP16 -- `_double_stream_layer`'s AdaLN/gate_res calls
+    # now unconditionally read/write `combined` as BF16 (opportunities.md
+    # OPT-001 "FP16 residual overflow" fix); FP16 here would silently
+    # reinterpret the wrong bit pattern, not just lose precision.
+    combined = _own(torch.zeros(a0, hidden, dtype=BF16, device=DEV))
+    # `_double_stream_layer` no longer projects txt_in/img_in itself
+    # (bug fix, 2026-09-15, opportunities.md OPT-001: it used to redo
+    # this every layer, discarding the previous layer's output -- a
+    # single-layer test like this one could never have caught that,
+    # since there IS no previous layer here). `imagewam_prefill` now
+    # does this ONCE before its layer loop; this test does the
+    # equivalent explicitly, matching `txt_input`/`img`'s own
+    # construction above exactly so both paths see the same input --
+    # via BF16 versions of the same weights/inputs (`gemm.bf16_nn`
+    # needs A/B/D all the same dtype), mirroring `Bf16OutLinear`.
+    context_bf16 = _own(context.to(BF16))
+    txt_in_w_bf16 = _own(txt_in_w.to(BF16))
+    img_raw_bf16 = _own(img_raw.to(BF16))
+    img_in_w_bf16 = _own(img_in_w.to(BF16))
+    gemm.bf16_nn(context_bf16.data_ptr(), txt_in_w_bf16.data_ptr(), combined.data_ptr(),
+                 x0, hidden, joint_attention_dim, 0)
+    gemm.bf16_nn(img_raw_bf16.data_ptr(), img_in_w_bf16.data_ptr(),
+                 combined.data_ptr() + x0 * hidden * 2, img_len, hidden, HD, 0)
     bufs = {
         "context": context.data_ptr(),
         "img_raw": img_raw.data_ptr(),
@@ -240,7 +261,11 @@ def test_single_stream_layer_matches_real_reference():
         use_perhead_kv=True, use_real_mot_mask=True,
     )
 
-    combined = _own(x.clone())
+    # BF16, not FP16 -- `_single_stream_layer`'s AdaLN/gate_res calls
+    # now unconditionally read/write `combined` as BF16 (opportunities.md
+    # OPT-001 "FP16 residual overflow" fix); `x_ref` (the separate
+    # PyTorch-level reference) stays FP16, unaffected.
+    combined = _own(x.clone().to(BF16))
     bufs = {
         "backbone_hidden": combined.data_ptr(),
         "modded_scratch": _own(torch.zeros(total, hidden, dtype=FP16, device=DEV)).data_ptr(),

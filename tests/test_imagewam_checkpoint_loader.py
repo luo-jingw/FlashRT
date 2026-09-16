@@ -185,6 +185,15 @@ def test_real_double_stream_layer_forward_finite():
     dims = dict(hidden=HIDDEN, HD=HD, NH=NH, mlp_hidden=MLP_HIDDEN,
                 joint_attention_dim=JOINT_ATTN_DIM, x0=X0, a0=A0)
 
+    # `_double_stream_layer` no longer projects txt_in/img_in itself
+    # (bug fix, 2026-09-15, opportunities.md OPT-001 -- see that
+    # function's own docstring); `imagewam_prefill` does this ONCE
+    # before its layer loop, this direct single-layer call does the
+    # equivalent explicitly.
+    weights[("backbone", "double", 0, "txt_in.weight")](context.data_ptr(), combined.data_ptr(), X0, 0)
+    weights[("backbone", "double", 0, "img_in.weight")](
+        img_raw.data_ptr(), combined.data_ptr() + X0 * HIDDEN * 2, img_len, 0)
+
     _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, 0, 0, attn, mod_txt, mod_img, table.data_ptr())
     torch.cuda.synchronize()
 

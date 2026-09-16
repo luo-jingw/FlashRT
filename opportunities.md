@@ -2162,3 +2162,88 @@ synthetic `N(0,1)`-scale random tensors, not real Qwen3-scale context
 doesn't need the fix to keep validating what it validates (per-layer
 math correctness against a PyTorch reference at a realistic but
 non-extreme scale).
+
+**Real Thor re-run of the BF16 fix, same day: `finite` fully restored**
+(`actions` mean=0.126 std=0.390 absmax=0.921; `backbone_hidden`
+absmax=68096, no longer Inf; the isolated row-0 case and the isolated
+single-layer random-`N(0,0.5)` case -- 20/20 finite -- both clean).
+**But cosine vs the official model was only 0.559 overall (txt=0.548,
+img=0.907)**, nowhere near the 0.999+ this project's own earlier
+real-checkpoint validation had on record. This is NOT a BF16/FP16
+precision artifact -- it is a second, independent, much older bug,
+finally exposed because this was the FIRST TIME `pipeline_thor.py`'s
+own actual serving path (not `pipeline_real.py`'s separate reference
+implementation) was compared cosine-wise against the real official
+model end to end.
+
+**Second real bug found and fixed same day: `_double_stream_layer` was
+re-deriving `txt_in`/`img_in` from RAW `context`/`img_raw` at the START
+of EVERY double-stream layer, discarding the previous layer's entire
+computed output.** Introduced on day one of this file's existence
+(`7aa431d`, "Phase 3: ImageWAM backbone prefill", documented at the
+time as module-docstring "simplification #3": "`_imagewam_thor_spec.py`
+declares one `txt_in` weight PER double-stream layer... this pipeline
+re-derives the text stream fresh from raw `context` at every
+double-stream layer"). That assumption -- one `txt_in`/`img_in` weight
+PER layer -- was itself wrong from the start: the real `flux2` model
+(`third_party/flux2/src/flux2/model.py`: `img = self.img_in(x); txt =
+self.txt_in(ctx)` called ONCE, BEFORE `for block in self.double_blocks`)
+has exactly ONE `txt_in`/`img_in` each, for the whole transformer, not
+one per block -- confirmed independently by `checkpoint_loader.py`'s
+own real-checkpoint finding ("txt_in/img_in shared across every double
+layer -- same tensor object, not L independent copies"). So every
+double-stream layer was silently resetting both streams back to a
+ONE-LAYER-DEEP transform of the raw input, layer after layer -- only
+the LAST double-stream layer's own single pass over the raw input ever
+reached the single-stream layers and the KV cache, discarding 4 of the
+5 real double-stream layers' worth of depth for BOTH streams. Text
+(cosine=0.548) was hit harder than image (cosine=0.907), consistent
+with text representations needing more transformer depth to become
+meaningful than already-fairly-informative VAE image patches do.
+
+**Why this was invisible until today**: every prior real-checkpoint
+accuracy claim on record above (cosine=0.999927 backbone,
+0.999963 ActionDiT, `benchmarks/imagewam_real_checkpoint_validation.py`)
+compared the official model against `pipeline_real.py`'s
+`imagewam_prefill_real` -- a SEPARATE, tensor-level reference
+implementation whose own function signature takes ALREADY-PROJECTED
+`txt`/`img` (never calls `txt_in`/`img_in` itself, so the bug doesn't
+exist there by construction) -- NOT against `pipeline_thor.py`, the
+actual CUDA-graph-captured serving code this project deploys. Likewise
+`tests/test_imagewam_thor_real_wiring.py`'s own
+`test_double_stream_layer_matches_real_reference` calls
+`_double_stream_layer` exactly ONCE (a single-layer test structurally
+cannot expose a "discards the PREVIOUS layer's output" bug -- there is
+no previous layer). Today's real-Qwen3 full-frontend Thor run was the
+first true end-to-end comparison of `pipeline_thor.py` itself against
+the official model.
+
+**Fix**: moved the `txt_in`/`img_in` projection out of
+`_double_stream_layer` entirely, into `imagewam_prefill`, called ONCE
+before the double-stream loop starts (matching the real model's own
+`img_in(x); txt_in(ctx)` placement exactly) -- `weights[("backbone",
+"double", 0, "txt_in.weight")]`/`"img_in.weight"` (layer 0's key,
+though any layer_idx gives the identical shared tensor). `combined`'s
+txt/img rows are now genuinely persistent across all 5 double-stream
+layers, exactly like the image-stream comment already (incorrectly)
+claimed. Updated the two tests that called `_double_stream_layer`
+directly (`test_imagewam_thor_real_wiring.py`'s
+`test_double_stream_layer_matches_real_reference`,
+`test_imagewam_checkpoint_loader.py`'s
+`test_real_double_stream_layer_forward_finite`) to do the equivalent
+one-time projection explicitly before their own single call, matching
+the new contract -- both still pass (cosine=0.999994 against
+`pipeline_real.py`'s reference; finite as before). Verified this fix
+introduces no dtype regression from the earlier BF16 change either:
+`test_imagewam_thor_real_wiring.py`'s two `_double_stream_layer`/
+`_single_stream_layer` reference tests had silently gone stale when
+`combined` became BF16-only (they still allocated it FP16, which the
+new BF16-reading kernels would have silently misinterpreted as
+garbage) -- caught and fixed in the same pass by actually running them,
+which had not been done since the BF16 commit landed.
+
+**Not yet re-verified on Thor**: this fix (moving the projection out of
+the per-layer loop). Needs the exact same three-real-components repro,
+checking BOTH finite AND cosine vs the official model this time --
+finite alone is no longer sufficient evidence of correctness, per this
+entry's own history.
