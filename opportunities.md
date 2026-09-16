@@ -2374,3 +2374,127 @@ per-layer math is fine either way: `real_action_double_block_forward_fp16`/
 shared unchanged by `pipeline_real.py` and `pipeline_thor.py`) already
 has a real-checkpoint cosine=0.999963 on record, and none of today's 3
 bugs touched ActionDiT's own code path.
+
+# OPT-009: real closed-loop robot-state (proprio) conditioning
+
+Status: implemented and locally verified (wiring correct, real weights
+load correctly); NOT yet Thor-tested; normalization stat choice
+confirmed exact from this release's own `config.yaml`, not guessed
+
+Area: real closed-loop testing readiness -- this project's own current
+priority (Thor steady-state speed + precision tracked vs FlashRT's own
+bf16/fp16 baseline, per the user's explicit direction 2026-09-15)
+
+## Two real, previously-unmodeled gaps, found the same day scoping
+"what does this project need for real closed-loop testing"
+
+1. **`proprio_dim=8` -- the real LIBERO checkpoint's `config.yaml` has
+   it, `pack_proprio_after_text: true`, and the checkpoint has a real
+   trained `proprio_encoder` (`weight` `(7680,8)`, `bias` `(7680,)`,
+   confirmed via `torch.load(ckpt_path, mmap=True)`'s TOP-LEVEL
+   payload -- a SIBLING of `mot`, not inside it).** The official
+   model's own `infer_action_flux2` -> `_append_proprio_to_context_if_enabled`
+   RAISES `ValueError` if `proprio_encoder` exists but no `proprio` is
+   passed -- proprio conditioning is not optional for this release.
+   FlashRT had ZERO mechanism for it anywhere (`checkpoint_loader.py`,
+   `imagewam_thor.py`, `pipeline_thor.py` -- confirmed via grep, no
+   hits at all) before this entry.
+2. **The real model's own `infer_action_flux2` returns the raw
+   flow-matching output with NO denormalization** (`return {"action":
+   latents_action[0]...}`, confirmed by reading it directly -- no
+   `*std+mean` or equivalent anywhere in that function). The release
+   ships a `dataset_stats.json` alongside `model.pt` (`state`/`action`,
+   each with `global_min/max/mean/std/q01/q99` AND `stepwise_*`
+   variants) for exactly this purpose -- the standard VLA convention:
+   normalize on the way in (training + proprio input), denormalize on
+   the way out (action output), using the SAME stats. This means even
+   the open-loop `actions` numbers already on record all session
+   (e.g. mean=-0.43, absmax=2.62 from the RoPE-grid-fix confirmation)
+   were almost certainly still in the model's own [-1,1] TRAINING
+   space, not real physical units -- unrelated to any of today's 3
+   bugs, but a real gap for anyone trying to send this output to an
+   actual robot.
+
+**Exact normalization convention, confirmed from this release's own
+`config.yaml`, not assumed**: `use_stepwise_action_norm: false`,
+`norm_default_mode: min/max`, `norm_exception_mode: null` -- both
+`state` (proprio, forward/normalize on the way in) and `action`
+(backward/denormalize on the way out) use plain `global_min`/
+`global_max` linear scaling to `[-1,1]` (clamped to `[-5,5]`), matching
+`imagewam/datasets/lerobot/utils/normalizer.py`'s own
+`SingleFieldLinearNormalizer` exactly (ported verbatim into a new
+`flash_rt/models/imagewam/dataset_stats.py`, including its
+degenerate-range `ignore_dim` handling). NEVER `stepwise_*`/`q01/q99`/
+`z-score` for this specific release -- a different release could use a
+different mode, check its own `config.yaml` before reusing this
+unchanged.
+
+**Real insertion rule, NOT a simple append**: `imagewam.py`'s own real
+`_append_proprio_to_context` (`pack_proprio_after_text=True` branch)
+inserts the proprio token at row `context_mask.sum()` (right after the
+last REAL text token, before any padding), shifting every padding row
+one position later. Context length grows by exactly 1 (`x0`: 512 -> 513
+for this release's real Qwen3 `max_length=512`). This is
+data-dependent (depends on THIS prompt's own real token count) but only
+needs computing ONCE per `set_prompt()` call (text is fixed per
+episode, proprio changes every control step) -- ported into a new
+`ImageWAMTorchFrontendThor._set_context_with_optional_proprio` helper,
+replicating the real scatter exactly (verified: real tokens keep rank,
+proprio lands at `valid_counts`, padding shifts by 1 -- see
+`tests/test_imagewam_proprio.py`'s own
+`test_proprio_scatter_matches_real_insertion_rule`).
+
+## Implementation
+
+- `flash_rt/models/imagewam/checkpoint_loader.py`: new
+  `load_real_proprio_weights(ckpt_path)` -- separate small loader (the
+  existing `load_real_imagewam_state_dict` only returns `payload["mot"]`
+  by design; widening its contract would break every existing caller),
+  returns `None` if this checkpoint has no `proprio_encoder` key.
+- `flash_rt/models/imagewam/dataset_stats.py` (new): `MinMaxNormalizer`
+  (real `SingleFieldLinearNormalizer` min/max math, verbatim),
+  `load_real_normalizers(dataset_stats_path)` -> `(state_norm, action_norm)`.
+- `flash_rt/frontends/torch/imagewam_thor.py`:
+  - New `dataset_stats_path` constructor kwarg.
+  - `dims["proprio_dim"]` opts proprio in (default `None` -- every
+    existing caller/test unaffected). When set: loads the real
+    `proprio_encoder` (or a random one when `ckpt_path=None`, matching
+    every other weight's toy/random-vs-real convention).
+  - `proprio_encoder` is applied OUTSIDE the captured CUDA graph via
+    plain `F.linear` -- same convention as the real VAE/Qwen3 encoders
+    (small, not `flux2`-dependent, no reason to live inside
+    `pipeline_thor.py`'s fvk-kernel-based graph).
+  - `set_prompt()`'s new `_set_context_with_optional_proprio` does the
+    real scatter once per prompt, records `self._proprio_row`.
+  - `infer(observation)`: REQUIRES `observation["proprio"]` when
+    `proprio_dim` is set (raises otherwise, matching the real model's
+    own contract) -- normalizes it (if `dataset_stats_path` given),
+    projects it, writes it into the row reserved by `set_prompt()`,
+    before `.replay()` (same pattern as `img_raw`/the VAE encode).
+    Denormalizes the returned `actions` (if `dataset_stats_path`
+    given) before returning.
+- `tests/test_imagewam_proprio.py` (new): normalizer round-trip against
+  the real `dataset_stats.json`, scatter-rule verification (toy dims,
+  no real checkpoint needed), missing-proprio raises, real
+  `proprio_encoder` shape check against the real checkpoint (skips
+  cleanly without it).
+
+Verified locally: constructed the REAL frontend with `ckpt_path=`,
+`dataset_stats_path=`, `proprio_dim=8`, `x0=513`, `ref_h=14, ref_w=28`
+(1 real double-stream layer, kept small for this machine's memory) --
+real `proprio_encoder` loads (`(7680,8)`/`(7680,)`), `set_prompt()`
+places the proprio row correctly (row 31 for a 31-real-token synthetic
+context, matching this session's own real Qwen3 observation), `infer()`
+produces finite, denormalized actions in a plausible range vs the real
+`dataset_stats.json` bounds. Full existing regression suite
+(backbone/single-stream/action reference tests, checkpoint-shape test,
+isolated real-weight layer test) still passes unchanged.
+
+**Not yet done**: Thor confirmation (this was implemented and verified
+entirely on the dev machine); a real cosine comparison against the
+official model's own proprio-enabled `infer_action_flux2` output
+(blocked by the same integration-schedule mismatch as the ActionDiT
+entry above -- a single-fixed-timestep comparison, bypassing the
+schedule question, is the cheap option there too); wiring proprio into
+`_imagewam_thor_spec.py`'s own declared shape documentation (not
+load-bearing for runtime, cosmetic).

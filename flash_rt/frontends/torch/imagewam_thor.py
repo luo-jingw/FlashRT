@@ -102,6 +102,7 @@ class ImageWAMTorchFrontendThor:
                  ckpt_path: str | None = None,
                  ae_model_path: str | None = None, flux2_src: str | None = None,
                  qwen3_model_spec: str | None = None,
+                 dataset_stats_path: str | None = None,
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
@@ -183,6 +184,52 @@ class ImageWAMTorchFrontendThor:
             del sd
         else:
             self._weights = self._alloc_random_weights(d)
+
+        # Real closed-loop robot-state conditioning (opportunities.md,
+        # found 2026-09-15 scoping real closed-loop testing): a plain
+        # biased Linear(proprio_dim -> joint_attention_dim), applied
+        # OUTSIDE the captured graph in infer() (same convention as the
+        # real VAE/Qwen3 encoders -- see that method's own docstring),
+        # NOT through Fp16Linear/quant_linear.py. `dims["proprio_dim"]`
+        # opts this in; omitted (None) by default so every existing
+        # caller/test (no proprio conditioning) is unaffected.
+        self._proprio_dim = d.get("proprio_dim")
+        self._proprio_w = None
+        self._proprio_b = None
+        if self._proprio_dim is not None:
+            if ckpt_path is not None:
+                from flash_rt.models.imagewam.checkpoint_loader import load_real_proprio_weights
+                pe = load_real_proprio_weights(ckpt_path)
+                if pe is None:
+                    raise ValueError(
+                        f"dims['proprio_dim']={self._proprio_dim} given but {ckpt_path} has no "
+                        f"top-level 'proprio_encoder' key -- this checkpoint was not trained "
+                        f"with proprio conditioning")
+                w, b = pe
+                if tuple(w.shape) != (d["joint_attention_dim"], self._proprio_dim):
+                    raise ValueError(
+                        f"real proprio_encoder.weight shape {tuple(w.shape)} != "
+                        f"(joint_attention_dim={d['joint_attention_dim']}, proprio_dim={self._proprio_dim})")
+                self._proprio_w = self._own(w.to(DEV, dtype=BF16))
+                self._proprio_b = self._own(b.to(DEV, dtype=BF16))
+            else:
+                self._proprio_w = self._own(
+                    torch.randn(d["joint_attention_dim"], self._proprio_dim, dtype=BF16, device=DEV) * 0.02)
+                self._proprio_b = self._own(torch.zeros(d["joint_attention_dim"], dtype=BF16, device=DEV))
+
+        # Real min/max normalization (dataset_stats.json), same
+        # closed-loop scope: `state` normalizes real proprio INTO the
+        # model's [-1,1] space (infer()'s own input side); `action`
+        # denormalizes the model's flow-matching output back OUT to
+        # real units (infer()'s own return value). Omitted by default
+        # -- every existing caller keeps getting the model's own raw
+        # (still-normalized-space) action_latent, unchanged.
+        self._state_norm = None
+        self._action_norm = None
+        if dataset_stats_path is not None:
+            from flash_rt.models.imagewam.dataset_stats import load_real_normalizers
+            self._state_norm, self._action_norm = load_real_normalizers(dataset_stats_path, device=DEV)
+
         self._bufs = self._alloc_buffers(d)
         # `ref_h`/`ref_w`: the REAL image RoPE needs the actual 2D patch
         # grid (14x28 for the real confirmed 224x448 input, NOT a flat
@@ -259,6 +306,11 @@ class ImageWAMTorchFrontendThor:
 
         self._graph = None
         self._current_prompt = None
+        # Row index inside self._context where the proprio token lives
+        # for the CURRENTLY captured prompt -- computed once in
+        # set_prompt() (depends on that prompt's own real token count),
+        # reused by every infer() call until the next set_prompt().
+        self._proprio_row = None
 
     def _own(self, t: torch.Tensor) -> torch.Tensor:
         """Keep a buffer tensor alive for the frontend's own lifetime.
@@ -709,6 +761,46 @@ class ImageWAMTorchFrontendThor:
                                    action_rope_table=self._action_rope_table.data_ptr())
         self._graph = graph
 
+    def _set_context_with_optional_proprio(self, text_ctx: torch.Tensor, text_mask: torch.Tensor) -> None:
+        """`text_ctx`: `(text_len, joint_attention_dim)` BF16 -- the
+        real (or precomputed) Qwen3 text context, BEFORE proprio.
+        `text_mask`: `(text_len,)` bool, `1` for real tokens.
+
+        `self._proprio_dim is None`: `text_ctx` must already be exactly
+        `dims["x0"]` rows -- copied in directly, unchanged behavior.
+
+        `self._proprio_dim` set: replicates `imagewam.py`'s own real
+        `_append_proprio_to_context` (`pack_proprio_after_text=True`
+        branch) EXACTLY -- real tokens keep their rank, the proprio
+        slot lands at row `valid_counts` (right after the last real
+        token), padding shifts one row later to make room. Real tokens'
+        own RoPE positions are unaffected (same indices either way);
+        the proprio slot's position must match the real model's
+        placement for its own RoPE position to be correct -- found
+        while scoping real closed-loop testing, opportunities.md.
+        `dims["x0"]` must equal `text_ctx`'s own length + 1 (validated
+        below). The proprio ROW ITSELF is left zero here -- `infer()`
+        overwrites it with the real `proprio_encoder(proprio)` output
+        every call, since proprio (unlike the text prompt) changes
+        every control step.
+        """
+        x0 = self.dims["x0"]
+        if self._proprio_dim is None:
+            if text_ctx.shape[0] != x0:
+                raise ValueError(f"context length {text_ctx.shape[0]} != dims['x0']={x0}")
+            self._context.copy_(text_ctx)
+            return
+        text_len = text_ctx.shape[0]
+        if x0 != text_len + 1:
+            raise ValueError(
+                f"dims['x0']={x0} must equal the text context length ({text_len}) + 1 "
+                f"(the proprio slot) when dims['proprio_dim'] is set")
+        valid_counts = int(text_mask.sum().item())
+        self._proprio_row = valid_counts
+        self._context.zero_()
+        self._context[:valid_counts].copy_(text_ctx[:valid_counts])
+        self._context[valid_counts + 1:x0].copy_(text_ctx[valid_counts:text_len])
+
     def set_prompt(self, prompt_text: str | None = None, *,
                     context: torch.Tensor | None = None,
                     context_mask: torch.Tensor | None = None) -> None:
@@ -721,11 +813,14 @@ class ImageWAMTorchFrontendThor:
         `context`/`context_mask` pair, never both.
 
         `context_mask` is accepted (matching the real interface and
-        `_imagewam_thor_spec.py`'s own declared input shape) but NOT
-        YET consumed by `pipeline_thor.py`'s own attention math --
-        every context row is still treated as valid regardless of
-        padding, a pre-existing, separately-documented gap (see that
-        module's own docstring), not something this change fixes.
+        `_imagewam_thor_spec.py`'s own declared input shape). Used for
+        two things when `dims["proprio_dim"]` is set (see
+        `_set_context_with_optional_proprio`): finding the real proprio
+        insertion row, and nothing else -- `pipeline_thor.py`'s own
+        attention math still treats every context row as valid
+        regardless of padding, a pre-existing, separately-documented
+        gap (see that module's own docstring), not something this
+        change fixes.
         """
         if prompt_text is not None and context is not None:
             raise ValueError("set_prompt: prompt_text and context are mutually exclusive "
@@ -737,14 +832,23 @@ class ImageWAMTorchFrontendThor:
             if context_mask is None:
                 raise ValueError("set_prompt(context=...) requires context_mask too "
                                   "(matches imagewam.py's own _prepare_flux2_infer_text)")
-            self._context.copy_(context.to(device=DEV, dtype=BF16))
+            self._set_context_with_optional_proprio(
+                context.to(device=DEV, dtype=BF16), context_mask.to(device=DEV, dtype=torch.bool))
         elif self._qwen3 is not None and prompt_text is not None:
             from flash_rt.models.imagewam.text_encoder import encode_prompts
             model, tokenizer = self._qwen3
-            real_context, _real_mask = encode_prompts(model, tokenizer, [prompt_text])
-            self._context.copy_(real_context[0].to(device=DEV, dtype=BF16))
+            real_context, real_mask = encode_prompts(model, tokenizer, [prompt_text])
+            self._set_context_with_optional_proprio(
+                real_context[0].to(device=DEV, dtype=BF16), real_mask[0].to(device=DEV))
         else:
             self._context.normal_()
+            if self._proprio_dim is not None:
+                # No real context/mask on this structural path -- no
+                # "real token count" to place the proprio slot after,
+                # so it goes at the very last row. Arbitrary, no
+                # accuracy claim on this path either way (matches
+                # every other random-fill branch in this class).
+                self._proprio_row = self.dims["x0"] - 1
         if self._graph is None:
             self._calibrate_fp8(self.dims)
             self._capture_graph()
@@ -764,6 +868,21 @@ class ImageWAMTorchFrontendThor:
         `.replay()`. `backbone_hidden`'s own image rows are WRITTEN by
         `img_in.weight` inside the graph itself either way, not filled
         directly here.
+
+        `observation["proprio"]` -- real closed-loop robot-state
+        conditioning (opportunities.md, found 2026-09-15), REQUIRED
+        (raises `ValueError`, matching the real model's own
+        `_append_proprio_to_context_if_enabled`) when this frontend was
+        constructed with `dims["proprio_dim"]` set. Unlike the text
+        prompt (fixed per `set_prompt()` episode), proprio genuinely
+        changes every control step -- normalized via the real
+        `dataset_stats.json` `state` min/max (if `dataset_stats_path`
+        was given at construction; raw otherwise, no accuracy claim),
+        projected through the real `proprio_encoder` OUTSIDE the graph
+        (plain `F.linear`, same convention as the VAE/Qwen3 encoders),
+        and copied into the row `set_prompt()` already reserved for it
+        (`self._proprio_row`) -- BEFORE `.replay()`, same pattern as
+        `img_raw`.
         """
         if self._graph is None:
             raise RuntimeError("call set_prompt() before infer()")
@@ -773,8 +892,24 @@ class ImageWAMTorchFrontendThor:
             self._img_raw.copy_(tokens[0].to(dtype=BF16))
         else:
             self._img_raw.normal_()
+        if self._proprio_dim is not None:
+            proprio = observation.get("proprio")
+            if proprio is None:
+                raise ValueError(
+                    "infer(observation=...) requires observation['proprio'] when "
+                    "dims['proprio_dim'] is set (matches imagewam.py's own "
+                    "_append_proprio_to_context_if_enabled)")
+            proprio_t = torch.as_tensor(proprio, dtype=torch.float32, device=DEV).reshape(1, self._proprio_dim)
+            if self._state_norm is not None:
+                proprio_t = self._state_norm.forward(proprio_t)
+            proprio_tok = torch.nn.functional.linear(
+                proprio_t.to(dtype=BF16), self._proprio_w, self._proprio_b)
+            self._context[self._proprio_row].copy_(proprio_tok[0])
         self._action_latent.normal_()
         self._action_latent.mul_(0.01)
         self._graph.replay()
         torch.cuda.synchronize()
-        return {"actions": self._action_latent.detach().cpu().numpy()}
+        actions = self._action_latent.detach()
+        if self._action_norm is not None:
+            actions = self._action_norm.backward(actions)
+        return {"actions": actions.cpu().numpy()}

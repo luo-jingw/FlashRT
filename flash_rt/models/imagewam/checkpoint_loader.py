@@ -245,3 +245,38 @@ def build_real_modulation_weights(sd: dict) -> dict:
         "head_adaln": w32("mixtures.action.head.adaLN_modulation.1.weight"),
     }
     return {"backbone": backbone, "action": action}
+
+
+def load_real_proprio_weights(ckpt_path: str) -> tuple[torch.Tensor, torch.Tensor] | None:
+    """Real `proprio_encoder` (a plain biased `nn.Linear(proprio_dim,
+    joint_attention_dim)`, e.g. `(7680,8)` weight + `(7680,)` bias for
+    the real LIBERO release, `proprio_dim=8` per that release's own
+    `config.yaml`) -- closed-loop real-robot-state conditioning, found
+    2026-09-15 while scoping real closed-loop testing (opportunities.md).
+
+    **Lives at the TOP LEVEL of the checkpoint payload, a SIBLING of
+    `mot` (NOT inside it)** -- confirmed by reading the real checkpoint
+    directly: `torch.load(ckpt_path, mmap=True)` has top-level keys
+    `{'mot', 'step', 'torch_dtype', 'proprio_encoder'}`.
+    `load_real_imagewam_state_dict` above only returns `payload["mot"]`
+    (by design -- every other loader in this module takes that flat
+    dict directly, and changing its return shape would break every
+    existing caller), so this is a small, separate loader that does
+    its own `torch.load` rather than widening that function's contract.
+    `mmap=True` keeps this cheap even though it re-opens the same file
+    (the 9GB backbone/action tensors are never touched by this call).
+
+    Returns `None` if this checkpoint has no `proprio_encoder` key
+    (i.e. `proprio_dim=None` for that release -- not every ImageWAM
+    checkpoint necessarily uses proprio conditioning), else
+    `(weight, bias)` as real `(out,in)`-layout CPU tensors (matching
+    `adaln.py`'s own plain-`F.linear` convention, NOT the transposed
+    `(K,N)` GEMM-storage convention `_w()` above uses -- this weight is
+    applied OUTSIDE the CUDA graph via plain PyTorch, same as
+    `text_encoder.py`/`vae_encoder.py`, never through `Fp16Linear`).
+    """
+    payload = torch.load(ckpt_path, map_location="cpu", mmap=True, weights_only=False)
+    pe = payload.get("proprio_encoder")
+    if pe is None:
+        return None
+    return pe["weight"].detach().contiguous(), pe["bias"].detach().contiguous()
