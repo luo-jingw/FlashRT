@@ -41,6 +41,7 @@ NUM_DOUBLE, NUM_SINGLE = 5, 20
 # max_length), see opportunities.md's OPT-001/OPT-008 entries
 # (2026-09-15) -- superseding the earlier 128/768/896 guesses.
 X0, A0 = 512, 904
+REF_H, REF_W = 14, 28  # real image RoPE grid (opportunities.md OPT-002's flat-grid correction)
 
 _FLUX2_SRC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "third_party", "flux2", "src")
 _AE_PATH = "/home/ljw/projects/pi0.5/models/flux2_klein_4b/ae.safetensors"
@@ -170,7 +171,7 @@ def test_real_double_stream_layer_forward_finite():
     context = (torch.randn(X0, JOINT_ATTN_DIM, device=DEV) * 0.5).to(BF16)
     img_raw = (torch.randn(img_len, HD, device=DEV) * 0.5).to(BF16)
     combined = torch.zeros(A0, HIDDEN, dtype=BF16, device=DEV)
-    table = build_backbone_rope_table(X0, img_len, 1, device=DEV)
+    table = build_backbone_rope_table(X0, REF_H, REF_W, device=DEV)
     bufs = {
         "context": context.data_ptr(), "img_raw": img_raw.data_ptr(), "backbone_hidden": combined.data_ptr(),
         "modded_scratch": torch.zeros(A0, HIDDEN, dtype=FP16, device=DEV).data_ptr(),
@@ -232,6 +233,7 @@ def test_full_frontend_with_real_checkpoint():
         num_action=64, total=A0 + 64,
         action_num_layers_double=NUM_DOUBLE, action_num_layers_single=NUM_SINGLE,
         dt=1.0 / 10, num_denoise_steps=10,
+        ref_h=REF_H, ref_w=REF_W,
     )
     frontend = ImageWAMTorchFrontendThor(dims_override=real_dims, precision="fp16", ckpt_path=_CKPT_PATH)
     frontend.set_prompt("real checkpoint smoke test")
@@ -267,6 +269,7 @@ def test_full_frontend_with_real_checkpoint_and_real_vae():
         num_action=64, total=A0 + 64,
         action_num_layers_double=NUM_DOUBLE, action_num_layers_single=NUM_SINGLE,
         dt=1.0 / 10, num_denoise_steps=10,
+        ref_h=REF_H, ref_w=REF_W,
     )
     frontend = ImageWAMTorchFrontendThor(dims_override=real_dims, precision="fp16", ckpt_path=_CKPT_PATH,
                                           ae_model_path=_AE_PATH, flux2_src=_FLUX2_SRC)

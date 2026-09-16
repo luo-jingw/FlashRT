@@ -166,8 +166,27 @@ class ImageWAMTorchFrontendThor:
         else:
             self._weights = self._alloc_random_weights(d)
         self._bufs = self._alloc_buffers(d)
+        # `ref_h`/`ref_w`: the REAL image RoPE needs the actual 2D patch
+        # grid (14x28 for the real confirmed 224x448 input, NOT a flat
+        # (img_len, 1) "392x1" placeholder) -- bug found 2026-09-15 via a
+        # real Thor cosine comparison against the official model
+        # (opportunities.md OPT-002's correction): this frontend was the
+        # only real call site still using the flat placeholder (every
+        # `pipeline_real.py`-based reference script/test already used
+        # the real `REF_H=14, REF_W=28`, which is why this went
+        # uncaught -- see that entry for the full account). Defaults to
+        # the OLD flat placeholder so the toy/default dims (no real 2D
+        # image structure) are unaffected; real callers MUST pass
+        # `ref_h`/`ref_w` explicitly via `dims_override` (e.g. 14/28).
+        img_len = d["a0"] - d["x0"]
+        ref_h = d.get("ref_h", img_len)
+        ref_w = d.get("ref_w", 1)
+        if ref_h * ref_w != img_len:
+            raise ValueError(
+                f"ref_h*ref_w ({ref_h}*{ref_w}={ref_h * ref_w}) must equal img_len "
+                f"(a0-x0={img_len}) -- every image patch needs exactly one RoPE position")
         self._rope_table = self._own(build_backbone_rope_table(
-            d["x0"], d["a0"] - d["x0"], 1, device=DEV))
+            d["x0"], ref_h, ref_w, device=DEV))
         self._action_rope_table = self._own(build_action_rope_table(d["num_action"], device=DEV))
         self._mod_txt, self._mod_img, self._mod_single = self._compute_backbone_modulation(
             d, real_mod=real_mod["backbone"] if real_mod else None)

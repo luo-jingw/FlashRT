@@ -2242,8 +2242,71 @@ new BF16-reading kernels would have silently misinterpreted as
 garbage) -- caught and fixed in the same pass by actually running them,
 which had not been done since the BF16 commit landed.
 
-**Not yet re-verified on Thor**: this fix (moving the projection out of
-the per-layer loop). Needs the exact same three-real-components repro,
-checking BOTH finite AND cosine vs the official model this time --
-finite alone is no longer sufficient evidence of correctness, per this
-entry's own history.
+**Real Thor re-run of the txt_in/img_in fix, same day: text fixed,
+image still wrong.** `backbone_hidden` absmax now matches the official
+model EXACTLY at every layer boundary (119808 at the end, same as the
+official trace) -- the depth-accumulation bug is genuinely fixed.
+Cosine: all=0.985, **txt=0.998** (up from 0.548), **img=0.910**
+(barely moved from 0.907). Per-layer trace nails it down further: txt's
+own absmax matches the official model's EXACTLY at every one of the 5
+double-stream layers (105984/110080/111104/111616/119808, identical to
+the last decimal on both sides) and its cosine never drops below
+0.9985 -- text is correct. Image diverges from LAYER 0 already
+(FlashRT absmax=122 vs official=138 right after the first double-
+stream layer) and gets progressively worse through layer 3
+(cosine 0.752) before partially recovering by layer 4 and the 20
+single-stream layers (final img cosine=0.910) -- a THIRD, independent
+bug, specific to the image stream, still open.
+
+**Third bug, found by inspection while writing up the above (not yet
+Thor-verified): the served frontend's own RoPE table uses a flat
+`(img_len, 1)` image grid instead of the real 2D `(14, 28)` patch
+grid.** `flash_rt.models.imagewam.rope.build_backbone_rope_table`'s
+own signature is `(x0, ref_h, ref_w, ...)` -- a genuine 2D grid, not a
+flat token count. `flash_rt/frontends/torch/imagewam_thor.py` (the
+ACTUAL served frontend) called it as
+`build_backbone_rope_table(d["x0"], d["a0"] - d["x0"], 1, device=DEV)`
+-- passing `img_len` (392) as `ref_h` and `1` as `ref_w`, i.e. treating
+the real 14x28 image patch grid as a degenerate 392x1 strip. Every
+image patch then gets the WRONG 2D spatial position for RoPE (all in
+column 0, rows 0-391, instead of the real 14 rows x 28 columns) --
+attention between image patches (and between image and text) is
+computed with systematically wrong relative positions, compounding
+across joint-attention layers. This matches the observed symptom
+exactly: text tokens don't depend on the image's own 2D position
+convention and are unaffected (txt cosine 0.998, matches); image
+tokens are directly corrupted from the very first attention layer
+(img cosine drops to 0.979 already at double-stream layer 0) and the
+error compounds through the following layers.
+
+**Why this went uncaught**: `benchmarks/imagewam_real_checkpoint_validation.py`
+(the one real accuracy comparison against the official model on
+record, cosine=0.999927/0.999963) and every test in this project that
+independently verifies REAL math against a REAL reference
+(`test_imagewam_real_backbone_attention.py`, `test_imagewam_rope_kernel.py`,
+`test_imagewam_real_double_stream_block.py`,
+`test_imagewam_real_single_stream_block.py`) all correctly pass real
+`ref_h`/`ref_w` (14/28) -- ONLY the actual served frontend
+(`imagewam_thor.py`) got this wrong. And
+`test_imagewam_thor_real_wiring.py`'s own `_double_stream_layer`/
+`_single_stream_layer` direct-call tests build their OWN RoPE table
+with the SAME flat convention and feed it to BOTH the "reference"
+(`real_double_stream_block_forward_fp16`) and the pointer path -- an
+internally-consistent WRONG table cancels out in a same-table
+comparison, so that test's own cosine=0.999994 says nothing about
+whether the table itself matches the real 2D convention. Only a
+comparison against the OFFICIAL model's own real positions (which
+today's real Thor run was the first to do end-to-end) can catch this
+class of bug.
+
+**Fix, same day**: `imagewam_thor.py`'s constructor now reads
+`ref_h`/`ref_w` from `dims` (default: the old flat `(img_len, 1)`, so
+the toy/default dims -- which have no real 2D image structure --stay
+unaffected) and validates `ref_h*ref_w == img_len` before building the
+RoPE table; every REAL-dims call site (`tests/test_imagewam_checkpoint_loader.py`'s
+two full-frontend tests, `benchmarks/imagewam_thor_bench.py`'s
+backbone benchmarks) now passes the real `REF_H=14, REF_W=28`
+explicitly. **Not yet re-verified on Thor** -- needs the same three-
+real-components repro, checking img cosine specifically this time (txt
+was already confirmed fixed by the previous entry; only img was ever
+in question).

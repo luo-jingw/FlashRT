@@ -97,6 +97,7 @@ MAX_ACTION_HORIZON = 64
 # _imagewam_thor_spec.py's own declared context shape -- see
 # opportunities.md's OPT-008 text-encoder entry, 2026-09-15).
 X0, A0 = 512, 904
+REF_H, REF_W = 14, 28  # real image RoPE grid (opportunities.md OPT-002's flat-grid correction)
 NUM_ACTION = MAX_ACTION_HORIZON
 TOTAL = A0 + NUM_ACTION  # 968, under the 1024 softmax ceiling
 
@@ -347,7 +348,7 @@ def bench_backbone_double():
         "mod_single": torch.randn(3 * HIDDEN, HIDDEN, dtype=F32, device=DEV) * 0.02,
     }
     mod_txt, mod_img, _ = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, HIDDEN)
-    table = build_backbone_rope_table(X0, img_len, 1, device=DEV)
+    table = build_backbone_rope_table(X0, REF_H, REF_W, device=DEV)
     _calibrate_static_fp8(weights, A0)
     _autotune_bf16(gemm, {
         (X0, HIDDEN, JOINT_ATTN_DIM),  # txt_in
@@ -396,7 +397,7 @@ def bench_backbone_single():
         "mod_single": torch.randn(3 * HIDDEN, HIDDEN, dtype=F32, device=DEV) * 0.02,
     }
     _, _, mod_single = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, HIDDEN)
-    table = build_backbone_rope_table(X0, A0 - X0, 1, device=DEV)
+    table = build_backbone_rope_table(X0, REF_H, REF_W, device=DEV)
     _calibrate_static_fp8(weights, A0)
     _autotune(gemm, {
         (A0, 3 * HIDDEN, HIDDEN), (A0, HIDDEN, HIDDEN), (A0, MLP_HIDDEN * 2, HIDDEN), (A0, HIDDEN, MLP_HIDDEN),
