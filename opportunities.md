@@ -2338,3 +2338,39 @@ once. `ImageWAMTorchFrontendThor.__init__` now raises `ValueError`
 immediately (before touching the multi-GB checkpoint file) if
 `ckpt_path` is given without `ref_h`/`ref_w` in `dims_override`;
 structural/random-weight dry runs (`ckpt_path=None`) are unaffected.
+
+**Follow-up investigation, same day: ActionDiT/denoise-loop full-action
+cosine vs the official model -- NOT a bug, a real scope gap, attempted
+and deliberately not completed.** Tried to compare
+`ImageWAMTorchFrontendThor`'s full `actions` output (backbone prefill +
+ActionDiT denoise loop) against the official model's own real
+`infer_action_flux2` output. Before running it, found the official
+model integrates the flow-matching ODE over a non-uniform, shift-based
+sigma schedule (`imagewam.py`'s `infer_action_flux2` ->
+`scheduler_continuous.py`'s `WanContinuousFlowMatchScheduler.build_inference_schedule`,
+`shift=5.0` default, `_phi(u,shift)=shift*u/(1+(shift-1)*u)`,
+`num_inference_steps=20`), while `imagewam_denoise_loop`/
+`imagewam_denoise_step` (`pipeline_thor.py`) integrates with a fixed,
+UNIFORM `dims["dt"]` per step -- a real, PRE-EXISTING simplification
+(not introduced by today's 3 fixes). Comparing final actions across
+these two different integration schedules would measure "does a
+uniform-Euler approximation match a shift-scheduled sampler," not
+"is ActionDiT's own math correct" -- not run, to avoid reporting a
+number that doesn't mean what it looks like it means.
+
+**Rescoped, not pursued for now**: the user's own stated priority for
+this project going forward is Thor steady-state SPEED and precision
+tracked RELATIVE TO FlashRT's own bf16/fp16 baseline -- not exact
+bit-for-bit matching of the official model's own real inference
+schedule. Under that framing, chasing a full official-schedule-aligned
+multi-step comparison is out of scope; what actually matters (FP8/
+NVFP4 ActionDiT vs FlashRT's own FP16 ActionDiT, SAME schedule both
+sides) is a much cheaper, already-tractable comparison that doesn't
+need the official model or schedule alignment at all -- not yet done,
+tracked as a real next step (see the top-level plan status this
+session's own final summary gives). Indirect evidence ActionDiT's own
+per-layer math is fine either way: `real_action_double_block_forward_fp16`/
+`real_action_single_block_forward_fp16` (`real_action_expert.py`,
+shared unchanged by `pipeline_real.py` and `pipeline_thor.py`) already
+has a real-checkpoint cosine=0.999963 on record, and none of today's 3
+bugs touched ActionDiT's own code path.
