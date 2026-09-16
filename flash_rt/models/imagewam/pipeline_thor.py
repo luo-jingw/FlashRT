@@ -723,18 +723,27 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
 
 
 def imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=0, *, attn=None,
-                           mod_double=None, mod_single=None, head_mod=None, action_rope_table=None):
+                           mod_double=None, mod_single=None, head_mod=None, action_rope_table=None,
+                           delta=None):
     """One flow-matching Euler step of the ActionDiT denoise loop.
 
     `step` is a plain Python int -- a compile-time constant during CUDA
-    Graph capture (this project's own dt schedule is a fixed uniform
-    `1.0 / num_denoise_steps`). `mod_double`/`mod_single`/`head_mod` are
-    THIS STEP's own precomputed AdaLN modulation (ActionDiT's
-    conditioning timestep changes every step, but since `step` is
-    itself a compile-time constant, so is every step's timestep -- the
-    caller precomputes one modulation tuple PER STEP before capture,
-    see module docstring, and `imagewam_denoise_loop` below selects the
-    right one per iteration).
+    Graph capture. `mod_double`/`mod_single`/`head_mod` are THIS STEP's
+    own precomputed AdaLN modulation (ActionDiT's conditioning timestep
+    changes every step, but since `step` is itself a compile-time
+    constant, so is every step's timestep -- the caller precomputes one
+    modulation tuple PER STEP before capture, see module docstring, and
+    `imagewam_denoise_loop` below selects the right one per iteration).
+
+    `delta`: this step's own real (non-uniform) Euler step size --
+    matches the real `WanContinuousFlowMatchScheduler.step()` exactly
+    (`sample + model_output * delta`, opportunities.md OPT-009's
+    follow-up, `flash_rt.models.imagewam.scheduler.build_inference_schedule`).
+    A plain Python float, precomputed ONCE per step before capture,
+    same convention as `mod_double`/`head_mod`. Defaults to `None`,
+    which falls back to `dims["dt"]` (this project's own ORIGINAL
+    fixed-uniform-schedule simplification) -- every existing caller
+    that never set up a real schedule is unaffected.
 
     OPT-001: real `action_encoder`/`head` wrapper around the per-layer
     blocks, ported from `imagewam/models/backbones/action_dit_flux2.py`'s
@@ -796,12 +805,13 @@ def imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=0, *
                              bufs["head_modded"], num_action, action_hidden_dim, eps, stream)
     key("head.linear.weight")(bufs["head_modded"], bufs["velocity"], num_action, stream)
 
+    step_delta = dims["dt"] if delta is None else delta
     fvk.gpu_euler_step(bufs["action_latent"], bufs["velocity"],
-                        num_action, action_dim, dims["dt"], 0, stream)
+                        num_action, action_dim, step_delta, 0, stream)
 
 
 def imagewam_denoise_loop(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None,
-                           action_mods=None, head_mods=None, action_rope_table=None):
+                           action_mods=None, head_mods=None, action_rope_table=None, deltas=None):
     """The whole flow-matching denoise loop -- what the frontend
     captures as ONE CUDA Graph together with `imagewam_prefill`.
 
@@ -809,6 +819,11 @@ def imagewam_denoise_loop(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn
     `head_mods`: a list of `(shift, scale)` tuples -- both one per
     denoise step (`dims["num_denoise_steps"]` entries), precomputed
     ONCE by the caller before capture -- see module docstring.
+
+    `deltas`: optional list of per-step real Euler step sizes (real
+    non-uniform schedule, opportunities.md OPT-009's follow-up) --
+    `None` (default) falls back to `dims["dt"]` for every step, this
+    project's original fixed-uniform-schedule simplification.
     """
     if head_mods is None:
         raise ValueError(
@@ -822,4 +837,5 @@ def imagewam_denoise_loop(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn
         mod_double, mod_single = action_mods[step]
         imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=stream, attn=attn,
                                mod_double=mod_double, mod_single=mod_single, head_mod=head_mods[step],
-                               action_rope_table=action_rope_table)
+                               action_rope_table=action_rope_table,
+                               delta=None if deltas is None else deltas[step])

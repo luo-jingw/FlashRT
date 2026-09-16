@@ -249,7 +249,7 @@ class ImageWAMTorchFrontendThor:
         self._action_rope_table = self._own(build_action_rope_table(d["num_action"], device=DEV))
         self._mod_txt, self._mod_img, self._mod_single = self._compute_backbone_modulation(
             d, real_mod=real_mod["backbone"] if real_mod else None)
-        self._action_mods, self._head_mods = self._compute_action_modulations(
+        self._action_mods, self._head_mods, self._deltas = self._compute_action_modulations(
             d, real_mod=real_mod["action"] if real_mod else None)
 
         num_layers = d["num_layers_double"] + d["num_layers_single"]
@@ -693,11 +693,24 @@ class ImageWAMTorchFrontendThor:
 
     def _compute_action_modulations(self, d: dict, *, real_mod: dict | None = None):
         """ActionDiT's own AdaLN modulation, ONE tuple PER DENOISE STEP:
-        its conditioning timestep changes every step (flow-matching
-        schedule, `1.0 -> 0.0` uniform), but `step` is itself a
-        compile-time Python constant during CUDA Graph capture, so
-        every step's own modulation is ALSO a compile-time constant --
-        precomputed here, once, never recomputed per replay.
+        its conditioning timestep changes every step, but `step` is
+        itself a compile-time Python constant during CUDA Graph
+        capture, so every step's own modulation is ALSO a compile-time
+        constant -- precomputed here, once, never recomputed per
+        replay.
+
+        Timestep schedule: `d["shift"]` set -> the REAL non-uniform
+        shift-based schedule (opportunities.md OPT-009's follow-up,
+        `scheduler.build_inference_schedule`, ported verbatim from the
+        real `WanContinuousFlowMatchScheduler` -- confirmed real LIBERO
+        release values `shift=5.0`, `num_train_timesteps=1000`,
+        `eval_num_inference_steps=10` in that release's own
+        `config.yaml`). `d["shift"]` unset (default) -> this project's
+        ORIGINAL fixed-uniform `action_timestep = 1.0 - step*dt`
+        simplification, unchanged -- every existing caller/test is
+        unaffected. Also returns `deltas` (`None` in the unset case) --
+        the caller threads it into `imagewam_denoise_loop`'s own
+        `deltas=` for the matching per-step Euler step size.
 
         `real_mod`: OPT-001, the real `mod_w` dict from
         `checkpoint_loader.build_real_modulation_weights()["action"]`
@@ -716,10 +729,20 @@ class ImageWAMTorchFrontendThor:
                 # gate -- see adaln.head_modulation's own docstring).
                 "head_adaln": self._own(torch.randn(2 * ahd, ahd, dtype=torch.float32, device=DEV) * 0.02),
             }
-        dt = d["dt"]
+        shift = d.get("shift")
+        deltas_out = None
+        if shift is not None:
+            from flash_rt.models.imagewam.scheduler import build_inference_schedule
+            num_train_timesteps = d.get("num_train_timesteps", 1000)
+            timesteps, deltas = build_inference_schedule(
+                d["num_denoise_steps"], shift=shift, num_train_timesteps=num_train_timesteps, device=DEV)
+            action_timesteps = (timesteps / num_train_timesteps).tolist()
+            deltas_out = deltas.tolist()
+        else:
+            dt = d["dt"]
+            action_timesteps = [1.0 - step * dt for step in range(d["num_denoise_steps"])]
         mods, head_mods = [], []
-        for step in range(d["num_denoise_steps"]):
-            action_timestep = 1.0 - step * dt
+        for step, action_timestep in enumerate(action_timesteps):
             timestep = self._own(torch.full((1,), action_timestep, dtype=torch.float32, device=DEV))
             mod_double, mod_single = compute_action_modulation(timestep, mod_w, ahd)
             for t in mod_double[0]:
@@ -733,7 +756,7 @@ class ImageWAMTorchFrontendThor:
             self._own(head_shift)
             self._own(head_scale)
             head_mods.append((head_shift, head_scale))
-        return mods, head_mods
+        return mods, head_mods, deltas_out
 
     def _capture_graph(self) -> None:
         s = torch.cuda.Stream()
@@ -747,7 +770,8 @@ class ImageWAMTorchFrontendThor:
                 imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, self._weights,
                                        self.dims, stream=s.cuda_stream, attn=self._attn,
                                        action_mods=self._action_mods, head_mods=self._head_mods,
-                                       action_rope_table=self._action_rope_table.data_ptr())
+                                       action_rope_table=self._action_rope_table.data_ptr(),
+                                       deltas=self._deltas)
         torch.cuda.current_stream().wait_stream(s)
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph, stream=s):
@@ -758,7 +782,8 @@ class ImageWAMTorchFrontendThor:
             imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, self._weights,
                                    self.dims, stream=s.cuda_stream, attn=self._attn,
                                    action_mods=self._action_mods, head_mods=self._head_mods,
-                                   action_rope_table=self._action_rope_table.data_ptr())
+                                   action_rope_table=self._action_rope_table.data_ptr(),
+                                   deltas=self._deltas)
         self._graph = graph
 
     def _set_context_with_optional_proprio(self, text_ctx: torch.Tensor, text_mask: torch.Tensor) -> None:

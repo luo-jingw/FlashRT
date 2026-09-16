@@ -2490,11 +2490,105 @@ produces finite, denormalized actions in a plausible range vs the real
 (backbone/single-stream/action reference tests, checkpoint-shape test,
 isolated real-weight layer test) still passes unchanged.
 
-**Not yet done**: Thor confirmation (this was implemented and verified
-entirely on the dev machine); a real cosine comparison against the
-official model's own proprio-enabled `infer_action_flux2` output
-(blocked by the same integration-schedule mismatch as the ActionDiT
-entry above -- a single-fixed-timestep comparison, bypassing the
-schedule question, is the cheap option there too); wiring proprio into
-`_imagewam_thor_spec.py`'s own declared shape documentation (not
-load-bearing for runtime, cosmetic).
+**Thor confirmation, same day**: real 3-real-component + proprio
+`infer()` on Thor (full 25-layer, real LIBERO first frame, real
+`observation.state`, all 8 real dims inside the real `dataset_stats.json`
+`state` range) -- finite throughout, `backbone_hidden` absmax=119808
+(matches the official model exactly, as before), `proprio_row=31`
+(matches this session's own real 31-real-token observation), `actions`
+already denormalized (O(1) real-unit magnitudes, not the model's own
+`[-1,1]` training space). Wiring confirmed correct. BUT only ~62.5% of
+predicted action values landed inside the real dataset's own
+`[global_min, global_max]` range (gripper dim went negative against a
+real `[0,1]` range; translation dims ran further negative than the
+real range's own minimum) -- NOT necessarily a bug (a single real
+frame's prediction has no reason to stay inside the training range,
+and this Thor run used the full 25-layer stack vs this dev machine's
+own 1-layer smoke test, so they were never expected to match), but see
+the schedule-alignment entry immediately below for a concrete
+alternative explanation worth checking before assuming it's just
+"this frame's own policy behavior."
+
+**Not yet done**: a real cosine comparison against the official
+model's own proprio-enabled `infer_action_flux2` output (blocked by
+the integration-schedule mismatch -- see the entry immediately below,
+now resolved on the FlashRT side; still needs the official-side
+comparison run); wiring proprio into `_imagewam_thor_spec.py`'s own
+declared shape documentation (not load-bearing for runtime, cosmetic).
+
+# OPT-010: real shift-based flow-matching inference schedule
+
+Status: implemented and locally verified (exact match against the
+real scheduler); NOT yet Thor-tested
+
+Area: ActionDiT denoise loop -- replaces the fixed-uniform-`dt`
+integration schedule (this project's own original simplification) with
+the real non-uniform shift-based schedule the official model actually
+uses, closing the gap the OPT-009 ActionDiT-schedule-comparison entry
+above found (and flagged as "real, not urgent, likely larger scope
+than it turned out to be")
+
+## Finding: much smaller scope than first estimated
+
+The real `imagewam.models.backbones.schedulers.scheduler_continuous.WanContinuousFlowMatchScheduler.step()`
+(read directly) is a **plain single-step Euler update**
+(`sample + model_output * delta`) -- NOT a multi-step integrator like
+UniPC. `fvk.gpu_euler_step` (FlashRT's existing Euler kernel) already
+implements the exact right formula; only the per-step VALUES feeding
+it needed to change, from a linear `1.0 - step*dt`/fixed-`dt` formula
+to the real non-uniform `timesteps[step]`/`deltas[step]` the real
+`build_inference_schedule` produces. `step` was already treated as a
+compile-time-constant-per-unrolled-loop-iteration in FlashRT's own
+existing design (`action_mods[step]` already selected per iteration
+before this change) -- so this needed zero new architecture, zero new
+kernels, zero new buffers, purely a formula substitution at two call
+sites.
+
+**Real confirmed parameters (this release's own `config.yaml`, not
+guessed)**: `shift=5.0`, `num_train_timesteps=1000` (both `video_scheduler`/
+`action_scheduler` blocks use the same values for this release),
+**`eval_num_inference_steps: 10`** (the real evaluation step count --
+NOT the scheduler's own generic default of 20 some example configs
+use; matches this project's own long-standing "10-step" benchmark
+convention already on record above, confirming that number was already
+the right target). Unit conversion `_scheduler_timestep_to_unit`:
+`timestep / num_train_timesteps`, confirmed by reading `imagewam.py`
+directly, not assumed.
+
+## Implementation
+
+- `flash_rt/models/imagewam/scheduler.py` (new): `phi`,
+  `build_inference_schedule` -- ported verbatim from the real
+  `WanContinuousFlowMatchScheduler`, verified bit-for-bit identical
+  against the real scheduler directly (`tests/test_imagewam_scheduler.py`'s
+  `test_schedule_matches_real_scheduler`, skips cleanly without the
+  real `imagewam` package).
+- `flash_rt/models/imagewam/pipeline_thor.py`: `imagewam_denoise_step`
+  gained an optional `delta=` param (falls back to `dims["dt"]` when
+  `None`, so every existing caller is byte-for-byte unaffected);
+  `imagewam_denoise_loop` gained an optional `deltas=` (list, one per
+  step) threaded through the same way `action_mods`/`head_mods`
+  already are.
+- `flash_rt/frontends/torch/imagewam_thor.py`: `dims["shift"]` opts
+  the real schedule in (default `None` -- unset, every existing
+  caller/test keeps the exact original linear formula, verified via
+  the full regression suite still passing unchanged).
+  `_compute_action_modulations` now returns `(mods, head_mods, deltas)`
+  (was `(mods, head_mods)`) -- `deltas` is `None` unless `dims["shift"]`
+  is set; threaded into both `_capture_graph()` call sites'
+  `imagewam_denoise_loop(..., deltas=self._deltas)`.
+
+Verified locally: `dims=dict(shift=5.0, num_train_timesteps=1000,
+num_denoise_steps=10)` end to end (construct, `set_prompt`, `infer`) --
+finite, and `self._deltas` matches the real scheduler's own 10-step
+output exactly (`[-0.0217, -0.0259, -0.0313, -0.0387, -0.0490,
+-0.0641, -0.0874, -0.1263, -0.1984, -0.3571]`). Full existing
+regression suite (backbone/action reference tests, checkpoint tests,
+proprio tests) still passes unchanged with `shift` left unset.
+
+**Not yet done**: Thor confirmation; re-running the OPT-009 ActionDiT
+schedule-comparison attempt now that the schedule mismatch is resolved
+(a single-fixed-timestep comparison against the official model is
+still the cheaper first check before attempting a full trajectory
+comparison); re-checking whether this changes the OPT-009 Thor
+proprio run's own out-of-range action values.
