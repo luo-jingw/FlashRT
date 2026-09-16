@@ -1668,6 +1668,35 @@ own activation distributions (a real correctness project, not yet
 started — this would need real weights to even evaluate, same
 dependency as OPT-001).
 
+## Same-shape Ada re-check: confirms this is a Thor-specific dispatch problem, not a general INT4 problem
+
+Directly tested the hypothesis "if INT4 is also slower locally, it's
+not a Thor-specific issue" — reran `imagewam_gemm_precision_compare.py`
+(the exact same 4 shapes as the Thor per-shape table above, same
+M=896, GEMM-only, no Hadamard, identical convention) on this dev
+machine's real Ada GPU (RTX 4060 Laptop, sm_89):
+
+| shape | FP16 (Ada) | INT8 (Ada) | INT4 (Ada) | INT4 vs FP16 (Ada) | INT4 vs FP16 (Thor) |
+|---|---:|---:|---:|---:|---:|
+| q/proj (896×3072×3072) | 0.807ms | 0.213ms | **0.086ms** | **9.4x faster** | 26x SLOWER |
+| k/v (896×128×3072) | 0.045ms | 0.025ms | 0.040ms | 1.1x faster | 24x SLOWER |
+| mlp0 (896×9216×3072) | 1.633ms | 0.458ms | **0.286ms** | **5.7x faster** | 11x SLOWER |
+| mlp2 (896×3072×9216) | 1.634ms | FAIL (known K=9216) | FAIL (same) | — | 18.7x SLOWER |
+
+Same compiled kernel, same shapes: 5.7-9.4x FASTER on Ada, 11-26x
+SLOWER on Thor — a hard reversal, not just a magnitude difference.
+This rules out "INT4/this quantization scheme is just bad" (it would
+also be bad on Ada if so) and confirms the failure is specific to
+running this SM80-templated kernel's tensor-core MMA instructions on
+Thor's SM100/110 (Blackwell) hardware specifically — almost certainly
+a compatibility/fallback dispatch path that doesn't reach Blackwell's
+real tensor cores, not an algorithmic or Hadamard-related cost (no
+Hadamard rotation runs in this measurement on either machine). Confirms
+the existing "closed for Thor, not universal" framing was already
+correct, and rules out reopening it via a different quantization
+pre-processing choice (e.g. dropping Hadamard) — the bottleneck is the
+kernel's hardware dispatch, not the quantization algorithm.
+
 ## Expected Mechanism
 
 Same mechanism the Chameleon-7B path already uses in production on its
@@ -1676,7 +1705,11 @@ here): FHT-rotated activations + offline-rotated weights survive
 int4's dynamic range at measured cosine 0.9914 (per the kernel file's
 own header comment, for Chameleon's own model and data — not
 re-measured for ImageWAM, and now confirmed NOT to translate to a
-speed win on Thor even where it runs).
+speed win on Thor even where it runs). The Ada-vs-Thor reversal above
+is the direct evidence for the "wrong tensor-core dispatch path on
+Blackwell" half of this mechanism — previously inferred from the
+Thor numbers alone, now confirmed by a same-shape control on hardware
+where the same kernel binary is known-good.
 
 ## Required Evidence
 
