@@ -448,6 +448,22 @@ class ImageWAMTorchFrontendThor:
         if self._precision == "fp16":
             return Fp16Linear(self._gemm, w.data_ptr(), n, k)
         if self._precision == "fp16_cutlass":
+            # Real Thor finding, opportunities.md OPT-013: CUTLASS FP16
+            # requires N/K divisible by 8 (`can_implement` fails
+            # otherwise, confirmed on real hardware) -- action_dim=7
+            # (real LIBERO width) makes action_encoder/head.linear
+            # structurally incompatible with every tile variant. Fall
+            # back to the plain cuBLASLt path for just these
+            # mis-aligned shapes rather than crashing `set_prompt()`'s
+            # graph capture -- cuBLASLt has no such alignment
+            # requirement. This precision tier is NOT currently
+            # recommended anyway (real Thor measurement: every tile
+            # variant tried is slower than cuBLASLt's own default, see
+            # that entry), so this fallback is about not crashing on
+            # an already-not-recommended option, not about chasing
+            # speed for these two tiny GEMMs.
+            if n % 8 != 0 or k % 8 != 0:
+                return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return CutlassFp16Linear(w.data_ptr(), n, k)
         if self._precision == "fp8":
             return Fp8Linear(w.data_ptr(), n, k)

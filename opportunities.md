@@ -2934,3 +2934,66 @@ measured); trying the other CUTLASS FP16 tile variants (`k64`/`2sm21`)
 against the default `sq`/`wide` heuristic pick, which is UNCALIBRATED
 for this specific kernel family (ported from FP8's own heuristic,
 which itself was flagged as provisional).
+
+## CONFIRMED on real Thor, same day: correct, but a real negative speed result
+
+**Correctness: clean.** `cutlass_fp16_k64_silu`/`_mul_aux` rc=0, SiLU
+vs `torch.silu(x@W.T)` cosine=1.000000. Phase A isolated GEMMs (proj/
+qkv/mlp2, including M=64) vs cuBLASLt cosine=1.000000. Phase B fused
+SwiGLU at the real MLP widths (M=513/392/64) vs the existing
+`silu_glu_merged_fp16` path cosine=1.000000. Full `infer()`
+actions/action_latent cosine=1.000000. `backbone_hidden` (25-layer
+accumulation) cosine=0.995090 -- expected floating-point
+non-associativity compounding across 25 real layers from a different
+GEMM algorithm's own summation order, not a transpose/variant bug
+(every ISOLATED layer/kernel check above is exactly 1.0).
+
+**Real bug found and fixed same day: CUTLASS FP16 requires N/K
+divisible by 8** (`can_implement` fails otherwise) -- `action_encoder`
+(real `K=7`, LIBERO's own action_dim) and `head.linear` (real `N=7`)
+are structurally incompatible with EVERY tile variant
+(`plain/sq/t1/wide/k64/2sm21` all returned `can_implement=-1`), and the
+default heuristic picks `wide` for `head.linear`'s own shape, so
+`set_prompt()`'s graph capture crashed outright with `precision=
+"fp16_cutlass"` before this fix. Fixed: `_wrap_linear` now falls back
+to the plain cuBLASLt `Fp16Linear` for any `n % 8 != 0 or k % 8 != 0`
+shape, keeping `precision="fp16_cutlass"` usable (falls back only for
+these two tiny, real-FLOPs-negligible GEMMs) rather than removing the
+precision tier or crashing.
+
+**Real speed result: NEGATIVE -- no CUTLASS FP16 tile variant beats
+cuBLASLt on real Thor, at ImageWAM's real (M,N,K) shapes**, real
+`x0=513/a0=905` full-pipeline `infer()` P50:
+
+| precision | P50 | vs `fp16` (cuBLASLt) |
+|---|---:|---:|
+| `fp16` (cuBLASLt, current default) | **287.2 ms** | -- |
+| `fp16_cutlass`, default `sq`/`wide` heuristic | 306.9 ms | **+6.9% slower** |
+| `fp16_cutlass`, `variant="plain"` | 297.8 ms | +3.7% slower |
+| `fp16_cutlass`, `variant="2sm21"` | 299.8 ms | +4.4% slower |
+| `fp16_cutlass`, `variant="k64"` | 303.3 ms | +5.6% slower |
+| `fp16_cutlass`, `variant="t1"` | 305.1 ms | +6.2% slower |
+
+Every variant tried is SLOWER than cuBLASLt's own generic autotuned
+algorithm selection, at every tile config tried. This falsifies the
+hypothesis this whole entry started from (that FlashRT's own existing,
+Thor-tuned FP16 CUTLASS family would beat cuBLASLt for ImageWAM the
+way it does for FP8) -- a real, valuable negative result: cuBLASLt's
+own per-shape autotuning (already the `fp16` default's own mechanism,
+OPT-004 step 4) is evidently already doing at least as well as this
+particular CUTLASS kernel family can at these specific shapes on real
+Thor hardware. Unlike FP8 (where CUTLASS had a clear, measured edge),
+FP16 does not -- these are different kernel families with different
+tuning histories, and this result should not be assumed to generalize
+back to the FP8 case or forward to any future precision work without
+its own real measurement.
+
+**Conclusion: `fp16_cutlass` is NOT recommended for production use.**
+Kept in the codebase (correct, gated behind `precision="fp16_cutlass"`,
+opt-in, zero effect on the `fp16` default) as a real, working, but
+not-faster alternative -- useful if a future CUTLASS tile addition or
+toolkit update changes this picture, and as a documented example that
+"CUTLASS exists for this precision" is not sufficient reason to expect
+a win without measuring. Stage 3 (pick a default deployment precision)
+reverts to comparing `fp16`/FP8-static+CUTLASS/NVFP4 only -- this
+entry is closed, not carried forward as a live speed candidate.
