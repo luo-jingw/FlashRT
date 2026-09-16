@@ -130,6 +130,156 @@ class Bf16OutLinear:
         self.gemm.bf16_nn(x_ptr, self.weight_ptr, out_ptr, m, self.n, self.k, stream)
 
 
+def _pick_fp16_cutlass_variant(n: int, k: int) -> str:
+    """Shape-based tile-config pick for the `cutlass_fp16_*` family
+    (opportunities.md OPT-013) -- mirrors `_pick_fp8_cutlass_variant`
+    above EXACTLY (same "wide-N -> a wide-tile variant" heuristic,
+    same caveat: ImageWAM's own shape mix has M always small relative
+    to N/K, this has NOT been calibrated against a real Thor profiling
+    sweep across the full `plain/sq/t1/wide/k64/2sm21` family -- `sq`/
+    `wide` are the two variants `_pick_fp8_cutlass_variant` already
+    uses for this same shape mix, kept as the default here too rather
+    than guessing among the other four with no evidence). Pass
+    `variant=` explicitly to `CutlassFp16Linear` to override for a
+    real Thor A/B sweep against `k64`/`2sm21`/etc -- do not treat this
+    default as settled without one."""
+    if n >= 4 * k:
+        return "wide"
+    return "sq"
+
+
+class CutlassFp16Linear:
+    """`out[M,N]` (fp16) `= x[M,K]` (fp16) `@ W[K,N]` (fp16) -- SAME
+    math as `Fp16Linear` (no quantization, `alpha=1, beta=0`), but
+    dispatched through a hand-tuned CUTLASS kernel
+    (`cutlass_fp16_plain/sq/t1/wide/k64/2sm21`, `csrc/gemm/cutlass_sm100_fp16.cu`)
+    instead of cuBLASLt's own generic autotuned algorithm selection --
+    opportunities.md OPT-013, found while surveying what FlashRT's
+    OTHER Thor models (GROOT/Pi0.5's `shared_primitives.py`) already do
+    that ImageWAM didn't: a real, Thor-tuned FP16 CUTLASS GEMM family
+    already exists in this codebase (confirmed via a code comment
+    dated 2026-05-18 recording real Thor timing), just never wired
+    into ImageWAM. Zero new math vs `Fp16Linear` -- this is a pure
+    GEMM-backend swap, so a real Thor A/B against the existing
+    `precision="fp16"` default is the only way to know if it actually
+    wins here (ImageWAM's own (M,N,K) shapes and Thor occupancy may
+    differ from whatever shape this kernel family was originally tuned
+    against elsewhere in this codebase).
+
+    **Thor/Blackwell-only, same gate as `StaticFp8Linear(use_cutlass=True)`/
+    `Nvfp4Linear`** -- these SM100/SM110 CUTLASS kernels are absent
+    from a plain Ada (`GPU_ARCH=89`) build; `hasattr(fvk, "cutlass_fp16_k64")`
+    probes availability, raising a clear `RuntimeError` (not silently
+    falling back) on any other build, matching this module's own
+    established pattern for every other CUTLASS-gated class.
+
+    **CUTLASS's own B-matrix convention differs from this project's
+    usual `(K,N)` GEMM-storage layout**, same as `Nvfp4Linear`/
+    `StaticFp8Linear(use_cutlass=True)`: CUTLASS FP16 reads B as
+    `[N,K]` row-major (`cutlass_sm100_fp16.cu`'s own header comment:
+    "same as PyTorch nn.Linear weights") -- the one-time
+    `.t().contiguous()` at construction handles this, identical to
+    those two classes' own pattern.
+    """
+
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int, *, variant: str | None = None):
+        self.n, self.k = int(n), int(k)
+        if not hasattr(fvk, "cutlass_fp16_k64"):
+            raise RuntimeError(
+                "CutlassFp16Linear requires a build with ENABLE_SM100_CUTLASS "
+                "(Thor/Blackwell, GPU_ARCH=110) -- cutlass_fp16_* kernels are "
+                "absent from this flash_rt_kernels build. Same gate FP8-static+"
+                "CUTLASS/NVFP4 already use; see quant_linear.py's own module "
+                "docstring.")
+        self._variant = variant if variant is not None else _pick_fp16_cutlass_variant(self.n, self.k)
+        self._cutlass_fn = getattr(fvk, f"cutlass_fp16_{self._variant}")
+        w_kn = _wrap_fp16(weight_fp16_ptr, self.k, self.n)  # (K,N), this project's usual convention
+        w_nk = w_kn.t().contiguous()  # (N,K), CUTLASS's own out-major convention -- one-time real copy
+        self._w = w_nk
+        self.weight_ptr = w_nk.data_ptr()
+
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
+        rc = self._cutlass_fn(x_ptr, self.weight_ptr, out_ptr, m, self.n, self.k,
+                               1.0, 0.0, stream)
+        if rc != 0:
+            raise RuntimeError(
+                f"cutlass_fp16_{self._variant} failed rc={rc} (M={m}, N={self.n}, K={self.k})")
+
+
+class CutlassFp16SwiGluMlp:
+    """ImageWAM's real MLP up-projection, `out[M,mlp_hidden] =
+    SiLU(x[M,K] @ W_gate[K,mlp_hidden]) * (x[M,K] @ W_up[K,mlp_hidden])`
+    -- the real SwiGLU gate (opportunities.md OPT-013), fused into TWO
+    CUTLASS kernels instead of today's default path (ONE wide cuBLASLt
+    GEMM producing a merged `(seq, 2*mlp_hidden)` `[gate;up]` buffer,
+    THEN a separate `silu_glu_merged_fp16` elementwise kernel reading
+    it back to compute `silu(gate)*up`):
+      1. `cutlass_fp16_k64_silu`: `gate_buf = SiLU(x @ W_gate)` (SiLU
+         fused into this GEMM's own epilogue -- ImageWAM's real
+         activation, confirmed against `csrc/kernels/activation.cu`'s
+         own `silu_glu_merged_kernel` formula, NOT the `GeluTanhApprox`
+         a different model's own GEMM+GELU epilogue variant uses).
+      2. `cutlass_fp16_k64_mul_aux`: `out = (x @ W_up) * gate_buf`
+         (the up-projection GEMM and the gate multiply fused into ONE
+         kernel's own epilogue, via CUTLASS's `LinCombDeEltAct` aux-tensor
+         load).
+    Net: zero separate elementwise kernel, same total GEMM FLOPs as
+    today's one wide GEMM (split into two `mlp_hidden`-wide ones
+    instead of one `2*mlp_hidden`-wide one) -- whether this nets out
+    faster than the current cuBLASLt-wide-GEMM-plus-elementwise-kernel
+    path is a real Thor timing question, not assumed.
+
+    **Splits the real checkpoint's own merged `mlp0.weight`
+    `(K, 2*mlp_hidden)` (columns `[0:mlp_hidden)`=gate,
+    `[mlp_hidden:2*mlp_hidden)`=up -- confirmed against
+    `silu_glu_merged_kernel`'s own indexing) into two separate
+    `(mlp_hidden, K)` CUTLASS-layout weights ONCE at construction** --
+    a plain column-slice + `.t().contiguous()`, no new checkpoint
+    format needed, no accuracy change (same real trained weight values,
+    just split into two tensors instead of read as one).
+
+    Allocates its own `gate_buf` scratch (`(max_m, mlp_hidden)` fp16)
+    lazily on first call, sized from that call's own `m` and reused
+    (same convention as `Nvfp4Linear`'s own lazy scratch) -- safe
+    across CUDA Graph replay since `m` is fixed per capture (this
+    project's own established invariant: shapes never change between
+    capture and replay).
+
+    Same Thor/Blackwell-only gate as `CutlassFp16Linear`.
+    """
+
+    def __init__(self, merged_weight_fp16_ptr: int, mlp_hidden: int, k: int):
+        self.mlp_hidden, self.k = int(mlp_hidden), int(k)
+        if not hasattr(fvk, "cutlass_fp16_k64_silu"):
+            raise RuntimeError(
+                "CutlassFp16SwiGluMlp requires a build with ENABLE_SM100_CUTLASS "
+                "(Thor/Blackwell, GPU_ARCH=110) -- cutlass_fp16_k64_silu/"
+                "_k64_mul_aux are absent from this flash_rt_kernels build.")
+        w_merged_kn = _wrap_fp16(merged_weight_fp16_ptr, self.k, 2 * self.mlp_hidden)
+        w_gate_kn = w_merged_kn[:, :self.mlp_hidden].contiguous()
+        w_up_kn = w_merged_kn[:, self.mlp_hidden:].contiguous()
+        self._w_gate = w_gate_kn.t().contiguous()  # (mlp_hidden, K), CUTLASS's own out-major convention
+        self._w_up = w_up_kn.t().contiguous()
+        self.w_gate_ptr = self._w_gate.data_ptr()
+        self.w_up_ptr = self._w_up.data_ptr()
+        self._gate_buf = None
+        self._max_m = 0
+
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
+        if self._gate_buf is None or m > self._max_m:
+            self._gate_buf = torch.zeros(m, self.mlp_hidden, dtype=FP16, device=DEV)
+            self._max_m = m
+        gate_ptr = self._gate_buf.data_ptr()
+        rc = fvk.cutlass_fp16_k64_silu(x_ptr, self.w_gate_ptr, gate_ptr,
+                                        m, self.mlp_hidden, self.k, 1.0, 0.0, stream)
+        if rc != 0:
+            raise RuntimeError(f"cutlass_fp16_k64_silu failed rc={rc} (M={m}, N={self.mlp_hidden}, K={self.k})")
+        rc = fvk.cutlass_fp16_k64_mul_aux(x_ptr, self.w_up_ptr, gate_ptr, out_ptr,
+                                           m, self.mlp_hidden, self.k, stream)
+        if rc != 0:
+            raise RuntimeError(f"cutlass_fp16_k64_mul_aux failed rc={rc} (M={m}, N={self.mlp_hidden}, K={self.k})")
+
+
 class Fp8Linear:
     """`out[M,N]` (fp16) `= x[M,K]` (fp16, quantized to fp8 on the fly)
     `@ W[K,N]` (fp8, quantized ONCE at construction from a REAL fp16

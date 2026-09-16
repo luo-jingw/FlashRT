@@ -61,6 +61,8 @@ from flash_rt.models.imagewam.pipeline_real import (
 )
 from flash_rt.models.imagewam.quant_linear import (
     Bf16OutLinear,
+    CutlassFp16Linear,
+    CutlassFp16SwiGluMlp,
     Fp8Linear,
     Fp16Linear,
     Nvfp4Linear,
@@ -68,7 +70,7 @@ from flash_rt.models.imagewam.quant_linear import (
 )
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 
-_PRECISIONS = ("fp16", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass")
+_PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass")
 # OPT-004 step 6 (plan.md): the two `StaticFp8Linear` variants need a
 # one-time calibration call in set_prompt() before graph capture (see
 # _calibrate_fp8 below) -- everything else needs no such step.
@@ -423,6 +425,20 @@ class ImageWAMTorchFrontendThor:
         w = self._own(torch.randn(k, n, dtype=BF16, device=DEV) * 0.02)
         return Bf16OutLinear(self._gemm, w.data_ptr(), n, k)
 
+    def _rnd_swiglu_mlp(self, n: int, k: int):
+        """`_rnd_linear`'s counterpart for the merged MLP gate/up
+        projection (`{txt,img}_mlp0.weight`/`mlp0.weight`/`mlp_in.weight`,
+        `n=2*mlp_hidden`) -- opportunities.md OPT-013. Only
+        `precision=="fp16_cutlass"` gets the fused `CutlassFp16SwiGluMlp`;
+        every other precision falls back to the plain `_rnd_linear`
+        (one wide GEMM, `pipeline_thor.py`'s own `_mlp_gate_up` helper
+        then does the separate `silu_glu_merged_fp16` step as before)."""
+        if self._precision != "fp16_cutlass":
+            return self._rnd_linear(n, k)
+        mlp_hidden = n // 2
+        w = self._own(torch.randn(k, n, dtype=FP16, device=DEV) * 0.02)
+        return CutlassFp16SwiGluMlp(w.data_ptr(), mlp_hidden, k)
+
     def _wrap_linear(self, w: torch.Tensor, n: int, k: int):
         """Wrap an already-materialized `(k,n)` fp16 CUDA weight tensor
         in the `self._precision`-selected linear-op object -- the part
@@ -431,6 +447,8 @@ class ImageWAMTorchFrontendThor:
         `torch.randn`. `w` must already be `self._own`'d by the caller."""
         if self._precision == "fp16":
             return Fp16Linear(self._gemm, w.data_ptr(), n, k)
+        if self._precision == "fp16_cutlass":
+            return CutlassFp16Linear(w.data_ptr(), n, k)
         if self._precision == "fp8":
             return Fp8Linear(w.data_ptr(), n, k)
         if self._precision == "nvfp4":
@@ -523,14 +541,14 @@ class ImageWAMTorchFrontendThor:
             for prefix in ("txt", "img"):
                 weights[("backbone", "double", L, f"{prefix}_qkv.weight")] = self._rnd_linear(3 * hidden, hidden)
                 weights[("backbone", "double", L, f"{prefix}_proj.weight")] = self._rnd_linear(hidden, hidden)
-                weights[("backbone", "double", L, f"{prefix}_mlp0.weight")] = self._rnd_linear(mlp_hidden * 2, hidden)
+                weights[("backbone", "double", L, f"{prefix}_mlp0.weight")] = self._rnd_swiglu_mlp(mlp_hidden * 2, hidden)
                 weights[("backbone", "double", L, f"{prefix}_mlp2.weight")] = self._rnd_linear(hidden, mlp_hidden)
                 weights[("backbone", "double", L, f"{prefix}_query_norm")] = self._rnd_norm_scale(HD)
                 weights[("backbone", "double", L, f"{prefix}_key_norm")] = self._rnd_norm_scale(HD)
         for L in range(d["num_layers_single"]):
             weights[("backbone", "single", L, "qkv.weight")] = self._rnd_linear(3 * hidden, hidden)
             weights[("backbone", "single", L, "attn_out_proj.weight")] = self._rnd_linear(hidden, hidden)
-            weights[("backbone", "single", L, "mlp_in.weight")] = self._rnd_linear(mlp_hidden * 2, hidden)
+            weights[("backbone", "single", L, "mlp_in.weight")] = self._rnd_swiglu_mlp(mlp_hidden * 2, hidden)
             weights[("backbone", "single", L, "mlp_down.weight")] = self._rnd_linear(hidden, mlp_hidden)
             weights[("backbone", "single", L, "query_norm")] = self._rnd_norm_scale(HD)
             weights[("backbone", "single", L, "key_norm")] = self._rnd_norm_scale(HD)
@@ -547,14 +565,14 @@ class ImageWAMTorchFrontendThor:
         for L in range(d["action_num_layers_double"]):
             weights[("action_dit", "double", L, "qkv.weight")] = self._rnd_linear(3 * aaw, ahd)
             weights[("action_dit", "double", L, "proj.weight")] = self._rnd_linear(ahd, aaw)
-            weights[("action_dit", "double", L, "mlp0.weight")] = self._rnd_linear(amh * 2, ahd)
+            weights[("action_dit", "double", L, "mlp0.weight")] = self._rnd_swiglu_mlp(amh * 2, ahd)
             weights[("action_dit", "double", L, "mlp2.weight")] = self._rnd_linear(ahd, amh)
             weights[("action_dit", "double", L, "query_norm")] = self._rnd_norm_scale(HD)
             weights[("action_dit", "double", L, "key_norm")] = self._rnd_norm_scale(HD)
         for L in range(d["action_num_layers_single"]):
             weights[("action_dit", "single", L, "qkv.weight")] = self._rnd_linear(3 * aaw, ahd)
             weights[("action_dit", "single", L, "attn_out_proj.weight")] = self._rnd_linear(ahd, aaw)
-            weights[("action_dit", "single", L, "mlp_in.weight")] = self._rnd_linear(amh * 2, ahd)
+            weights[("action_dit", "single", L, "mlp_in.weight")] = self._rnd_swiglu_mlp(amh * 2, ahd)
             weights[("action_dit", "single", L, "mlp_down.weight")] = self._rnd_linear(ahd, amh)
             weights[("action_dit", "single", L, "query_norm")] = self._rnd_norm_scale(HD)
             weights[("action_dit", "single", L, "key_norm")] = self._rnd_norm_scale(HD)
@@ -602,6 +620,15 @@ class ImageWAMTorchFrontendThor:
                 n, k = t.shape[1], t.shape[0]
                 tg = self._own(t.to(DEV, dtype=BF16).contiguous())
                 value = Bf16OutLinear(self._gemm, tg.data_ptr(), n, k)
+            elif self._precision == "fp16_cutlass" and slot in (
+                    "txt_mlp0.weight", "img_mlp0.weight", "mlp0.weight", "mlp_in.weight"):
+                # opportunities.md OPT-013: fused SwiGLU gate/up (see
+                # CutlassFp16SwiGluMlp's own docstring) -- `t` is the
+                # real checkpoint's own merged (K, 2*mlp_hidden) weight,
+                # split internally, same real trained values.
+                n, k = t.shape[1], t.shape[0]
+                tg = self._own(t.to(DEV).contiguous())
+                value = CutlassFp16SwiGluMlp(tg.data_ptr(), n // 2, k)
             else:
                 n, k = t.shape[1], t.shape[0]  # already (K,N) convention, see checkpoint_loader._w
                 tg = self._own(t.to(DEV).contiguous())

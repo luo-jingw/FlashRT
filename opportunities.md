@@ -2782,3 +2782,155 @@ far, and both are already running through FlashRT's own kernel system**
 already measured ~14-22% faster than FP16 on prefill/denoise
 specifically), not VAE fusion. Re-prioritizing: pick a default
 deployment precision (Stage 3) before investing in VAE fusion.
+
+# OPT-013: FP16 CUTLASS GEMM + SwiGLU epilogue fusion (new precision tier)
+
+Status: Phase A + Phase B implemented, compiled (local SM90a
+syntax-check substitute, this dev machine has no SM100/SM110 CUTLASS
+build), zero local regression; Phase C (gated-residual epilogue) NOT
+attempted -- deliberately deferred, see below
+
+Area: FP16/BF16 GEMM speed -- 92.2% of real steady-state `infer()` cost
+(OPT-012) is backbone prefill + ActionDiT denoise, both GEMM-dominated
+and, until now, entirely dispatched through cuBLASLt's own generic
+autotuned algorithm selection, never CUTLASS (unlike FP8-static and
+NVFP4, which already use hand-tuned CUTLASS kernels)
+
+## Background: found by forking a survey of FlashRT's OTHER models
+
+User asked why other FlashRT Thor models see more speedup than
+ImageWAM; a fork survey of `shared_primitives.py` (GROOT/Pi0.5/Pi0's
+shared Thor B=1 path), `motus_rtx.py`/`hyvla_thor.py`, and
+`cosmos3_edge`'s `vae_native.py` found: (1) `flashrt_rms_qkv_fp16` --
+turned out, on reading the real source, to be a two-kernel C-level
+BUNDLE (`rms_norm_fp16` then `cutlass_fp16_k64`, still a real
+intermediate write+read of `x_norm_scratch` between them) rather than
+a genuine single-kernel fusion -- so this collapses into item (2)
+below, not an independent technique; (2) a real, Thor-tuned FP16
+CUTLASS GEMM family (`cutlass_fp16_plain/sq/t1/wide/k64/2sm21`,
+`csrc/gemm/cutlass_sm100_fp16.cu`) already exists in this codebase,
+confirmed timed against real Thor hardware (a code comment dated
+2026-05-18), never wired into ImageWAM; (3) GEMM-epilogue fusion for
+activation (`cutlass_fp16_k64_gelu`/`_sq_gelu`) and for
+multiply-by-auxiliary-tensor (`cutlass_fp16_k64_mul_aux`,
+`D=(A@B)*Aux`) already exist for a DIFFERENT model's GEGLU MLP (GELU,
+not SiLU) and residual accumulate (`beta=1` epilogue fold, but only
+for an UN-GATED residual -- see Phase C below for why this doesn't
+transfer directly). INT8/INT4 rowwise fusion patterns elsewhere are
+confirmed NOT applicable (OPT-007: 7-8.6x slower than FP16 on Thor,
+no native tensor-core benefit at these shapes on sm_110).
+
+## Phase A: `CutlassFp16Linear` -- pure GEMM-backend swap, zero new math
+
+New `precision="fp16_cutlass"` tier (`quant_linear.py`'s
+`CutlassFp16Linear`, `imagewam_thor.py`'s `_wrap_linear` dispatch).
+Every plain `Fp16Linear`-wrapped weight (backbone/ActionDiT QKV, proj,
+mlp2/mlp_down, action_encoder/head) dispatches through
+`cutlass_fp16_sq`/`_wide` (mirrors `_pick_fp8_cutlass_variant`'s own
+already-established shape heuristic: `wide` if `N>=4*K` else `sq`) --
+identical `alpha=1,beta=0` math to `Fp16Linear`, so this can only
+differ from the cuBLASLt path in SPEED, never in output value (same
+weight, same GEMM, different kernel implementation selecting the same
+mathematical operation). Same Thor/Blackwell-only gate as
+`StaticFp8Linear(use_cutlass=True)`/`Nvfp4Linear`
+(`hasattr(fvk, "cutlass_fp16_k64")`), raises a clear `RuntimeError` on
+this dev machine's Ada build, exactly as expected.
+
+## Phase B: `CutlassFp16SwiGluMlp` -- SwiGLU gate/up fused, new kernel added
+
+ImageWAM's real MLP gate IS true SiLU (confirmed against
+`csrc/kernels/activation.cu`'s own `silu_glu_merged_kernel`:
+`silu(g)=g*sigmoid(g)`, computed on half the merged GEMM output then
+multiplied by the other half) -- NOT the GELU the existing
+`cutlass_fp16_k64_gelu`/`sq_gelu` epilogues use, so those were not
+directly reusable. Added a genuinely new CUTLASS type,
+`sm100_fp16_k64_silu` (`gemm_types_sm100_fp16.h`), an exact structural
+copy of `sm100_fp16_k64_gelu` with the activation functor swapped from
+the file's own custom `GeluTanhApprox` to CUTLASS's OWN BUILT-IN
+`cutlass::epilogue::thread::SiLu` (confirmed present in this project's
+vendored CUTLASS, `epilogue/thread/activation.h`, formula
+`value*sigmoid(value)` -- an exact match, not an approximation) -- plus
+its host entry point `cutlass_fp16_k64_silu` (`cutlass_sm100_fp16.cu`)
+and pybind11 binding, mirroring the GELU variants' own pattern exactly.
+
+`CutlassFp16SwiGluMlp` (`quant_linear.py`) splits the real checkpoint's
+merged `mlp0.weight`/`mlp_in.weight` `(K, 2*mlp_hidden)` into two
+`(mlp_hidden, K)` CUTLASS-layout halves ONCE at construction (a plain
+column-slice + transpose, same real trained weight values, no accuracy
+change), then on each call: `gate_buf = SiLU(x @ W_gate)` (new
+`cutlass_fp16_k64_silu`, activation fused into the GEMM epilogue) ->
+`out = (x @ W_up) * gate_buf` (existing `cutlass_fp16_k64_mul_aux`,
+the multiply fused into THIS GEMM's own epilogue) -- net: the separate
+`silu_glu_merged_fp16` elementwise kernel is eliminated entirely, at
+the cost of splitting one wide GEMM into two `mlp_hidden`-wide ones
+(same total FLOPs, one fewer kernel launch's worth of memory
+round-trip for the intermediate). `pipeline_thor.py` gained a small
+`_mlp_gate_up` helper (all 5 MLP-gate call sites across backbone
+double/single and ActionDiT double/single now go through it) that
+DUCK-TYPES on `weights[key]`'s own class to pick the fused path or the
+existing default path -- `pipeline_thor.py` itself stays
+precision-agnostic, same convention as every other `weights[key](...)`
+call site in this project.
+
+**Local verification (this dev machine has no SM100/SM110 CUTLASS
+build, so nothing here could be RUN)**: the exact `.cu`/`.h` changes
+compile cleanly under a standalone `nvcc -gencode=arch=compute_90a,code=sm_90a`
+syntax-check substitute (this local CUDA 12.8 toolkit doesn't recognize
+`sm_110a`/`compute_110a` at all, so this is the closest available
+stand-in that still exercises the same CUTLASS 3.x CollectiveBuilder/EVT
+template machinery -- a real, meaningful check: a wrong template
+parameter, e.g. a functor with the wrong interface, would fail to
+instantiate regardless of target SM version). Full existing local
+regression suite (backbone/action reference tests at cosine
+0.999994-1.000000, checkpoint-shape test, proprio tests) still passes
+UNCHANGED with `precision="fp16"` (default) -- confirms Phase A/B's own
+new code paths are correctly gated behind `precision="fp16_cutlass"`
+and introduce zero effect on the existing default path.
+`precision="fp16_cutlass"` correctly raises a clear `RuntimeError` on
+this Ada machine (same gate as NVFP4/FP8-static+CUTLASS) rather than
+silently falling back or crashing confusingly.
+
+## Phase C: gated-residual epilogue fusion -- NOT attempted, deliberately
+
+The fork's own "residual fusion, direct copy" framing was for an
+UN-GATED residual (`beta=1`: `D = alpha*A@B + beta*D_old`, a plain
+scalar accumulate-into-D). ImageWAM's real residual is GATED
+(`residual += gate_vector * proj_output`, `gate` a real,
+timestep-conditioned, PER-CHANNEL vector -- `gate_res_fp16`/
+`gate_res_bf16res`) -- `beta` in the existing CUTLASS API is a scalar,
+not a per-channel vector, so the existing `beta=1` pattern is
+mathematically WRONG for ImageWAM's own residual rule and cannot be
+applied as-is. A correct fusion needs a genuinely NEW epilogue (e.g. a
+`Sm90ColBroadcast`-based EVT node multiplying the accumulator by a
+per-column gate vector, composed with the existing `C`/residual load)
+-- CUTLASS almost certainly has the primitives for this (per-row/
+per-column broadcast-and-combine EVT nodes are a documented pattern),
+but composing them correctly requires deeper CUTLASS EVT-tree API work
+than Phases A/B needed (those were: swap one template parameter, or
+copy an existing epilogue verbatim -- this needs assembling a NEW one).
+
+**Deliberately not attempted this round**: the failure mode for a
+subtly-wrong epilogue is silent wrong numbers, not a crash or a
+compile error -- exactly the class of bug this whole project's real
+Thor validation work (OPT-001/002/009/010) spent real effort finding
+and fixing today. This dev machine cannot verify CORRECTNESS of any
+SM100 CUTLASS kernel at all (only that it compiles, via the sm_90a
+substitute) -- shipping a new, unverified-beyond-compilation epilogue
+that touches every layer's own residual stream is a materially
+different risk than Phase A/B's changes (pure backend swap; activation
+functor swap with an exact CUTLASS-verified formula match). Left as a
+clearly scoped, real follow-up rather than rushed.
+
+**Not yet done, any phase**: real Thor timing (does `fp16_cutlass`
+actually beat the cuBLASLt-autotuned `fp16` default at ImageWAM's real
+(M,N,K) shapes? -- this project's own established pattern, e.g.
+FP8-static+CUTLASS's real ~8-9% win over cuBLASLt FP8-static, suggests
+plausible but unmeasured here); real Thor correctness (cosine vs the
+`fp16` default, same real inputs -- Phase A should be ~1.0 by
+construction since the math is identical modulo GEMM-algorithm
+floating-point non-associativity, Phase B should also be very close
+since it's the same real math restructured, but neither has been
+measured); trying the other CUTLASS FP16 tile variants (`k64`/`2sm21`)
+against the default `sq`/`wide` heuristic pick, which is UNCALIBRATED
+for this specific kernel family (ported from FP8's own heuristic,
+which itself was flagged as provisional).

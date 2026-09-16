@@ -200,6 +200,33 @@ from __future__ import annotations
 
 import torch
 
+from flash_rt.models.imagewam.quant_linear import CutlassFp16SwiGluMlp
+
+
+def _mlp_gate_up(fvk, key, gate_slot: str, modded_ptr: int, merged_ptr: int, gated_ptr: int,
+                  m: int, mlp_hidden: int, stream: int) -> None:
+    """The real SwiGLU MLP's own gate/up half:
+    `gated = SiLU(x @ W_gate) * (x @ W_up)`. Two equivalent paths,
+    selected by WHICH CLASS `weights[key]` already is (constructed by
+    `imagewam_thor.py`, this module stays precision-agnostic, same
+    convention as every other `weights[key](...)` call site):
+
+    - Default (`Fp16Linear`/`Fp8Linear`/etc.): ONE merged GEMM into
+      `merged_ptr` (`(m, 2*mlp_hidden)`, `[gate;up]` columns), then
+      `silu_glu_merged_fp16` computes `silu(gate)*up` into `gated_ptr`.
+    - `CutlassFp16SwiGluMlp` (opportunities.md OPT-013): already fuses
+      SiLU into its own gate GEMM's epilogue and the gate-multiply into
+      its own up GEMM's epilogue -- writes the final gated result
+      DIRECTLY into `gated_ptr`, `merged_ptr` unused (no separate
+      merged buffer or elementwise kernel needed).
+    """
+    mlp_weight = key(gate_slot)
+    if isinstance(mlp_weight, CutlassFp16SwiGluMlp):
+        mlp_weight(modded_ptr, gated_ptr, m, stream)
+    else:
+        mlp_weight(modded_ptr, merged_ptr, m, stream)
+        fvk.silu_glu_merged_fp16(merged_ptr, gated_ptr, m, mlp_hidden, stream)
+
 
 def _ptr_offset(base_ptr: int, row_offset: int, row_width: int) -> int:
     """Byte offset into a row-major fp16 buffer -- 2 bytes/element."""
@@ -423,16 +450,15 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     # --- separate real SiLU-GLU MLPs, GATED residual ---
     fvk.ada_layer_norm_bf16in_fp16out(txt_x, txt_scale2_t.data_ptr(), txt_shift2_t.data_ptr(), modded, x0, hidden, eps, stream)
     txt_mlp_merged, txt_mlp_gated = bufs["txt_mlp_merged"], bufs["txt_mlp_gated"]
-    key("txt_mlp0.weight")(modded, txt_mlp_merged, x0, stream)
-    fvk.silu_glu_merged_fp16(txt_mlp_merged, txt_mlp_gated, x0, mlp_hidden, stream)
+    _mlp_gate_up(fvk, key, "txt_mlp0.weight", modded, txt_mlp_merged, txt_mlp_gated, x0, mlp_hidden, stream)
     key("txt_mlp2.weight")(txt_mlp_gated, proj, x0, stream)
     fvk.gate_res_bf16res(proj, txt_gate2_t.data_ptr(), txt_x, x0 * hidden, stream)
 
     fvk.ada_layer_norm_bf16in_fp16out(img_x_ptr, img_scale2_t.data_ptr(), img_shift2_t.data_ptr(),
                              img_modded_ptr, img_len, hidden, eps, stream)
     img_mlp_merged, img_mlp_gated = bufs["img_mlp_merged"], bufs["img_mlp_gated"]
-    key("img_mlp0.weight")(img_modded_ptr, img_mlp_merged, img_len, stream)
-    fvk.silu_glu_merged_fp16(img_mlp_merged, img_mlp_gated, img_len, mlp_hidden, stream)
+    _mlp_gate_up(fvk, key, "img_mlp0.weight", img_modded_ptr, img_mlp_merged, img_mlp_gated,
+                 img_len, mlp_hidden, stream)
     key("img_mlp2.weight")(img_mlp_gated, img_proj_ptr, img_len, stream)
     fvk.gate_res_bf16res(img_proj_ptr, img_gate2_t.data_ptr(), img_x_ptr, img_len * hidden, stream)
 
@@ -477,8 +503,7 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     fvk.rope_apply_fp16_perhead(K_cache, rope_table, a0, NH, HD, stream)
 
     mlp_merged, mlp_gated = bufs["single_mlp_merged"], bufs["single_mlp_gated"]
-    key("mlp_in.weight")(modded, mlp_merged, a0, stream)
-    fvk.silu_glu_merged_fp16(mlp_merged, mlp_gated, a0, mlp_hidden, stream)
+    _mlp_gate_up(fvk, key, "mlp_in.weight", modded, mlp_merged, mlp_gated, a0, mlp_hidden, stream)
 
     attn.run("backbone", site_layer_idx, q_seq=a0, stream=stream)
 
@@ -664,8 +689,7 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
     fvk.ada_layer_norm_fp16(action_x, scale2_t.data_ptr(), shift2_t.data_ptr(),
                              modded, num_action, action_hidden_dim, eps, stream)
     mlp_merged, mlp_gated = bufs["action_mlp_merged"], bufs["action_mlp_gated"]
-    key("mlp0.weight")(modded, mlp_merged, num_action, stream)
-    fvk.silu_glu_merged_fp16(mlp_merged, mlp_gated, num_action, action_mlp_hidden, stream)
+    _mlp_gate_up(fvk, key, "mlp0.weight", modded, mlp_merged, mlp_gated, num_action, action_mlp_hidden, stream)
     key("mlp2.weight")(mlp_gated, proj, num_action, stream)
     fvk.gate_res_fp16(proj, gate2_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
 
@@ -711,8 +735,7 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     attn.run("mot", site_layer_idx, q_seq=num_action, kv_seq=dims["total"], stream=stream, x0=x0, a0=a0)
 
     mlp_merged, mlp_gated = bufs["action_mlp_merged"], bufs["action_mlp_gated"]
-    key("mlp_in.weight")(modded, mlp_merged, num_action, stream)
-    fvk.silu_glu_merged_fp16(mlp_merged, mlp_gated, num_action, action_mlp_hidden, stream)
+    _mlp_gate_up(fvk, key, "mlp_in.weight", modded, mlp_merged, mlp_gated, num_action, action_mlp_hidden, stream)
 
     from_attn = bufs["action_proj_scratch"]
     from_mlp = bufs["action_proj_scratch2"]

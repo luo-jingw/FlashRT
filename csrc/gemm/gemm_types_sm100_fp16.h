@@ -232,6 +232,41 @@ using Gemm = cutlass::gemm::device::GemmUniversalAdapter<
 }  // namespace sm100_fp16_k64_gelu
 
 // ============================================================
+//  K64SiluFp16: same tile/structure as k64_gelu, SiLu epilogue
+//  instead of GELU-tanh -- ImageWAM's own real MLP gate activation
+//  (opportunities.md OPT-013; matches csrc/kernels/activation.cu's
+//  own silu_glu_merged_kernel EXACTLY: silu(g) = g * sigmoid(g),
+//  confirmed against CUTLASS's own built-in SiLu functor
+//  (epilogue/thread/activation.h), not a custom approximation like
+//  GeluTanhApprox above -- ImageWAM uses TRUE SiLU, not GELU.
+//  Used for: gate_buf = SiLU(X @ W_gate), the first half of the real
+//  SwiGLU MLP, feeding sm100_fp16_k64_mul_aux below for the second
+//  half (D = (X @ W_up) * gate_buf).
+// ============================================================
+namespace sm100_fp16_k64_silu {
+using Tile = Shape<_256, _256, _64>;
+using Cluster = Shape<_2, _2, _1>;
+using Fusion = cutlass::epilogue::fusion::LinCombEltAct<
+    cutlass::epilogue::thread::SiLu, cutlass_fp16_t, float>;
+using Epi = typename cutlass::epilogue::collective::CollectiveBuilder<
+    cutlass::arch::Sm100, cutlass::arch::OpClassTensorOp,
+    Tile, Cluster, cutlass::epilogue::collective::EpilogueTileAuto,
+    float, float, cutlass_fp16_t, cutlass::layout::RowMajor, 8,
+    cutlass_fp16_t, cutlass::layout::RowMajor, 8,
+    cutlass::epilogue::collective::EpilogueScheduleAuto, Fusion>::CollectiveOp;
+using Main = typename cutlass::gemm::collective::CollectiveBuilder<
+    cutlass::arch::Sm100, cutlass::arch::OpClassTensorOp,
+    cutlass_fp16_t, cutlass::layout::RowMajor, 8,
+    cutlass_fp16_t, cutlass::layout::ColumnMajor, 8,
+    float, Tile, Cluster,
+    cutlass::gemm::collective::StageCountAutoCarveout<
+        static_cast<int>(sizeof(typename Epi::SharedStorage))>,
+    cutlass::gemm::collective::KernelScheduleAuto>::CollectiveOp;
+using Gemm = cutlass::gemm::device::GemmUniversalAdapter<
+    cutlass::gemm::kernel::GemmUniversal<Shape<int,int,int,int>, Main, Epi>>;
+}  // namespace sm100_fp16_k64_silu
+
+// ============================================================
 //  K64MulAuxFp16: same tile as k64 with binary `multiplies` epilogue
 //  pulling an auxiliary tensor (gate_buf) via TMA.  R3.1 Phase 2:
 //  D = acc * Aux, where Aux is GELU(X @ W_gate) loaded element-wise
