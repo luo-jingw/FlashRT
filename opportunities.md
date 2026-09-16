@@ -2586,9 +2586,53 @@ output exactly (`[-0.0217, -0.0259, -0.0313, -0.0387, -0.0490,
 regression suite (backbone/action reference tests, checkpoint tests,
 proprio tests) still passes unchanged with `shift` left unset.
 
-**Not yet done**: Thor confirmation; re-running the OPT-009 ActionDiT
-schedule-comparison attempt now that the schedule mismatch is resolved
-(a single-fixed-timestep comparison against the official model is
-still the cheaper first check before attempting a full trajectory
-comparison); re-checking whether this changes the OPT-009 Thor
-proprio run's own out-of-range action values.
+**CONFIRMED on real Thor, same day -- this was the actual cause of
+OPT-009's out-of-range action values, not policy behavior.** Re-ran the
+same real 3-real-component + proprio `infer()` with `shift=5.0,
+num_train_timesteps=1000, num_denoise_steps=10` (the real confirmed
+values) instead of the old uniform `dt`:
+
+| | old uniform schedule | real shift=5.0 schedule | dataset range |
+|---|---|---|---|
+| gripper mean / min-max | -0.24 / -0.43~0.14 | **0.996 / 0.981~1.002** | `[0,1]`, mean 0.51 |
+| translation dim0 mean | -1.45 | **0.51** | `±0.94` |
+| translation dim1 mean | -1.11 | **0.38** | `±0.94` |
+| fraction inside `[global_min,max]` | 62.5% | **98.4%** (100% at 5% tol) | |
+| first-step gripper vs real GT (1.0) | off by 1.43 | **off by 0.0008** | |
+
+`self._deltas` matched the real `WanContinuousFlowMatchScheduler`'s
+own output bit-for-bit on Thor too (not just this dev machine).
+Real end-to-end `infer()` (full real pipeline: real VAE + real Qwen3 +
+real proprio + real 25-layer backbone + real 10-step ActionDiT denoise,
+all outside-graph real encode steps included): **P50 = 289.5 ms**.
+
+**Single-step ActionDiT cosine vs the official model, real first step
+(`t=1.0`, `delta=-0.0217`, the real schedule's own first entry)**:
+hidden-state cosine = **0.999978**, finite. (The official `Flux2ActionHead`
+takes a `vec` tensor rather than the `t_mod` dict `real_action_*`
+produces, so the final head+Euler-step portion wasn't chased down to
+its own cosine -- the per-layer transformer math, which is where any
+real bug would live, is already covered at 0.999978.)
+
+**Minor finding, not prioritized**: the 5-precision table's own
+per-kernel-isolated benchmark showed `mot_joint` jump from 0.044ms
+(even `total=968`, the old x0=512 shape) to 0.195ms (odd `total=969`,
+the new x0=513-with-proprio shape) -- `softmax.cu`'s own kernels
+process columns in `__half2` pairs with a scalar fallback for a
+trailing odd column, and an odd `total` hits that fallback on every
+query row. In ABSOLUTE terms this is small (~0.15ms x 10 steps
+=~1.5ms) against the real 289.5ms end-to-end number, and is the reason
+the 5-precision table's own DERIVED "10-step" total (e.g. FP16 297ms)
+runs slightly higher than the real measured `infer()` (289.5ms) --
+trust the real measured number, not the derived per-kernel sum, for
+this shape. Not worth chasing further given the absolute cost; noted
+here in case it compounds with a future higher-`total` shape.
+
+**Takeaway for Stage 2's own mot/ActionDiT-FA4 item**: given
+`mot_joint`'s own absolute cost (0.04-0.2ms) is negligible next to the
+GEMM-dominated per-layer costs (backbone double/single: 4.9-5.9ms;
+ActionDiT double/single: 0.5-0.7ms) at this real shape, FA4 for the
+"mot" site would not move the total number meaningfully even if it
+worked -- deprioritize that Stage 2 item; the real remaining speed
+lever is precision choice (NVFP4 already ~19% faster than FP16 at this
+shape, `242ms` vs `297ms` derived), not attention-kernel choice.
