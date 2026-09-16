@@ -2708,3 +2708,77 @@ as a FlashRT-vs-official divergence either way) -- worth a quick sanity
 check on the eval harness itself before concluding those 6 tasks are
 really a checkpoint limitation, but not urgent given it doesn't affect
 FlashRT's own correctness story.
+
+# OPT-012: real end-to-end steady-state speed breakdown, real vs official PyTorch
+
+Status: RESOLVED -- real, precise (not estimated) profiling; corrects
+an earlier same-day estimate (VAE guessed at ~15.7% from an older,
+different-resolution historical number; the real current figure is
+7.6%, about half)
+
+Area: whole-pipeline speed, at the real FP16 steady-state config
+(`x0=513` with proprio, real 10-step shift=5.0 schedule) -- both an
+absolute number and a real breakdown of where the time actually goes
+
+## Real vs official PyTorch, end to end (same real checkpoint, same
+224x448 input, same horizon=64, real Thor hardware)
+
+| path | P50 | vs FlashRT (284.9ms) |
+|---|---:|---:|
+| official `infer_action_flux2`, 10-step, re-runs Qwen3 every call | 605 ms | 2.12x slower |
+| official, its own default 20-step | 863 ms | 3.03x slower |
+| official, 10-step, text cached (fair comparison to FlashRT's `infer()`) | 485 ms | **1.70x slower** |
+
+**FlashRT is faster than the official PyTorch reference implementation
+by 1.7-2.1x depending on what's held fixed** -- this is the real
+apples-to-apples speed validation for this whole session's work (a
+prior discussion here compared against an unrelated Wan2.2 number
+without knowing what it actually measured; this comparison is against
+the SAME checkpoint's own reference implementation, same hardware,
+same shapes).
+
+Per-stage, official PyTorch (10-step): Qwen3=118ms (re-run every call
+in the official path -- NOT part of FlashRT's own `infer()`, which
+caches text via `set_prompt()`), VAE=21.5ms, backbone prefill=201ms,
+ActionDiT 10-step=258ms. FlashRT: prefill=118ms (**1.70x faster**),
+denoise=145ms (**1.78x faster**), VAE=21.5ms (same AE, no difference
+expected or found).
+
+## Real steady-state `infer()` breakdown (FlashRT, FP16, P50=284.9ms)
+
+| part | P50 | share |
+|---|---:|---:|
+| ActionDiT 10-step denoise (in-graph) | 144.6 ms | **50.7%** |
+| backbone prefill, 25 layers (in-graph) | 118.4 ms | **41.5%** |
+| VAE `encode_to_tokens` (out-of-graph) | 21.5 ms | **7.6%** |
+| proprio encode | 0.11 ms | ~0% |
+| action noise fill | 0.02 ms | ~0% |
+| denorm + D2H copy | 0.05 ms | ~0% |
+| **sum / measured** | 284.7 / 284.9 ms | 100% |
+
+`graph.replay()` itself: 262.9ms (92.3% of `infer()`). Eager (ungraphed)
+prefill+denoise: 281ms -- graph capture saves ~1.07x, matching OPT-004's
+own earlier "compute-bound, not launch-bound" finding (small, real,
+not the dominant lever). Single denoise step P50=15.5ms x 10 = 155ms,
+consistent with the 10-step loop total.
+
+## Correction to this same session's earlier VAE-share estimate
+
+An earlier turn today estimated VAE at ~15.7% of `infer()`, extrapolated
+from an OLDER historical Thor number (43.9ms, a different round's
+shape/resolution) divided by the CURRENT total (279.5ms). The real,
+directly-measured current figure is **21.5ms / 7.6%** -- about half
+the earlier estimate. **This changes the priority call from the
+previous entry**: VAE fusion (GroupNorm+SiLU -- `cosmos3_edge/vae_native.py`
+already has a real, working precedent for exactly this fusion in this
+same codebase, so this would be adapting existing work, not writing
+from scratch) now has a hard ceiling of 7.6% even if reduced to
+near-zero, smaller than previously implied -- still legitimate,
+real, zero-precision-cost work, just not the highest-value item
+anymore.
+**denoise (50.7%) + prefill (41.5%) = 92.2% of the total dominate by
+far, and both are already running through FlashRT's own kernel system**
+-- the real remaining lever is PRECISION CHOICE on that 92.2% (NVFP4
+already measured ~14-22% faster than FP16 on prefill/denoise
+specifically), not VAE fusion. Re-prioritizing: pick a default
+deployment precision (Stage 3) before investing in VAE fusion.
