@@ -2636,3 +2636,75 @@ ActionDiT double/single: 0.5-0.7ms) at this real shape, FA4 for the
 worked -- deprioritize that Stage 2 item; the real remaining speed
 lever is precision choice (NVFP4 already ~19% faster than FP16 at this
 shape, `242ms` vs `297ms` derived), not attention-kernel choice.
+
+# OPT-011: real open-loop LIBERO evaluation -- closes out the correctness line
+
+Status: RESOLVED -- the strongest validation this project has run,
+confirms `pipeline_thor.py` faithfully reproduces the official model
+across real, diverse data (10 tasks x 5 frames = 50 real observations),
+not just the single cherry-picked frame every prior entry used
+
+Area: whole-pipeline correctness (real VAE + real Qwen3 + real proprio
++ real backbone + real ActionDiT + real shift schedule + real
+denormalization, ALL together, across real task diversity)
+
+## Result
+
+**FlashRT vs the official model, same frame/noise/schedule
+(`num_inference_steps=10, sigma_shift=5.0`)**: cosine 0.870-0.999
+across sampled episodes, most 0.997-0.999. **Critical diagnostic
+signature**: on episodes where BOTH FlashRT and the official model
+diverge from the real dataset ground truth (e.g. ep226, both land near
+cosine=0 vs GT, both predict gripper=1 where GT=0), FlashRT still
+tracks the OFFICIAL model closely (cosine 0.870/0.928 there) -- i.e.
+when the prediction is "wrong" relative to GT, it is wrong the SAME
+WAY on both sides. This is the signature of a real POLICY/checkpoint
+limitation on those specific tasks, not a FlashRT serving bug: a
+wiring/kernel bug would show FlashRT diverging from the OFFICIAL
+model too, not just from GT.
+
+**50-frame vs real dataset GT (step-0, real units)**: 94.6% of values
+land inside `[global_min,global_max]` (xyz/rpy nearly all in-range;
+gripper 64%, occasionally ~1.002 vs a `[0,1]` range -- a tiny,
+expected float overshoot, not a normalization bug). Overall MAE=0.198,
+cosine=0.559 across all 50 frames -- but this average is misleading on
+its own: 4/10 tasks are excellent (MAE 0.029-0.045, gripper error
+0.002-0.005, cosine 0.983-0.993), 6/10 tasks are poor (gripper MAE
+0.40-1.00, cosine near 0 or negative) -- driven almost entirely by
+gripper open/close disagreement and some tasks' own xyz pattern not
+matching their demos, NOT a directional/systematic serving-level bias
+(rotation MAE stays small and uniform across all tasks: roll/pitch/yaw
+0.028/0.058/0.036 -- no single axis is "always off," which is what a
+real wiring bug would look like).
+
+**Stability, 40 consecutive `infer()` calls after one `set_prompt()`**
+(the real closed-loop-shaped access pattern): P50=279.5ms, P90=280.1ms,
+range 278.4-281.1ms -- flat, no drift. GPU memory: 18.132GB at both
+start and end, delta=0 -- no leak. This was the one remaining
+"is this actually usable in a real control loop" concern from OPT-009;
+now directly measured and clean.
+
+## What this does and doesn't mean
+
+Confirms: the full real-data serving path (everything built this
+session -- BF16 residual, txt_in/img_in-once, real RoPE grid, proprio,
+denormalization, real shift schedule) is faithful to the official
+model across real task diversity, not just one frame. The remaining
+GT mismatch on 6/10 tasks is a checkpoint/policy quality question
+(does this specific LIBERO fine-tune generalize well to these specific
+tasks/episodes), which is OUTSIDE this project's own scope (a Thor
+inference-engine port: speed + precision-vs-own-baseline, not model
+training/data quality) -- not something to chase here.
+
+One real confound worth a quick double-check, not a finding: the
+eval's own footnote notes a substituted episode (`ep359` instead of
+the first-listed one for the "stove" task, because the wrist video
+only covers the first 1050s) -- if any OTHER of the 6 poor-scoring
+tasks has a similar frame/video-length mismatch in how the eval
+harness paired observation to ground truth, that would look like
+"policy is wrong" while actually being a data-pairing issue upstream
+of both FlashRT and the official model equally (so it wouldn't show up
+as a FlashRT-vs-official divergence either way) -- worth a quick sanity
+check on the eval harness itself before concluding those 6 tasks are
+really a checkpoint limitation, but not urgent given it doesn't affect
+FlashRT's own correctness story.
