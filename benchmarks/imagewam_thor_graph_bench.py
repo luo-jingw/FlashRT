@@ -47,7 +47,11 @@ def main():
           "(quantizes/allocates every weight -- may take a while)...")
     print(f"Dims: {REAL_DIMS}\n")
 
-    frontend = ImageWAMTorchFrontendThor(dims_override=REAL_DIMS)
+    # Pinned fp16 explicitly: this script measures the graph-capture win
+    # in isolation (module docstring above), and the class default is
+    # now "nvfp4" (Stage 3 decision, opportunities.md), which requires a
+    # Blackwell/Thor build this dev machine doesn't have.
+    frontend = ImageWAMTorchFrontendThor(dims_override=REAL_DIMS, precision="fp16")
     frontend.set_prompt("bench")  # triggers the one-time CUDA Graph capture
     torch.cuda.synchronize()
     print("Graph captured. Running steady-state infer() timing "

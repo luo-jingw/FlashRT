@@ -15,7 +15,11 @@ from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
 
 
 def test_set_prompt_then_repeated_infer():
-    frontend = ImageWAMTorchFrontendThor()
+    # Wiring/CUDA-Graph-replay test, not a precision test -- pin fp16
+    # explicitly since the class default is now "nvfp4" (Stage 3
+    # decision, opportunities.md), which requires a Blackwell/Thor
+    # build this dev machine doesn't have.
+    frontend = ImageWAMTorchFrontendThor(precision="fp16")
 
     frontend.set_prompt("pick up the red cup")
     # Second call with the same prompt must be a fast no-op (no recapture).

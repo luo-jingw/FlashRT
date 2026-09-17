@@ -75,6 +75,16 @@ _PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static
 # one-time calibration call in set_prompt() before graph capture (see
 # _calibrate_fp8 below) -- everything else needs no such step.
 _STATIC_FP8_PRECISIONS = ("fp8_static", "fp8_static_cutlass")
+# Stage 3 default precision decision (opportunities.md, real Thor
+# checklist against real checkpoint weights + real open-loop LIBERO
+# data): nvfp4 is the fastest AND closest to fp16/GT (actions
+# cosine=0.9998 vs fp16, open-loop MAE 1.01x fp16's own). fp8_static*
+# was ruled out -- its per-layer activation calibration is still a
+# placeholder N(0,0.1) guess (img_in excepted), which measurably wrecks
+# accuracy (backbone_hidden cosine ~0.46) independent of which GEMM
+# backend (cuBLASLt or CUTLASS) runs it -- a calibration problem, not a
+# kernel problem, so CUTLASS doesn't fix it. `nvfp4` is a real
+# production default here, not just a benchmark-only opt-in.
 
 DEV = "cuda"
 FP16 = torch.float16
@@ -100,7 +110,7 @@ class ImageWAMTorchFrontendThor:
     """
 
     def __init__(self, checkpoint_dir=None, *, dims_override: dict | None = None,
-                 use_fa4: bool = False, precision: str = "fp16",
+                 use_fa4: bool = False, precision: str = "nvfp4",
                  ckpt_path: str | None = None,
                  ae_model_path: str | None = None, flux2_src: str | None = None,
                  qwen3_model_spec: str | None = None,
@@ -468,6 +478,17 @@ class ImageWAMTorchFrontendThor:
         if self._precision == "fp8":
             return Fp8Linear(w.data_ptr(), n, k)
         if self._precision == "nvfp4":
+            # Real Thor finding (opportunities.md, Stage 3 checklist):
+            # NVFP4 requires K divisible by 16 (`Nvfp4Linear`'s own
+            # constructor check), and the real underlying CUTLASS
+            # block-scaled kernel also rejects action_encoder (K=7) and
+            # head.linear (N=7) -- same structurally-misaligned pair
+            # fp16_cutlass hit. Fall back to plain fp16 for these two
+            # tiny, FLOPs-negligible GEMMs rather than crashing
+            # set_prompt()'s graph capture; every other real weight in
+            # the model is a multiple of 16 already.
+            if n % 16 != 0 or k % 16 != 0:
+                return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return Nvfp4Linear(w.data_ptr(), n, k)
         if self._precision == "fp8_static":
             return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=False)

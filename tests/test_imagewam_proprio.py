@@ -73,8 +73,13 @@ def test_proprio_scatter_matches_real_insertion_rule():
     from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
 
     JA = 16
+    # Wiring test (proprio row placement), not a precision test -- pin
+    # fp16 explicitly since the class default is now "nvfp4" (Stage 3
+    # decision, opportunities.md), which requires a Blackwell/Thor
+    # build this dev machine doesn't have.
     f = ImageWAMTorchFrontendThor(
-        dims_override=dict(x0=9, a0=14, total=18, joint_attention_dim=JA, proprio_dim=3))
+        dims_override=dict(x0=9, a0=14, total=18, joint_attention_dim=JA, proprio_dim=3),
+        precision="fp16")
 
     text_ctx = torch.arange(8 * JA, dtype=torch.float32, device=DEV).reshape(8, JA)
     text_mask = torch.tensor([1, 1, 1, 0, 0, 0, 0, 0], dtype=torch.bool, device=DEV)
@@ -103,7 +108,9 @@ def test_infer_raises_on_missing_proprio():
     `proprio` is given -- proprio is NOT optional once enabled."""
     from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
 
-    f = ImageWAMTorchFrontendThor(dims_override=dict(proprio_dim=8))
+    # Wiring test (missing-proprio contract), not a precision test --
+    # pin fp16 explicitly, same reason as above.
+    f = ImageWAMTorchFrontendThor(dims_override=dict(proprio_dim=8), precision="fp16")
     f.set_prompt()
     try:
         f.infer({})

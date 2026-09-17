@@ -3030,3 +3030,117 @@ toolkit update changes this picture, and as a documented example that
 a win without measuring. Stage 3 (pick a default deployment precision)
 reverts to comparing `fp16`/FP8-static+CUTLASS/NVFP4 only -- this
 entry is closed, not carried forward as a live speed candidate.
+
+# OPT-014: Stage 3 default precision decision -- CLOSED, default is `nvfp4`
+
+Status: CLOSED. Real Thor checklist run against real checkpoint
+weights, real proprio+shift-schedule, and real open-loop LIBERO data
+(the gap every earlier FP8/NVFP4 cosine number in this file had --
+OPT-005/OPT-006's own 0.999242/0.989133 were `test_imagewam_quant_linear.py`'s
+small-shape, single-layer, RANDOM-weight numbers, never re-checked
+through the real 25-layer stack or real GT). `ImageWAMTorchFrontendThor`'s
+default `precision` changed from `"fp16"` to `"nvfp4"`
+(`imagewam_thor.py`) -- this is now a real production default, not
+just a benchmark opt-in.
+
+## Real Thor result 1: full real-weight end-to-end cosine vs `fp16`, same real frame
+
+| | actions | backbone_hidden | action_latent |
+|---|---:|---:|---:|
+| **nvfp4** | **0.9998** | **0.9939** | **0.9997** |
+| fp8_static_cutlass | 0.897 | 0.461 | 0.874 |
+| fp8_static (cuBLASLt) | 0.697 | 0.467 | 0.257 |
+
+**NVFP4's isolated-GEMM 0.989 does NOT get amplified across the real
+25-layer stack** (0.9939 backbone_hidden, if anything closer to 1.0 than
+the single-layer number suggested it might drift). **FP8-static is the
+one that actually degrades badly**, and CUTLASS vs cuBLASLt makes
+almost no difference (0.461 vs 0.467) -- this isolates the cause to
+calibration, not the GEMM backend: every `StaticFp8Linear` weight
+except `img_in` (OPT-004 step 6's own real-token calibration) still
+uses a placeholder `N(0, 0.1)` activation-scale guess, and that
+placeholder is measurably wrong at real-model scale. `_calibrate_fp8()`
+itself ran clean on real weights (no NaN/inf across all ~220 scales,
+`act_scale` ~1e-3) -- the calibration STEP works, its INPUT
+DISTRIBUTION is the problem.
+
+**Real alignment-crash bug, same shape as OPT-013's**: `action_encoder`
+(K=7) / `head.linear` (N=7) fail all three quantized precisions'
+alignment requirements (FP8 CUTLASS `can_implement=-1`, NVFP4 requires
+K%16, FP8 cuBLASLt heuristic also picks a bad algorithm there). Fixed
+in `_wrap_linear` (`imagewam_thor.py`): the `nvfp4` branch now falls
+back to plain `Fp16Linear` for `n % 16 != 0 or k % 16 != 0`, identical
+pattern to OPT-013's `fp16_cutlass` fix -- both quantized tiers need
+this fallback to run end to end at all, since real LIBERO action_dim=7
+never aligns to either family's block size.
+
+## Real Thor result 2: real open-loop LIBERO, 50 frames vs GT (same tasks/frames as OPT-011's own `fp16` run)
+
+| | MAE | vs GT cosine | first 4 (previously-good) tasks' cosine |
+|---|---:|---:|---|
+| fp16 | 0.1985 | 0.559 | 0.983-0.993 |
+| **nvfp4** | 0.2007 (1.01x fp16) | 0.558 | **0.982-0.994** |
+| fp8_static_cutlass | 0.2839 (1.43x fp16) | 0.565 | 0.90-0.95 (regressed) |
+
+NVFP4 reproduces `fp16`'s own error structure almost exactly, including
+on the tasks where `fp16` already tracks GT well. FP8-static visibly
+degrades even the tasks `fp16`/NVFP4 get right -- confirms result 1
+isn't a cosine-metric artifact, it shows up in task-relevant behavior.
+
+## Real Thor result 3: ActionDiT M=64, FP8 CUTLASS vs cuBLASLt
+
+Numerically identical (cosine=1.0) but **CUTLASS is 1.44-1.68x SLOWER**
+at this specific M=64 shape (qkv: 0.023ms cuBLASLt -> 0.034ms CUTLASS)
+-- confirms `_pick_fp8_cutlass_variant`'s heuristic (ported from FP8's
+own backbone-shape tuning, flagged provisional since OPT-006) really
+doesn't transfer to ActionDiT's own small-M shapes, and it's a real
+loss there, not just "no extra benefit." The backbone's own large-M
+CUTLASS win is large enough to still make whole-pipeline
+`fp8_static_cutlass` faster than `fp8_static`, but this specific
+sub-result is now a confirmed regression at this shape, moot only
+because `fp8_static*` is not the chosen default anyway.
+
+## Real Thor result 4: full `infer()` P50 at corrected real conditions (`x0=513`, proprio on, real 10-step shift schedule)
+
+| precision | P50 |
+|---|---:|
+| **nvfp4** | **236.9 ms** |
+| fp8_static_cutlass | 243.0 ms |
+| fp8_static | 259.8 ms |
+| fp16 | 280.2 ms |
+| fp16_cutlass | 306.7 ms |
+
+Supersedes OPT-006's own 97.9ms/92.6ms prefill-only numbers, which
+predate `x0=513` (proprio row), the real shift schedule, and were
+prefill-only rather than full `infer()` -- not directly comparable to
+this table. NVFP4 is fastest here too, by a real margin (15.5% faster
+than `fp16`, 2.5% faster than `fp8_static_cutlass`).
+
+## Real Thor result 5: NVFP4 stability, 40 calls
+
+P50=243.5ms, min-max 243.2-247.3ms (flat), memory delta=0 -- same
+methodology as OPT-011's own `fp16` stability check, same clean result.
+
+## Decision
+
+**Default precision is `nvfp4`**: fastest measured option AND closest
+to `fp16`/GT on both cosine and real open-loop task behavior --
+resolves the correctness-vs-speed tradeoff in NVFP4's favor decisively,
+not narrowly. `fp8_static`/`fp8_static_cutlass` are NOT promoted --
+their real blocker is placeholder per-layer activation calibration
+(`N(0,0.1)`, everywhere except `img_in`), not the GEMM backend
+(CUTLASS and cuBLASLt degrade identically). `fp16` remains available
+and correct (`precision="fp16"`) for any caller that needs an
+un-quantized reference or hits an environment without the Blackwell
+NVFP4 build (`Nvfp4Linear` raises a clear `RuntimeError` there, same
+gate as before).
+
+## Follow-up, not started
+
+Real per-layer activation calibration for `fp8_static*` (replacing the
+`N(0,0.1)` placeholder the way `img_in` already got real-token
+calibration in OPT-004 step 6) would need real representative
+activations captured at every layer, not just the VAE's own entry
+point -- a real project, not a quick fix. Worth revisiting only if
+NVFP4 accuracy is ever found insufficient on a broader/harder task set
+than this checklist's 50 frames covered; not blocking, not scheduled.
