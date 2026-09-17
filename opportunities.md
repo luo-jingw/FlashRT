@@ -1697,6 +1697,33 @@ correct, and rules out reopening it via a different quantization
 pre-processing choice (e.g. dropping Hadamard) — the bottleneck is the
 kernel's hardware dispatch, not the quantization algorithm.
 
+## Root cause, confirmed at the ISA level (not just "probably a compatibility path")
+
+`csrc/gemm/cutlass_sm80_int4_rowwise.cu` (lines ~59-63) templates this
+kernel on `ArchTag = cutlass::arch::Sm80`, `InstructionShape =
+GemmShape<16, 8, 64>` — this is Ampere's real `mma.sync.aligned
+.m16n8k64...s4.s4.s32` integer tensor-core instruction (W4A4). Ada
+(sm_89) and Orin (sm_87) have this exact instruction natively — that's
+why the Ada-vs-Thor control above shows genuine 5.7-9.4x speedups
+there, real tensor-core throughput, not luck. **Thor is sm_110
+(Blackwell); Blackwell's native 4-bit tensor-core path is NVFP4
+(block-scaled), not this plain-s4 ISA.** There is no Blackwell-native
+lowering for `m16n8k64 s4.s4` — CUTLASS still reports `can_implement`
+success and the kernel still launches (`rc=0`), but the actual
+execution must go through some non-tensor-core compatibility/emulation
+path, which is what produces the measured 11-26x slowdown. This is
+the SAME kernel binary and the SAME GEMM shapes that are genuinely
+fast on Ada — confirming the issue is "the wrong ISA landed on the
+wrong GPU generation," not a quantization-scheme or kernel-quality
+problem. **Not planned to be fixed**: the correct fix for a genuine
+4-bit tensor-core path on Thor is NVFP4, which is already the shipped
+default (OPT-014) and already gets a real, measured speed win there —
+writing a new, genuinely Blackwell-native plain-INT4 kernel would
+duplicate what NVFP4 already provides, with no project-scope
+justification (Thor-only; this SM80 kernel's only legitimate future
+target remains a hypothetical true Orin/Ampere deployment, unchanged
+from this entry's existing framing).
+
 ## Expected Mechanism
 
 Same mechanism the Chameleon-7B path already uses in production on its
@@ -3340,3 +3367,83 @@ where a speed change would directly affect the currently-deployed
 default, not just an opt-in alternative -- verify before treating this
 as a real win, same discipline as every other precision change this
 session).
+
+## Real Thor result -- correct, no speed win, REVERTED from the default
+
+`GPU_ARCH=110`, `flash_rt_fp4` rebuilt, `silu_glu_two_fp4_to_fp16`
+confirmed wired (all 55 real MLP-gate slots dispatch through
+`Nvfp4SwiGluMlp`). Real conditions: `x0=513`, proprio on, real 10-step
+shift schedule, real LIBERO dual-camera input.
+
+**Correctness**: finite throughout.
+
+| pair | actions | backbone_hidden | action_latent |
+|---|---:|---:|---:|
+| new fused `nvfp4` vs old (pre-fusion) `nvfp4` | 0.99987 | 0.99382 | 0.99975 |
+| new fused `nvfp4` vs `fp16` | 0.99982 | 0.99303 | 0.99966 |
+| old `nvfp4` vs `fp16` | 0.99981 | 0.99347 | 0.99966 |
+| OPT-014's own `nvfp4` vs `fp16` (reference) | 0.9998 | 0.9939 | 0.9997 |
+
+New-vs-old and old-vs-fp16 land at essentially the SAME distance from
+`fp16` (0.99303 vs 0.99347, 0.99982 vs 0.99981) -- **no measurable
+accuracy regression relative to the actual reference**; the
+0.99382/0.99975 "new vs old" numbers are just two similarly-fp16-close
+implementations differing from EACH OTHER, not from ground truth.
+
+**Root cause of the new-vs-old `backbone_hidden` delta, analyzed
+without Thor access (real Thor per-layer isolation not yet run to
+confirm)**: checked and RULED OUT weight-quantization split-order as
+the cause -- read `csrc/quantize/quantize_fp4_sfa.cu`'s real
+`kernel_quantize_fp4_sfa` directly: "one thread per (row, 16-element
+block)", every row's scale depends ONLY on that row's own 16 K-values,
+no per-tensor/global scale anywhere in this kernel. Splitting a merged
+`(2*mlp_hidden, K)` weight into two `(mlp_hidden, K)` row-groups before
+quantizing is therefore mathematically IDENTICAL, bit-for-bit, to
+quantizing the merged tensor as one block -- this cannot be the cause.
+**More likely real cause**: the new path's gate/up intermediate is
+FP4-PACKED (4-bit e2m1, 16 discrete magnitude levels per block) before
+the combiner reads it, where the old path's intermediate was full fp16
+(16-bit) the whole way through the elementwise combine -- a real,
+structural, one-extra-lossy-quantization-step difference (the actual
+cost side of this fusion's own bandwidth-for-precision trade), not a
+combiner-formula bug (the formula itself was independently verified
+correct against `activation.cu`'s real SiLU). Suggested follow-up
+diagnostic if ever revisited: compare gate/up at a SINGLE isolated
+layer (before any 25-layer compounding) between old and new paths --
+already-low cosine at one layer would confirm the FP4-intermediate-
+precision explanation; only compounding over many layers would instead
+implicate GEMM-algorithm reduction-order non-associativity (the same
+class of benign effect OPT-013 already found and accepted for
+`fp16_cutlass`'s own `backbone_hidden=0.995090`). Not investigated
+further -- moot given the speed result below.
+
+**Speed**: no measured win.
+
+| | `infer()` P50 |
+|---|---:|
+| new fused `nvfp4` | 244.8 ms |
+| old (pre-fusion) `nvfp4`, same commit/build | 244.2 ms |
+| OPT-014's own `nvfp4` measurement | 236.9 ms |
+| OPT-014's own 40-call stability band | 243.2-247.3 ms |
+
+Fused path is 0.6ms SLOWER than the unfused path on the same commit --
+noise-level, and both land inside OPT-014's own already-measured
+stability band. Shrinking the gate/up intermediate from a wide fp16
+buffer to two FP4-packed buffers did not translate into a measurable
+`infer()`-level win at these real shapes (M=513/392/64) -- plausibly
+because two separate FP4 GEMM launches + a new combiner kernel roughly
+offset whatever bandwidth was saved, at shapes this small.
+
+**Decision: REVERTED from the default.** Unlike `fp16_cutlass`
+(OPT-013, always an opt-in tier, never the default), this fusion was
+wired directly into the actual shipped `nvfp4` default -- carrying it
+forward would mean shipping extra representation risk (correctness is
+fine here, but the class of risk is real, see the root-cause
+discussion above) for zero measured benefit. `_load_real_weights` and
+`_rnd_swiglu_mlp` (`imagewam_thor.py`) reverted to the plain merged-
+GEMM path for `nvfp4` (same as before this entry). `Nvfp4SwiGluMlp`
+and `silu_glu_two_fp4_to_fp16` stay in the codebase (correct, real
+Thor-verified, documented) but are not wired to any precision string --
+available if a future shape mix (larger M, different mlp_hidden ratio)
+ever makes the bandwidth trade actually pay off, same "kept but not
+adopted" treatment as `fp16_cutlass`'s own CUTLASS FP16 tile variants.
