@@ -111,26 +111,41 @@ def _extract_double_block(sd: dict, prefix: str, *, sides: tuple[str, ...], pref
     return out
 
 
-def _extract_single_block(sd: dict, prefix: str, *, attn_dim: int) -> dict:
+def _extract_single_block(sd: dict, prefix: str, *, attn_dim: int,
+                           merge_qkv_mlp: bool = False) -> dict:
     """One single-stream block: splits the real fused `linear1`/`linear2`
     into the separate GEMMs `pipeline_thor.py` expects -- mathematically
     identical column-range split, see `real_single_stream_block.py`'s
     own docstring for why. `linear1`: `(3*attn_dim + 2*mlp_hidden, hidden)`
-    real `(out,in)`; `linear2`: `(hidden, attn_dim + mlp_hidden)`."""
+    real `(out,in)`; `linear2`: `(hidden, attn_dim + mlp_hidden)`.
+
+    `merge_qkv_mlp=True` (opportunities.md op-fusion audit finding 1):
+    returns the real, UNSPLIT `linear1.weight` (covers qkv+mlp-gate/up
+    in one tensor) under `"linear1.weight"` instead of splitting it
+    into `qkv.weight`/`mlp_in.weight` -- `pipeline_thor.py`'s own
+    merged-GEMM path reads Q/K/V and the mlp gate/up columns directly
+    out of that one GEMM's output via strided views (no separate
+    `mlp_in` GEMM). `linear2` (attn_out_proj/mlp_down) is UNCHANGED
+    regardless of this flag -- that merge is separate, larger, and not
+    yet attempted (this audit's own "sub-problem 3")."""
     l1 = sd[f"{prefix}.linear1.weight"].detach()  # (out, in) bf16
     l2 = sd[f"{prefix}.linear2.weight"].detach()
-    qkv_w = l1[: 3 * attn_dim, :]
-    mlp_in_w = l1[3 * attn_dim:, :]
     attn_out_w = l2[:, :attn_dim]
     mlp_out_w = l2[:, attn_dim:]
-    return {
-        "qkv.weight": qkv_w.t().contiguous().to(FP16),
-        "mlp_in.weight": mlp_in_w.t().contiguous().to(FP16),
+    out = {
         "attn_out_proj.weight": attn_out_w.t().contiguous().to(FP16),
         "mlp_down.weight": mlp_out_w.t().contiguous().to(FP16),
         "query_norm": _v(sd, f"{prefix}.norm.query_norm.scale"),
         "key_norm": _v(sd, f"{prefix}.norm.key_norm.scale"),
     }
+    if merge_qkv_mlp:
+        out["linear1.weight"] = l1.t().contiguous().to(FP16)
+    else:
+        qkv_w = l1[: 3 * attn_dim, :]
+        mlp_in_w = l1[3 * attn_dim:, :]
+        out["qkv.weight"] = qkv_w.t().contiguous().to(FP16)
+        out["mlp_in.weight"] = mlp_in_w.t().contiguous().to(FP16)
+    return out
 
 
 def load_real_imagewam_state_dict(ckpt_path: str) -> dict:
@@ -160,7 +175,7 @@ def load_real_imagewam_state_dict(ckpt_path: str) -> dict:
 
 def build_real_weights(sd: dict, *, num_double: int, num_single: int,
                         action_num_double: int, action_num_single: int,
-                        action_attn_width: int) -> dict:
+                        action_attn_width: int, merge_qkv_mlp: bool = False) -> dict:
     """Returns a flat dict keyed EXACTLY like `imagewam_thor.py`'s own
     `self._weights` (same 4-tuples `pipeline_thor.py` already expects)
     -- values are raw fp16 `torch.Tensor` (CPU; NOT yet wrapped in
@@ -189,7 +204,8 @@ def build_real_weights(sd: dict, *, num_double: int, num_single: int,
 
     for L in range(num_single):
         block = _extract_single_block(
-            sd, f"mixtures.video.transformer.single_blocks.{L}", attn_dim=hidden)
+            sd, f"mixtures.video.transformer.single_blocks.{L}", attn_dim=hidden,
+            merge_qkv_mlp=merge_qkv_mlp)
         for slot, tensor in block.items():
             weights[("backbone", "single", L, slot)] = tensor
 
@@ -203,7 +219,8 @@ def build_real_weights(sd: dict, *, num_double: int, num_single: int,
             weights[("action_dit", "double", L, slot)] = tensor
     for L in range(action_num_single):
         block = _extract_single_block(
-            sd, f"mixtures.action.single_blocks.{L}", attn_dim=action_attn_width)
+            sd, f"mixtures.action.single_blocks.{L}", attn_dim=action_attn_width,
+            merge_qkv_mlp=merge_qkv_mlp)
         for slot, tensor in block.items():
             weights[("action_dit", "single", L, slot)] = tensor
 

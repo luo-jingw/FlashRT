@@ -148,6 +148,19 @@ class ImageWAMTorchFrontendThor:
         self.dims = dict(_DEFAULT_DIMS)
         if dims_override:
             self.dims.update(dims_override)
+        # op-fusion audit finding 1 (opportunities.md): merge single-
+        # stream blocks' real fused `linear1` (qkv+mlp-gate/up) into ONE
+        # GEMM instead of the historical qkv.weight/mlp_in.weight split
+        # -- every precision except `fp16_cutlass`, which already has
+        # its OWN separate fused mlp-gate/up mechanism
+        # (`CutlassFp16SwiGluMlp`) that needs `mlp_in.weight` as its own
+        # standalone tensor, not a slice of a wider linear1 buffer (that
+        # would need a stride-aware weight-loading path this class
+        # doesn't have -- not attempted, `fp16_cutlass` keeps the old
+        # split unchanged). `linear2` (attn_out_proj+mlp_down) is
+        # UNCHANGED regardless -- a separate, larger, not-yet-attempted
+        # merge (this audit's own "sub-problem 3").
+        self.dims["merge_qkv_mlp"] = precision != "fp16_cutlass"
         d = self.dims
         if d["action_attn_width"] != d["hidden"]:
             raise ValueError(
@@ -590,9 +603,13 @@ class ImageWAMTorchFrontendThor:
                 weights[("backbone", "double", L, f"{prefix}_query_norm")] = self._rnd_norm_scale(HD)
                 weights[("backbone", "double", L, f"{prefix}_key_norm")] = self._rnd_norm_scale(HD)
         for L in range(d["num_layers_single"]):
-            weights[("backbone", "single", L, "qkv.weight")] = self._rnd_linear(3 * hidden, hidden)
+            if self.dims.get("merge_qkv_mlp"):
+                weights[("backbone", "single", L, "linear1.weight")] = self._rnd_linear(
+                    3 * hidden + 2 * mlp_hidden, hidden)
+            else:
+                weights[("backbone", "single", L, "qkv.weight")] = self._rnd_linear(3 * hidden, hidden)
+                weights[("backbone", "single", L, "mlp_in.weight")] = self._rnd_swiglu_mlp(mlp_hidden * 2, hidden)
             weights[("backbone", "single", L, "attn_out_proj.weight")] = self._rnd_linear(hidden, hidden)
-            weights[("backbone", "single", L, "mlp_in.weight")] = self._rnd_swiglu_mlp(mlp_hidden * 2, hidden)
             weights[("backbone", "single", L, "mlp_down.weight")] = self._rnd_linear(hidden, mlp_hidden)
             weights[("backbone", "single", L, "query_norm")] = self._rnd_norm_scale(HD)
             weights[("backbone", "single", L, "key_norm")] = self._rnd_norm_scale(HD)
@@ -614,9 +631,13 @@ class ImageWAMTorchFrontendThor:
             weights[("action_dit", "double", L, "query_norm")] = self._rnd_norm_scale(HD)
             weights[("action_dit", "double", L, "key_norm")] = self._rnd_norm_scale(HD)
         for L in range(d["action_num_layers_single"]):
-            weights[("action_dit", "single", L, "qkv.weight")] = self._rnd_linear(3 * aaw, ahd)
+            if self.dims.get("merge_qkv_mlp"):
+                weights[("action_dit", "single", L, "linear1.weight")] = self._rnd_linear(
+                    3 * aaw + 2 * amh, ahd)
+            else:
+                weights[("action_dit", "single", L, "qkv.weight")] = self._rnd_linear(3 * aaw, ahd)
+                weights[("action_dit", "single", L, "mlp_in.weight")] = self._rnd_swiglu_mlp(amh * 2, ahd)
             weights[("action_dit", "single", L, "attn_out_proj.weight")] = self._rnd_linear(ahd, aaw)
-            weights[("action_dit", "single", L, "mlp_in.weight")] = self._rnd_swiglu_mlp(amh * 2, ahd)
             weights[("action_dit", "single", L, "mlp_down.weight")] = self._rnd_linear(ahd, amh)
             weights[("action_dit", "single", L, "query_norm")] = self._rnd_norm_scale(HD)
             weights[("action_dit", "single", L, "key_norm")] = self._rnd_norm_scale(HD)
@@ -640,7 +661,7 @@ class ImageWAMTorchFrontendThor:
         raw = build_real_weights(
             sd, num_double=d["num_layers_double"], num_single=d["num_layers_single"],
             action_num_double=d["action_num_layers_double"], action_num_single=d["action_num_layers_single"],
-            action_attn_width=d["action_attn_width"])
+            action_attn_width=d["action_attn_width"], merge_qkv_mlp=d.get("merge_qkv_mlp", False))
 
         weights = {}
         seen_shared: dict[int, object] = {}  # id(cpu tensor) -> wrapped/ptr, for shared txt_in/img_in
@@ -711,6 +732,15 @@ class ImageWAMTorchFrontendThor:
             "img_qkv_merged": z(img_len, 3 * hidden).data_ptr(),
             "single_qkv_merged": z(a0, 3 * hidden).data_ptr(),
             "action_qkv_merged": z(num_action, 3 * aaw).data_ptr(),
+            # op-fusion audit finding 1: single-stream blocks' real
+            # fused linear1 (qkv+mlp-gate/up in ONE GEMM) output, used
+            # instead of single_qkv_merged/single_mlp_merged (and their
+            # action_dit counterparts) when merge_qkv_mlp is set. Both
+            # buffer sets are always allocated (a real but small, ~50MB
+            # combined, memory overhead) so `fp16_cutlass`'s own
+            # unmerged path keeps working unchanged.
+            "single_linear1_merged": z(a0, 3 * hidden + 2 * mlp_hidden).data_ptr(),
+            "action_linear1_merged": z(num_action, 3 * aaw + 2 * amh).data_ptr(),
             "action_latent_fp16": z(num_action, action_dim).data_ptr(),
             "velocity": z(num_action, action_dim).data_ptr(),
             "head_modded": z(num_action, ahd).data_ptr(),

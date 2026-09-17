@@ -3233,11 +3233,20 @@ point -- a real project, not a quick fix. Worth revisiting only if
 NVFP4 accuracy is ever found insufficient on a broader/harder task set
 than this checklist's 50 frames covered; not blocking, not scheduled.
 
-# OPT-015: systematic op-fusion audit vs. official ImageWAM, finding 2 implemented
+# OPT-015: systematic op-fusion audit vs. official ImageWAM
 
-Status: audit complete (fork, read-only); finding 2 implemented and
-locally syntax/wiring-verified, NOT yet Thor-verified. Finding 1 not
-started (see below).
+Status: audit complete (fork, read-only). Finding 2 (NVFP4 SwiGLU
+fusion) implemented, real-Thor-verified, REVERTED from the default (no
+measured win, see its own dated section below). Finding 1's
+sub-problem 1 (qkv+mlp_in merge into one real `linear1` GEMM)
+IMPLEMENTED and FULLY LOCALLY VERIFIED (bit-for-bit cosine match
+against the split path, not just syntax-checked) -- the only fusion
+attempted this whole session that didn't need Thor to confirm
+correctness, since it's plain scalar CUDA with no tensor-core/CUTLASS
+dependency. Sub-problem 3 (linear2/attn_out+mlp_down merge) not
+started. Two further candidates (gated-residual CUTLASS epilogue,
+RMSNorm-prologue fusion) evaluated and both closed as "defer, don't
+attempt" -- see their own sections below.
 
 Area: "scheduler/graph alignment" work item, deprioritized in the
 original top-level plan pending precision correctness -- picked back up
@@ -3447,3 +3456,129 @@ Thor-verified, documented) but are not wired to any precision string --
 available if a future shape mix (larger M, different mlp_hidden ratio)
 ever makes the bandwidth trade actually pay off, same "kept but not
 adopted" treatment as `fp16_cutlass`'s own CUTLASS FP16 tile variants.
+
+## Candidate: gated-residual CUTLASS epilogue fusion -- evaluated, DEFER
+
+`gate_res_fp16`/`gate_res_bf16res` (`csrc/kernels/decoder_fused.cu`)
+computes `residual += gate_vector * proj_output` (per-channel `gate`,
+not a scalar), currently a standalone elementwise kernel reading
+`proj_output` right after the preceding down-projection GEMM writes it
+to DRAM. Folding this into that GEMM's own epilogue was flagged in
+OPT-013 as a real candidate, deliberately not designed there. Forked a
+feasibility assessment (read-only): CUTLASS *does* have the right
+semantic building block, `PerColLinCombPerColBiasEltAct`
+(`third_party/cutlass/include/cutlass/epilogue/fusion/operations.hpp:302-317`,
+`D = activation(per-col alpha*acc + per-col beta*C + per-col bias)` --
+exactly this math with `alpha=gate, beta=1, bias=0`), but it is only
+wired up for SM90 (Hopper) in this vendored CUTLASS snapshot
+(`sm90_callbacks_tma_warpspecialized.hpp`) -- SM100 (Thor's real
+target, the same `cutlass_fp16_k64_*` family OPT-013 uses) has
+`FusionCallbacks` specializations only for the FP4/FP8 block-scale-
+factor variants, nothing for a plain per-column accumulate-into-C.
+Would need genuine new SM100 epilogue-visitor authoring with no
+existing template in this codebase to copy from (unlike every fusion
+actually shipped this session, which reused existing kernel
+infrastructure). Quantified target: eliminating `proj_output`'s own
+DRAM round-trip is a SMALLER buffer (`hidden`-width, one tensor) than
+either OPT-013's CUTLASS swap or OPT-015 finding 2's `Nvfp4SwiGluMlp`
+(`2*mlp_hidden`-width) -- both of which were real, correct, and showed
+**zero** measured `infer()` win despite bigger targets and lower
+authoring risk. **Verdict: defer, do not attempt** -- worse expected
+value than either already-negative precedent, given OPT-004's own
+compute-bound finding.
+
+## Candidate: RMSNorm+modulate to QKV-GEMM prologue fusion -- evaluated, DEFER
+
+A new candidate (not from the original audit): fuse the norm+modulate
+step (`ada_layer_norm_fp16`/`ada_layer_norm_bf16in_fp16out`, already
+one kernel) into the FOLLOWING GEMM's own PROLOGUE (input side),
+eliminating the `modded` buffer's DRAM round-trip entirely -- the one
+fusion axis nothing this session has tried (every fusion so far is
+either elementwise-kernel bundling or GEMM EPILOGUE/output-side
+fusion). Forked a feasibility assessment: CUTLASS's vendored epilogue
+visitor tree is entirely output-side (`gemm/collective/` has no
+prologue/input-visitor concept at all, confirmed by grep). Worse,
+this is architecturally awkward regardless of tooling: RMSNorm needs a
+full row's reduction (sum-of-squares across all of K) BEFORE any of
+that row can be scaled, which fights CUTLASS's own tile-at-a-time
+mainloop streaming -- a real fused prologue would need a genuinely
+custom two-pass mainloop, a bigger, more novel piece of authoring than
+even the deferred gated-residual epilogue above (which at least
+extends CUTLASS's existing, working EVT pattern). Quantified savings
+(real shapes, all real per-layer call sites, full `infer()`): ~340-470
+MiB of DRAM traffic in the best case -- SMALLER than OPT-015 finding
+2's own already-measured non-win, and single-stream layers can't even
+fully realize it without ALSO merging `linear1` (their one `modded`
+buffer is read by two separate GEMMs today). **Verdict: defer
+indefinitely, not "pending Finding 1"** -- worse cost/benefit than
+either open candidate, not worth carrying forward as a live candidate.
+
+## Finding 1, sub-problem 1: qkv+mlp_in merge -- IMPLEMENTED, fully locally verified
+
+Unlike every other precision/kernel change this session (all gated
+behind Thor-only CUTLASS/NVFP4 builds, verifiable locally only via an
+sm_90a syntax-check substitute at best), this fusion is plain scalar
+CUDA with zero tensor-core dependency -- genuinely, numerically
+verifiable on this Ada dev machine, not just syntax-checked.
+
+**What changed**: the real official single-stream blocks
+(`SingleStreamBlock`/`SlimFlux2SingleBlock`) run QKV and MLP-gate/up
+as ONE real `linear1` GEMM; `checkpoint_loader.py`'s
+`_extract_single_block` used to always split it into separate
+`qkv.weight`/`mlp_in.weight` slots (a deliberate historical
+simplification, `real_single_stream_block.py`'s own docstring,
+because `silu_glu_merged_fp16` hardcoded its input's row stride to its
+own width). Fixed the actual blocker directly: `silu_glu_merged_kernel`
+(`csrc/kernels/activation.cu`) gained a `row_stride` parameter
+(defaults to `half_dim*2`, every existing caller's own tightly-packed
+layout, unchanged) so it can read gate/up straight out of a
+column-slice of a WIDER buffer -- confirmed bit-exact against a plain
+torch reference for both the default (unchanged) and wide-stride
+(new) cases, not just cosine-close.
+
+`_extract_single_block`/`build_real_weights` gained a
+`merge_qkv_mlp: bool` param: `True` (every precision except
+`fp16_cutlass`, which keeps its own separate `mlp_in.weight`-based
+`CutlassFp16SwiGluMlp` mechanism unchanged) returns the real, UNSPLIT
+`linear1.weight` under one key instead of splitting it.
+`imagewam_thor.py` sets `self.dims["merge_qkv_mlp"] = precision !=
+"fp16_cutlass"` once at construction, threads it through
+`_load_real_weights`/`_alloc_random_weights`/the buffer-allocation
+dict (new `single_linear1_merged`/`action_linear1_merged` buffers,
+always allocated alongside the old split ones -- a small, ~50MB
+combined memory overhead accepted for zero code-complexity cost, so
+`fp16_cutlass`'s own unmerged path needs no special handling).
+`pipeline_thor.py`'s `_single_stream_layer`/`_action_single_layer`
+branch on `dims.get("merge_qkv_mlp")`: the merged path runs ONE
+`linear1.weight` GEMM, reads Q/K/V via the existing `_copy_slice`
+column-slice technique (already used for the QKV-only merge that
+predates this entry), and calls the now-stride-aware
+`silu_glu_merged_fp16` directly on the mlp-gate/up column range --
+`_mlp_gate_up`'s own separate-GEMM path is skipped entirely for this
+case (no `mlp_in` GEMM exists any more, nothing to skip TO). `linear2`
+(attn_out_proj+mlp_down, sub-problem 3) is completely unchanged.
+
+**Verification**: two new tests
+(`tests/test_imagewam_thor_real_wiring.py`:
+`test_single_stream_layer_merged_linear1_matches_real_reference`,
+and a merged-linear1 check appended to
+`test_action_double_and_single_layers_match_real_reference`) build the
+SAME real weight VALUES both ways (split into `qkv`/`mlp_in`, and
+concatenated into one `linear1`) and compare the merged pointer-path
+output against the SAME already-verified tensor-level reference used
+for the split path. Result: cosine=0.999998 (backbone single-stream)
+and cosine=1.000000 (ActionDiT single-stream) -- **identical to the
+split path's own numbers**, not just "close". Full existing regression
+suite (`test_imagewam_frontend`, `test_imagewam_proprio`,
+`test_imagewam_checkpoint_loader` real 343-tensor real-checkpoint
+load, `test_imagewam_scheduler`) passes unchanged.
+
+**Not yet done**: real Thor speed measurement (this fusion removes one
+real GEMM launch + one `modded`-buffer re-read per single-stream layer
+-- 20 backbone layers once per prefill, 20 ActionDiT layers x 10
+denoise steps per `infer()`; the backbone side has real bandwidth
+savings at large M, the ActionDiT side is tiny-M/launch-bound per
+OPT-004's own finding and may show little to no win, same pattern as
+OPT-015 finding 2 and OPT-013). Sub-problem 3 (`linear2` merge) still
+not started -- the audit's own recommendation was to measure this one
+standalone first.

@@ -56,8 +56,13 @@ void gate_geglu_merged_fp16(const __half* merged, __half* out,
 // (`x1, x2 = x.chunk(2, dim=-1); return silu(x1) * x2`) exactly, found
 // while reading flux2/model.py directly. The existing gate_geglu_*
 // kernels use GELU and are for a DIFFERENT model; not reusable here.
+// `row_stride`: 0 (default) means "tightly packed, use half_dim*2" --
+// every existing caller's own layout, unchanged. Pass a wider buffer's
+// real row width to read gate/up from a column-slice of it instead
+// (opportunities.md op-fusion audit finding 1).
 void silu_glu_merged_fp16(const __half* merged, __half* out,
-                           int seq, int half_dim, cudaStream_t stream = 0);
+                           int seq, int half_dim, cudaStream_t stream = 0,
+                           int row_stride = 0);
 
 // Element-wise multiply: out[i] = a[i] * b[i] for i in [0, n).
 // FP16 inputs and output, FP32 multiply.  Used by R3.1 split-G7 path
