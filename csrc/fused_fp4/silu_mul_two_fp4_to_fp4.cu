@@ -75,6 +75,19 @@ __device__ __forceinline__ float silu_mul_p1(float g, float u) {
     return gelu * u;
 }
 
+// TRUE SiLU (x * sigmoid(x)), NOT the GELU-tanh approximation above despite
+// this file's own naming/comments -- confirmed by direct read: the formula
+// above is `x/(1+exp(-sqrt(2/pi)*2*(x+0.044715x^3)))`, the standard GELU-tanh
+// approximation (1.5957691216057308 == 2*sqrt(2/pi)), not SiLU. ImageWAM's
+// real `silu_glu_merged_kernel` (csrc/kernels/activation.cu) uses exact
+// `g/(1+exp(-g))` -- this is that formula, for FP4 gate/up inputs. Added for
+// opportunities.md's op-fusion audit finding 2 (ImageWAM's NVFP4 MLP gate/up
+// had no fused SwiGLU path at all -- see Nvfp4SwiGluMlp, quant_linear.py).
+__device__ __forceinline__ float true_silu_mul_p1(float g, float u) {
+    float silu = g / (1.0f + expf(-g));
+    return silu * u;
+}
+
 __device__ float geglu_gate_lut_p1[256 * 16];
 
 std::once_flag g_geglu_gate_lut_once;
@@ -200,6 +213,62 @@ __global__ void silu_mul_two_fp4_to_fp4_kernel(
         uint8_t lo = fp32_to_e2m1_p1(vals[2*p]   * inv_bs);
         uint8_t hi = fp32_to_e2m1_p1(vals[2*p+1] * inv_bs);
         op[p] = lo | (hi << 4);
+    }
+}
+
+// ImageWAM's own NVFP4 SwiGLU combiner: TRUE silu(gate)*up over two FP4
+// inputs, writing a PLAIN fp16 [S, H] output directly -- no output
+// requantization/SFA (unlike silu_mul_two_fp4_to_fp4_kernel above, which
+// re-packs to FP4 for a downstream FP4-consuming GEMM). The immediate
+// consumer here is the existing unchanged down-projection GEMM slot
+// (Nvfp4Linear for mlp2/mlp_down), which already re-quantizes its own fp16
+// input internally -- writing fp16 here avoids needing a second, tile-
+// interleaved-SFA-aware dequant kernel for a case that doesn't need one.
+// Still real: replaces [1 wide fp16-merged NVFP4 GEMM -> write 2*H-wide
+// fp16 buffer -> silu_glu_merged_fp16 reads it -> writes H-wide gated
+// buffer] with [2 separate NVFP4 GEMMs, each producing an H-wide FP4-
+// PACKED (4-bit, ~1/4 the bytes of fp16) intermediate -> this kernel reads
+// both, writes the H-wide fp16 gated buffer directly] -- see
+// opportunities.md's op-fusion audit finding 2 / Nvfp4SwiGluMlp.
+template <class LayoutSF>
+__global__ void silu_glu_two_fp4_to_fp16_kernel(
+    const uint8_t* __restrict__ gate_packed,   // [S, H/2]
+    const uint8_t* __restrict__ gate_sfa,
+    const uint8_t* __restrict__ up_packed,     // [S, H/2]
+    const uint8_t* __restrict__ up_sfa,
+    __half* __restrict__ out,                  // [S, H]
+    LayoutSF layout_in,                        // SFA layout for inputs (S, H)
+    int H) {
+    const int block_idx = blockIdx.y * blockDim.x + threadIdx.x;
+    const int row       = blockIdx.x;
+    const int n_blocks  = H / 16;
+    if (block_idx >= n_blocks) return;
+
+    const int col_base = block_idx * 16;
+
+    int sfa_off = layout_in(row, col_base, 0);
+    uint8_t gate_sf_byte = gate_sfa[sfa_off];
+    uint8_t up_sf_byte   = up_sfa[sfa_off];
+    __nv_fp8_e4m3 gate_bs_q, up_bs_q;
+    *reinterpret_cast<uint8_t*>(&gate_bs_q) = gate_sf_byte;
+    *reinterpret_cast<uint8_t*>(&up_bs_q)   = up_sf_byte;
+    float gate_scale = static_cast<float>(gate_bs_q);
+    float up_scale   = static_cast<float>(up_bs_q);
+
+    const uint8_t* gp = gate_packed + row * (H / 2) + block_idx * 8;
+    const uint8_t* up = up_packed   + row * (H / 2) + block_idx * 8;
+    __half* op = out + row * H + col_base;
+
+    #pragma unroll
+    for (int p = 0; p < 8; ++p) {
+        uint8_t gb = gp[p];
+        uint8_t ub = up[p];
+        float g_lo = e2m1_to_fp32_p1(gb & 0xF) * gate_scale;
+        float g_hi = e2m1_to_fp32_p1(gb >> 4)  * gate_scale;
+        float u_lo = e2m1_to_fp32_p1(ub & 0xF) * up_scale;
+        float u_hi = e2m1_to_fp32_p1(ub >> 4)  * up_scale;
+        op[2*p]   = __float2half(true_silu_mul_p1(g_lo, u_lo));
+        op[2*p+1] = __float2half(true_silu_mul_p1(g_hi, u_hi));
     }
 }
 
@@ -362,6 +431,29 @@ void silu_mul_two_fp4_to_fp4(
 #else
     (void)gate_packed; (void)gate_sfa; (void)up_packed; (void)up_sfa;
     (void)out_packed; (void)out_sfa; (void)seq_len; (void)H; (void)stream;
+#endif
+}
+
+void silu_glu_two_fp4_to_fp16(
+    const uint8_t* gate_packed, const uint8_t* gate_sfa,
+    const uint8_t* up_packed,   const uint8_t* up_sfa,
+    __half* out,
+    int seq_len, int H, cudaStream_t stream) {
+#if FV_HAVE_CUTLASS
+    auto shape = cute::make_shape(seq_len, 1, H, 1);
+    auto layout = CfgF4P1::tile_atom_to_shape_SFA(shape);
+
+    const int n_blocks = H / 16;
+    const int threads = 256;
+    const int y_groups = (n_blocks + threads - 1) / threads;
+    dim3 grid(seq_len, y_groups);
+    dim3 block(threads);
+    silu_glu_two_fp4_to_fp16_kernel<<<grid, block, 0, stream>>>(
+        gate_packed, gate_sfa, up_packed, up_sfa, out, layout, H);
+    check_fp4_kernel_launch("silu_glu_two_fp4_to_fp16");
+#else
+    (void)gate_packed; (void)gate_sfa; (void)up_packed; (void)up_sfa;
+    (void)out; (void)seq_len; (void)H; (void)stream;
 #endif
 }
 

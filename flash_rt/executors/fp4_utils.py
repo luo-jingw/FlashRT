@@ -212,6 +212,22 @@ def geglu_two_fp4_to_fp4(
         S, H, stream)
 
 
+def silu_glu_two_fp4_to_fp16(
+        gate_packed: int, gate_sfa: int,
+        up_packed: int,   up_sfa: int,
+        out: int,
+        S: int, H: int, stream: int = 0) -> None:
+    """ImageWAM's own combiner: TRUE `silu(gate) * up` (real `g/(1+exp(-g))`,
+    NOT `geglu_two_fp4_to_fp4`'s GELU-tanh approximation) over two FP4
+    inputs, writing a plain fp16 `[S, H]` output directly -- no FP4
+    requantization/output SFA, since the immediate consumer (the down-
+    projection GEMM) already re-quantizes its own fp16 input internally.
+    See `quant_linear.py`'s `Nvfp4SwiGluMlp`, opportunities.md op-fusion
+    audit finding 2."""
+    fvk_fp4.silu_glu_two_fp4_to_fp16(
+        gate_packed, gate_sfa, up_packed, up_sfa, out, S, H, stream)
+
+
 def fp4_gemm(scratch: FP4ActScratch, w_quant: dict, out: torch.Tensor,
              M: int, N: int, K: int, variant_idx: int = -1,
              alpha: float = 1.0, beta: float = 0.0,

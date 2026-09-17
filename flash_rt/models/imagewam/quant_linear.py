@@ -505,3 +505,97 @@ class Nvfp4Linear:
         out = _wrap_fp16(out_ptr, m, self.n)
         self._quant_act(x, self.scratch, m, stream)
         self._fp4_gemm(self.scratch, self.w_quant, out, m, self.n, self.k, stream=stream)
+
+
+class Nvfp4SwiGluMlp:
+    """ImageWAM's own NVFP4 MLP gate/up fusion (opportunities.md op-fusion
+    audit finding 2, mirrors `CutlassFp16SwiGluMlp` above but for NVFP4).
+
+    Today's `nvfp4` MLP-gate path (via the generic `_wrap_linear`/
+    `Nvfp4Linear` dispatch every OTHER precision also uses) is: one WIDE
+    NVFP4 GEMM against the real checkpoint's own merged `(2*mlp_hidden, K)`
+    weight -> a full `(m, 2*mlp_hidden)` fp16 buffer written -> the plain
+    `silu_glu_merged_fp16` kernel reads it -> a `(m, mlp_hidden)` fp16
+    gated buffer written. This class instead: splits the SAME merged
+    weight into two `(mlp_hidden, K)` NVFP4-quantized halves at
+    construction (one-time, mirrors `CutlassFp16SwiGluMlp`'s own column-
+    split) -> two separate NVFP4 GEMMs, each producing an `(m, mlp_hidden)`
+    FP4-PACKED (4-bit, ~1/4 the bytes of fp16) intermediate via
+    `fp4out_gemm`/`FP4Buffer` (the "split-GU FFN path" building blocks
+    this codebase already had for a different model, never wired to
+    ImageWAM) -> the new TRUE-SiLU combiner kernel
+    (`silu_glu_two_fp4_to_fp16`, added alongside this class -- the
+    existing `geglu_two_fp4_to_fp4` computes GELU-tanh, confirmed by
+    reading its actual device-code formula, not SiLU, despite its
+    "silu_mul" internal naming) reads both FP4-packed intermediates and
+    writes the `(m, mlp_hidden)` fp16 gated buffer directly, no FP4
+    requantization needed since the down-projection GEMM immediately
+    after (unchanged, still the generic `Nvfp4Linear` dispatch) already
+    re-quantizes its own fp16 input internally.
+
+    Net effect: the intermediate gate/up representation is FP4-packed
+    instead of a full-width fp16 merged buffer -- real DRAM-traffic
+    reduction on the intermediate, not just a launch-count change (see
+    this codebase's own `silu_mul_two_fp4_to_fp4.cu` module docstring:
+    "reads HALF the activation DRAM... vs fp16 today" for the same
+    mechanism in a different model). Activation is quantized to FP4 ONCE
+    per call and reused for both GEMMs (matches the existing single-wide-
+    GEMM path's own single activation-quant cost, not doubled).
+    """
+
+    def __init__(self, merged_weight_fp16_ptr: int, mlp_hidden: int, k: int):
+        try:
+            import flash_rt.flash_rt_fp4  # noqa: F401 -- import-time availability check
+            from flash_rt.executors.fp4_utils import (
+                FP4ActScratch,
+                FP4Buffer,
+                fp4out_gemm,
+                quant_act_nvfp4,
+                quant_weight_nvfp4,
+                silu_glu_two_fp4_to_fp16,
+            )
+        except ImportError as e:
+            raise RuntimeError(
+                "Nvfp4SwiGluMlp requires a Blackwell/Thor NVFP4 build "
+                "(flash_rt.flash_rt_fp4) -- configure cmake with "
+                "-DGPU_ARCH=110 and rebuild (see "
+                "benchmarks/imagewam_thor_fp4_bench.py's own docstring)."
+            ) from e
+        if k % 16 != 0:
+            raise ValueError(f"NVFP4 requires K divisible by 16, got K={k}")
+        self.mlp_hidden, self.k = int(mlp_hidden), int(k)
+        self._fp4_act_scratch_cls = FP4ActScratch
+        self._fp4_buffer_cls = FP4Buffer
+        self._fp4out_gemm = fp4out_gemm
+        self._quant_act = quant_act_nvfp4
+        self._combine = silu_glu_two_fp4_to_fp16
+
+        w_kn = _wrap_fp16(merged_weight_fp16_ptr, self.k, 2 * self.mlp_hidden)  # (K, 2*mlp_hidden)
+        w_gate_nk = w_kn[:, :self.mlp_hidden].t().contiguous()  # (mlp_hidden, K), NVFP4's own convention
+        w_up_nk = w_kn[:, self.mlp_hidden:].t().contiguous()    # (mlp_hidden, K)
+        self.w_gate_quant = quant_weight_nvfp4(w_gate_nk)
+        self.w_up_quant = quant_weight_nvfp4(w_up_nk)
+
+        self.scratch = None
+        self._gate_buf = None
+        self._up_buf = None
+        self._max_m = 0
+
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
+        if self.scratch is None or m > self._max_m:
+            self.scratch = self._fp4_act_scratch_cls(m, self.k, device=DEV)
+            self._gate_buf = self._fp4_buffer_cls(m, self.mlp_hidden, device=DEV)
+            self._up_buf = self._fp4_buffer_cls(m, self.mlp_hidden, device=DEV)
+            self._max_m = m
+        x = _wrap_fp16(x_ptr, m, self.k)
+        out = _wrap_fp16(out_ptr, m, self.mlp_hidden)
+        self._quant_act(x, self.scratch, m, stream)
+        self._fp4out_gemm(self.scratch, self.w_gate_quant,
+                           self._gate_buf.packed.data_ptr(), self._gate_buf.sfa.data_ptr(),
+                           m, self.mlp_hidden, self.k, stream=stream)
+        self._fp4out_gemm(self.scratch, self.w_up_quant,
+                           self._up_buf.packed.data_ptr(), self._up_buf.sfa.data_ptr(),
+                           m, self.mlp_hidden, self.k, stream=stream)
+        self._combine(self._gate_buf.packed.data_ptr(), self._gate_buf.sfa.data_ptr(),
+                      self._up_buf.packed.data_ptr(), self._up_buf.sfa.data_ptr(),
+                      out.data_ptr(), m, self.mlp_hidden, stream)

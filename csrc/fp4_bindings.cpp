@@ -1121,6 +1121,38 @@ same contract as cutlass_fp4_gemm_geglu_il_hw.
         py::arg("seq_len"), py::arg("half_dim"), py::arg("stream") = 0,
         "P1: GEGLU over two FP4 inputs → FP4 + SFA.");
 
+  // ── ImageWAM: silu_glu_two_fp4_to_fp16 -- TRUE SiLU combiner, FP4 in / fp16 out ──
+  m.def("silu_glu_two_fp4_to_fp16",
+        [](uintptr_t gate_packed, uintptr_t gate_sfa,
+           uintptr_t up_packed,   uintptr_t up_sfa,
+           uintptr_t out,
+           int seq_len, int half_dim, uintptr_t stream) {
+          const auto shape = fp4_kernel_shape({{"seq_len", seq_len},
+                                                {"half_dim", half_dim}});
+          require_fp4_ptrs("silu_glu_two_fp4_to_fp16",
+                           {{"gate_packed", gate_packed}, {"gate_sfa", gate_sfa},
+                            {"up_packed", up_packed}, {"up_sfa", up_sfa},
+                            {"out", out}}, shape);
+          require_fp4(seq_len > 0 && half_dim > 0 && (half_dim % 16) == 0,
+                      "silu_glu_two_fp4_to_fp16",
+                      "seq_len must be positive and half_dim must be a positive multiple of 16",
+                      shape);
+          flash_rt::fused_fp4::silu_glu_two_fp4_to_fp16(
+              reinterpret_cast<const uint8_t*>(gate_packed),
+              reinterpret_cast<const uint8_t*>(gate_sfa),
+              reinterpret_cast<const uint8_t*>(up_packed),
+              reinterpret_cast<const uint8_t*>(up_sfa),
+              reinterpret_cast<__half*>(out),
+              seq_len, half_dim,
+              reinterpret_cast<cudaStream_t>(stream));
+        },
+        py::arg("gate_packed"), py::arg("gate_sfa"),
+        py::arg("up_packed"),   py::arg("up_sfa"),
+        py::arg("out"),
+        py::arg("seq_len"), py::arg("half_dim"), py::arg("stream") = 0,
+        "ImageWAM: TRUE silu(gate)*up over two FP4 inputs → plain fp16 output "
+        "(no FP4 requantization). See opportunities.md op-fusion audit finding 2.");
+
   // ── bf16-activation NVFP4 path (GR00T N1.7 DiT) ─────────────────────
   m.def("quantize_fp4_dynamic_sfa_bf16_vec",
         [](uintptr_t src, uintptr_t packed, uintptr_t sfa,

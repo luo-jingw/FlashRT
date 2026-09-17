@@ -23,6 +23,17 @@ void silu_mul_two_fp4_to_fp4(
     uint8_t* out_packed, uint8_t* out_sfa,
     int seq_len, int H, cudaStream_t stream);
 
+// TRUE silu(gate) * up (not the GELU-tanh approximation the function above
+// actually computes despite its name) over two FP4 inputs, writing a plain
+// fp16 [seq_len, H] output directly (no FP4 requantization/output SFA) --
+// ImageWAM's own NVFP4 MLP gate/up fusion, opportunities.md op-fusion audit
+// finding 2 / Nvfp4SwiGluMlp (quant_linear.py).
+void silu_glu_two_fp4_to_fp16(
+    const uint8_t* gate_packed, const uint8_t* gate_sfa,
+    const uint8_t* up_packed,   const uint8_t* up_sfa,
+    __half* out,
+    int seq_len, int H, cudaStream_t stream);
+
 // Same as above + per-input-channel multiply by inv_s (AWQ Down activation
 // scaling). Applied to the silu_mul fp32 result BEFORE per-block FP4 quant
 // so the per-block amax reflects the post-AWQ distribution. inv_s is

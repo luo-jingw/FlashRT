@@ -66,6 +66,7 @@ from flash_rt.models.imagewam.quant_linear import (
     Fp8Linear,
     Fp16Linear,
     Nvfp4Linear,
+    Nvfp4SwiGluMlp,
     StaticFp8Linear,
 )
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
@@ -438,16 +439,21 @@ class ImageWAMTorchFrontendThor:
     def _rnd_swiglu_mlp(self, n: int, k: int):
         """`_rnd_linear`'s counterpart for the merged MLP gate/up
         projection (`{txt,img}_mlp0.weight`/`mlp0.weight`/`mlp_in.weight`,
-        `n=2*mlp_hidden`) -- opportunities.md OPT-013. Only
-        `precision=="fp16_cutlass"` gets the fused `CutlassFp16SwiGluMlp`;
-        every other precision falls back to the plain `_rnd_linear`
-        (one wide GEMM, `pipeline_thor.py`'s own `_mlp_gate_up` helper
-        then does the separate `silu_glu_merged_fp16` step as before)."""
-        if self._precision != "fp16_cutlass":
-            return self._rnd_linear(n, k)
-        mlp_hidden = n // 2
-        w = self._own(torch.randn(k, n, dtype=FP16, device=DEV) * 0.02)
-        return CutlassFp16SwiGluMlp(w.data_ptr(), mlp_hidden, k)
+        `n=2*mlp_hidden`) -- opportunities.md OPT-013/op-fusion audit
+        finding 2. `precision=="fp16_cutlass"` gets `CutlassFp16SwiGluMlp`,
+        `"nvfp4"` gets `Nvfp4SwiGluMlp`; every other precision falls back
+        to the plain `_rnd_linear` (one wide GEMM, `pipeline_thor.py`'s
+        own `_mlp_gate_up` helper then does the separate
+        `silu_glu_merged_fp16` step as before)."""
+        if self._precision == "fp16_cutlass":
+            mlp_hidden = n // 2
+            w = self._own(torch.randn(k, n, dtype=FP16, device=DEV) * 0.02)
+            return CutlassFp16SwiGluMlp(w.data_ptr(), mlp_hidden, k)
+        if self._precision == "nvfp4":
+            mlp_hidden = n // 2
+            w = self._own(torch.randn(k, n, dtype=FP16, device=DEV) * 0.02)
+            return Nvfp4SwiGluMlp(w.data_ptr(), mlp_hidden, k)
+        return self._rnd_linear(n, k)
 
     def _wrap_linear(self, w: torch.Tensor, n: int, k: int):
         """Wrap an already-materialized `(k,n)` fp16 CUDA weight tensor
@@ -666,6 +672,15 @@ class ImageWAMTorchFrontendThor:
                 n, k = t.shape[1], t.shape[0]
                 tg = self._own(t.to(DEV).contiguous())
                 value = CutlassFp16SwiGluMlp(tg.data_ptr(), n // 2, k)
+            elif self._precision == "nvfp4" and slot in (
+                    "txt_mlp0.weight", "img_mlp0.weight", "mlp0.weight", "mlp_in.weight"):
+                # op-fusion audit finding 2 (opportunities.md): fused NVFP4
+                # SwiGLU gate/up (see Nvfp4SwiGluMlp's own docstring) --
+                # `t` is the real checkpoint's own merged (K, 2*mlp_hidden)
+                # weight, split internally, same real trained values.
+                n, k = t.shape[1], t.shape[0]
+                tg = self._own(t.to(DEV).contiguous())
+                value = Nvfp4SwiGluMlp(tg.data_ptr(), n // 2, k)
             else:
                 n, k = t.shape[1], t.shape[0]  # already (K,N) convention, see checkpoint_loader._w
                 tg = self._own(t.to(DEV).contiguous())

@@ -200,13 +200,13 @@ from __future__ import annotations
 
 import torch
 
-from flash_rt.models.imagewam.quant_linear import CutlassFp16SwiGluMlp
+from flash_rt.models.imagewam.quant_linear import CutlassFp16SwiGluMlp, Nvfp4SwiGluMlp
 
 
 def _mlp_gate_up(fvk, key, gate_slot: str, modded_ptr: int, merged_ptr: int, gated_ptr: int,
                   m: int, mlp_hidden: int, stream: int) -> None:
     """The real SwiGLU MLP's own gate/up half:
-    `gated = SiLU(x @ W_gate) * (x @ W_up)`. Two equivalent paths,
+    `gated = SiLU(x @ W_gate) * (x @ W_up)`. Three equivalent paths,
     selected by WHICH CLASS `weights[key]` already is (constructed by
     `imagewam_thor.py`, this module stays precision-agnostic, same
     convention as every other `weights[key](...)` call site):
@@ -219,9 +219,14 @@ def _mlp_gate_up(fvk, key, gate_slot: str, modded_ptr: int, merged_ptr: int, gat
       its own up GEMM's epilogue -- writes the final gated result
       DIRECTLY into `gated_ptr`, `merged_ptr` unused (no separate
       merged buffer or elementwise kernel needed).
+    - `Nvfp4SwiGluMlp` (opportunities.md op-fusion audit finding 2): two
+      separate NVFP4 GEMMs each producing an FP4-PACKED intermediate,
+      combined by a TRUE-SiLU FP4 kernel straight into `gated_ptr` --
+      `merged_ptr` unused here too, no fp16-width merged buffer ever
+      materializes.
     """
     mlp_weight = key(gate_slot)
-    if isinstance(mlp_weight, CutlassFp16SwiGluMlp):
+    if isinstance(mlp_weight, (CutlassFp16SwiGluMlp, Nvfp4SwiGluMlp)):
         mlp_weight(modded_ptr, gated_ptr, m, stream)
     else:
         mlp_weight(modded_ptr, merged_ptr, m, stream)

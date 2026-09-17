@@ -3205,3 +3205,138 @@ activations captured at every layer, not just the VAE's own entry
 point -- a real project, not a quick fix. Worth revisiting only if
 NVFP4 accuracy is ever found insufficient on a broader/harder task set
 than this checklist's 50 frames covered; not blocking, not scheduled.
+
+# OPT-015: systematic op-fusion audit vs. official ImageWAM, finding 2 implemented
+
+Status: audit complete (fork, read-only); finding 2 implemented and
+locally syntax/wiring-verified, NOT yet Thor-verified. Finding 1 not
+started (see below).
+
+Area: "scheduler/graph alignment" work item, deprioritized in the
+original top-level plan pending precision correctness -- picked back up
+after Stage 3 closed (OPT-014). Scope chosen: systematically compare
+FlashRT's real per-layer implementation against the REAL official
+FLUX.2/ImageWAM forward pass (source read directly, not re-deriving
+from kernel code the way every fusion so far was found), rather than
+denoise-step-count reduction (that direction not started).
+
+## Audit method and result
+
+Forked a comparison of the real official op sequence
+(`third_party/flux2/src/flux2/model.py`'s `DoubleStreamBlock`/
+`SingleStreamBlock`, `action_dit_flux2.py`'s `SlimFlux2*Block`,
+`imagewam.py`'s `infer_action_flux2`) against `pipeline_thor.py`'s
+`_double_stream_layer`/`_single_stream_layer`/`_action_double_layer`/
+`_action_single_layer`. First checked and ruled out one candidate before
+reporting: AdaLN modulation sharing across layers is ALREADY correct --
+the real model computes shift/scale/gate once per stream-type via one
+`Modulation` linear, reused across all blocks in its loop
+(`model.py:98-108,132-134`); `pipeline_thor.py:74-91` already does the
+same (precomputed once by the caller, reused across 25 layers). Not a
+gap, correctly not re-flagged.
+
+Two real gaps found:
+
+**Finding 1 (not started, larger scope)**: the real official
+`SingleStreamBlock`/`SlimFlux2SingleBlock` fuse QKV+MLP-gate/up into
+ONE `linear1` GEMM and attn-out+MLP-down into ONE `linear2` GEMM (over
+`cat([attn_out, mlp_act(mlp)], dim=-1)`). FlashRT's own
+`checkpoint_loader.py:114-133` (`_extract_single_block`) already
+confirms the real checkpoint stores these as ONE tensor each --
+FlashRT explicitly splits them into 4 separate GEMM slots at load time.
+This split was a KNOWN, documented, deliberate simplification
+(`real_single_stream_block.py`'s own docstring, written earlier this
+project): `silu_glu_merged_fp16` needs its gate/up input's row stride
+to equal its own width, which breaks for a column-slice of a wider
+`linear1` output -- merging back needs new strided-aware kernel
+variants at three spots (gate/up read, QKV read, `linear2`'s implicit
+concat-sum), not a free relayout. Applies to 40 real layers (20
+backbone single-stream + 20 ActionDiT single-stream); double-stream
+blocks on both sides keep qkv/mlp genuinely separate in the real
+checkpoint too, confirmed NOT a gap there. Deferred -- real compute/
+bandwidth win, but bigger design+kernel investment than finding 2, not
+started this round.
+
+**Finding 2 (implemented this round)**: `nvfp4` (the actual default
+precision since OPT-014) had NO fused SwiGLU path at all for MLP
+gate/up -- unlike `fp16_cutlass` (`CutlassFp16SwiGluMlp`, OPT-013),
+`nvfp4`'s MLP-gate slot fell through to the generic `Nvfp4Linear`
+dispatch: one wide NVFP4 GEMM against the real merged `(2*mlp_hidden,
+K)` weight, writing a full `(m, 2*mlp_hidden)` fp16 buffer, then the
+plain `silu_glu_merged_fp16` kernel reads it and writes the `(m,
+mlp_hidden)` gated buffer -- the exact "extra merged-buffer write+read"
+pattern OPT-013 already eliminated for FP16 CUTLASS, still fully
+present for the actual shipped default.
+
+## Finding 2 implementation
+
+New `Nvfp4SwiGluMlp` (`quant_linear.py`), wired into `_mlp_gate_up`
+(`pipeline_thor.py`) and both real-weight loading (`imagewam_thor.py`'s
+`_load_real_weights`, same `txt_mlp0.weight`/`img_mlp0.weight`/
+`mlp0.weight`/`mlp_in.weight` slots OPT-013 already special-cases) and
+random-weight construction (`_rnd_swiglu_mlp`) -- mirrors
+`CutlassFp16SwiGluMlp`'s own construction-time column-split of the
+real merged weight, but into two NVFP4-quantized `(mlp_hidden, K)`
+halves (`quant_weight_nvfp4`) instead of one fp16 transpose.
+
+Mechanism differs from FP16 CUTLASS's epilogue-fusion approach (this
+codebase's NVFP4 GEMM doesn't expose an arbitrary activation epilogue
+the way the CUTLASS EVT path does): two separate NVFP4 GEMMs
+(`fp4out_gemm`/`FP4Buffer`, the "split-GU FFN path" building blocks
+this codebase already had for a DIFFERENT model, never wired to
+ImageWAM) each produce an `(m, mlp_hidden)` FP4-PACKED (4-bit, ~1/4 the
+bytes of fp16) intermediate, then a new combiner kernel
+(`silu_glu_two_fp4_to_fp16`, `csrc/fused_fp4/silu_mul_two_fp4_to_fp4.{cu,cuh}`)
+reads both and writes the `(m, mlp_hidden)` fp16 gated buffer directly
+-- no FP4 requantization needed since the down-projection GEMM right
+after (unchanged) already re-quantizes its own fp16 input internally.
+Net: the intermediate representation shrinks from a full-width fp16
+merged buffer to two FP4-packed halves -- real DRAM-traffic reduction
+on the intermediate (same mechanism this file's own module docstring
+already documents for a different model: "reads HALF the activation
+DRAM... vs fp16 today"), not just a launch-count change. Activation is
+quantized to FP4 once per call and reused for both GEMMs (matches the
+existing single-wide-GEMM path's own single activation-quant cost).
+
+**Real bug found and fixed while implementing, before it could ship
+silently wrong**: the existing `geglu_two_fp4_to_fp4`/
+`silu_mul_two_fp4_to_fp4` (built for a different model's AWQ path) is
+misleadingly named -- its own module docstring and Python wrapper
+docstring both say "SiLU", and its device helper is even named
+`silu_mul_p1`, but the ACTUAL formula
+(`g/(1+exp(-1.5957691216057308f*g*(1+0.044715*g*g)))`) is the standard
+GELU-tanh approximation (`1.5957691216057308 == 2*sqrt(2/pi)`), not
+true SiLU (`g/(1+exp(-g))`, ImageWAM's own real formula,
+`csrc/kernels/activation.cu`). Confirmed by reading the device code
+directly, not trusting the name/comments -- would have silently
+produced GELU-activated (wrong) outputs if reused as-is. Added a
+genuinely new `true_silu_mul_p1` device function with the correct
+formula instead of reusing the misnamed existing one.
+
+## Verification status
+
+Local (Ada, no NVFP4 build): Python syntax clean
+(`py_compile`), full existing regression suite unaffected (fp16
+default untouched), `precision="nvfp4"` construction still fails at
+the same documented point (`Nvfp4Linear`/`Nvfp4SwiGluMlp` both raise
+the same clear `RuntimeError` for a missing Blackwell build -- no new
+crash introduced). New CUDA kernel (`silu_glu_two_fp4_to_fp16` in
+`silu_mul_two_fp4_to_fp4.cu`) compiles cleanly via the same sm_90a
+syntax-check substitute OPT-013 used for its own SM100-only kernel
+(real object file produced, ~148KB) -- this specific kernel has no
+tensor-core/MMA instructions (pure per-thread scalar math over packed
+FP4 bytes), so it may actually be able to RUN on non-Blackwell
+hardware if built for it, unlike the real FP4 GEMMs -- but the whole
+`flash_rt_fp4` extension is gated behind `ENABLE_NVFP4`
+(`GPU_ARCH=100`/`110` only, `CMakeLists.txt:43-60`), so this wasn't
+pursued further locally; not claiming functional correctness, only
+that the C++/CUDA is syntactically/semantically valid.
+
+**Not yet done, real Thor verification needed**: cosine vs. the
+existing `nvfp4` default (should be very close -- same math,
+restructured) and vs. `fp16`; real Thor speed delta for the actual
+shipped default precision (this is the one place in the whole session
+where a speed change would directly affect the currently-deployed
+default, not just an opt-in alternative -- verify before treating this
+as a real win, same discipline as every other precision change this
+session).
