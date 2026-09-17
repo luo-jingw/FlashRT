@@ -1726,6 +1726,67 @@ negative result, not pursued further there). Would need a real
 Orin/Ampere deployment target and the required evidence above to be
 worth reopening elsewhere.
 
+## Local (Ada) full-pipeline number at real LIBERO dual-camera dims + action=10x7
+
+Answers a direct question about THIS dev machine specifically (not
+Thor): the existing `imagewam_thor_{fp16,int8,int4}_bench.py`'s own
+full-pipeline numbers all predate the real-shape confirmation and use
+a stale placeholder (768 image tokens / 384x512 input guess, X0=128,
+NUM_ACTION=64) -- re-measured instead at the real confirmed LIBERO
+dual-camera shape (224x448 input -> 14x28 grid -> 392 image tokens),
+`X0=512` (real text context), `NUM_ACTION=10`/`action_dim=7` (this
+question's own assumption; `action_dim` itself only affects
+`action_encoder`/`head.linear`, which these per-layer-type benchmarks
+don't model, so it has no further effect here). One model per process
+(see contamination note below for why).
+
+| | prefill (VAE+25L backbone) | one denoise step (25L ActionDiT) | prefill+10-step |
+|---|---:|---:|---:|
+| FP16 | 180.4 ms | 4.89 ms | 229.4 ms |
+| INT8 (SM80) | FAILS: `cutlass_int8_rowwise_fp16out` rc=131079 at the real `mlp2` shape (M=512,N=3072,K=9216) | -- | -- |
+| INT4 (SM80) | **74.8 ms (2.4x faster)** | 4.11 ms (1.19x faster) | **115.9 ms (2.0x faster)** |
+
+INT8 fails identically to every prior finding in this entry (real
+K=9216 is a hard, reproducible limitation of this kernel, independent
+of order/context -- confirmed fresh, in isolation, at these new dims).
+INT4 is genuinely fast here (matches the earlier isolated-GEMM finding
+that this SM80 kernel is legitimately good on Ada's own native tensor
+cores) -- prefill wins big (large M), the denoise step wins much less
+(NUM_ACTION=10 is a tiny M, consistent with the earlier per-shape
+result that this kernel's win shrinks toward parity at small M). Same
+GEMM-only caveat as the rest of this entry: no real per-call activation
+quantization (the FHT crash at non-power-of-2 dims is unchanged).
+
+**New instability finding, distinct in kind from this entry's earlier
+ones**: the FIRST attempt at this measurement ran FP16 -> INT8 (fails
+mid-`run_prefill`) -> INT4 sequentially in ONE process (natural, since
+that's how you'd compare three precisions) and got a nonsensical INT4
+prefill number, **5156ms -- a 69x regression from the real 74.8ms**,
+consistent (tight P50/P90) across all 50 measured iterations, not a
+one-off spike. Isolating layer-by-layer (`_double_layer`/
+`_single_layer` alone) and even raw isolated GEMM calls at the exact
+shapes involved all timed fast and normal (sub-2ms/sub-0.3ms
+respectively) -- summing to the correct ~70ms, matching the real
+isolated number. The anomaly only appeared when running the FULL
+25-layer `run_prefill()` repeatedly, and only in a process that had
+already run FP16 and a failed INT8 construction first. **Root-caused
+by elimination, not just observed**: reran INT4 alone in a fresh
+process, tracking free VRAM per call -- completely stable at ~70ms
+across 30 consecutive calls, VRAM flat after call 1 (no leak). The
+5156ms number was real but an artifact of cross-precision process/GPU
+state contamination (most likely from the failed INT8 model's partial
+25-layer weight allocation, or cuBLASLt/CUTLASS handle-level state,
+left behind when its exception path returned without the success
+path's `torch.cuda.empty_cache()`) -- **NOT a property of the INT4
+kernel itself**. This is a new symptom (a large, consistent per-call
+slowdown that only appears after a different precision's model
+fails in the same process) for this SM80 CUTLASS kernel family's
+already-extensive instability record in this entry -- worth
+remembering as a methodology note: **always benchmark this specific
+kernel family (SM80 INT8/INT4) in an isolated, single-precision
+process**, never in a combined multi-precision comparison script,
+regardless of which precision runs first.
+
 # OPT-008
 
 Status: real VAE-encode cost added to all local/Thor full-pipeline benchmarks; the `img_in` gap this exposed is FIXED (OPT-001 Phase 1); the VAE encoder ITSELF is NOW wired into the served frontend (2026-09-15, `plan.md`'s own "real VAE encoder + text-context wiring" plan, all 3 phases done) — see this file's own new entry below
