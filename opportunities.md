@@ -3573,12 +3573,68 @@ suite (`test_imagewam_frontend`, `test_imagewam_proprio`,
 `test_imagewam_checkpoint_loader` real 343-tensor real-checkpoint
 load, `test_imagewam_scheduler`) passes unchanged.
 
-**Not yet done**: real Thor speed measurement (this fusion removes one
-real GEMM launch + one `modded`-buffer re-read per single-stream layer
--- 20 backbone layers once per prefill, 20 ActionDiT layers x 10
-denoise steps per `infer()`; the backbone side has real bandwidth
-savings at large M, the ActionDiT side is tiny-M/launch-bound per
-OPT-004's own finding and may show little to no win, same pattern as
-OPT-015 finding 2 and OPT-013). Sub-problem 3 (`linear2` merge) still
-not started -- the audit's own recommendation was to measure this one
-standalone first.
+## Real Thor result: a genuine measured win -- the first this session
+
+Real conditions: `nvfp4` (shipped default), `x0=513`, proprio on, real
+10-step shift schedule, real LIBERO dual-camera input. Confirmed
+wired: 20+20 real `linear1.weight` slots (vs. the old split path's
+40+40 `qkv.weight`/`mlp_in.weight` slots).
+
+**Correctness (merged vs. old split path, same commit)**:
+
+| | actions | backbone_hidden | action_latent |
+|---|---:|---:|---:|
+| merged vs split | 0.999983 | 0.994464 | 0.999964 |
+
+All finite. `actions`/`action_latent` confirm the two paths are the
+same math end to end. `backbone_hidden`'s 0.9945 (vs. the LOCAL FP16
+single-layer check's exact 0.999998) is expected, not a bug: the local
+check compared ONE layer at FP16 (no quantization in the picture); this
+is `nvfp4` accumulated across the REAL 25-layer stack, where the wide
+`linear1` GEMM (`N=27648`) and the two separate GEMMs it replaces hit
+different CUTLASS/quantization reduction paths -- the same class of
+benign per-layer floating-point/representation drift already
+documented for `fp16_cutlass` (OPT-013, `backbone_hidden=0.995090`)
+and `Nvfp4SwiGluMlp` (OPT-015 finding 2, `0.9938`). Confirmed not a
+stride bug specifically: a wrong `_col_ptr`/`row_stride` read would
+show up as a much larger `actions` error, not 0.99998.
+
+**Speed -- a real win, first one this session**:
+
+| | merged (default) | split (old) | delta |
+|---|---:|---:|---:|
+| VAE | 21.17 ms | 21.13 ms | none |
+| backbone prefill | 106.52 ms | 107.11 ms | +0.59 ms |
+| ActionDiT 10-step denoise | 122.73 ms | 130.71 ms | **+8.0 ms** |
+| `infer()` P50 | **231.63 ms** | 239.55 ms | **+7.9 ms (1.03x)** |
+
+231.6ms beats OPT-014's own `nvfp4` baseline (236.9ms) and its 40-call
+stability average (243.5ms) -- a real, measured improvement to the
+actual shipped default.
+
+**Counter-intuitive finding, worth recording plainly**: this entry's
+own prediction (based on OPT-004's compute-bound-vs-launch-bound
+framing) was backwards. Backbone prefill (large M=905, where removing
+one GEMM's real DRAM traffic should matter most) shows essentially
+ZERO win (+0.59ms). ActionDiT's denoise loop (tiny M=64, 20 layers x
+10 steps = 200 calls) captures nearly the ENTIRE win (+8.0ms). The
+likely reason: at backbone's large M, the two GEMMs being merged were
+already comfortably compute-dominated, so removing one launch barely
+registers against Thor's fast HBM/compute throughput; at ActionDiT's
+tiny M, each GEMM call's cost is dominated by FIXED per-launch
+overhead rather than the actual FLOPs, so eliminating one launch per
+layer, replayed 200 times per `infer()`, adds up to a real, measurable
+amount even though each individual saving is small. This inverts the
+"backbone matters more" assumption this entry started with -- if
+`linear1`'s merge were ever partially reverted, ActionDiT's side is
+the one to keep, not backbone's.
+
+**Decision: keep the merge for the whole network** (already the
+shipped default going forward). Sub-problem 3 (`linear2` merge,
+attn_out+mlp_down) still not started -- given this result's own lesson
+(the win came from launch-count at ActionDiT's small-M denoise loop,
+not backbone bandwidth), sub-problem 3's own ActionDiT-side benefit
+now looks MORE promising than this entry originally estimated (it also
+removes GEMM launches from the same 200-call-per-`infer()` denoise
+loop), while its backbone-side benefit should be expected to stay
+small, matching this measurement's own pattern.
