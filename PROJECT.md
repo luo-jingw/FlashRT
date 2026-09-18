@@ -178,10 +178,6 @@ this fork covers Jetson AGX Thor (sm_110).
   runs here through the TN layout; the remaining skips are FA4, NVFP4,
   SM100 CUTLASS FP8, and the FP8 NN-vs-TN comparison (needs a GPU that
   supports both layouts).
-- NVFP4 numerics can be checked here with `precision="nvfp4_sim"`
-  (`flash_rt/models/imagewam/nvfp4_sim.py`, bit-exact to the real
-  quantizer; `tests/test_imagewam_nvfp4_sim.py` JIT-compiles
-  `csrc/quantize/quantize_fp4_dynamic.cu` for sm_90 to prove it).
 - Real activation-calibration files (`docs/imagewam_calibration.md`)
   live outside the repository, under
   `/home/user1/workspace/jingwu/artifacts/calibration/`.
@@ -192,6 +188,16 @@ this fork covers Jetson AGX Thor (sm_110).
 - The real-checkpoint tests read `CKPT_PATH`, `AE_MODEL_PATH`, and
   `IMAGEWAM_SRC`. When these are unset, they fall back to the original
   `/home/ljw/...` paths.
+- The block-scaled 4-bit quantizers (NVFP4 and E0M3, not the tcgen05
+  GEMMs) use no Blackwell instructions and run on H100 when compiled for
+  sm_90a. `tools/check_blockscaled_quantizers_sm90.py` builds them with
+  the `fp4_kernels_obj` flags and compares their bytes with
+  `flash_rt/models/imagewam/blockscaled_ref.py`. 4-bit accuracy work can
+  be simulated here with that reference: per GEMM
+  (`benchmarks/imagewam_e0m3_accuracy_study.py`,
+  `benchmarks/imagewam_nvfp4_awq_study.py`) or through the whole served
+  pipeline with `precision="nvfp4_sim"` (NVFP4 numerics, fp16 GEMMs;
+  `tests/test_imagewam_nvfp4_sim.py`).
 
 ## Credentials
 

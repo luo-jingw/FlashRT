@@ -70,6 +70,7 @@ from flash_rt.models.imagewam.quant_linear import (
     Bf16OutLinear,
     CutlassFp16Linear,
     CutlassFp16SwiGluMlp,
+    E0m3HadamardLinear,
     Fp8Linear,
     Fp16Linear,
     Nvfp4Linear,
@@ -80,7 +81,8 @@ from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbon
 from flash_rt.models.imagewam.vae_preprocess import RESIZE_MODES, VaePreprocessor
 from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeStageSpec
 
-_PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass", "nvfp4_sim")
+_PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass", "e0m3_hadamard",
+               "nvfp4_sim")
 # `nvfp4_sim`: NVFP4 numerics emulated with fp16 GEMMs (SimNvfp4Linear,
 # bit-exact quantizer), for accuracy work on GPUs without Blackwell FP4.
 # Not a fast path.
@@ -699,6 +701,16 @@ class ImageWAMTorchFrontendThor:
             if n % 16 != 0 or k % 16 != 0:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return Nvfp4Linear(w.data_ptr(), n, k, awq_inv_s=awq_inv_s)
+        if self._precision == "e0m3_hadamard":
+            # opportunities.md OPT-024: E0M3 weights and activations with a
+            # per-16 Hadamard rotation on both. Same block-scaled operand
+            # layout as nvfp4, so the same K%16/N%16 requirement and the
+            # same fallback for action_encoder (K=7) and head.linear (N=7).
+            # The merged single-stream linear1 is one ordinary (K, N)
+            # weight here; the rotation runs along K only.
+            if n % 16 != 0 or k % 16 != 0:
+                return Fp16Linear(self._gemm, w.data_ptr(), n, k)
+            return E0m3HadamardLinear(w.data_ptr(), n, k)
         if self._precision == "nvfp4_sim":
             # Same K=7/N=7 fallback as "nvfp4" above, so both precisions
             # quantize exactly the same set of GEMMs.
