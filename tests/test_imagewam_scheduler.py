@@ -9,7 +9,7 @@ import os
 import torch
 
 DEV = "cuda"
-_IMAGEWAM_SRC = "/home/ljw/projects/pi0.5/tmp/ImageWAM/src"
+_IMAGEWAM_SRC = os.environ.get("IMAGEWAM_SRC", "/home/ljw/projects/pi0.5/tmp/ImageWAM/src")
 _IMAGEWAM_AVAILABLE = os.path.isdir(_IMAGEWAM_SRC)
 
 

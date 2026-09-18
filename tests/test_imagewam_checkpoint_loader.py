@@ -31,7 +31,7 @@ DEV = "cuda"
 FP16 = torch.float16
 BF16 = torch.bfloat16
 
-_CKPT_PATH = "/home/ljw/projects/pi0.5/models/imagewam_flux2_4b_libero/model.pt"
+_CKPT_PATH = os.environ.get("CKPT_PATH", "/home/ljw/projects/pi0.5/models/imagewam_flux2_4b_libero/model.pt")
 _CKPT_AVAILABLE = os.path.exists(_CKPT_PATH)
 
 HIDDEN, HD, NH, MLP_HIDDEN, JOINT_ATTN_DIM = 3072, 128, 24, 9216, 7680
@@ -44,7 +44,8 @@ X0, A0 = 512, 904
 REF_H, REF_W = 14, 28  # real image RoPE grid (opportunities.md OPT-002's flat-grid correction)
 
 _FLUX2_SRC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "third_party", "flux2", "src")
-_AE_PATH = "/home/ljw/projects/pi0.5/models/flux2_klein_4b/ae.safetensors"
+_AE_PATH = os.environ.get(
+    "AE_MODEL_PATH", "/home/ljw/projects/pi0.5/models/flux2_klein_4b/ae.safetensors")
 _VAE_AVAILABLE = os.path.isdir(_FLUX2_SRC) and os.path.isfile(_AE_PATH)
 
 

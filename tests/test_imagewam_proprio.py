@@ -31,8 +31,8 @@ import torch
 DEV = "cuda"
 BF16 = torch.bfloat16
 
-_CKPT_PATH = "/home/ljw/projects/pi0.5/models/imagewam_flux2_4b_libero/model.pt"
-_STATS_PATH = "/home/ljw/projects/pi0.5/models/imagewam_flux2_4b_libero/dataset_stats.json"
+_CKPT_PATH = os.environ.get("CKPT_PATH", "/home/ljw/projects/pi0.5/models/imagewam_flux2_4b_libero/model.pt")
+_STATS_PATH = os.path.join(os.path.dirname(_CKPT_PATH), "dataset_stats.json")
 _CKPT_AVAILABLE = os.path.exists(_CKPT_PATH)
 _STATS_AVAILABLE = os.path.exists(_STATS_PATH)
 

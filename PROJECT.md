@@ -123,14 +123,67 @@ this fork covers Jetson AGX Thor (sm_110).
   machine (Ada sm_89) does INT4/INT8 (SM80 CUTLASS) inference speed
   work only — that's the precision tier this hardware can actually
   execute. FP8 and FP4 (NVFP4) testing belongs on Thor, not here: FP8
-  fails on this venv's cuBLASLt with `CUBLAS_STATUS_NOT_SUPPORTED` at
-  every shape tried (a confirmed environment gap, not fixable by more
-  local effort — see `opportunities.md`), and FP4 needs Blackwell
+  fails with `CUBLAS_STATUS_NOT_SUPPORTED` at every shape because
+  `fp8_gemm_descale_fp16` requests an NN layout that cuBLASLt supports
+  for FP8 only on Blackwell (`issues.md` ISSUE-001), and FP4 needs Blackwell
   hardware this machine does not have at all. Do not spend local time
   trying to make FP8/FP4 work here; do not ask Thor to test INT4/INT8
   (SM80) either — that path is a confirmed, measured dead end there
   (~8.6x slower than FP16, see `opportunities.md` OPT-007) precisely
   because it doesn't use Thor's own native tensor cores.
+
+### Shared H100 server (current dev machine since 2026-09-17)
+
+- Hardware: 8x NVIDIA H100 NVL (sm_90, 94GB each), 755GB RAM, driver
+  580.159.03 (CUDA 13.0). Another user's long-running training job keeps
+  about 40GB of each GPU in use at about 100% utilization. Latency
+  measured on this machine is contaminated by that job and is not a
+  performance number. Use this machine for correctness checks and Thor
+  for speed.
+- Environment script: `/home/user1/workspace/jingwu/imagewam_env.sh`,
+  outside the repository. It sets the CUDA 12.6 toolkit (`nvcc`), the
+  `.venv` (Python 3.11.13, torch 2.14.0+cu126, transformers 4.56.1,
+  diffusers 0.39.0, pybind11 3.1.0), `IMAGEWAM_SRC`, `FLUX2_SRC`,
+  `CKPT_PATH`, `FLUX2_MODEL_PATH`, `FLUX2_AE_MODEL_PATH`/`AE_MODEL_PATH`,
+  `QWEN3_MODEL_SPEC`, and `DATA_ROOT`.
+- Assets:
+  - `/home/user1/workspace/jingwu/models/imagewam_flux2_4b_libero/`: HF
+    `yuyangalin/ImageWAM-FLUX.2-4B-LIBERO`, with `model.pt`,
+    `config.yaml`, and `dataset_stats.json`.
+  - `/home/user1/workspace/jingwu/models/flux2_klein_4b/`:
+    `flux-2-klein-base-4b.safetensors` and `ae.safetensors` (from the
+    gated `FLUX.2-dev`).
+  - Qwen3-4B from the HF cache.
+  - ImageWAM upstream at `/home/user1/workspace/jingwu/ImageWAM`.
+  - LIBERO (`yuanty/LIBERO-fastwam`, all four suites, extracted) at
+    `/home/user1/workspace/jingwu/data/libero_mujoco3.3.2`.
+- Build: `cmake -B build -S . -G Ninja -DGPU_ARCH=90
+  -DFLASHRT_SLIM_BUILD=ON -DPython3_EXECUTABLE=<.venv python>
+  -Dpybind11_DIR=<.venv pybind11 cmake dir>`, then `cmake --build build
+  -j32 --target flash_rt_kernels`. This takes about 45 seconds. On
+  sm_90, FA2, SM100 CUTLASS, and NVFP4 are all disabled. ImageWAM's
+  attention uses the cuBLAS attention kernels, so the FP16 pipeline
+  still runs.
+- Thor (sm_110) compile check: a CUDA 13.0.88 toolkit is installed at
+  `/home/user1/workspace/jingwu/cuda13` (conda, `nvidia` and
+  `conda-forge` channels). `/home/user1/workspace/jingwu/sm110_check.sh
+  <src_dir> <name>` mirrors a source tree to
+  `/home/user1/workspace/jingwu/sm110_mirror/<name>` and builds
+  `flash_rt_kernels` and `flash_rt_fp4` there with `GPU_ARCH=110`. The
+  mirror keeps the source tree's own sm_90 `.so` from being overwritten.
+  The first build takes about 10-15 minutes at `-j24`; later builds are
+  incremental. A passing build shows only that the code compiles and
+  links. Correctness and speed still have to be checked on Thor.
+- Baseline on this machine: `pytest tests/test_imagewam_*.py` gives 68
+  passed and 6 skipped. The skips are FA4, NVFP4, SM100 CUTLASS FP8,
+  and FP8 cuBLASLt (ISSUE-001).
+- End-to-end check against the official model:
+  `benchmarks/imagewam_e2e_official_compare.py`. On fp16 over 20
+  LIBERO frames, the median action cosine is 0.9984 when both sides use
+  the same noise. The numbers are recorded in `issues.md` ISSUE-002.
+- The real-checkpoint tests read `CKPT_PATH`, `AE_MODEL_PATH`, and
+  `IMAGEWAM_SRC`. When these are unset, they fall back to the original
+  `/home/ljw/...` paths.
 
 ## Credentials
 
