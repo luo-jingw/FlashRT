@@ -53,6 +53,7 @@ from __future__ import annotations
 import logging
 import os
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -476,6 +477,8 @@ class ImageWAMTorchFrontendThor:
         # `text_trim`: set once the max-dims eager prefill that sizes every
         # lazily grown GEMM scratch has run (`_capture_graph`).
         self._scratch_reserved = False
+        # Set once `_calibrate_fp8` has run (before the first capture only).
+        self._fp8_calibrated = False
         # Capture stream and CUDA-graph memory pool shared by every capture
         # of this frontend (created at the first capture, `_capture_graph`).
         self._capture_stream: torch.cuda.Stream | None = None
@@ -1214,7 +1217,9 @@ class ImageWAMTorchFrontendThor:
         a `RuntimeWarning`, records the reason in
         `self.fa4_fallback_reason`, rebuilds the attention backend with
         FA4 off at both sites, and captures again. A failure with FA4 off,
-        or a second failure after the fallback, propagates.
+        or a second failure after the fallback, propagates; after a second
+        failure the frontend holds no graph (`_graph` is None and the
+        per-length cache is empty).
 
         An invalidated capture (for example a device sync inside it)
         makes `torch.cuda.graph`'s exit raise before it restores the
@@ -1238,11 +1243,19 @@ class ImageWAMTorchFrontendThor:
         self.use_fa4 = False
         self.use_fa4_mot = False
         self._attn = self._build_attn_backend()
-        # Graphs of other text lengths captured with FA4 are dropped, so
-        # every graph this frontend replays uses the same attention.
-        self._captures.clear()
         torch.cuda.synchronize()
-        self._capture_graph()
+        try:
+            self._capture_graph()
+        except BaseException:
+            torch.cuda.set_stream(caller_stream)
+            self._graph = None
+            self._captures.clear()
+            raise
+        # Graphs of other text lengths captured with FA4 are dropped, so
+        # every graph this frontend replays uses the same attention. They
+        # (and their RoPE tables) stay alive until the replacement graph
+        # exists; after a second failure no graph is left at all.
+        self._captures.clear()
 
     def _set_context_with_optional_proprio(self, text_ctx: torch.Tensor, text_mask: torch.Tensor) -> None:
         """`text_ctx`: `(text_len, joint_attention_dim)` BF16 -- the
@@ -1309,33 +1322,83 @@ class ImageWAMTorchFrontendThor:
         self._set_context_with_optional_proprio(text_ctx, text_mask)
         return self.dims["x0"]
 
-    def _activate_text_length(self, x0: int) -> None:
-        """Makes the capture for context length `x0` the one `infer()`
-        replays, capturing it first if this length has none.
+    def _capture_text_length(self, x0: int) -> TextLengthCapture:
+        """Captures a graph for context length `x0` and returns its record
+        (not yet cached; `_active_dims`/`_rope_table`/`_graph` hold the new
+        length afterwards).
 
-        A new length gets its sequence dims (`trimmed_sequence_dims`), its
-        backbone RoPE table (text positions `0..x0-1`, image positions
-        unchanged), the static FP8 calibration if nothing was captured
-        yet, the GEMM autotune of the shapes it adds (only on a
+        The new length gets its sequence dims (`trimmed_sequence_dims`),
+        its backbone RoPE table (text positions `0..x0-1`, image positions
+        unchanged), the static FP8 calibration before the first capture
+        only, the GEMM autotune of the shapes it adds (only on a
         `GemmRunner` this frontend owns; the `fp16_nn` weight-GEMM shapes
         only for `precision="fp16"`, the one precision whose backbone
         weight GEMMs run on `fp16_nn`), and a capture."""
+        dims = trimmed_sequence_dims(self.dims, x0)
+        if dims is self.dims:
+            rope_table = self._max_rope_table
+        else:
+            rope_table = build_backbone_rope_table(x0, *self._ref_hw, device=DEV)
+        self._active_dims, self._rope_table = dims, rope_table
+        if not self._fp8_calibrated:
+            self._calibrate_fp8(self.dims)
+            self._fp8_calibrated = True
+        if self._owns_gemm:
+            self._autotune_gemm(dims, fp16_nn_shapes=self._precision == "fp16")
+        self._capture_graph_or_fall_back()
+        return TextLengthCapture(dims=dims, rope_table=rope_table, graph=self._graph)
+
+    def _invalidate_active_graph(self) -> None:
+        """After a failed capture: the context rows may already hold a
+        prompt no captured graph matches, so `infer()` refuses until a
+        `set_prompt` succeeds, and the next `set_prompt` never returns
+        early on the old cache key. Cached captures stay valid."""
+        self._graph = None
+        self._current_prompt = None
+
+    def _activate_text_length(self, x0: int) -> None:
+        """Makes the capture for context length `x0` the one `infer()`
+        replays, capturing it first if this length has none
+        (`_capture_text_length`). If that capture raises, no graph is
+        active afterwards (`_invalidate_active_graph`) and the exception
+        propagates; the cached captures of other lengths, with their RoPE
+        tables, are kept (the FA4 fallback's own rule aside)."""
         capture = self._captures.get(x0)
         if capture is None:
-            dims = trimmed_sequence_dims(self.dims, x0)
-            if dims is self.dims:
-                rope_table = self._max_rope_table
-            else:
-                rope_table = build_backbone_rope_table(x0, *self._ref_hw, device=DEV)
-            self._active_dims, self._rope_table = dims, rope_table
-            if self._graph is None:
-                self._calibrate_fp8(self.dims)
-            if self._owns_gemm:
-                self._autotune_gemm(dims, fp16_nn_shapes=self._precision == "fp16")
-            self._capture_graph_or_fall_back()
-            capture = TextLengthCapture(dims=dims, rope_table=rope_table, graph=self._graph)
+            try:
+                capture = self._capture_text_length(x0)
+            except BaseException:
+                self._invalidate_active_graph()
+                raise
             self._captures[x0] = capture
         self._active_dims, self._rope_table, self._graph = capture.dims, capture.rope_table, capture.graph
+
+    def precapture_text_lengths(self, x0s: Sequence[int]) -> None:
+        """`text_trim`: captures a graph for every context length in `x0s`
+        (valid text tokens + 1 with proprio, as `captured_text_lengths`
+        reports) that has none, so the first `set_prompt` of a prompt
+        with that length only switches graphs. The context rows and the
+        active length are unchanged afterwards. If a capture raises, no
+        graph is active afterwards, as for a failed `set_prompt`."""
+        if not self._text_trim:
+            raise ValueError("precapture_text_lengths needs text_trim=True")
+        active_x0 = None if self._graph is None else int(self._active_dims["x0"])
+        wanted = [int(x0) for x0 in x0s]
+        try:
+            # An FA4 fallback during one capture drops the graphs captured
+            # before it (at most once: FA4 is off afterwards), so the
+            # missing set is recomputed after every capture.
+            missing = [x0 for x0 in wanted if x0 not in self._captures]
+            while missing:
+                self._captures[missing[0]] = self._capture_text_length(missing[0])
+                missing = [x0 for x0 in wanted if x0 not in self._captures]
+        except BaseException:
+            self._invalidate_active_graph()
+            raise
+        if active_x0 is None:
+            self._graph = None
+        else:
+            self._activate_text_length(active_x0)
 
     @property
     def active_dims(self) -> dict:

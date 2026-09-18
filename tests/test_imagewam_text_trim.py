@@ -495,3 +495,125 @@ def test_vae_in_graph_shares_one_pool_across_lengths():
         print(f"\n  x0={n + 1} " + _fmt("VAE in graph vs VAE outside", a, b))
         assert torch.equal(a, b)
     assert in_graph.captured_text_lengths == (6, 10, 13)
+
+
+# ── capture failures (no stale graph after a failed set_prompt) ─────────
+
+
+def _replay_after(fe: ImageWAMTorchFrontendThor) -> torch.Tensor:
+    torch.manual_seed(7)
+    out = fe.infer({"proprio": PROPRIO_VALUE}, action_noise=_NOISE.to(DEV))["actions"]
+    return torch.from_numpy(out).double()
+
+
+@needs_gpu
+def test_failed_capture_leaves_no_replayable_graph(monkeypatch):
+    """A capture that raises after `set_prompt` wrote the new context must
+    not leave the previous length's graph active: `infer()` refuses, the
+    old prompt's key no longer short-circuits `set_prompt`, and the cached
+    captures (with their RoPE tables) keep working."""
+    ctx = _context()
+    fe = _frontend(text_trim=True)
+    first = _run(fe, ctx, 5)
+    cached_rope = fe._captures[6].rope_table
+    real_capture = fe._capture_graph
+
+    def boom() -> None:
+        raise RuntimeError("stand-in: capture failed on a new length")
+
+    monkeypatch.setattr(fe, "_capture_graph", boom)
+    with pytest.raises(RuntimeError, match="stand-in"):
+        fe.set_prompt(context=ctx, context_mask=_mask(9))  # a new length
+    print(f"\nafter the failed set_prompt: graph={fe._graph} current_prompt={fe._current_prompt} "
+          f"cached={fe.captured_text_lengths}")
+    assert fe._graph is None and fe._current_prompt is None
+    with pytest.raises(RuntimeError, match="set_prompt"):
+        fe.infer({"proprio": PROPRIO_VALUE})
+    monkeypatch.setattr(fe, "_capture_graph", real_capture)
+    assert fe.captured_text_lengths == (6,) and fe._captures[6].rope_table is cached_rope
+    assert torch.equal(_run(fe, ctx, 5), first), "the cached length must still replay its own result"
+    out = _run(fe, ctx, 9)
+    fresh = _run(_frontend(text_trim=True, gemm_runner=fe._gemm), ctx, 9)
+    print("  " + _fmt("n_valid=9 after the failure vs a fresh frontend", out, fresh))
+    assert torch.equal(out, fresh)
+
+
+@needs_gpu
+def test_failed_first_capture_does_not_cache_the_prompt(monkeypatch):
+    """`text_trim=False`: a failed first capture must not record the prompt
+    key, so the same `set_prompt` call retries instead of returning early."""
+    fe = _frontend(text_trim=False)
+    real_capture = fe._capture_graph
+
+    def boom() -> None:
+        raise RuntimeError("stand-in: capture failed")
+
+    monkeypatch.setattr(fe, "_capture_graph", boom)
+    with pytest.raises(RuntimeError, match="stand-in"):
+        fe.set_prompt("random prompt")
+    assert fe._graph is None and fe._current_prompt is None and fe.captured_text_lengths == ()
+    monkeypatch.setattr(fe, "_capture_graph", real_capture)
+    fe.set_prompt("random prompt")
+    assert fe._graph is not None and fe.captured_text_lengths == (SMALL_DIMS["x0"],)
+
+
+@needs_gpu
+def test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists(monkeypatch):
+    """FA4 fallback on a new length: the FA4 graphs of the other lengths
+    (and their RoPE tables) stay alive until the cuBLAS recapture has
+    succeeded, and are dropped afterwards. A second failure leaves no
+    graph at all."""
+    monkeypatch.setattr(fa4_backend, "fa4_fwd", lambda: _fa4_fp32_stand_in)
+    ctx = _context()
+    fe = _frontend(text_trim=True, use_fa4=True, use_fa4_mot=True)
+    for n in (5, 12):
+        _run(fe, ctx, n)
+    real_capture = fe._capture_graph
+    seen: list[tuple[int, ...]] = []
+
+    def fail_first_then_record() -> None:
+        seen.append(fe.captured_text_lengths)
+        if len(seen) == 1:
+            raise RuntimeError("stand-in: FA4 compile failed")
+        real_capture()
+
+    monkeypatch.setattr(fe, "_capture_graph", fail_first_then_record)
+    with pytest.warns(RuntimeWarning, match="falling back"):
+        out = _run(fe, ctx, 3)
+    print(f"\ncached lengths seen by the failing capture and by the recapture: {seen}; "
+          f"after the fallback {fe.captured_text_lengths}")
+    assert seen == [(6, 13), (6, 13)], "old graphs must stay alive through the recapture"
+    assert fe.captured_text_lengths == (4,) and not fe.use_fa4 and not fe.use_fa4_mot
+    monkeypatch.setattr(fe, "_capture_graph", real_capture)
+    cublas = _frontend(text_trim=True, gemm_runner=fe._gemm)
+    for n, value in ((3, out), (5, _run(fe, ctx, 5)), (12, _run(fe, ctx, 12))):
+        assert torch.equal(value, _run(cublas, ctx, n)), f"n_valid={n} after the fallback must run the cuBLAS chain"
+
+    def always_fail() -> None:
+        raise RuntimeError("stand-in: capture failed")
+
+    fe2 = _frontend(text_trim=True, use_fa4=True, use_fa4_mot=True)
+    _run(fe2, ctx, 5)
+    monkeypatch.setattr(fe2, "_capture_graph", always_fail)
+    with pytest.warns(RuntimeWarning, match="falling back"), pytest.raises(RuntimeError, match="capture failed"):
+        fe2.set_prompt(context=ctx, context_mask=_mask(9))
+    print(f"  second failure: graph={fe2._graph} cached={fe2.captured_text_lengths} use_fa4={fe2.use_fa4}")
+    assert fe2._graph is None and fe2.captured_text_lengths == () and not fe2.use_fa4
+    assert torch.cuda.current_stream() == torch.cuda.default_stream()
+
+
+@needs_gpu
+def test_precapture_text_lengths_keeps_the_active_prompt():
+    ctx = _context()
+    fe = _frontend(text_trim=True)
+    before = _run(fe, ctx, 5)
+    graph = fe._graph
+    fe.precapture_text_lengths([3, 10, 6, 13])
+    assert fe.captured_text_lengths == (3, 6, 10, 13) and fe._graph is graph and fe.active_dims["x0"] == 6
+    assert torch.equal(_replay_after(fe), before), "precapture must not change the active prompt's result"
+    captured_before = fe.captured_text_lengths
+    out = _run(fe, ctx, 9)  # x0 = 10, precaptured: no new capture
+    assert fe.captured_text_lengths == captured_before
+    assert torch.equal(out, _run(_frontend(text_trim=True, gemm_runner=fe._gemm), ctx, 9))
+    with pytest.raises(ValueError, match="text_trim"):
+        _frontend(text_trim=False).precapture_text_lengths([3])
