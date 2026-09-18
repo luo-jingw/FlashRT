@@ -3253,3 +3253,151 @@ Phase Status: pending
   `opportunities.md` (OPT-022), `issues.md` (ISSUE-001 resolution).
 - Observation: fidelity table next to OPT-014's; e2e numbers next to
   the fp16 baseline (median 0.99840, min 0.99567, MAE 0.18359).
+
+# Plan: AWQ per-channel scales folded into the NVFP4 weights (roadmap item 8)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+- The shipped `nvfp4` precision quantizes every aligned projection
+  GEMM's weight and activation with 16-element blocks and E4M3 block
+  scales (`quantize_fp4_sfa.cu`), with no per-tensor global scale.
+  Real Thor accuracy vs `fp16` (`opportunities.md` OPT-014): actions
+  cosine 0.9998, `backbone_hidden` 0.9939, open-loop MAE 1.01x `fp16`.
+- Pi0.5 has an AWQ path (`pi05_thor_fp4.py::_awq_scale_weight`,
+  `s = clamp((a / mean(a)) ** alpha, 0.25, 4)`, inverse fused into the
+  pre-GEMM kernels) that its FP4 preset enables; ImageWAM has none.
+- NVFP4 cannot run on the H100 dev machine, so no NVFP4 accuracy
+  experiment can run here today.
+- Real activation statistics now exist (item 7's calibration file,
+  `channel_amax` per GEMM input site).
+
+### Problem
+
+It is unknown whether AWQ reduces ImageWAM's NVFP4 error, where its
+inverse scale can be applied without an extra kernel, and whether the
+fold is exact.
+
+### Measurable goal
+
+- A PyTorch NVFP4 simulator bit-exact to the real quantizer.
+- Per-layer and whole-pipeline simulated NVFP4 error vs `fp16`, with
+  and without AWQ, on held-out real frames.
+- An opt-in AWQ flag on the `nvfp4` path with exact folds, a unit test
+  of the fold in fp16, `sm110_check.sh`, and a Thor check.
+
+## Structure
+
+- `flash_rt/models/imagewam/nvfp4_sim.py` (new): NVFP4 quantizer
+  emulation and `SimNvfp4Linear` (`precision="nvfp4_sim"`). Owner of
+  simulated NVFP4 numerics.
+- `flash_rt/models/imagewam/awq.py` (new): AWQ scale math, the
+  `AwqScaledLinear` ABC (weights that need their input divided by `s`),
+  the fold-A modulation math, and the per-weight AWQ plan (fold A rows,
+  fold B up columns). Owner of AWQ scales.
+- `flash_rt/models/imagewam/quant_linear.py`: `Nvfp4Linear` implements
+  `AwqScaledLinear` (`awq_inv_s=` argument, default `None`).
+- `flash_rt/models/imagewam/pipeline_thor.py`: `_awq_folded()` swaps in
+  the folded AdaLN pair for AWQ-scaled GEMMs. Owner of the fold call
+  sites.
+- `flash_rt/frontends/torch/imagewam_thor.py`: `nvfp4_awq=`,
+  `awq_alpha=`, `awq_scope=` constructor arguments (with
+  `calibration_path=`); `precision="nvfp4_sim"`. Owner of the AWQ
+  weight transform lifecycle.
+- `benchmarks/imagewam_nvfp4_awq_study.py` (new): per-layer simulated
+  error study on held-out frames.
+- `benchmarks/imagewam_precision_fidelity.py`: AWQ env flags for the
+  whole-pipeline comparison (H100 `nvfp4_sim`, Thor `nvfp4`).
+
+## Interface
+
+```python
+# nvfp4_sim.py
+def quantize_nvfp4(x_fp16) -> (codes_uint8, scales_e4m3)
+def dequantize_nvfp4(codes, scales) -> fp16
+def fake_quant_nvfp4(x_fp16) -> fp16
+class SimNvfp4Linear(AwqScaledLinear): __init__(gemm, weight_ptr, n, k, *, awq_inv_s=None)
+
+# awq.py
+def awq_scale(channel_amax, alpha) -> s
+def fold_inv_scale_into_modulation(shift, scale, inv_s) -> (shift_fp16, scale_fp16)
+class AwqScaledLinear(ABC): awq_inv_s -> Tensor | None; folded_modulation(shift, scale)
+def plan_awq(keys, channel_amax, dims, *, alpha, scope) -> dict[key, AwqWeightPlan]
+def apply_awq_plan(w_kn, plan) -> fp16 (K, N)
+
+# imagewam_thor.py
+ImageWAMTorchFrontendThor(precision="nvfp4" | "nvfp4_sim", calibration_path=...,
+                          nvfp4_awq=True, awq_alpha=0.5, awq_scope="adaln+down")
+```
+
+## Flow
+
+1. Construction: the calibration file is loaded; `plan_awq` computes
+   `s` per AWQ site from `channel_amax`; `apply_awq_plan` scales the fp16
+   weight rows (and the up columns of the gate/up weight that precedes
+   an AWQ down projection); the scaled weight is quantized by
+   `Nvfp4Linear` (or `SimNvfp4Linear`) with `awq_inv_s = 1/s` for fold-A
+   sites.
+2. Graph warmup: `_awq_folded()` computes and caches the folded AdaLN
+   pair per (layer, modulation); capture and replay read the cache.
+
+## Code Mapping
+
+| Module / interface / state | File |
+|---|---|
+| Simulated NVFP4 | `flash_rt/models/imagewam/nvfp4_sim.py` |
+| AWQ scales, plan, fold math | `flash_rt/models/imagewam/awq.py` |
+| `Nvfp4Linear.awq_inv_s` | `flash_rt/models/imagewam/quant_linear.py` |
+| Fold call sites | `flash_rt/models/imagewam/pipeline_thor.py` |
+| Flags, weight transform | `flash_rt/frontends/torch/imagewam_thor.py` |
+| Study | `benchmarks/imagewam_nvfp4_awq_study.py` |
+| Whole-pipeline check | `benchmarks/imagewam_precision_fidelity.py` |
+| Tests | `tests/test_imagewam_nvfp4_sim.py`, `tests/test_imagewam_awq.py` |
+
+## Implementation Phases
+
+### Phase 1: NVFP4 simulator
+
+Phase Status: active
+
+- Goal: bit-exact emulation of the real quantizer; `SimNvfp4Linear`.
+- Files: `nvfp4_sim.py`, `tests/test_imagewam_nvfp4_sim.py`.
+- Observation: packed-code and scale-byte mismatches vs the real kernel
+  (JIT-built `quantize_fp4_dynamic.cu` on sm_90, `flash_rt_fp4` on
+  Thor); `SimNvfp4Linear` cosine vs the Thor-measured `Nvfp4Linear`
+  number on the same inputs.
+
+### Phase 2: AWQ math, folds, fold test
+
+Phase Status: pending
+
+- Goal: `awq.py`, pipeline fold hook, fp16 exactness test.
+- Files: `awq.py`, `pipeline_thor.py`, `tests/test_imagewam_awq.py`.
+- Observation: folded vs ideal modulation error (max-abs, rel_l2) next
+  to the kernel's own fp16 rounding; toy-dims pipeline with AWQ-scaled
+  fp16 weights vs unscaled.
+
+### Phase 3: simulated-accuracy study
+
+Phase Status: pending
+
+- Goal: per-layer and whole-pipeline NVFP4 error with and without AWQ
+  on held-out frames; pick alpha and scope.
+- Files: `benchmarks/imagewam_nvfp4_awq_study.py`,
+  `benchmarks/imagewam_precision_fidelity.py`, `imagewam_thor.py`
+  (`nvfp4_sim`, flags), `quant_linear.py`.
+- Observation: per-site-group rel_l2; `backbone_hidden` /
+  `action_latent` / `actions` cosine vs `fp16` and MAE.
+
+### Phase 4: opt-in flag on `nvfp4`, sm110 check, Thor handoff
+
+Phase Status: pending
+
+- Goal: `nvfp4_awq=True` on the real `nvfp4` path.
+- Files: `imagewam_thor.py`, `quant_linear.py`, `opportunities.md`
+  (OPT-023).
+- Observation: `sm110_check.sh`; Thor checklist (cosine vs `fp16`,
+  open-loop MAE, `infer()` P50 with and without AWQ).
