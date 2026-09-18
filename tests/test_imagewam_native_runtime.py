@@ -1,12 +1,14 @@
 """ImageWAM `io="native"` model runtime: C verbs from libflashrt_imagewam_native.
 
-Small random-weight dims (fp16, proprio + dataset stats). Covers the
-schema (Python declaration records == C++ records), the native verbs over
+Small random-weight dims (fp16, or IMAGEWAM_NATIVE_PRECISION; proprio +
+dataset stats). Covers the schema (Python declaration records == C++
+records), the native verbs over
 the Python-captured graph, a tick that enters no Python frame, and the
 status codes. Skips when exec/, runtime/ or the native library is not
 built (docs/imagewam_native_cpp.md).
 """
 import json
+import os
 import sys
 
 import numpy as np
@@ -27,6 +29,8 @@ except ImportError as e:  # pragma: no cover - depends on the local build
     pytest.skip(str(e), allow_module_level=True)
 
 PROPRIO_DIM = 8
+# fp16 locally; the Thor checklist sets IMAGEWAM_NATIVE_PRECISION=nvfp4.
+PRECISION = os.environ.get("IMAGEWAM_NATIVE_PRECISION", "fp16")
 SEED = 99
 
 
@@ -40,7 +44,7 @@ def frontend(tmp_path_factory):
     }
     path = tmp_path_factory.mktemp("imagewam_stats") / "dataset_stats.json"
     path.write_text(json.dumps(stats))
-    fe = ImageWAMTorchFrontendThor(precision="fp16", dims_override={"proprio_dim": PROPRIO_DIM},
+    fe = ImageWAMTorchFrontendThor(precision=PRECISION, dims_override={"proprio_dim": PROPRIO_DIM},
                                    dataset_stats_path=str(path))
     fe.set_prompt("pick up the red cup")
     return fe

@@ -57,6 +57,13 @@ target_link_libraries(flashrt_imagewam_native PRIVATE
   CUDA::cublasLt
   CUDA::cudart
 )
+# A C ABI library must be self-contained (fail the link, not the dlopen) and
+# export only its C API, including over the linked flash_rt_fp4 objects.
+target_link_options(flashrt_imagewam_native PRIVATE
+  -Wl,--no-undefined
+  -Wl,--version-script=${_imagewam_native_dir}/imagewam_native_exports.map)
+set_property(TARGET flashrt_imagewam_native APPEND PROPERTY
+  LINK_DEPENDS ${_imagewam_native_dir}/imagewam_native_exports.map)
 if(ENABLE_SM100_CUTLASS)
   target_sources(flashrt_imagewam_native PRIVATE $<TARGET_OBJECTS:fp4_kernels_obj>)
   target_compile_definitions(flashrt_imagewam_native PRIVATE FLASHRT_IMAGEWAM_NATIVE_NVFP4=1)

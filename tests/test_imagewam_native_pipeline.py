@@ -1,9 +1,10 @@
 """ImageWAM native C++ pipeline vs the Python pipeline, step by step.
 
-Small random-weight dims, fp16. The native pipeline
-(cpp/models/imagewam/src/native_pipeline.cpp) records the same kernels as
-flash_rt/models/imagewam/pipeline_thor.py over the frontend's own buffers
-and weights, with the frontend's autotuned GEMM algorithms handed off.
+Small random-weight dims, fp16 (IMAGEWAM_NATIVE_PRECISION=nvfp4 on Thor).
+The native pipeline (cpp/models/imagewam/src/native_pipeline.cpp) records
+the same kernels as flash_rt/models/imagewam/pipeline_thor.py over the
+frontend's own buffers and weights, with the frontend's autotuned GEMM
+algorithms handed off.
 Each check restores one input state, runs the Python function eagerly,
 restores again, runs the native segment, and compares every state buffer
 bit for bit: one backbone block of each type, the full prefill, the full
@@ -11,6 +12,8 @@ denoise loop, then the captured native graph against the Python graph
 and through the `io="native"` model runtime against `infer()`.
 Skips when exec/, runtime/ or the native library is not built.
 """
+import os
+
 import numpy as np
 import pytest
 import torch
@@ -31,6 +34,8 @@ except ImportError as e:  # pragma: no cover - depends on the local build
     pytest.skip(str(e), allow_module_level=True)
 
 PROPRIO_DIM = 8
+# fp16 locally; the Thor checklist sets IMAGEWAM_NATIVE_PRECISION=nvfp4.
+PRECISION = os.environ.get("IMAGEWAM_NATIVE_PRECISION", "fp16")
 STATE_NAMES = ("backbone_hidden", "K_cache", "V_cache", "Q_O", "context", "img_raw", "action_latent")
 
 
@@ -39,7 +44,7 @@ class Harness:
     input state both sides start from."""
 
     def __init__(self):
-        self.fe = ImageWAMTorchFrontendThor(precision="fp16", dims_override={"proprio_dim": PROPRIO_DIM})
+        self.fe = ImageWAMTorchFrontendThor(precision=PRECISION, dims_override={"proprio_dim": PROPRIO_DIM})
         self.fe.set_prompt("pick up the red cup")
         self.native = ImageWAMNativeRuntime.create(self.fe.runtime_surface(), LIBRARY)
         self.native.set_pipeline(self.fe)
