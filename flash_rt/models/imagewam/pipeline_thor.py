@@ -52,7 +52,11 @@ Double-stream block (real order, per side txt/img):
 Single-stream block: same shape, one stream (no txt/img split), one
 fused `qkv` GEMM + one `mlp_in` GEMM (both real fused `linear1` slices,
 see `real_single_stream_block.py`'s own docstring), attn-out-proj +
-mlp-down SUMMED before the one gated residual.
+mlp-down SUMMED before the one gated residual. With
+`dims["merge_qkv_mlp"]` the real `linear1` runs as ONE GEMM
+(opportunities.md OPT-015); with `dims["merge_linear2"]` the real
+`linear2` also runs as ONE GEMM over `[attn_out | mlp_act]` (roadmap
+item 4), exactly the official block's structure.
 
 **QKV fusion (OPT-004 step 2, 2026-09-14)**: `qkv` is ONE GEMM into a
 `(seq, 3*width)` scratch buffer (matches a real checkpoint's own fused
@@ -170,6 +174,10 @@ frontend, fp16 throughout unless noted):
     txt_mlp_merged/txt_mlp_gated, img_mlp_merged/img_mlp_gated
                       (x0 or img_len, mlp_hidden*2 / mlp_hidden)
     single_mlp_merged/single_mlp_gated  (a0, mlp_hidden*2 / mlp_hidden)
+    single_linear2_in (a0, hidden + mlp_hidden)  -- merged `linear2`
+                      GEMM input `[attn_out | mlp_act]` (roadmap item 4;
+                      `action_linear2_in` is the ActionDiT counterpart,
+                      `(num_action, action_attn_width + action_mlp_hidden)`)
     proj_scratch      (a0, hidden)   -- GEMM output landing pad before
                                          the gated-residual accumulate
     proj_scratch2     (a0, hidden)   -- single-stream block's own
@@ -341,6 +349,17 @@ def _add_inplace(dst_ptr: int, src_ptr: int, seq: int, dim: int) -> None:
     dst.add_(src)
 
 
+def _merge_linear2(dims: dict) -> bool:
+    """`dims["merge_linear2"]` (roadmap item 4): single-stream blocks run
+    the real `linear2` as ONE GEMM over `[attn_out | mlp_act]`. Only the
+    merged-`linear1` path writes its SiLU-GLU output into that GEMM's
+    input buffer, so the flag requires `dims["merge_qkv_mlp"]`."""
+    merge = bool(dims.get("merge_linear2"))
+    if merge and not dims.get("merge_qkv_mlp"):
+        raise ValueError("dims['merge_linear2'] requires dims['merge_qkv_mlp']")
+    return merge
+
+
 def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream, attn,
                           mod_txt, mod_img, rope_table):
     """One real FLUX.2 double-stream block: separate img/txt fused-QKV
@@ -495,6 +514,9 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     ptrs = attn.get_slot_ptrs("backbone", site_layer_idx)
     Q_O, K_cache, V_cache = ptrs["Q"], ptrs["K"], ptrs["V"]
 
+    merge_linear2 = _merge_linear2(dims)
+    linear2_width = hidden + mlp_hidden
+
     fvk.ada_layer_norm_bf16in_fp16out(combined, scale_t.data_ptr(), shift_t.data_ptr(), modded, a0, hidden, eps, stream)
 
     if dims.get("merge_qkv_mlp"):
@@ -508,8 +530,16 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         _copy_slice(Q_O, linear1_out, a0, hidden, src_row_stride=linear1_width)
         _copy_slice(K_cache, _col_ptr(linear1_out, hidden), a0, hidden, src_row_stride=linear1_width)
         _copy_slice(V_cache, _col_ptr(linear1_out, 2 * hidden), a0, hidden, src_row_stride=linear1_width)
-        mlp_gated = bufs["single_mlp_gated"]
-        fvk.silu_glu_merged_fp16(_col_ptr(linear1_out, 3 * hidden), mlp_gated, a0, mlp_hidden, stream, linear1_width)
+        if merge_linear2:
+            # Roadmap item 4: the SiLU-GLU output lands in the MLP
+            # columns of the merged `linear2` input `[attn_out | mlp_act]`.
+            linear2_in = bufs["single_linear2_in"]  # (a0, linear2_width)
+            fvk.silu_glu_merged_fp16(_col_ptr(linear1_out, 3 * hidden), _col_ptr(linear2_in, hidden),
+                                      a0, mlp_hidden, stream, linear1_width, linear2_width)
+        else:
+            mlp_gated = bufs["single_mlp_gated"]
+            fvk.silu_glu_merged_fp16(_col_ptr(linear1_out, 3 * hidden), mlp_gated, a0, mlp_hidden, stream,
+                                      linear1_width)
     else:
         qkv_merged = bufs["single_qkv_merged"]  # (a0, 3*hidden)
         key("qkv.weight")(modded, qkv_merged, a0, stream)
@@ -527,10 +557,16 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     attn.run("backbone", site_layer_idx, q_seq=a0, stream=stream)
 
     from_attn = bufs["proj_scratch"]
-    from_mlp = bufs["proj_scratch2"]
-    key("attn_out_proj.weight")(Q_O, from_attn, a0, stream)
-    key("mlp_down.weight")(mlp_gated, from_mlp, a0, stream)
-    _add_inplace(from_attn, from_mlp, a0, hidden)
+    if merge_linear2:
+        # Roadmap item 4: attention output joins the MLP activation in
+        # the `linear2` input, then ONE GEMM with K = hidden + mlp_hidden.
+        _copy_slice(linear2_in, Q_O, a0, hidden, dst_row_stride=linear2_width)
+        key("linear2.weight")(linear2_in, from_attn, a0, stream)
+    else:
+        from_mlp = bufs["proj_scratch2"]
+        key("attn_out_proj.weight")(Q_O, from_attn, a0, stream)
+        key("mlp_down.weight")(mlp_gated, from_mlp, a0, stream)
+        _add_inplace(from_attn, from_mlp, a0, hidden)
     fvk.gate_res_bf16res(from_attn, gate_t.data_ptr(), combined, a0 * hidden, stream)
 
 
@@ -737,6 +773,9 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     action_K_ptr = _ptr_offset(K_cache, a0, action_attn_width)
     action_V_ptr = _ptr_offset(V_cache, a0, action_attn_width)
 
+    merge_linear2 = _merge_linear2(dims)
+    linear2_width = action_attn_width + action_mlp_hidden
+
     fvk.ada_layer_norm_fp16(action_x, scale_t.data_ptr(), shift_t.data_ptr(),
                              modded, num_action, action_hidden_dim, eps, stream)
     if dims.get("merge_qkv_mlp"):
@@ -751,9 +790,17 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
                     src_row_stride=linear1_width)
         _copy_slice(action_V_ptr, _col_ptr(linear1_out, 2 * action_attn_width), num_action, action_attn_width,
                     src_row_stride=linear1_width)
-        mlp_gated = bufs["action_mlp_gated"]
-        fvk.silu_glu_merged_fp16(_col_ptr(linear1_out, 3 * action_attn_width), mlp_gated,
-                                  num_action, action_mlp_hidden, stream, linear1_width)
+        if merge_linear2:
+            # Roadmap item 4: same merged `linear2` input as
+            # `_single_stream_layer` above.
+            linear2_in = bufs["action_linear2_in"]  # (num_action, linear2_width)
+            fvk.silu_glu_merged_fp16(_col_ptr(linear1_out, 3 * action_attn_width),
+                                      _col_ptr(linear2_in, action_attn_width),
+                                      num_action, action_mlp_hidden, stream, linear1_width, linear2_width)
+        else:
+            mlp_gated = bufs["action_mlp_gated"]
+            fvk.silu_glu_merged_fp16(_col_ptr(linear1_out, 3 * action_attn_width), mlp_gated,
+                                      num_action, action_mlp_hidden, stream, linear1_width)
     else:
         qkv_merged = bufs["action_qkv_merged"]  # (num_action, 3*action_attn_width)
         key("qkv.weight")(modded, qkv_merged, num_action, stream)
@@ -772,10 +819,14 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     attn.run("mot", site_layer_idx, q_seq=num_action, kv_seq=dims["total"], stream=stream, x0=x0, a0=a0)
 
     from_attn = bufs["action_proj_scratch"]
-    from_mlp = bufs["action_proj_scratch2"]
-    key("attn_out_proj.weight")(action_Q_ptr, from_attn, num_action, stream)
-    key("mlp_down.weight")(mlp_gated, from_mlp, num_action, stream)
-    _add_inplace(from_attn, from_mlp, num_action, action_hidden_dim)
+    if merge_linear2:
+        _copy_slice(linear2_in, action_Q_ptr, num_action, action_attn_width, dst_row_stride=linear2_width)
+        key("linear2.weight")(linear2_in, from_attn, num_action, stream)
+    else:
+        from_mlp = bufs["action_proj_scratch2"]
+        key("attn_out_proj.weight")(action_Q_ptr, from_attn, num_action, stream)
+        key("mlp_down.weight")(mlp_gated, from_mlp, num_action, stream)
+        _add_inplace(from_attn, from_mlp, num_action, action_hidden_dim)
     fvk.gate_res_fp16(from_attn, gate_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
 
 

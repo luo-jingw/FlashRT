@@ -3196,7 +3196,7 @@ Phase Status: completed
 
 ### Phase 2: loader, frontend, and pipeline wiring
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: merged path selected by `dims["merge_linear2"]`, default on for
   every precision except `fp16_cutlass`.
@@ -3207,7 +3207,7 @@ Phase Status: active
 
 ### Phase 3: layer-level verification
 
-Phase Status: pending
+Phase Status: completed
 
 - Goal: merged == split within FP16 rounding at the real shapes.
 - Files: `tests/test_imagewam_thor_real_wiring.py`,
@@ -3221,7 +3221,7 @@ Phase Status: pending
 
 ### Phase 4: regression, end to end, local A/B, sm_110 build
 
-Phase Status: pending
+Phase Status: active
 
 - Goal: no regression; indicative local speed; Thor build compiles.
 - Files: `benchmarks/imagewam_fusion_ab.py` (new).
