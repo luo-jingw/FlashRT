@@ -18,23 +18,13 @@ architecture-portable by design; `fp4_gemm` is a genuine CUTLASS
 kernel built with `-arch=sm_110a` specifically for Thor's own
 tensor-core generation) -- this module is glue code, not new CUDA.
 
-**FP8 is ALSO untestable for real numeric correctness on this dev
-machine, for a completely different reason than NVFP4** (confirmed
-2026-09-14 while wiring this module, and already independently
-documented in `plan.md`'s own "Ada FP8 Environment Gap — Confirmed,
-Not This Project's Bug" section from an earlier session): this venv's
-cuBLASLt (12.8.04, CUDA 12.8, Ada compute capability (8,9)) returns
-`cublasLtMatmulAlgoGetHeuristic failed with cuBLAS status 15`
-(`CUBLAS_STATUS_NOT_SUPPORTED`) for `fp8_gemm_descale_fp16` at EVERY
-shape tried, including trivial ones -- not a shape problem, not a bug
-in this module or in `pipeline_thor.py`'s own wiring, and not a
-hardware limitation (Ada Lovelace has real FP8 tensor cores; the
-user's own real Thor run already produced real FP8 numbers with this
-exact kernel). `Fp8Linear` itself is straightforward and mirrors
-`_Fp8Linear`'s own already-Thor-proven call pattern exactly -- this
-note exists so a `RuntimeError` from `Fp8Linear.__call__` on THIS
-machine is correctly read as "known environment gap, needs Thor," not
-as a wiring bug to chase.
+**FP8 cuBLASLt layout** (`issues.md` ISSUE-001): cuBLASLt supports FP8
+matmul on compute capability 8.9/9.0 (Ada, Hopper) only in the TN
+layout. `fp8_gemm_descale_fp16` requests NN (weight stored `(K,N)`) and
+fails there with `CUBLAS_STATUS_NOT_SUPPORTED` at every shape;
+`fp8_gemm_descale_fp16_tn` takes the weight stored `(N,K)` and runs.
+`Fp8Linear`/`StaticFp8Linear(use_cutlass=False)` pick the layout with
+`fp8_cublaslt_layout()`: NN on Blackwell (Thor, unchanged), TN below.
 
 **NVFP4 is UNTESTED on this project's own dev machine** (Ada sm_89):
 `flash_rt.flash_rt_fp4` (the compiled NVFP4 extension) only exists in
@@ -46,9 +36,8 @@ and by directly attempting the import here (`ModuleNotFoundError`).
 `flash_rt.executors.fp4_utils` LAZILY, inside `__init__`, so this
 module stays importable everywhere; only actually constructing an
 `Nvfp4Linear` requires the real extension. FP8 (`Fp8Linear`) has no
-such restriction -- `fp8_gemm_descale_fp16` lives in the main
-`flash_rt_kernels` extension and is exercised by every existing test
-this session already ran on Ada.
+such restriction -- `fp8_gemm_descale_fp16`/`_tn` live in the main
+`flash_rt_kernels` extension.
 """
 from __future__ import annotations
 
@@ -56,7 +45,8 @@ import numpy as np
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
-from flash_rt.models.imagewam.blockscaled_ref import BLOCK, prepare_e0m3_hadamard_weight
+from flash_rt.models.imagewam.awq import AwqScaledLinear
+from flash_rt.models.imagewam.blockscaled_ref import BLOCK, fake_quantize, prepare_e0m3_hadamard_weight
 
 DEV = "cuda"
 FP16 = torch.float16
@@ -281,6 +271,43 @@ class CutlassFp16SwiGluMlp:
             raise RuntimeError(f"cutlass_fp16_k64_mul_aux failed rc={rc} (M={m}, N={self.mlp_hidden}, K={self.k})")
 
 
+FP8_CUBLASLT_LAYOUTS = ("nn", "tn")
+
+
+def fp8_cublaslt_layout() -> str:
+    """cuBLASLt FP8 operand layout for the current GPU (`issues.md`
+    ISSUE-001). cuBLASLt supports FP8 matmul on compute capability 8.9
+    and 9.0 only in the TN layout (weight stored `(N,K)` row-major,
+    `TRANSA=T`, via `fp8_gemm_descale_fp16_tn`); the NN layout (weight
+    stored `(K,N)`, `fp8_gemm_descale_fp16`) fails there with status 15
+    at every shape. Blackwell (compute capability >= 10, Thor is 11.0)
+    supports both; it keeps NN, the layout every existing Thor FP8 number
+    was measured with."""
+    major, _minor = torch.cuda.get_device_capability()
+    return "nn" if major >= 10 else "tn"
+
+
+def _quantize_fp8_weight(w_kn: torch.Tensor, n: int, k: int, layout: str) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-tensor FP8 E4M3 weight quantization (`quantize_fp8_device_fp16`:
+    scale = absmax/448) into the storage `layout` needs: `(K,N)` for NN,
+    `(N,K)` for TN. The scale is per tensor, so both layouts hold the same
+    FP8 values, transposed. Returns `(w_f8, w_scale)`."""
+    if layout not in FP8_CUBLASLT_LAYOUTS:
+        raise ValueError(f"layout={layout!r} -- must be one of {FP8_CUBLASLT_LAYOUTS}")
+    src = w_kn if layout == "nn" else w_kn.t().contiguous()
+    w_f8 = torch.empty(tuple(src.shape), dtype=F8, device=DEV)
+    w_scale = torch.zeros(1, dtype=torch.float32, device=DEV)
+    fvk.quantize_fp8_device_fp16(src.data_ptr(), w_f8.data_ptr(), w_scale.data_ptr(), n * k, 0)
+    return w_f8, w_scale
+
+
+def _fp8_cublaslt_gemm(layout: str):
+    """The cuBLASLt FP8 GEMM entry point for `layout` -- both take
+    `(act_f8, w_f8, out, M, N, K, act_scale_ptr, w_scale_ptr, stream)` and
+    differ only in the weight storage they expect."""
+    return fvk.fp8_gemm_descale_fp16 if layout == "nn" else fvk.fp8_gemm_descale_fp16_tn
+
+
 class Fp8Linear:
     """`out[M,N]` (fp16) `= x[M,K]` (fp16, quantized to fp8 on the fly)
     `@ W[K,N]` (fp8, quantized ONCE at construction from a REAL fp16
@@ -289,15 +316,18 @@ class Fp8Linear:
     -> quantize, no calibration, no host sync, no fixed placeholder --
     matches `imagewam_thor_fp8_bench.py`'s own already-established
     convention for why this is the right primitive to use here).
+
+    `layout` (`"nn"`/`"tn"`, default `fp8_cublaslt_layout()`): the
+    cuBLASLt operand layout, see that function. Pass it explicitly only
+    to A/B the two layouts on Blackwell, where both are supported.
     """
 
-    def __init__(self, weight_fp16_ptr: int, n: int, k: int):
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int, *, layout: str | None = None):
         self.n, self.k = int(n), int(k)
+        self.layout = fp8_cublaslt_layout() if layout is None else layout
         w = _wrap_fp16(weight_fp16_ptr, self.k, self.n)  # (K,N), matches gemm.fp16_nn's own convention
-        self.w_f8 = torch.empty(self.k, self.n, dtype=F8, device=DEV)
-        self.w_scale = torch.zeros(1, dtype=torch.float32, device=DEV)
-        fvk.quantize_fp8_device_fp16(w.data_ptr(), self.w_f8.data_ptr(), self.w_scale.data_ptr(),
-                                      self.k * self.n, 0)
+        self.w_f8, self.w_scale = _quantize_fp8_weight(w, self.n, self.k, self.layout)
+        self._gemm_fn = _fp8_cublaslt_gemm(self.layout)
         self.act_scale = torch.zeros(1, dtype=torch.float32, device=DEV)
         self.act_f8 = None
         self._max_m = 0
@@ -308,9 +338,9 @@ class Fp8Linear:
             self._max_m = m
         fvk.quantize_fp8_device_fp16(x_ptr, self.act_f8.data_ptr(), self.act_scale.data_ptr(),
                                       m * self.k, stream)
-        fvk.fp8_gemm_descale_fp16(self.act_f8.data_ptr(), self.w_f8.data_ptr(), out_ptr,
-                                   m, self.n, self.k, self.act_scale.data_ptr(), self.w_scale.data_ptr(),
-                                   stream)
+        self._gemm_fn(self.act_f8.data_ptr(), self.w_f8.data_ptr(), out_ptr,
+                      m, self.n, self.k, self.act_scale.data_ptr(), self.w_scale.data_ptr(),
+                      stream)
 
 
 def _pick_fp8_cutlass_variant(n: int, k: int) -> str:
@@ -401,7 +431,8 @@ class StaticFp8Linear:
     and the tuning methods raise.
     """
 
-    def __init__(self, weight_fp16_ptr: int, n: int, k: int, *, use_cutlass: bool = False):
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int, *, use_cutlass: bool = False,
+                 layout: str | None = None):
         self.n, self.k = int(n), int(k)
         self.use_cutlass = use_cutlass
         self.family = "fp8_cutlass" if use_cutlass else "fp8_cublaslt"
@@ -419,14 +450,21 @@ class StaticFp8Linear:
                     "cutlass_fp8_sq/_wide/_t1 are absent from this "
                     "flash_rt_kernels build. Same gate NVFP4 already uses; "
                     "see quant_linear.py's own module docstring.")
+            if layout is not None:
+                raise ValueError("layout= selects the cuBLASLt layout; the CUTLASS path "
+                                 "always stores the weight (N,K)")
             self.default_variant = _pick_fp8_cutlass_variant(self.n, self.k)
             self.variant = self.default_variant
-            w_nk = w_kn.t().contiguous()  # (N,K), CUTLASS's own out-major convention
-            self.w_f8 = torch.empty(self.n, self.k, dtype=F8, device=DEV)
-            self._quantize_weight(w_nk, self.w_f8)
+            # (N,K), CUTLASS's own out-major convention -- same storage as
+            # the cuBLASLt "tn" layout.
+            self.layout = None
+            self.w_f8, self.w_scale = _quantize_fp8_weight(w_kn, self.n, self.k, "tn")
         else:
-            self.w_f8 = torch.empty(self.k, self.n, dtype=F8, device=DEV)
-            self._quantize_weight(w_kn, self.w_f8)
+            # cuBLASLt: "nn" stores (K,N), "tn" stores (N,K); see
+            # fp8_cublaslt_layout() for which one this GPU supports.
+            self.layout = fp8_cublaslt_layout() if layout is None else layout
+            self.w_f8, self.w_scale = _quantize_fp8_weight(w_kn, self.n, self.k, self.layout)
+            self._gemm_fn = _fp8_cublaslt_gemm(self.layout)
 
         self.act_scale = torch.zeros(1, dtype=torch.float32, device=DEV)
         self.act_f8 = None
@@ -435,20 +473,29 @@ class StaticFp8Linear:
         self._tune_scale = None
         self._tune_alpha = 1.0
 
-    def _quantize_weight(self, w: torch.Tensor, out_f8: torch.Tensor) -> None:
-        w_scale = torch.zeros(1, dtype=torch.float32, device=DEV)
-        fvk.quantize_fp8_device_fp16(w.data_ptr(), out_f8.data_ptr(), w_scale.data_ptr(),
-                                      w.numel(), 0)
-        self.w_scale = w_scale
+    def set_activation_scale(self, scale: float) -> None:
+        """Freeze the activation scale to a precomputed value (a real
+        calibration file's `amax/448`, see `calibration_file.py`) instead
+        of measuring it with `calibrate()`. Same ordering contract as
+        `calibrate()`: must run before the first `__call__`."""
+        if self._called:
+            raise RuntimeError("StaticFp8Linear.set_activation_scale() called after __call__ -- "
+                                "would silently invalidate an already-captured graph")
+        scale32 = np.float32(scale)
+        if not np.isfinite(scale32) or scale32 <= 0:
+            raise ValueError(f"activation scale must be finite and > 0, got {scale}")
+        self.act_scale.fill_(float(scale32))
+        # Same f32 host alpha rule as calibrate() (docs/calibration.md §2.3).
+        self._alpha_host = float(scale32 * np.float32(self.w_scale.item()))
+        self._calibrated = True
 
     def calibrate(self, x_ptr: int, m: int, stream: int = 0) -> None:
-        """Measure and FREEZE the activation scale from one
-        representative forward pass -- see class docstring for the
-        ordering contract this enforces. `x_ptr`/`m` are the SAME
-        random dry-run activations this project already uses everywhere
-        (NOT real calibration data; see the plan's own "deliberately
-        not in scope" note for why real house calibration waits for a
-        real checkpoint, OPT-001)."""
+        """Measure and FREEZE the activation scale (absmax/448) from one
+        activation tensor -- see class docstring for the ordering
+        contract this enforces. Real calibration data goes through
+        `set_activation_scale()` instead (a real calibration file,
+        `calibration_file.py`); this method measures whatever `x_ptr`
+        holds."""
         if self._called:
             raise RuntimeError("StaticFp8Linear.calibrate() called after __call__ -- "
                                 "would silently invalidate an already-captured graph")
@@ -481,9 +528,9 @@ class StaticFp8Linear:
             if rc != 0:
                 raise RuntimeError(f"cutlass_fp8_{self.variant} failed rc={rc}")
         else:
-            fvk.fp8_gemm_descale_fp16(self.act_f8.data_ptr(), self.w_f8.data_ptr(), out_ptr,
-                                       m, self.n, self.k, self.act_scale.data_ptr(), self.w_scale.data_ptr(),
-                                       stream)
+            self._gemm_fn(self.act_f8.data_ptr(), self.w_f8.data_ptr(), out_ptr,
+                          m, self.n, self.k, self.act_scale.data_ptr(), self.w_scale.data_ptr(),
+                          stream)
 
     def _require_cutlass(self) -> None:
         if not self.use_cutlass:
@@ -535,12 +582,17 @@ def _nvfp4_variant_index(variant: str) -> int:
     return int(variant[1:])
 
 
-class Nvfp4Linear:
+class Nvfp4Linear(AwqScaledLinear):
     """`out[M,N]` (fp16) `= x[M,K]` (fp16, quantized on the fly) `@
     W[N,K]^T` (nvfp4, quantized ONCE at construction). See module
     docstring for the Blackwell/Thor-only availability constraint --
     raises a clear `RuntimeError` at construction (not at import time)
     on any build without `flash_rt.flash_rt_fp4`.
+
+    `awq_inv_s` (optional, fp32 `(K,)`): the weight passed in already
+    carries an AWQ input scale `s` (`awq.py`), so the caller must feed
+    `x / s`; `pipeline_thor.py` folds `awq_inv_s = 1/s` into the AdaLN
+    modulation that produces `x`. `None` (default): plain NVFP4.
 
     NVFP4's own weight convention is `[N,K]` (out-major), NOT this
     project's usual `(K,N)` GEMM storage convention every OTHER weight
@@ -560,7 +612,9 @@ class Nvfp4Linear:
 
     family = "nvfp4"
 
-    def __init__(self, weight_fp16_ptr: int, n: int, k: int):
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int, *, awq_inv_s: torch.Tensor | None = None):
+        super().__init__()
+        self._awq_inv_s = awq_inv_s
         try:
             import flash_rt.flash_rt_fp4 as fvk_fp4
             from flash_rt.executors.fp4_utils import (
@@ -591,6 +645,10 @@ class Nvfp4Linear:
         w_nk = w_kn.t().contiguous()  # (N,K), NVFP4's own convention -- one-time real copy
         self.w_quant = quant_weight_nvfp4(w_nk)
         self.scratch = None
+
+    @property
+    def awq_inv_s(self) -> torch.Tensor | None:
+        return self._awq_inv_s
 
     def _ensure_scratch(self, m: int) -> None:
         if self.scratch is None or m > self.scratch.max_M:
@@ -796,3 +854,44 @@ class E0m3HadamardLinear:
             m, self.n, self.k, self.alpha, 0.0, stream, 0)
         if rc != 0:
             raise RuntimeError(f"cutlass_fp4_gemm_e0m3w_variant({self.variant}) failed rc={rc:#x}")
+
+
+def _fake_quant_nvfp4(x: torch.Tensor) -> torch.Tensor:
+    """fp16 `[R, K]` -> the fp16 values an NVFP4 GEMM multiplies. Every
+    dequantized NVFP4 value (E2M1 value times UE4M3 scale, magnitude at
+    most 6 * 448) is exact in fp16, so the cast does not round."""
+    return fake_quantize(x, "e2m1").to(FP16)
+
+
+class SimNvfp4Linear(AwqScaledLinear):
+    """`Nvfp4Linear`'s numerics on any GPU (`precision="nvfp4_sim"`):
+    `out[M,N] = fq(x)[M,K] @ fq(W)[K,N]` with `fq` the NVFP4 (E2M1, amax
+    block scale) fake quantization of `blockscaled_ref.fake_quantize`
+    along K for both operands (the weight as `W^T`, `(N,K)`, the layout
+    `Nvfp4Linear` quantizes), fp32 accumulation (`GemmRunner.fp16_nn`),
+    fp16 output. The quantizer is bit-exact to the real one, so this
+    differs from the hardware GEMM only in accumulation order. Keeps its
+    own fake-quantized weight copy; the source weight may be freed.
+    `awq_inv_s`: as for `Nvfp4Linear`. An accuracy tool, not a fast path."""
+
+    def __init__(self, gemm, weight_fp16_ptr: int, n: int, k: int, *,
+                 awq_inv_s: torch.Tensor | None = None):
+        super().__init__()
+        if k % BLOCK:
+            raise ValueError(f"NVFP4 requires K divisible by 16, got K={k}")
+        self.gemm = gemm
+        self.n, self.k = int(n), int(k)
+        w_kn = _wrap_fp16(weight_fp16_ptr, self.k, self.n)
+        self._w_fq = _fake_quant_nvfp4(w_kn.t().contiguous()).t().contiguous()  # (K,N)
+        self._awq_inv_s = awq_inv_s
+        self._x_fq = None
+
+    @property
+    def awq_inv_s(self) -> torch.Tensor | None:
+        return self._awq_inv_s
+
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
+        # The torch ops run on torch's current stream, which is `stream`
+        # on every frontend path (eager run, warmup and capture).
+        self._x_fq = _fake_quant_nvfp4(_wrap_fp16(x_ptr, m, self.k))
+        self.gemm.fp16_nn(self._x_fq.data_ptr(), self._w_fq.data_ptr(), out_ptr, m, self.n, self.k, stream)

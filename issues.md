@@ -1,6 +1,6 @@
 # ISSUE-001
 
-Status: open
+Status: resolved
 
 Area: FP8 cuBLASLt GEMM (`fp8_gemm_descale_fp16` / `fp8_gemm_descale_f32out`, `csrc/kernels/decoder_fused.cu`), used by `Fp8Linear` and `StaticFp8Linear(use_cutlass=False)` in `flash_rt/models/imagewam/quant_linear.py`
 
@@ -45,6 +45,36 @@ its cosine against `Fp16Linear`. Keep the NN path for Thor unless TN is
 measured there to be no slower.
 
 ## Resolution
+
+The hypothesis held: the NN operation layout was the only cause.
+
+- `csrc/kernels/decoder_fused.cu` gained `fp8_gemm_descale_fp16_tn` and
+  `fp8_gemm_descale_f32out_tn`: weight stored `(N,K)` row-major,
+  `TRANSA=T`, their own descriptor cache keyed by `(M,N,K,output type)`.
+  The NN functions and their cache are unchanged.
+- `quant_linear.fp8_cublaslt_layout()` returns `"nn"` on compute
+  capability >= 10 (Thor keeps the exact NN path it was measured with)
+  and `"tn"` below. `Fp8Linear` and `StaticFp8Linear(use_cutlass=False)`
+  store the weight in that layout; `layout=` forces one for an A/B.
+- H100 (sm_90): `fp8_gemm_descale_fp16_tn` is bit-exact to
+  `torch._scaled_mm` at `[4,16,16]`, `[905,27648,3072]` and
+  `[64,5120,1024]`; the NN call still returns status 15.
+- `tests/test_imagewam_quant_linear.py` runs its FP8 tests on H100: the
+  small case gives cosine 0.999242 for dynamic and static FP8 (the same
+  value Thor measured), and every served ImageWAM shape (16 distinct
+  `(M,N,K)`, merged single-stream `linear1`/`linear2`) gives cosine
+  0.999291-0.999304, rel_l2 0.0373-0.0376 against `Fp16Linear` (random
+  N(0,0.02) weight, N(0,1) input). The
+  NN-vs-TN test skips here (NN unsupported) and runs on Thor.
+- `sm110_check.sh`: builds; the Thor build exports the TN and NN symbols.
+- End to end on H100 with the real checkpoint
+  (`imagewam_e2e_official_compare.py`, `N_TASKS=3 FRAMES=0`): `fp8` gives
+  `fr_vs_off` median 0.99845, MAE vs GT 0.20706 (official 0.20688).
+  `fp8_static` runs too; its accuracy depends on the activation
+  calibration (`opportunities.md` OPT-022).
+
+Whether TN is as fast as NN on Thor is open; the Thor check is
+`benchmarks/imagewam_fp8_layout_bench.py`.
 
 # ISSUE-002
 
@@ -881,6 +911,50 @@ UE4M3's normal range.
 Simulate a per-row power-of-two pre-scale for the down-projection
 inputs in the accuracy study and measure the per-GEMM and whole-pipeline
 change.
+
+## Resolution
+
+# ISSUE-040
+
+Status: open
+
+Area: `flash_rt.core.calibration.stratified_sample_indices` (house calibration-frame sampler)
+
+## Observation
+
+With `frames_per_ep = ceil(n / n_eps)` and `step = len(ep) // frames_per_ep`,
+`range(0, len(ep), step)` yields `frames_per_ep + 1` frames whenever
+`len(ep)` is not a multiple of `frames_per_ep`. The loop stops at `n`
+picks, so the extra frame per episode is paid for by episodes at the end
+of the chosen list, which are never reached.
+
+## Impact
+
+Episode coverage is about two thirds of what the docstring promises.
+For ImageWAM's calibration build (`n = 64`, three suites, 21-22 frames
+per suite) each suite's share covered 6-7 episodes instead of 11
+(`frames 0, len//2, len-1` per episode). Pi0.5/GROOT callers of the same
+function are affected the same way. The scales stayed stable in this
+case: a differently mixed 64-frame set (31/27/6 frames per suite) gave
+per-site amax within a few percent (e.g. `txt_mlp2` max 7051 vs 7067,
+single-stream `linear1` median 36.47 vs 36.42).
+
+## Evidence
+
+- `benchmarks/imagewam_build_calibration.py` log: "64 from 21 episodes"
+  for 3 x 11 chosen episodes.
+- `select_calibration_frames(..., n=64)` picks frames `0, 72, 144` of
+  `libero_object` episode 0.
+
+## Hypotheses
+
+The intended behavior is exactly `frames_per_ep` frames per chosen
+episode (`range(0, len, step)[:frames_per_ep]`).
+
+## Next Experiment
+
+Cap each episode at `frames_per_ep` picks, rebuild the ImageWAM file,
+and compare per-site amax and the `fp8_static` fidelity numbers.
 
 ## Resolution
 

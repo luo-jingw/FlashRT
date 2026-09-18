@@ -25,6 +25,10 @@ write for the tcgen05 block-scaled GEMMs (`cutlass_fp4_gemm_variant`,
   the CUTLASS `Sm1xxBlockScaledConfig<16>` scale-factor layout used for
   both SFA (rows = M) and SFB (rows = N).
 
+Every function allocates only on the input's device (no host-to-device
+copies), so the E2M1 path also runs inside CUDA Graph capture
+(`quant_linear.SimNvfp4Linear`, `precision="nvfp4_sim"`).
+
 Measured against the CUDA kernels compiled for sm_90 from the same
 sources and flags (`tools/check_blockscaled_quantizers_sm90.py`: 130M
 real ImageWAM weight elements, activations with outliers, and blocks
@@ -89,7 +93,7 @@ def _e2m1_codes(v: torch.Tensor) -> torch.Tensor:
     a = v.abs()
     mant = torch.full_like(v, 7, dtype=torch.uint8)
     for idx in range(len(_E2M1_UPPER) - 1, -1, -1):
-        mant = torch.where(a <= _E2M1_UPPER[idx], torch.tensor(idx, dtype=torch.uint8, device=v.device), mant)
+        mant.masked_fill_(a <= _E2M1_UPPER[idx], idx)
     sign = (v < 0).to(torch.uint8) << 3
     return sign | mant
 
@@ -106,12 +110,12 @@ def _e0m3_codes(v: torch.Tensor) -> torch.Tensor:
 
 def decode_codes(codes: torch.Tensor, fmt: str) -> torch.Tensor:
     """4-bit codes -> element values (float32, before scaling)."""
-    mag_idx = (codes & 7).long()
+    mag_idx = (codes & 7).float()
     if fmt == "e2m1":
-        lut = torch.tensor(_E2M1_LEVELS, dtype=torch.float32, device=codes.device)
-        mag = lut[mag_idx]
+        # _E2M1_LEVELS by index, exactly: i/2 for 0..3, i-2 for 4..6, 6 for 7.
+        mag = torch.where(mag_idx < 4, mag_idx * 0.5, torch.where(mag_idx < 7, mag_idx - 2.0, 6.0))
     elif fmt == "e0m3":
-        mag = mag_idx.float()
+        mag = mag_idx
     else:
         raise ValueError(f"fmt must be one of {FORMATS}, got {fmt!r}")
     return torch.where((codes & 8) != 0, -mag, mag)
@@ -167,7 +171,9 @@ def _desired_scale(amax: torch.Tensor, fmt: str) -> torch.Tensor:
     division (it differs exactly at the ties `amax / 7` hits often, e.g.
     amax = 1.3671875 gives exactly 25/128)."""
     if fmt == "e2m1":
-        return amax * torch.tensor(1.0 / E2M1_MAX, dtype=torch.float32, device=amax.device)
+        # A Python scalar multiplies a float32 tensor as its float32
+        # rounding, the same constant as the kernels' reciprocal of 6.
+        return amax * (1.0 / E2M1_MAX)
     return torch.div(amax, torch.full_like(amax, E0M3_MAX))
 
 

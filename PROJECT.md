@@ -122,12 +122,11 @@ this fork covers Jetson AGX Thor (sm_110).
   instruction, given this machine's limited memory/VRAM)**: this local
   machine (Ada sm_89) does INT4/INT8 (SM80 CUTLASS) inference speed
   work only — that's the precision tier this hardware can actually
-  execute. FP8 and FP4 (NVFP4) testing belongs on Thor, not here: FP8
-  fails with `CUBLAS_STATUS_NOT_SUPPORTED` at every shape because
-  `fp8_gemm_descale_fp16` requests an NN layout that cuBLASLt supports
-  for FP8 only on Blackwell (`issues.md` ISSUE-001), and FP4 needs Blackwell
-  hardware this machine does not have at all. Do not spend local time
-  trying to make FP8/FP4 work here; do not ask Thor to test INT4/INT8
+  execute. FP4 (NVFP4) testing belongs on Thor, not here: FP4 needs
+  Blackwell hardware this machine does not have at all (`nvfp4_sim`
+  emulates its numerics for accuracy work). FP8 cuBLASLt runs on sm_89
+  and sm_90 through the TN layout (`issues.md` ISSUE-001, resolved);
+  FP8 speed still belongs on Thor. Do not ask Thor to test INT4/INT8
   (SM80) either — that path is a confirmed, measured dead end there
   (~8.6x slower than FP16, see `opportunities.md` OPT-007) precisely
   because it doesn't use Thor's own native tensor cores.
@@ -174,9 +173,14 @@ this fork covers Jetson AGX Thor (sm_110).
   The first build takes about 10-15 minutes at `-j24`; later builds are
   incremental. A passing build shows only that the code compiles and
   links. Correctness and speed still have to be checked on Thor.
-- Baseline on this machine: `pytest tests/test_imagewam_*.py` gives 68
-  passed and 6 skipped. The skips are FA4, NVFP4, SM100 CUTLASS FP8,
-  and FP8 cuBLASLt (ISSUE-001).
+- Baseline on this machine: `pytest tests/test_imagewam_*.py` gave 68
+  passed and 6 skipped before ISSUE-001 was resolved. FP8 cuBLASLt now
+  runs here through the TN layout; the remaining skips are FA4, NVFP4,
+  SM100 CUTLASS FP8, and the FP8 NN-vs-TN comparison (needs a GPU that
+  supports both layouts).
+- Real activation-calibration files (`docs/imagewam_calibration.md`)
+  live outside the repository, under
+  `/home/user1/workspace/jingwu/artifacts/calibration/`.
 - End-to-end check against the official model:
   `benchmarks/imagewam_e2e_official_compare.py`. On fp16 over 20
   LIBERO frames, the median action cosine is 0.9984 when both sides use
@@ -188,9 +192,12 @@ this fork covers Jetson AGX Thor (sm_110).
   GEMMs) use no Blackwell instructions and run on H100 when compiled for
   sm_90a. `tools/check_blockscaled_quantizers_sm90.py` builds them with
   the `fp4_kernels_obj` flags and compares their bytes with
-  `flash_rt/models/imagewam/blockscaled_ref.py`; 4-bit accuracy work can
-  be simulated here with that reference
-  (`benchmarks/imagewam_e0m3_accuracy_study.py`).
+  `flash_rt/models/imagewam/blockscaled_ref.py`. 4-bit accuracy work can
+  be simulated here with that reference: per GEMM
+  (`benchmarks/imagewam_e0m3_accuracy_study.py`,
+  `benchmarks/imagewam_nvfp4_awq_study.py`) or through the whole served
+  pipeline with `precision="nvfp4_sim"` (NVFP4 numerics, fp16 GEMMs;
+  `tests/test_imagewam_nvfp4_sim.py`).
 
 ## Credentials
 
