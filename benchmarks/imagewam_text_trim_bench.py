@@ -14,9 +14,10 @@ Sections (`--section`, default `all`):
            max-dims scratch prefill and the calibration) and the device
            memory it adds. Cached length: wall time of `set_prompt`.
   ab       the same frontend, `--ab-valid` valid tokens (trimmed) vs 512
-           valid tokens (x0=513, the untrimmed shapes), alternating:
-           graph replay alone (CUDA events) and `infer()` (wall clock,
-           synchronized; placeholder image tokens unless --vae-graph).
+           valid tokens (x0=513, the untrimmed shapes), alternating every
+           sample: graph replay alone (CUDA events) and `infer()` (wall
+           clock, synchronized; placeholder image tokens unless
+           --vae-graph). `--iters * --rounds` samples per side.
 
 Memory per new length is reported three ways: torch
 `memory_reserved()` delta (the graph's private pool and any autotune
@@ -178,56 +179,55 @@ def section_capture(fe: ImageWAMTorchFrontendThor, counts: list[int]) -> None:
          peak_allocated_gib=round(torch.cuda.max_memory_allocated() / 2**30, 2))
 
 
-def _replay_ms(graph: torch.cuda.CUDAGraph, iters: int) -> list[float]:
+def _replay_ms(graph: torch.cuda.CUDAGraph) -> float:
     start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
-    out = []
-    for _ in range(iters):
-        start.record()
-        graph.replay()
-        end.record()
-        end.synchronize()
-        out.append(start.elapsed_time(end))
-    return out
+    start.record()
+    graph.replay()
+    end.record()
+    end.synchronize()
+    return start.elapsed_time(end)
 
 
-def _infer_ms(fe: ImageWAMTorchFrontendThor, obs: dict[str, object], iters: int) -> list[float]:
-    out = []
-    for _ in range(iters):
-        torch.cuda.synchronize()
-        t = time.perf_counter()
-        fe.infer(obs)
-        out.append((time.perf_counter() - t) * 1e3)
-    return out
+def _infer_ms(fe: ImageWAMTorchFrontendThor, obs: dict[str, object]) -> float:
+    torch.cuda.synchronize()
+    t = time.perf_counter()
+    fe.infer(obs)
+    return (time.perf_counter() - t) * 1e3
 
 
 def section_ab(fe: ImageWAMTorchFrontendThor, ab_valid: int, iters: int, rounds: int,
                obs: dict[str, object]) -> None:
+    """Every sample alternates the two sides: one replay each (CUDA
+    events), then per side an untimed `set_prompt` (cached length, so no
+    capture) and one timed `infer()`."""
     sides = {"trimmed": ab_valid, "full": TEXT_LEN}
-    graphs = {}
-    for name, n in sides.items():
-        ctx, mask = _context_and_mask(n)
-        fe.set_prompt(context=ctx, context_mask=mask)
-        graphs[name] = (fe._graph, fe.active_dims["x0"], ctx, mask)
-    print(f"\n=== ab: trimmed x0={graphs['trimmed'][1]} vs full x0={graphs['full'][1]}, "
-          f"{rounds} rounds x {iters} iters, alternating ===", flush=True)
+    prompts = {name: _context_and_mask(n) for name, n in sides.items()}
+    graphs, x0s = {}, {}
+    for name in sides:
+        fe.set_prompt(context=prompts[name][0], context_mask=prompts[name][1])
+        graphs[name], x0s[name] = fe._graph, fe.active_dims["x0"]
+    samples = iters * rounds
+    print(f"\n=== ab: trimmed x0={x0s['trimmed']} vs full x0={x0s['full']}, {samples} alternating samples ===",
+          flush=True)
     replay: dict[str, list[float]] = {name: [] for name in sides}
     infer: dict[str, list[float]] = {name: [] for name in sides}
-    for name in sides:  # warmup
-        _replay_ms(graphs[name][0], 3)
-    for _ in range(rounds):
+    for i in range(samples + 3):
         for name in sides:
-            replay[name] += _replay_ms(graphs[name][0], iters)
+            r = _replay_ms(graphs[name])
+            if i >= 3:
+                replay[name].append(r)
         for name in sides:
-            _, _, ctx, mask = graphs[name]
-            fe.set_prompt(context=ctx, context_mask=mask)
-            _infer_ms(fe, obs, 2)
-            infer[name] += _infer_ms(fe, obs, iters)
+            fe.set_prompt(context=prompts[name][0], context_mask=prompts[name][1])
+            t = _infer_ms(fe, obs)
+            if i >= 3:
+                infer[name].append(t)
     for name in sides:
-        emit("ab", side=name, x0=graphs[name][1], replay_ms=asdict(Percentiles.of(replay[name])),
-             infer_ms=asdict(Percentiles.of(infer[name])), samples=len(replay[name]))
-    r = Percentiles.of(replay["trimmed"]).p50 / Percentiles.of(replay["full"]).p50
-    i = Percentiles.of(infer["trimmed"]).p50 / Percentiles.of(infer["full"]).p50
-    emit("ab_ratio", replay_p50_trimmed_over_full=round(r, 4), infer_p50_trimmed_over_full=round(i, 4))
+        emit("ab", side=name, x0=x0s[name], replay_ms=asdict(Percentiles.of(replay[name])),
+             infer_ms=asdict(Percentiles.of(infer[name])), samples=samples)
+    ratio = {k: {q: round(getattr(Percentiles.of(v["trimmed"]), q) / getattr(Percentiles.of(v["full"]), q), 4)
+                 for q in ("p10", "p50", "p90")}
+             for k, v in (("replay", replay), ("infer", infer))}
+    emit("ab_ratio_trimmed_over_full", **ratio)
 
 
 def main() -> None:
