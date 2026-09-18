@@ -70,9 +70,14 @@ from flash_rt.models.imagewam.quant_linear import (
     Nvfp4Linear,
     StaticFp8Linear,
 )
+from flash_rt.models.imagewam.nvfp4_sim import SimNvfp4Linear
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 
-_PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass")
+_PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass", "nvfp4_sim")
+# `nvfp4_sim`: NVFP4 numerics emulated with fp16 GEMMs (nvfp4_sim.py,
+# bit-exact quantizer), for accuracy work on GPUs without Blackwell FP4.
+# Not a fast path.
+_NVFP4_PRECISIONS = ("nvfp4", "nvfp4_sim")
 # OPT-004 step 6 (plan.md): the two `StaticFp8Linear` variants need a
 # one-time calibration call in set_prompt() before graph capture (see
 # _calibrate_fp8 below) -- everything else needs no such step.
@@ -81,12 +86,11 @@ _STATIC_FP8_PRECISIONS = ("fp8_static", "fp8_static_cutlass")
 # checklist against real checkpoint weights + real open-loop LIBERO
 # data): nvfp4 is the fastest AND closest to fp16/GT (actions
 # cosine=0.9998 vs fp16, open-loop MAE 1.01x fp16's own). fp8_static*
-# was ruled out -- its per-layer activation calibration is still a
-# placeholder N(0,0.1) guess (img_in excepted), which measurably wrecks
-# accuracy (backbone_hidden cosine ~0.46) independent of which GEMM
-# backend (cuBLASLt or CUTLASS) runs it -- a calibration problem, not a
-# kernel problem, so CUTLASS doesn't fix it. `nvfp4` is a real
-# production default here, not just a benchmark-only opt-in.
+# was measured with the N(0,0.1) placeholder activation scales
+# (backbone_hidden cosine ~0.46); with a real calibration file
+# (calibration_path=, opportunities.md OPT-022) it tracks fp16 on H100.
+# `nvfp4` is a real production default here, not just a benchmark-only
+# opt-in.
 
 DEV = "cuda"
 FP16 = torch.float16
@@ -119,6 +123,7 @@ class ImageWAMTorchFrontendThor:
                  qwen3_model_spec: str | None = None,
                  dataset_stats_path: str | None = None,
                  calibration_path: str | None = None,
+                 nvfp4_awq: bool = False, awq_alpha: float = 0.5, awq_scope: str = "adaln+down",
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
@@ -195,13 +200,23 @@ class ImageWAMTorchFrontendThor:
                 "be passed explicitly for real-checkpoint accuracy")
 
         # Real activation calibration (calibration_file.py): loaded and
-        # identity-checked here, before the multi-GB checkpoint load, and
-        # applied by _calibrate_fp8() before graph capture.
+        # identity-checked here, before the multi-GB checkpoint load. Used
+        # by _calibrate_fp8() (static FP8 scales) and, with nvfp4_awq, by
+        # _load_real_weights() (AWQ channel statistics, awq.py).
+        self._nvfp4_awq = nvfp4_awq
+        self._awq_alpha = float(awq_alpha)
+        self._awq_scope = awq_scope
+        if nvfp4_awq:
+            if precision not in _NVFP4_PRECISIONS:
+                raise ValueError(f"nvfp4_awq applies to {_NVFP4_PRECISIONS}, not precision={precision!r}")
+            if calibration_path is None or ckpt_path is None:
+                raise ValueError("nvfp4_awq needs calibration_path (per-channel activation "
+                                 "statistics) and ckpt_path")
         self._calibration = None
         if calibration_path is not None:
-            if precision not in _STATIC_FP8_PRECISIONS:
-                raise ValueError(f"calibration_path is used by {_STATIC_FP8_PRECISIONS}, "
-                                 f"not precision={precision!r}")
+            if precision not in _STATIC_FP8_PRECISIONS and not nvfp4_awq:
+                raise ValueError(f"calibration_path is used by {_STATIC_FP8_PRECISIONS} and by "
+                                 f"nvfp4_awq, not precision={precision!r}")
             if ckpt_path is None:
                 raise ValueError("calibration_path requires ckpt_path (a calibration file is "
                                  "tied to one real checkpoint)")
@@ -488,12 +503,17 @@ class ImageWAMTorchFrontendThor:
         w = self._own(torch.randn(k, n, dtype=FP16, device=DEV) * 0.02)
         return CutlassFp16SwiGluMlp(w.data_ptr(), mlp_hidden, k)
 
-    def _wrap_linear(self, w: torch.Tensor, n: int, k: int):
+    def _wrap_linear(self, w: torch.Tensor, n: int, k: int, *, awq_inv_s: torch.Tensor | None = None):
         """Wrap an already-materialized `(k,n)` fp16 CUDA weight tensor
         in the `self._precision`-selected linear-op object -- the part
         of `_rnd_linear` that's shared with `_load_real_weights` (OPT-001),
         which sources `w` from the real checkpoint instead of
-        `torch.randn`. `w` must already be `self._own`'d by the caller."""
+        `torch.randn`. `w` must already be `self._own`'d by the caller
+        (except for `SimNvfp4Linear`, which keeps its own copy).
+        `awq_inv_s`: the AWQ input scale `w` already carries (NVFP4
+        precisions only, `awq.py`)."""
+        if awq_inv_s is not None and self._precision not in _NVFP4_PRECISIONS:
+            raise ValueError(f"awq_inv_s given for precision={self._precision!r}")
         if self._precision == "fp16":
             return Fp16Linear(self._gemm, w.data_ptr(), n, k)
         if self._precision == "fp16_cutlass":
@@ -538,7 +558,13 @@ class ImageWAMTorchFrontendThor:
             # the model is a multiple of 16 already.
             if n % 16 != 0 or k % 16 != 0:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
-            return Nvfp4Linear(w.data_ptr(), n, k)
+            return Nvfp4Linear(w.data_ptr(), n, k, awq_inv_s=awq_inv_s)
+        if self._precision == "nvfp4_sim":
+            # Same K=7/N=7 fallback as "nvfp4" above, so both precisions
+            # quantize exactly the same set of GEMMs.
+            if n % 16 != 0 or k % 16 != 0:
+                return Fp16Linear(self._gemm, w.data_ptr(), n, k)
+            return SimNvfp4Linear(self._gemm, w.data_ptr(), n, k, awq_inv_s=awq_inv_s)
         if self._precision == "fp8_static":
             # Same K=7/N=7 FP8 alignment gap as the "fp8" branch above --
             # _calibrate_fp8() already skips non-StaticFp8Linear objects
@@ -695,6 +721,8 @@ class ImageWAMTorchFrontendThor:
             action_num_double=d["action_num_layers_double"], action_num_single=d["action_num_layers_single"],
             action_attn_width=d["action_attn_width"], merge_qkv_mlp=d.get("merge_qkv_mlp", False))
 
+        awq_plans = self._plan_awq(d, raw) if self._nvfp4_awq else {}
+
         weights = {}
         seen_shared: dict[int, object] = {}  # id(cpu tensor) -> wrapped/ptr, for shared txt_in/img_in
         for key, t in raw.items():
@@ -728,11 +756,39 @@ class ImageWAMTorchFrontendThor:
                 value = CutlassFp16SwiGluMlp(tg.data_ptr(), n // 2, k)
             else:
                 n, k = t.shape[1], t.shape[0]  # already (K,N) convention, see checkpoint_loader._w
-                tg = self._own(t.to(DEV).contiguous())
-                value = self._wrap_linear(tg, n, k)
+                tg = t.to(DEV).contiguous()
+                inv_s = None
+                plan = awq_plans.get(key)
+                if plan is not None:
+                    from flash_rt.models.imagewam.awq import apply_awq_plan
+                    tg = apply_awq_plan(tg, plan)
+                    inv_s = (1.0 / plan.input_scale) if plan.fold_input else None
+                value = self._wrap_linear(tg, n, k, awq_inv_s=inv_s)
+                if not isinstance(value, SimNvfp4Linear):
+                    self._own(tg)
             weights[key] = value
             seen_shared[cpu_id] = value
         return weights
+
+    def _plan_awq(self, d: dict, raw: dict) -> dict:
+        """AWQ plan (`awq.plan_awq`) for every NVFP4-quantized weight of
+        the real checkpoint, from the calibration file's per-channel
+        activation statistics: fold A for AdaLN-fed GEMMs, plus fold B
+        (down projections via the preceding up columns) when
+        `awq_scope="adaln+down"`."""
+        from flash_rt.models.imagewam.activation_recorder import site_name
+        from flash_rt.models.imagewam.awq import plan_awq
+        eligible = [key for key, t in raw.items()
+                    if not (key[-1].endswith("_norm") or key[-1] == "action_encoder.bias"
+                            or key[-1] in ("txt_in.weight", "img_in.weight"))
+                    and t.shape[0] % 16 == 0 and t.shape[1] % 16 == 0]
+        channel_amax = {}
+        for key in eligible:
+            site = self._calibration.sites.get(site_name(key))
+            if site is None or site.channel_amax.shape[0] != raw[key].shape[0]:
+                raise ValueError(f"calibration file has no (or a wrong-width) site for {site_name(key)}")
+            channel_amax[key] = torch.from_numpy(site.channel_amax).to(DEV)
+        return plan_awq(eligible, channel_amax, d, alpha=self._awq_alpha, scope=self._awq_scope)
 
     def _alloc_buffers(self, d: dict) -> dict:
         hidden, mlp_hidden, x0, a0, HD = d["hidden"], d["mlp_hidden"], d["x0"], d["a0"], d["HD"]

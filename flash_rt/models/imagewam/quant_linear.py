@@ -45,6 +45,7 @@ import numpy as np
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
+from flash_rt.models.imagewam.awq import AwqScaledLinear
 
 DEV = "cuda"
 FP16 = torch.float16
@@ -504,12 +505,17 @@ class StaticFp8Linear:
                           stream)
 
 
-class Nvfp4Linear:
+class Nvfp4Linear(AwqScaledLinear):
     """`out[M,N]` (fp16) `= x[M,K]` (fp16, quantized on the fly) `@
     W[N,K]^T` (nvfp4, quantized ONCE at construction). See module
     docstring for the Blackwell/Thor-only availability constraint --
     raises a clear `RuntimeError` at construction (not at import time)
     on any build without `flash_rt.flash_rt_fp4`.
+
+    `awq_inv_s` (optional, fp32 `(K,)`): the weight passed in already
+    carries an AWQ input scale `s` (`awq.py`), so the caller must feed
+    `x / s`; `pipeline_thor.py` folds `awq_inv_s = 1/s` into the AdaLN
+    modulation that produces `x`. `None` (default): plain NVFP4.
 
     NVFP4's own weight convention is `[N,K]` (out-major), NOT this
     project's usual `(K,N)` GEMM storage convention every OTHER weight
@@ -521,7 +527,9 @@ class Nvfp4Linear:
     convention, only this class's own constructor differs internally.
     """
 
-    def __init__(self, weight_fp16_ptr: int, n: int, k: int):
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int, *, awq_inv_s: torch.Tensor | None = None):
+        super().__init__()
+        self._awq_inv_s = awq_inv_s
         try:
             import flash_rt.flash_rt_fp4  # noqa: F401 -- import-time availability check
             from flash_rt.executors.fp4_utils import FP4ActScratch, fp4_gemm, quant_act_nvfp4, quant_weight_nvfp4
@@ -543,6 +551,10 @@ class Nvfp4Linear:
         w_nk = w_kn.t().contiguous()  # (N,K), NVFP4's own convention -- one-time real copy
         self.w_quant = quant_weight_nvfp4(w_nk)
         self.scratch = None
+
+    @property
+    def awq_inv_s(self) -> torch.Tensor | None:
+        return self._awq_inv_s
 
     def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
         if self.scratch is None:

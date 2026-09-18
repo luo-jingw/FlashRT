@@ -22,9 +22,13 @@ The frontends run one after the other (reference first, outputs kept on
 the CPU), so peak memory is one frontend plus Qwen3.
 
 Env: CKPT_PATH, FLUX2_AE_MODEL_PATH, FLUX2_SRC, QWEN3_MODEL_SPEC, DATA_ROOT;
-PRECISION (candidate, default fp8_static), CALIBRATION (path, optional),
-N_TASKS (10), FRAMES ("0,60"), NOISE_SCALE (1.0 = official N(0,1) sampler;
-0.01 = the served infer() convention, issues.md ISSUE-002), ITERS (30).
+PRECISION (candidate, default fp8_static; nvfp4 on Thor, nvfp4_sim anywhere),
+CALIBRATION (path, optional), NVFP4_AWQ (0/1, nvfp4*/needs CALIBRATION),
+AWQ_ALPHA (0.5), AWQ_SCOPE (adaln+down), N_TASKS (10), FRAMES ("0,60"),
+NOISE_SCALE (1.0 = official N(0,1) sampler; 0.01 = the served infer()
+convention, issues.md ISSUE-002), ITERS (30), REF_CACHE (optional .pt path:
+the fp16 reference outputs and latency are loaded from it when it exists
+for the same frames and noise, else computed and saved there).
 """
 from __future__ import annotations
 
@@ -48,6 +52,10 @@ N_TASKS = int(os.environ.get("N_TASKS", "10"))
 FRAMES = tuple(int(x) for x in os.environ.get("FRAMES", "0,60").split(","))
 NOISE_SCALE = float(os.environ.get("NOISE_SCALE", "1.0"))
 ITERS = int(os.environ.get("ITERS", "30"))
+NVFP4_AWQ = os.environ.get("NVFP4_AWQ", "0") == "1"
+AWQ_ALPHA = float(os.environ.get("AWQ_ALPHA", "0.5"))
+AWQ_SCOPE = os.environ.get("AWQ_SCOPE", "adaln+down")
+REF_CACHE = os.environ.get("REF_CACHE") or None
 
 
 def cos(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -61,13 +69,14 @@ def noise_for(i: int) -> torch.Tensor:
     return n.to(DEV, BF16).float()[0] * NOISE_SCALE
 
 
-def build(precision: str, calibration: str | None) -> ImageWAMTorchFrontendThor:
+def build(precision: str, calibration: str | None, *, awq: bool = False) -> ImageWAMTorchFrontendThor:
+    awq_kw = dict(nvfp4_awq=True, awq_alpha=AWQ_ALPHA, awq_scope=AWQ_SCOPE) if awq else {}
     return ImageWAMTorchFrontendThor(
         precision=precision, dims_override=dict(LIBERO_REAL_DIMS), ckpt_path=CKPT,
         ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
         qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"],
         dataset_stats_path=os.path.join(os.path.dirname(CKPT), "dataset_stats.json"),
-        calibration_path=calibration)
+        calibration_path=calibration, **awq_kw)
 
 
 def obs_of(fr: LiberoFrame) -> dict:
@@ -113,16 +122,25 @@ def latency(fe: ImageWAMTorchFrontendThor, fr: LiberoFrame) -> tuple[float, floa
 def main() -> None:
     refs = evaluation_frames(os.environ["DATA_ROOT"], n_tasks=N_TASKS, frames=FRAMES)
     frames = [load_frame(os.environ["DATA_ROOT"], r, LIBERO_HORIZON) for r in refs]
+    label = f"{PRECISION}" + (f" +AWQ(alpha={AWQ_ALPHA}, {AWQ_SCOPE})" if NVFP4_AWQ else "")
     print(f"{len(frames)} held-out frames (libero_spatial, frames {FRAMES}); candidate "
-          f"precision={PRECISION} calibration={CALIBRATION}; noise scale {NOISE_SCALE}", flush=True)
+          f"{label} calibration={CALIBRATION}; noise scale {NOISE_SCALE}", flush=True)
 
-    fe = build("fp16", None)
-    ref_out = run(fe, frames)
-    ref_lat = latency(fe, frames[0])
-    del fe
-    torch.cuda.empty_cache()
+    ref_key = dict(frames=[(r.suite, r.episode, r.frame) for r in refs], noise_scale=NOISE_SCALE)
+    cached = torch.load(REF_CACHE) if REF_CACHE and os.path.exists(REF_CACHE) else None
+    if cached is not None and cached["key"] == ref_key:
+        ref_out, ref_lat = cached["out"], cached["lat"]
+        print(f"fp16 reference loaded from {REF_CACHE}", flush=True)
+    else:
+        fe = build("fp16", None)
+        ref_out = run(fe, frames)
+        ref_lat = latency(fe, frames[0])
+        del fe
+        torch.cuda.empty_cache()
+        if REF_CACHE:
+            torch.save(dict(key=ref_key, out=ref_out, lat=ref_lat), REF_CACHE)
 
-    fe = build(PRECISION, CALIBRATION)
+    fe = build(PRECISION, CALIBRATION, awq=NVFP4_AWQ)
     cand_out = run(fe, frames)
     cand_lat = latency(fe, frames[0])
 
@@ -141,14 +159,14 @@ def main() -> None:
         rows.append(row)
         print({k: (round(v, 5) if isinstance(v, float) else v) for k, v in row.items()}, flush=True)
     df = pd.DataFrame(rows)
-    print(f"\n=== {PRECISION} vs fp16, calibration={CALIBRATION}, noise scale {NOISE_SCALE} ===")
+    print(f"\n=== {label} vs fp16, calibration={CALIBRATION}, noise scale {NOISE_SCALE} ===")
     for col in ("backbone_hidden", "action_hidden", "action_latent", "actions",
                 "mae_fp16_vs_gt", "mae_cand_vs_gt"):
         print(f"{col:16s} min={df[col].min():.5f} median={df[col].median():.5f} mean={df[col].mean():.5f}")
     print(f"MAE ratio (candidate / fp16): {df['mae_cand_vs_gt'].mean() / df['mae_fp16_vs_gt'].mean():.3f}")
     print(f"all finite: {bool(df['finite'].all())}")
     print(f"infer() ms  fp16: P10={ref_lat[0]:.1f} P50={ref_lat[1]:.1f} P90={ref_lat[2]:.1f} | "
-          f"{PRECISION}: P10={cand_lat[0]:.1f} P50={cand_lat[1]:.1f} P90={cand_lat[2]:.1f}")
+          f"{label}: P10={cand_lat[0]:.1f} P50={cand_lat[1]:.1f} P90={cand_lat[2]:.1f}")
     print(f"peak GPU mem: {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB")
 
 

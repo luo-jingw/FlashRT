@@ -200,6 +200,7 @@ from __future__ import annotations
 
 import torch
 
+from flash_rt.models.imagewam.awq import AwqScaledLinear
 from flash_rt.models.imagewam.quant_linear import CutlassFp16SwiGluMlp, Nvfp4SwiGluMlp
 
 
@@ -321,6 +322,18 @@ def _fuse_mod_group(shift, scale, gate, seq: int, dim: int):
     return shift_t, scale_t, gate_t
 
 
+def _awq_folded(lin, shift, scale, shift_t, scale_t):
+    """AWQ fold A (`flash_rt/models/imagewam/awq.py`): when the GEMM that
+    consumes this AdaLN output carries an AWQ input scale `s`, its input
+    must be `x / s`, so the modulation pair becomes `(shift / s,
+    (1 + scale) / s - 1)`. Otherwise returns `(shift_t, scale_t)`
+    unchanged. `shift`/`scale` are the fp32 modulation tensors (the
+    folded pair is computed from them, not from the fp16 copies)."""
+    if isinstance(lin, AwqScaledLinear) and lin.awq_inv_s is not None:
+        return lin.folded_modulation(shift, scale)
+    return shift_t, scale_t
+
+
 def _fuse_mod_pair(shift, scale):
     """Same as `_fuse_mod_group` but for a GATE-LESS AdaLN pair (OPT-001,
     `adaln.head_modulation`'s own output) -- no `(seq,dim)` broadcast
@@ -368,6 +381,10 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     txt_shift2_t, txt_scale2_t, txt_gate2_t = _fuse_mod_group(txt_shift2, txt_scale2, txt_gate2, x0, hidden)
     img_shift1_t, img_scale1_t, img_gate1_t = _fuse_mod_group(img_shift1, img_scale1, img_gate1, img_len, hidden)
     img_shift2_t, img_scale2_t, img_gate2_t = _fuse_mod_group(img_shift2, img_scale2, img_gate2, img_len, hidden)
+    txt_shift1_t, txt_scale1_t = _awq_folded(key("txt_qkv.weight"), txt_shift1, txt_scale1, txt_shift1_t, txt_scale1_t)
+    txt_shift2_t, txt_scale2_t = _awq_folded(key("txt_mlp0.weight"), txt_shift2, txt_scale2, txt_shift2_t, txt_scale2_t)
+    img_shift1_t, img_scale1_t = _awq_folded(key("img_qkv.weight"), img_shift1, img_scale1, img_shift1_t, img_scale1_t)
+    img_shift2_t, img_scale2_t = _awq_folded(key("img_mlp0.weight"), img_shift2, img_scale2, img_shift2_t, img_scale2_t)
 
     combined = bufs["backbone_hidden"]  # (a0, hidden)
     modded = bufs["modded_scratch"]
@@ -488,6 +505,8 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     key = lambda slot: weights[("backbone", "single", weight_layer_idx, slot)]
     shift, scale, gate = mod_single
     shift_t, scale_t, gate_t = _fuse_mod_group(shift, scale, gate, a0, hidden)
+    if dims.get("merge_qkv_mlp"):
+        shift_t, scale_t = _awq_folded(key("linear1.weight"), shift, scale, shift_t, scale_t)
 
     combined = bufs["backbone_hidden"]
     modded = bufs["modded_scratch"]
@@ -671,6 +690,8 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
     (shift1, scale1, gate1), (shift2, scale2, gate2) = mod
     shift1_t, scale1_t, gate1_t = _fuse_mod_group(shift1, scale1, gate1, num_action, action_hidden_dim)
     shift2_t, scale2_t, gate2_t = _fuse_mod_group(shift2, scale2, gate2, num_action, action_hidden_dim)
+    shift1_t, scale1_t = _awq_folded(key("qkv.weight"), shift1, scale1, shift1_t, scale1_t)
+    shift2_t, scale2_t = _awq_folded(key("mlp0.weight"), shift2, scale2, shift2_t, scale2_t)
 
     action_x = bufs["action_hidden"]  # (num_action, action_hidden_dim)
     modded = bufs["action_modded"]
@@ -727,6 +748,8 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     key = lambda slot: weights[("action_dit", "single", weight_layer_idx, slot)]
     shift, scale, gate = mod
     shift_t, scale_t, gate_t = _fuse_mod_group(shift, scale, gate, num_action, action_hidden_dim)
+    if dims.get("merge_qkv_mlp"):
+        shift_t, scale_t = _awq_folded(key("linear1.weight"), shift, scale, shift_t, scale_t)
 
     action_x = bufs["action_hidden"]
     modded = bufs["action_modded"]
