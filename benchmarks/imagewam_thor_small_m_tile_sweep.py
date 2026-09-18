@@ -4,14 +4,16 @@
 Roadmap item 1 (plan.md, "Plan: ActionDiT small-M CUTLASS tile
 selection"; opportunities.md OPT-018). Two parts:
 
-`--part kernels` -- every real ActionDiT GEMM shape at M = 64:
+`--part kernels` -- every ActionDiT GEMM shape the served pipeline runs
+at M = 64 (merged single-stream linear1 and linear2):
 
   site                                   N      K   layers sharing it
   double qkv                          9216   1024    5
-  double proj + single attn_out_proj  1024   3072   25
+  double proj                         1024   3072    5
   double mlp0 (merged gate/up)        8192   1024    5
-  double mlp2 + single mlp_down       1024   4096   25
+  double mlp2                         1024   4096    5
   single linear1 (qkv + gate/up)     17408   1024   20
+  single linear2 (attn out + down)    1024   7168   20
 
   For each shape it builds as many distinct random weights as real layers
   share the shape, then for every NVFP4 variant (all `cutlass_fp4_gemm_variant`
@@ -93,10 +95,11 @@ class ActionShape:
 
 SHAPES = (
     ActionShape("double qkv", 9216, 1024, 5),
-    ActionShape("proj / attn_out_proj", 1024, 3072, 25),
+    ActionShape("double proj", 1024, 3072, 5),
     ActionShape("double mlp0", 8192, 1024, 5),
-    ActionShape("mlp2 / mlp_down", 1024, 4096, 25),
+    ActionShape("double mlp2", 1024, 4096, 5),
     ActionShape("single linear1", 17408, 1024, 20),
+    ActionShape("single linear2", 1024, 7168, 20),
 )
 
 
