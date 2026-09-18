@@ -1776,8 +1776,20 @@ class ImageWAMTorchFrontendThor:
 
     # -- runtime export ---------------------------------------------------
 
+    def _refuse_text_trim(self, what: str) -> None:
+        """`runtime_surface()` / `pipeline_resources()` describe one graph at
+        `self.dims`; with `text_trim` the graph, the context length and the
+        RoPE table change with every new prompt length (opportunities.md
+        OPT-030 lists what per-length support needs)."""
+        if self._text_trim:
+            raise ValueError(f"{what} does not support text_trim=True: it describes one graph at the max dims, "
+                             f"while a trimmed frontend runs one graph per prompt length (active_dims); "
+                             f"construct with text_trim=False")
+
     def runtime_surface(self) -> ImageWAMRuntimeSurface:
-        """The captured graph and its device windows, for the runtime export."""
+        """The captured graph and its device windows, for the runtime export.
+        Not available with `text_trim=True` (`ValueError`)."""
+        self._refuse_text_trim("runtime_surface()")
         if self._graph is None:
             raise RuntimeError("call set_prompt() before runtime_surface()")
         d = self.dims
@@ -1826,7 +1838,9 @@ class ImageWAMTorchFrontendThor:
         `fp16_adaln_operands` / `fp16_adaln_shift_scale` build (the unfused path and the
         standalone AdaLN that starts each chain) and the FP32 modulation
         chunks the fused gated residual + next AdaLN kernel reads
-        (`dims["fuse_res_norm"]`)."""
+        (`dims["fuse_res_norm"]`). Not available with `text_trim=True`
+        (`ValueError`)."""
+        self._refuse_text_trim("pipeline_resources()")
         if self._graph is None:
             raise RuntimeError("call set_prompt() before pipeline_resources()")
         if self.use_fa4 or self.use_fa4_mot:
@@ -1941,6 +1955,8 @@ class ImageWAMTorchFrontendThor:
         """Package the captured graph as an `frt_model_runtime_v1`. See
         `flash_rt.models.imagewam.runtime_export.export_model_runtime`.
         Needs the exec/ and runtime/ native modules (built separately);
-        `io="native"` also needs `native` (an `ImageWAMNativeRuntime`)."""
+        `io="native"` also needs `native` (an `ImageWAMNativeRuntime`).
+        Not available with `text_trim=True` (`runtime_surface()` raises
+        `ValueError`)."""
         from flash_rt.models.imagewam.runtime_export import export_model_runtime
         return export_model_runtime(self, identity=identity, io=io, native=native)
