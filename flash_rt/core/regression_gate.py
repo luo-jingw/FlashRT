@@ -10,19 +10,26 @@ compares it with fixed limits:
   from ``flash_rt.core.parity.parity_metrics``; this module only judges
   them.
 * Latency: ``p50 < baseline_p50 * (1 + margin)``, from a per-device
-  policy. A device can be marked ungated (for example a shared GPU whose
-  timings are contaminated by another tenant); the measurement is then
-  still recorded, with the reason.
+  policy. Latency is ungated when the device is marked ungated (for
+  example a shared GPU whose timings are contaminated by another
+  tenant), when the device matches no policy, or when a gated device has
+  no baseline for the precision. An ungated latency is never silent: the
+  report's top-level ``latency`` field says ``ungated``, ``latency_reason``
+  says why, and the verdict reason repeats it. With
+  ``require_latency=True`` an ungated latency makes the verdict
+  ``blocked``.
 
 The report (``GateReport.to_dict``, schema ``RESULT_SCHEMA_VERSION``)
 has the same shape as Pi0.5's end-to-end harness result
 (``tests/bench_pi05_decoder_fp4_e2e.py``): named checks, a context
 record (commit, device, clock state, configuration), and one verdict.
 
-Verdicts: ``pass`` (every check passed or is ungated), ``fail`` (a check
-failed), ``skipped`` (the configuration is not gateable yet, e.g. a
-required calibration file is absent), ``blocked`` (the configuration
-should be gateable but a required interface is missing). The process
+Verdicts: ``pass`` (every gated check passed; an ungated latency is
+named in the reason unless it is required), ``fail`` (a check failed),
+``skipped`` (the configuration is not gateable yet, e.g. a required
+calibration file is absent), ``blocked`` (the configuration should be
+gateable but a required interface, baseline or input is missing,
+including an ungated latency under ``require_latency``). The process
 exit code is 0 for ``pass``/``skipped`` and 1 for ``fail``/``blocked``.
 """
 from __future__ import annotations
@@ -42,6 +49,8 @@ LATENCY_GROUP_COUNT = 10
 CHECK_PASS = "pass"
 CHECK_FAIL = "fail"
 CHECK_UNGATED = "ungated"
+LATENCY_CHECK = "latency_p50"
+LATENCY_NOT_MEASURED = "not_measured"
 
 VERDICT_PASS = "pass"
 VERDICT_FAIL = "fail"
@@ -257,14 +266,14 @@ class LatencyGate:
 
     def evaluate(self, precision: str, summary: LatencySummary) -> GateCheck:
         if not self.policy.gated:
-            return GateCheck("latency_p50", CHECK_UNGATED, summary.p50_ms, None,
+            return GateCheck(LATENCY_CHECK, CHECK_UNGATED, summary.p50_ms, None,
                              f"{self.policy.device}: {self.policy.reason}")
         baseline = self.policy.baselines.get(precision)
         if baseline is None:
-            return GateCheck("latency_p50", CHECK_UNGATED, summary.p50_ms, None,
+            return GateCheck(LATENCY_CHECK, CHECK_UNGATED, summary.p50_ms, None,
                              f"{self.policy.device}: no baseline for precision {precision!r}")
         passed = summary.p50_ms < baseline.limit_ms
-        return GateCheck("latency_p50", CHECK_PASS if passed else CHECK_FAIL, summary.p50_ms,
+        return GateCheck(LATENCY_CHECK, CHECK_PASS if passed else CHECK_FAIL, summary.p50_ms,
                          baseline.limit_ms,
                          f"p50 < {baseline.p50_ms} ms x (1 + {baseline.margin}); baseline: {baseline.source}")
 
@@ -279,15 +288,39 @@ class GateReport:
     reason: str
     checks: list[GateCheck]
     context: dict[str, object]
+    latency: str
+    latency_reason: str
 
     @classmethod
     def evaluated(cls, precision: str, device: str, checks: list[GateCheck],
-                  context: dict[str, object]) -> GateReport:
+                  context: dict[str, object], *, require_latency: bool = False) -> GateReport:
+        """Verdict from the checks.
+
+        ``latency`` is the status of the ``latency_p50`` check (``pass``,
+        ``fail``, ``ungated``), or ``not_measured`` when there is none.
+        Anything other than ``pass``/``fail`` is ungated: it is named in
+        the reason, and with ``require_latency`` it makes the verdict
+        ``blocked`` unless a check already failed.
+        """
         failed = [c.name for c in checks if c.status == CHECK_FAIL]
-        verdict = VERDICT_FAIL if failed else VERDICT_PASS
-        reason = f"failed: {', '.join(failed)}" if failed else "all gated checks passed"
+        latency_check = next((c for c in checks if c.name == LATENCY_CHECK), None)
+        latency = latency_check.status if latency_check is not None else LATENCY_NOT_MEASURED
+        latency_reason = (latency_check.detail if latency_check is not None
+                          else "no latency check in this run")
+        ungated = latency not in (CHECK_PASS, CHECK_FAIL)
+        ungated_note = f"latency {latency}: {latency_reason}"
+        if failed:
+            verdict = VERDICT_FAIL
+            reason = f"failed: {', '.join(failed)}" + (f"; {ungated_note}" if ungated else "")
+        elif ungated and require_latency:
+            verdict = VERDICT_BLOCKED
+            reason = f"latency required but {ungated_note}"
+        else:
+            verdict = VERDICT_PASS
+            reason = "all gated checks passed" + (f"; {ungated_note}" if ungated else "")
         return cls(precision=precision, device=device, verdict=verdict, reason=reason,
-                   checks=list(checks), context=dict(context))
+                   checks=list(checks), context=dict(context), latency=latency,
+                   latency_reason=latency_reason)
 
     @classmethod
     def not_run(cls, precision: str, device: str, verdict: str, reason: str,
@@ -295,7 +328,8 @@ class GateReport:
         if verdict not in (VERDICT_SKIPPED, VERDICT_BLOCKED):
             raise ValueError(f"not_run verdict must be skipped or blocked, got {verdict!r}")
         return cls(precision=precision, device=device, verdict=verdict, reason=reason,
-                   checks=[], context=dict(context))
+                   checks=[], context=dict(context), latency=LATENCY_NOT_MEASURED,
+                   latency_reason=f"not run: {verdict}")
 
     @property
     def exit_code(self) -> int:
@@ -309,6 +343,8 @@ class GateReport:
             "verdict": self.verdict,
             "reason": self.reason,
             "passed": self.verdict == VERDICT_PASS,
+            "latency": self.latency,
+            "latency_reason": self.latency_reason,
             "checks": [asdict(c) for c in self.checks],
             "context": self.context,
         }

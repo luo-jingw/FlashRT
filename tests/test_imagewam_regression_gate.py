@@ -16,6 +16,8 @@ from flash_rt.core.regression_gate import (
     CHECK_FAIL,
     CHECK_PASS,
     CHECK_UNGATED,
+    LATENCY_CHECK,
+    LATENCY_NOT_MEASURED,
     RESULT_SCHEMA_VERSION,
     VERDICT_BLOCKED,
     VERDICT_FAIL,
@@ -118,7 +120,7 @@ def test_latency_gate_ungated_device_still_records_p50():
 
 def test_report_verdicts_and_exit_codes():
     passing = GateReport.evaluated("fp16", "h100", [GateCheck("a", CHECK_PASS, 1.0, 1.0, ""),
-                                                   GateCheck("b", CHECK_UNGATED, 2.0, None, "")], {})
+                                                   GateCheck(LATENCY_CHECK, CHECK_PASS, 2.0, 3.0, "")], {})
     failing = GateReport.evaluated("fp16", "h100", [GateCheck("a", CHECK_FAIL, 0.0, 1.0, "")], {})
     skipped = GateReport.not_run("fp8_static", "h100", VERDICT_SKIPPED, "no calibration file", {})
     blocked = GateReport.not_run("fp8_static", "h100", VERDICT_BLOCKED, "missing keyword", {})
@@ -126,9 +128,49 @@ def test_report_verdicts_and_exit_codes():
         (VERDICT_PASS, 0), (VERDICT_FAIL, 1), (VERDICT_SKIPPED, 0), (VERDICT_BLOCKED, 1)]
     record = json.loads(json.dumps(failing.to_dict()))
     assert record["schema_version"] == RESULT_SCHEMA_VERSION
-    assert record["passed"] is False and record["reason"] == "failed: a"
+    assert record["passed"] is False
+    assert record["reason"] == "failed: a; latency not_measured: no latency check in this run"
     with pytest.raises(ValueError):
         GateReport.not_run("fp16", "h100", VERDICT_PASS, "", {})
+    assert passing.to_dict()["latency"] == CHECK_PASS and passing.reason == "all gated checks passed"
+    assert skipped.to_dict()["latency"] == LATENCY_NOT_MEASURED
+
+
+def _fidelity_pass() -> GateCheck:
+    return GateCheck("vs_official_median", CHECK_PASS, 0.999, 0.997, "")
+
+
+@pytest.mark.parametrize("policy, precision, reason_part", [
+    (DeviceLatencyPolicy("h100", False, "shared GPU"), "fp16", "shared GPU"),
+    (DeviceLatencyPolicy("thor", True, "target",
+                         {"nvfp4": LatencyBaseline(231.6, 0.05, "OPT-015")}), "fp16", "no baseline for precision"),
+    (LatencyPolicyTable(entries=()).resolve("NVIDIA GeForce RTX 4090", (8, 9)), "nvfp4",
+     "no latency policy for this device"),
+])
+def test_ungated_latency_is_explicit_and_can_be_required(policy, precision, reason_part):
+    latency = LatencyGate(policy).evaluate(precision, LatencySummary.from_samples([100.0] * 10))
+    default = GateReport.evaluated(precision, policy.device, [_fidelity_pass(), latency], {})
+    record = default.to_dict()
+    assert default.verdict == VERDICT_PASS and default.exit_code == 0
+    assert record["latency"] == CHECK_UNGATED and reason_part in record["latency_reason"]
+    assert "latency ungated" in record["reason"] and reason_part in record["reason"]
+    required = GateReport.evaluated(precision, policy.device, [_fidelity_pass(), latency], {},
+                                    require_latency=True)
+    assert required.verdict == VERDICT_BLOCKED and required.exit_code == 1
+    assert reason_part in required.reason
+
+
+def test_required_latency_does_not_mask_a_fidelity_failure():
+    latency = LatencyGate(DeviceLatencyPolicy("h100", False, "shared GPU")).evaluate(
+        "fp16", LatencySummary.from_samples([100.0] * 10))
+    report = GateReport.evaluated("fp16", "h100", [GateCheck("vs_official_min", CHECK_FAIL, 0.9, 0.99, ""),
+                                                   latency], {}, require_latency=True)
+    assert report.verdict == VERDICT_FAIL and "latency ungated" in report.reason
+
+
+def test_missing_latency_check_counts_as_ungated():
+    report = GateReport.evaluated("fp16", "h100", [_fidelity_pass()], {}, require_latency=True)
+    assert report.latency == LATENCY_NOT_MEASURED and report.verdict == VERDICT_BLOCKED
 
 
 # ── committed config files ──────────────────────────────────────────────

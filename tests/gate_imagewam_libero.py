@@ -31,6 +31,13 @@ or ``$IMAGEWAM_FP8_CALIBRATION``:
   ``blocked`` (exit 1). The gate never runs ``fp8_static`` on the
   placeholder ``N(0, 0.1)`` calibration.
 
+Latency is ungated on a device marked ungated (the shared H100), on a
+device with no policy, and for a precision with no baseline on a gated
+device. The result then carries ``latency: "ungated"`` and
+``latency_reason`` at top level and the verdict reason names it; the
+verdict stays ``pass``. ``--require-latency`` turns an ungated latency
+into ``blocked`` (exit 1).
+
 Writes ``<output-dir>/result.json`` and prints one ``__IMAGEWAM_GATE__``
 JSON line. Exit code 0 for ``pass``/``skipped``, 1 for ``fail``/``blocked``.
 
@@ -210,6 +217,7 @@ def emit(report: GateReport, output_dir: Path) -> int:
     (output_dir / "result.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     print(RESULT_PREFIX + json.dumps(record, sort_keys=True), flush=True)
     print(f"verdict: {report.verdict} ({report.reason})")
+    print(f"latency: {report.latency} ({report.latency_reason})")
     for check in report.checks:
         print(f"  {check.status:8s} {check.name:26s} value={check.value} limit={check.limit}  {check.detail}")
     print(f"result: {output_dir / 'result.json'}", flush=True)
@@ -228,6 +236,8 @@ def main() -> int:
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iters", type=int, default=100)
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--require-latency", action="store_true",
+                        help="an ungated latency (no policy or no baseline) makes the verdict blocked")
     args = parser.parse_args()
     if args.fixture_dir is None:
         parser.error(f"--fixture-dir is required (or set ${FIXTURE_DIR_ENV})")
@@ -254,7 +264,8 @@ def main() -> int:
                     "file_sha256": manifest.files[FIXTURE_FILE].sha256},
         "checkpoint": {"path": ckpt, "bytes": os.path.getsize(ckpt)},
         "latency_policy": {"device": policy.device, "gated": policy.gated, "reason": policy.reason},
-        "config": {"warmup": args.warmup, "iters": args.iters, "use_fa4": False},
+        "config": {"warmup": args.warmup, "iters": args.iters, "use_fa4": False,
+                   "require_latency": args.require_latency},
     }
 
     thresholds = FidelityThresholdTable.load(args.thresholds).for_precision(args.precision)
@@ -316,7 +327,8 @@ def main() -> int:
     context["peak_gpu_gib"] = round(torch.cuda.max_memory_allocated() / 2**30, 2)
 
     checks = FidelityGate(thresholds).evaluate(measurement) + [LatencyGate(policy).evaluate(args.precision, latency)]
-    return emit(GateReport.evaluated(args.precision, policy.device, checks, context), output_dir)
+    return emit(GateReport.evaluated(args.precision, policy.device, checks, context,
+                                     require_latency=args.require_latency), output_dir)
 
 
 if __name__ == "__main__":
