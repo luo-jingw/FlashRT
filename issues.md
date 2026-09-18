@@ -156,51 +156,124 @@ sites; `flash_rt/models/imagewam/pipeline_thor.py`)
 The served pipeline attends to every one of the `x0` context rows. The
 Qwen3 context is tokenized to a fixed 512 tokens with
 `padding="max_length"` (`flash_rt/models/imagewam/text_encoder.py`).
-The official mask builder `_build_mot_attention_mask_flux2` in
-`imagewam/models/backbones/imagewam.py` removes padded text keys for
-every query:
+LIBERO prompts have 16-31 valid tokens, so about 490 of the 512 text
+rows are padding.
+
+Official `_build_mot_attention_mask_flux2` in
+`imagewam/models/backbones/imagewam.py` excludes the padded text keys
+for every query row:
 
 ```python
 mask[:, :, t0:r0] &= text_valid[:, None, :]
 ```
 
-The effect reaches the backbone prefill and the ActionDiT `mot` site.
-`set_prompt()` reads `context_mask` only to place the proprio row.
+`infer_action_flux2` passes `text_attention_mask` to both of its calls,
+the backbone prefill (`action_len=0`) and the action site
+(`action_len>0`). `target_len=0` removes only the region mask.
+FlashRT's `set_prompt()` reads `context_mask` only to place the
+proprio row. At both attention sites FlashRT attends to the padded
+keys and official does not.
 
 ## Impact
 
-FlashRT and official compute different attention whenever the prompt
-is shorter than 512 tokens, which covers every LIBERO prompt. The
-measured end-to-end effect is bounded by ISSUE-002's numbers:
-FlashRT vs official median action cosine is 0.99840 with the same
-noise. A fused attention kernel adopted for either site would need to
-express this key mask before the pipeline could match official exactly.
+This one difference accounts for almost all of FlashRT's deviation
+from official, and on some frames it is larger than official's own
+seed-to-seed spread.
+
+Measurement setup:
+
+- 60 LIBERO frames: `libero_spatial`, `libero_goal` and `libero_10`,
+  10 tasks x frames {0, 60} each.
+- FlashRT fp16 against official bf16, seed 0, the same N(0,1) initial
+  noise on both sides, H100.
+- The official variants patch `_build_mot_attention_mask_flux2` to drop
+  `text_attention_mask` at both calls, at the prefill call only, or at
+  the action call only.
+
+Action cosine:
+
+| comparison | median | min | mean |
+|---|---:|---:|---:|
+| FlashRT vs official (masked, as shipped) | 0.99809 | 0.92997 | 0.99543 |
+| FlashRT vs official with the text mask removed at both calls | 0.999979 | 0.99758 | 0.99990 |
+| official masked vs official unmasked | 0.99812 | 0.92807 | 0.99557 |
+| official, mask dropped at the prefill call only, vs masked | 0.99918 | 0.93622 | 0.99631 |
+| official, mask dropped at the action call only, vs masked | 0.99825 | 0.98264 | 0.99794 |
+| official seed 0 vs seed 1 (masked) | 0.99656 | 0.77926 | 0.98782 |
+
+Per suite:
+
+| suite | valid text tokens | FlashRT vs official median / min | FlashRT vs unmasked official median / min | official masked vs unmasked median / min |
+|---|---|---|---|---|
+| libero_spatial | 26-31 | 0.99840 / 0.99567 | 0.99998 / 0.99994 | 0.99839 / 0.99585 |
+| libero_goal | 16-21 | 0.99681 / 0.92997 | 0.99998 / 0.99971 | 0.99690 / 0.92807 |
+| libero_10 | 20-31 | 0.99860 / 0.96642 | 0.99998 / 0.99758 | 0.99860 / 0.97533 |
+
+Four of 60 frames fall below 0.99 against official:
+
+| frame | valid tokens | FlashRT vs official | FlashRT vs unmasked official | official masked vs unmasked | official seed 0 vs 1 |
+|---|---:|---:|---:|---:|---:|
+| libero_goal ep 0, frame 0 | 19 | 0.92997 | 0.99996 | 0.92807 | 0.99756 |
+| libero_10 ep 0, frame 60 | 24 | 0.96642 | 0.99758 | 0.97533 | 0.77926 |
+| libero_goal ep 300, frame 0 | 19 | 0.98105 | 0.99998 | 0.98091 | 0.99554 |
+| libero_goal ep 338, frame 0 | 21 | 0.98137 | 0.99997 | 0.98133 | 0.98854 |
+
+On libero_goal ep 0 frame 0, official's own seed spread is 0.99756, but
+the mask alone moves official to 0.928.
+
+Mean MAE of the 64-step chunk against ground truth barely moves:
+
+| path | mean MAE |
+|---|---:|
+| official masked | 0.15873 |
+| official unmasked | 0.15855 |
+| FlashRT | 0.15868 |
+
+The correlation between the valid-token count and the masked-vs-unmasked
+cosine is 0.258.
 
 ## Evidence
 
-- Upstream mask builder, as quoted above. Both real call sites in
-  `infer_action_flux2` pass `text_attention_mask=video_pre["text_mask"]`.
+- The upstream mask builder and both of its call sites, as quoted above.
 - `ImageWAMAttnBackend.run()` has no key-mask input. With
   `use_real_mot_mask=True` both sites call unmasked
   `attention_qkv_fp16_perhead`.
+- The measurements above. Removing the mask from official moves
+  FlashRT's agreement from median 0.99809 / min 0.92997 to median
+  0.999979 / min 0.99758.
 - With proprio packing, padded keys form one contiguous row range,
-  `[valid_count + 1, x0)`, in the middle of the key sequence, between
-  the proprio row and the image rows.
+  `[valid_count + 1, x0)`, between the proprio row and the image rows.
 
 ## Hypotheses
 
-The padded keys are low-information after AdaLN modulation, so they
-shift attention weights only slightly. That would explain why the
-end-to-end cosine against official stays at 0.998.
+Under the official mask, padded text tokens are inert: no query reads
+them. Their own queries still run, but nothing reads their outputs,
+because the text rows' outputs do not feed the action path except
+through K/V, and padded K/V are masked. If so, dropping the padded rows
+from the sequence is exactly equivalent to the official mask, with no
+mask kernel needed.
+
+Supporting measurement, fp16, H100, 4 libero_goal frames including
+ep 0 frame 0:
+
+- FlashRT built with `x0 = n_valid + 1` (a0 and total adjusted:
+  `a0 = x0 + 392`, `total = a0 + 64`).
+- `set_prompt(context=context[:n_valid], context_mask=mask[:n_valid])`.
+- Cosine against official masked: 0.999976-0.999989, including the
+  frame where the full-length build gives 0.930.
+- The shorter sequence also makes `infer()` faster.
 
 ## Next Experiment
 
-In the fp16 path, set the logits of padded key columns to `-inf`
-before the softmax, at both sites: a masked variant of
-`attention_qkv_fp16_perhead`, or K/V rows reordered so that padding
-becomes a suffix and `kv_seq` shortens. Then rerun
-`benchmarks/imagewam_e2e_official_compare.py` and compare `fr_vs_off`
-against 0.99840.
+Serve with the padded tokens dropped: size `x0` from the prompt's
+valid-token count (`n_valid + 1` with proprio), so `a0` and `total`
+follow, and capture per prompt length. The served frontend fixes `x0`
+at construction today, so this needs either per-prompt construction or
+buffers sized for the maximum length with a capture per length. Then
+run `benchmarks/imagewam_e2e_official_compare.py` on
+`libero_spatial`, `libero_goal` and `libero_10`, and compare
+`fr_vs_off` against the table above; the expected median is
+0.99998-level. Then re-measure `infer()` on Thor.
 
 ## Resolution
 
