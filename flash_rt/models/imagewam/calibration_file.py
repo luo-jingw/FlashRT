@@ -15,9 +15,16 @@ pipeline, reduced across samples with the house reducer
 - `sample_absmax`: each sample's own amax before the reduction.
 
 Identity: the checkpoint (`flash_rt.core.quant.calibrator._checkpoint_hash`:
-SHA-256 of the first 64KB + file size, first 16 hex chars) and every dims
-entry that changes GEMM shapes or activation distributions. A frontend
-refuses a file whose identity differs from its own.
+SHA-256 of the first 64KB + file size, first 16 hex chars), every dims
+entry that changes GEMM shapes or activation distributions, and
+`text_trim`: whether the statistics were recorded with the text context
+trimmed to the prompt's valid tokens (`ImageWAMTorchFrontendThor(text_trim=True)`,
+issues.md ISSUE-020). Untrimmed text and single-stream GEMM inputs include
+about 490 padded context rows that a trimmed frontend never computes. A
+frontend refuses a file whose identity differs from its own.
+
+Format versions: 2 records `text_trim`; version-1 files predate the field
+and were recorded untrimmed, so they load as `text_trim=False`.
 
 On disk: one safetensors file. Arrays are tensors named
 `<site>.channel_amax` / `<site>.sample_absmax`; everything else is JSON
@@ -39,7 +46,10 @@ from flash_rt.core.quant.calibrator import _checkpoint_hash
 from flash_rt.models.imagewam.activation_recorder import ABS_PERCENTILES, SampleStats
 
 FORMAT_NAME = "imagewam_activation_calibration"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+# Versions `load_calibration` reads. Version 1 has no `text_trim` entry:
+# every version-1 file was recorded with the untrimmed frontend.
+SUPPORTED_VERSIONS = (1, 2)
 FP8_E4M3_MAX = 448.0
 DEFAULT_PERCENTILE = 99.9
 IDENTITY_DIM_KEYS = (
@@ -76,12 +86,16 @@ class ImageWAMCalibration:
     frames: list[tuple[str, int, int]]   # (suite, episode, frame)
     noise: str
     sites: dict[str, SiteCalibration]
+    text_trim: bool
 
-    def validate_for(self, *, checkpoint_path: str, dims: dict) -> None:
+    def validate_for(self, *, checkpoint_path: str, dims: dict, text_trim: bool) -> None:
         """Raise `ValueError` unless this file was built for exactly this
-        checkpoint and these dims."""
-        if self.version != FORMAT_VERSION:
-            raise ValueError(f"calibration file version {self.version} != {FORMAT_VERSION}")
+        checkpoint, these dims and this `text_trim` setting."""
+        if self.version not in SUPPORTED_VERSIONS:
+            raise ValueError(f"calibration file version {self.version} not in {SUPPORTED_VERSIONS}")
+        if bool(text_trim) != self.text_trim:
+            raise ValueError(f"calibration file was recorded with text_trim={self.text_trim}, the frontend "
+                             f"runs text_trim={bool(text_trim)} (the text and single-stream GEMM inputs differ)")
         ckpt_id, ckpt_size = checkpoint_identity(checkpoint_path)
         if (ckpt_id, ckpt_size) != (self.checkpoint_id, self.checkpoint_size):
             raise ValueError(f"calibration file is for checkpoint {self.checkpoint_id} "
@@ -103,10 +117,13 @@ def identity_dims(dims: dict) -> dict:
 
 
 def build_calibration(samples: list[SampleStats], *, percentile: float, checkpoint_path: str,
-                      dims: dict, frames: list[tuple[str, int, int]], noise: str) -> ImageWAMCalibration:
+                      dims: dict, frames: list[tuple[str, int, int]], noise: str,
+                      text_trim: bool) -> ImageWAMCalibration:
     """Reduce per-sample statistics across samples with the house
     percentile reducer (`accumulate_amax`: linear interpolation along the
-    sample axis; 100.0 is the plain max)."""
+    sample axis; 100.0 is the plain max). `text_trim`: the recording
+    frontend's setting. With it, a site's `rows` (sample 0's) varies with
+    the prompt length for the text and single-stream sites."""
     if not samples:
         raise ValueError("build_calibration needs at least one sample")
     names = sorted(samples[0].sites)
@@ -127,7 +144,8 @@ def build_calibration(samples: list[SampleStats], *, percentile: float, checkpoi
     ckpt_id, ckpt_size = checkpoint_identity(checkpoint_path)
     return ImageWAMCalibration(version=FORMAT_VERSION, checkpoint_id=ckpt_id, checkpoint_size=ckpt_size,
                                dims=identity_dims(dims), percentile=float(percentile),
-                               frames=[tuple(f) for f in frames], noise=noise, sites=sites)
+                               frames=[tuple(f) for f in frames], noise=noise, sites=sites,
+                               text_trim=bool(text_trim))
 
 
 def save_calibration(cal: ImageWAMCalibration, path: str) -> None:
@@ -144,6 +162,7 @@ def save_calibration(cal: ImageWAMCalibration, path: str) -> None:
         "dims": cal.dims, "percentile": cal.percentile,
         "abs_percentile_levels": list(ABS_PERCENTILES),
         "frames": [list(f) for f in cal.frames], "noise": cal.noise, "sites": site_meta,
+        "text_trim": cal.text_trim,
     }
     tmp = path + ".tmp"
     save_file(tensors, tmp, metadata={"imagewam_calibration": json.dumps(meta)})
@@ -158,6 +177,10 @@ def load_calibration(path: str) -> ImageWAMCalibration:
         meta = json.loads(raw)
         if meta.get("format") != FORMAT_NAME:
             raise ValueError(f"{path}: format {meta.get('format')!r} != {FORMAT_NAME!r}")
+        version = int(meta["version"])
+        if version not in SUPPORTED_VERSIONS:
+            raise ValueError(f"{path}: calibration file version {version} not in {SUPPORTED_VERSIONS}")
+        text_trim = False if version == 1 else bool(meta["text_trim"])
         sites = {}
         for n, sm in meta["sites"].items():
             sites[n] = SiteCalibration(
@@ -167,7 +190,7 @@ def load_calibration(path: str) -> ImageWAMCalibration:
                 sample_absmax=f.get_tensor(f"{n}.sample_absmax").numpy(),
                 rows=int(sm["rows"]))
     return ImageWAMCalibration(
-        version=int(meta["version"]), checkpoint_id=meta["checkpoint_id"],
+        version=version, checkpoint_id=meta["checkpoint_id"],
         checkpoint_size=int(meta["checkpoint_size"]), dims=meta["dims"],
         percentile=float(meta["percentile"]), frames=[tuple(f) for f in meta["frames"]],
-        noise=meta["noise"], sites=sites)
+        noise=meta["noise"], sites=sites, text_trim=text_trim)

@@ -347,7 +347,7 @@ class ImageWAMTorchFrontendThor:
                                  "tied to one real checkpoint)")
             from flash_rt.models.imagewam.calibration_file import load_calibration
             self._calibration = load_calibration(calibration_path)
-            self._calibration.validate_for(checkpoint_path=ckpt_path, dims=d)
+            self._calibration.validate_for(checkpoint_path=ckpt_path, dims=d, text_trim=self._text_trim)
 
         self._ctx = fvk.FvkContext()
         # `gemm_runner`: an already-autotuned `fvk.GemmRunner` from another

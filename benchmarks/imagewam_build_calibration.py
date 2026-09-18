@@ -17,7 +17,12 @@ bf16 (the official sampler's noise, as in the end-to-end harness).
 Required env: CKPT_PATH (dataset_stats.json beside it), FLUX2_AE_MODEL_PATH,
 FLUX2_SRC, QWEN3_MODEL_SPEC, DATA_ROOT.
 
-  python benchmarks/imagewam_build_calibration.py --out <file>.safetensors [--n 64]
+`--text-trim` records with the frontend's `text_trim=True` (the text
+context trimmed to the prompt's valid tokens, issues.md ISSUE-020); the
+file's identity then records `text_trim=True`, and only a
+`text_trim=True` frontend loads it.
+
+  python benchmarks/imagewam_build_calibration.py --out <file>.safetensors [--n 64] [--text-trim]
 """
 from __future__ import annotations
 
@@ -60,6 +65,9 @@ def main() -> None:
     ap.add_argument("--eval-suite", default=EVAL_SUITE)
     ap.add_argument("--eval-tasks", type=int, default=10)
     ap.add_argument("--eval-frames", default="0,60")
+    ap.add_argument("--text-trim", action="store_true",
+                    help="record with the text context trimmed to the prompt's valid tokens "
+                         "(frontend text_trim=True); the file then serves text_trim=True frontends only")
     args = ap.parse_args()
 
     data_root = os.environ["DATA_ROOT"]
@@ -81,8 +89,9 @@ def main() -> None:
         precision="fp16", dims_override=dict(LIBERO_REAL_DIMS), ckpt_path=ckpt,
         ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
         qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"],
-        dataset_stats_path=os.path.join(os.path.dirname(ckpt), "dataset_stats.json"))
-    print(f"fp16 frontend constructed in {time.time() - t0:.1f}s", flush=True)
+        dataset_stats_path=os.path.join(os.path.dirname(ckpt), "dataset_stats.json"),
+        text_trim=args.text_trim)
+    print(f"fp16 frontend (text_trim={args.text_trim}) constructed in {time.time() - t0:.1f}s", flush=True)
 
     rec = ActivationRecorder()
     wrapped = rec.wrap(fe.weights)
@@ -109,11 +118,11 @@ def main() -> None:
 
     cal = build_calibration(samples, percentile=args.percentile, checkpoint_path=ckpt,
                             dims=fe.dims, frames=[(r.suite, r.episode, r.frame) for r in refs],
-                            noise=NOISE_DESC)
+                            noise=NOISE_DESC, text_trim=args.text_trim)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     save_calibration(cal, args.out)
     print(f"saved {args.out} ({os.path.getsize(args.out) / 1e6:.1f} MB): {len(cal.sites)} sites, "
-          f"checkpoint {cal.checkpoint_id}, percentile {cal.percentile}")
+          f"checkpoint {cal.checkpoint_id}, percentile {cal.percentile}, text_trim {cal.text_trim}")
 
     names = sorted(cal.sites)
     per_sample = [np.array([s.sites[n].absmax for n in names], dtype=np.float32) for s in samples]
