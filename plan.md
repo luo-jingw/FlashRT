@@ -3038,6 +3038,494 @@ section is only an index; do not treat any item here as approved
 until it gets its own `# Plan: <item>` section with `Plan Status:
 approved`.
 
+# Plan: Jetson clock-locking check for the benchmark scripts (roadmap item 10)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+The ImageWAM benchmark entry points (`benchmarks/imagewam_thor_graph_bench.py`,
+the timing section of `benchmarks/imagewam_e2e_official_compare.py`,
+`benchmarks/imagewam_thor_int4_bench.py`, `benchmarks/imagewam_thor_int8_bench.py`)
+print latency without recording the Jetson power and clock state it was
+measured under. Pi0.5's end-to-end benchmark
+(`tests/bench_pi05_decoder_fp4_e2e.py`, `machine_state()`) refuses to run
+unless `nvpmodel -q` reports MAXN and the `gpu-gpc-0`/`gpu-nvd-0`
+devfreq nodes have `min_freq == max_freq == cur_freq`, and it writes that
+state into its result JSON. No ImageWAM latency on record, including the
+shipped `nvfp4` P50 of 231.6 ms, carries a clock record.
+
+### Goal
+
+One reusable helper that reads the nvpmodel mode, the `jetson_clocks`
+state, and GPU/EMC devfreq `cur/min/max/governor` from sysfs; prints and
+returns a structured record; warns when clocks are not locked; and
+returns an explicit "not a Jetson" record on any other machine. Every
+listed benchmark prints this record once before timing. Measurable:
+unit tests on x86 against a fake sysfs tree cover the locked, unlocked,
+missing-nvpmodel, EMC and non-Jetson cases; on Thor the record is
+captured before and after `sudo jetson_clocks`.
+
+## Structure
+
+| module | responsibility | state owned |
+|---|---|---|
+| `flash_rt/hardware/jetson_clock_state.py` | read the sysfs tree and the nvpmodel/jetson_clocks tools under an injectable root and command runner; derive the lock verdict; print the record | none (reads only) |
+| benchmark entry points | call `report_jetson_clock_state()` once before timing | none |
+| `tests/test_jetson_clock_state.py` | fake sysfs trees in `tmp_path`, fake command runner | none |
+
+The helper is stdlib-only (no torch, no extension), so it imports on
+any machine.
+
+## Interface
+
+```python
+# flash_rt/hardware/jetson_clock_state.py
+@dataclass(frozen=True)
+class DevfreqNode:            # one /sys/class/devfreq/<name> entry
+    name: str; kind: str      # "gpu" | "emc"
+    cur_hz: int | None; min_hz: int | None; max_hz: int | None
+    governor: str | None
+    locked: bool              # cur == min == max, all readable
+
+@dataclass(frozen=True)
+class ToolQuery:              # one external tool invocation
+    available: bool; text: str
+
+@dataclass(frozen=True)
+class JetsonClockState:
+    is_jetson: bool; platform: str
+    nvpmodel: ToolQuery; nvpmodel_mode: str | None; nvpmodel_mode_id: int | None
+    jetson_clocks: ToolQuery
+    gpu: tuple[DevfreqNode, ...]; emc: tuple[DevfreqNode, ...]
+    clock_caps_hz: tuple[tuple[str, int], ...]   # /sys/kernel/nvpmodel_clk_cap/*
+    gpu_locked: bool; emc_locked: bool | None; power_mode_max: bool | None
+    locked: bool; warnings: tuple[str, ...]
+    def to_dict(self) -> dict[str, object]
+
+class CommandRunner(Protocol):
+    def run(self, argv: Sequence[str]) -> ToolQuery
+
+class JetsonClockProbe:
+    def __init__(self, root: Path = Path("/"), runner: CommandRunner | None = None) -> None
+    def read(self) -> JetsonClockState
+
+def report_jetson_clock_state(probe: JetsonClockProbe | None = None,
+                              emit: Callable[[str], None] = print) -> JetsonClockState
+```
+
+Lock verdict: `gpu_locked` = at least one GPU devfreq node and every GPU
+node locked. `emc_locked` = `None` when no EMC devfreq node is visible,
+else every EMC node locked. `power_mode_max` = `None` when `nvpmodel` is
+unavailable, else the mode name starts with `MAXN`. `locked` = Jetson,
+`gpu_locked`, and neither `emc_locked` nor `power_mode_max` is `False`.
+Every condition that makes the record unobservable or unlocked adds a
+warning line.
+
+## Flow
+
+1. `JetsonClockProbe.read()` checks `/etc/nv_tegra_release` and
+   `/proc/device-tree/{model,compatible}`. Neither present: return a
+   record with `is_jetson=False` and no tool calls.
+2. On a Jetson: run `nvpmodel -q` and `jetson_clocks --show` through the
+   runner (timeout, never `sudo`); list `/sys/class/devfreq/*`; classify
+   names containing `gpu` (and the Tegra GPU ids `gp10b/gv11b/ga10b/gb10b`)
+   as GPU and names containing `emc` as EMC; read `cur_freq`, `min_freq`,
+   `max_freq`, `governor`; read `/sys/kernel/nvpmodel_clk_cap/*`.
+3. Derive the verdict and warnings.
+4. `report_jetson_clock_state()` prints `[jetson-clock-state] <json>`
+   plus one `[jetson-clock-state] WARNING: ...` line per warning, and
+   returns the record.
+
+## Code Mapping
+
+| item | file |
+|---|---|
+| probe, record types, runner protocol, reporter | `flash_rt/hardware/jetson_clock_state.py` (new) |
+| unit tests | `tests/test_jetson_clock_state.py` (new) |
+| wiring | `benchmarks/imagewam_thor_graph_bench.py`, `benchmarks/imagewam_e2e_official_compare.py` (timing section), `benchmarks/imagewam_thor_int4_bench.py`, `benchmarks/imagewam_thor_int8_bench.py`; the item-13 gate runner embeds the record in its result JSON |
+
+## Implementation Phases
+
+### Phase 1 — helper and unit tests
+
+Phase Status: completed
+
+Goal: `jetson_clock_state.py` with the interface above.
+Modified files: `flash_rt/hardware/jetson_clock_state.py`, `tests/test_jetson_clock_state.py`.
+Observation method: pytest on x86 with fake sysfs trees; the record
+printed on this H100 box (expected `is_jetson=false`).
+
+### Phase 2 — wire into the benchmark entry points
+
+Phase Status: completed
+
+Goal: every listed benchmark prints the record once before timing.
+Modified files: the four benchmarks listed in Code Mapping.
+Observation method: `python -m py_compile` on each; run the graph bench
+on H100 far enough to see the record line (fp16 row).
+
+### Phase 3 — Thor handoff
+
+Phase Status: blocked
+
+Goal: Thor checklist entry: record before and after
+`sudo nvpmodel -m 0 && sudo jetson_clocks`.
+Modified files: none (checklist in the stream report).
+Observation method: owner's Thor run.
+Blocker: needs the Thor hardware. The checklist command is
+`python -c "from flash_rt.hardware.jetson_clock_state import
+report_jetson_clock_state; report_jetson_clock_state()"`, run before and
+after locking; on the shared H100 the record is `is_jetson=false`.
+
+## Results
+
+- `tests/test_jetson_clock_state.py`: 11 passed on x86 (fake sysfs trees
+  for locked, unlocked GPU, non-MAXN, missing `nvpmodel`, EMC node
+  locked/unlocked, Jetson without GPU devfreq, unreadable frequency,
+  reporter output, off-Jetson).
+- `benchmarks/imagewam_thor_graph_bench.py` on H100 prints the
+  `[jetson-clock-state]` record (`is_jetson=false`) before its table.
+
+# Plan: Precision-routing contract test (roadmap item 11)
+
+Plan Status: completed
+
+## Problem
+
+### Current
+
+`ImageWAMTorchFrontendThor` routes each weight slot to a GEMM wrapper in
+three places: `_wrap_linear` (per precision, with K/N alignment
+fallbacks), `_alloc_random_weights`, and `_load_real_weights`, plus the
+constructor's `dims["merge_qkv_mlp"] = precision != "fp16_cutlass"`
+decision. The special cases are: `action_encoder` (K=7) and
+`head.linear` (N=7) fall back to `Fp16Linear` for `nvfp4`, the FP8 family
+and `fp16_cutlass`; single-stream blocks use one merged `linear1` except
+under `fp16_cutlass`, which keeps `qkv`/`mlp_in`; the SwiGLU gate/up
+slots use `CutlassFp16SwiGluMlp` under `fp16_cutlass`; `txt_in`/`img_in`
+always use `Bf16OutLinear`. Existing coverage constructs real wrappers
+on a GPU, so on H100 the NVFP4 and SM100-CUTLASS routes are never
+exercised (they skip), and the FP8 K=7 crash (commit `2b9d5fd`) was
+found only on Thor.
+
+### Goal
+
+A CPU-only test, no `flash_rt_kernels`, no GPU, that asserts the wrapper
+class of every weight slot for every precision in `_PRECISIONS`, at the
+real FLUX.2-4B dims and at the frontend's default dims, for both the
+random-weight and the real-checkpoint paths. The expected routing is one
+explicit table that other streams edit when they change routing.
+
+## Structure
+
+| module | responsibility |
+|---|---|
+| `tests/test_imagewam_thor_precision_routing.py` | stubs, expected routing table, tests |
+
+Stubs at the import boundary, as in `tests/test_pi05_thor_fp4_routing.py`:
+
+- `flash_rt.flash_rt_kernels`: a module whose `FvkContext()` raises
+  `_NoGpuContext`. The constructor makes every routing decision
+  (precision validation, `merge_qkv_mlp`) before it creates the kernel
+  context, so catching `_NoGpuContext` leaves an instance holding the
+  real decisions and no GPU state.
+- `flash_rt.models.imagewam.quant_linear`: recording classes with the
+  real constructor signatures; `test_stub_signatures_match_quant_linear`
+  checks them against the real module wherever it imports.
+- The frontend module's `DEV` is patched to `"meta"`, so real-dim weights
+  allocate no memory.
+
+A module-snapshot helper restores `sys.modules` and parent-package
+attributes afterwards, so the stubbed import does not leak into other
+tests in the same session.
+
+## Interface
+
+```python
+PRECISION_COLUMNS: tuple[str, ...]      # must equal imagewam_thor._PRECISIONS
+EXPECTED_ROUTING: dict[tuple[str, str, str], tuple[str, ...]]
+#   (site, block, slot) -> one route label per PRECISION_COLUMNS entry
+#   labels: "Fp16Linear", "Bf16OutLinear", "CutlassFp16Linear",
+#           "CutlassFp16SwiGluMlp", "Fp8Linear", "Nvfp4Linear",
+#           "StaticFp8Linear[cublaslt]", "StaticFp8Linear[cutlass]",
+#           "ptr" (raw device pointer), ABSENT (slot must not exist)
+def route_of(value: object) -> str
+```
+
+## Flow
+
+1. Install stubs, import the frontend fresh, patch `DEV="meta"`.
+2. Construct the frontend for one precision; catch `_NoGpuContext`.
+3. Set `_gemm` to a sentinel; call `_alloc_random_weights(dims)` or
+   `_load_real_weights(dims, fake_state_dict)` (meta tensors under the
+   real checkpoint key names).
+4. Compare every produced key against `EXPECTED_ROUTING` (and every
+   expected present slot against the produced keys, per layer).
+5. Restore modules.
+
+## Code Mapping
+
+| item | file |
+|---|---|
+| stubs, table, tests | `tests/test_imagewam_thor_precision_routing.py` (new) |
+| code under test | `flash_rt/frontends/torch/imagewam_thor.py` (unchanged), `flash_rt/models/imagewam/checkpoint_loader.py` (unchanged) |
+
+## Implementation Phases
+
+### Phase 1 — contract test
+
+Phase Status: completed
+
+Goal: the test file above, passing on H100 and in a process where
+`flash_rt.flash_rt_kernels` is unimportable and `CUDA_VISIBLE_DEVICES=""`.
+Modified files: `tests/test_imagewam_thor_precision_routing.py`.
+Observation method: pytest in both environments; a deliberate
+mutation of `_wrap_linear` (drop the `nvfp4` K%16 fallback) must fail
+the test (checked once, not committed).
+
+## Results
+
+- `tests/test_imagewam_thor_precision_routing.py`: 54 passed on H100
+  with the real extension importable; 53 passed and 1 skipped
+  (`test_stub_signatures_match_quant_linear`, needs the real
+  `quant_linear`) with `CUDA_VISIBLE_DEVICES=""` and
+  `flash_rt.flash_rt_kernels` made unimportable. About 15 s either way.
+- Mutation check (not committed): removing the `nvfp4` `K%16`/`N%16`
+  fallback in `_wrap_linear` fails 5 tests, naming
+  `action_encoder.weight` and `head.linear.weight`; making
+  `fp8_static` skip the `linear1` merge fails 5 tests.
+
+# Plan: Fidelity and latency regression gate harness (roadmap item 13)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+The repository has no committed gate for ImageWAM. Fidelity is checked
+ad hoc with `benchmarks/imagewam_e2e_official_compare.py`, which loads
+the official bf16 model (Qwen3-4B included) next to FlashRT in the same
+process (about 34GB) and needs `av`/`pandas` for LIBERO decoding, none
+of which a Thor gate run should depend on. Latency claims (`nvfp4` 231.6 ms, `opportunities.md`
+OPT-015) are recorded in prose, with no machine-readable baseline and no
+pass/fail rule. Pi0.5's harness (`tests/bench_pi05_decoder_fp4_e2e.py`)
+has the generic pieces: per-sample cosine thresholds,
+`p50` against a regression baseline, and a versioned result JSON with the
+clock state. Roadmap item 13 lists item 7 (real calibration data) as a
+dependency; only the `fp8_static` gate needs it.
+
+### Goal
+
+1. A versioned LIBERO fixture: real preprocessed observations (two
+   224x224 views, proprio, prompt), the official Qwen3 context and mask,
+   fixed initial action noise, official reference actions, and FlashRT
+   `fp16` reference actions. Data lives under
+   `/home/user1/workspace/jingwu/artifacts/deploy-gates/`; git holds the
+   generator and a manifest with checksums. Gating on Thor needs neither
+   the official model nor Qwen3.
+2. A gate runner that, for one precision, checks fidelity against the
+   official reference and the FlashRT `fp16` reference, and latency
+   against a per-device baseline JSON (Thor `nvfp4` seeded at 231.6 ms;
+   H100 latency ungated).
+3. An `fp8_static` slot that activates when a calibration file exists,
+   with a documented hand-off interface and no dependency on the
+   calibration stream's code.
+
+Measurable: on H100, `fp16` against the fixture reproduces the
+end-to-end baseline (`fr_vs_off` median 0.99840, min 0.99567; mean
+`mae_fr_vs_gt` 0.18359) and passes.
+
+## Structure
+
+| module | responsibility | state owned |
+|---|---|---|
+| `flash_rt/core/regression_gate.py` | model-agnostic gate policy: thresholds, latency baseline, latency summary, per-check results, report schema | none |
+| `flash_rt/datasets/imagewam_gate_fixture.py` | fixture arrays, `.npz` IO, manifest with per-file and per-array SHA-256, verification | fixture format version |
+| `benchmarks/imagewam_gate_fixture_generate.py` | produce a fixture on H100: reuses `imagewam_e2e_official_compare.py` for LIBERO loading, preprocessing and the official model; then the FlashRT `fp16` reference through the served `infer()` | fixture data on disk |
+| `tests/gate_imagewam_libero.py` | gate runner CLI: load and verify fixture, run one precision through served `infer()`, evaluate, write result JSON | result JSON |
+| `tests/fixtures/imagewam_gate/fidelity_thresholds.json` | per-precision fidelity thresholds, `requires_calibration` flag | thresholds |
+| `tests/fixtures/imagewam_gate/latency_baselines.json` | per-device latency baselines and gating switch | baselines |
+| `tests/fixtures/imagewam_gate/<name>.manifest.json` | committed manifest of the generated fixture | fixture identity |
+| `flash_rt/frontends/torch/imagewam_thor.py` | `infer(observation, *, action_noise=None)`: optional explicit initial noise; default behavior unchanged | action latent buffer (unchanged owner) |
+| `tests/test_imagewam_regression_gate.py` | CPU tests for gate policy, fixture round trip and tamper detection, committed config files | none |
+
+The runner goes through the served `infer()` rather than re-implementing
+its body, so later changes to `infer()` (for example an in-graph VAE)
+are gated as served.
+
+## Interface
+
+```python
+# flash_rt/core/regression_gate.py
+RESULT_SCHEMA_VERSION = 1
+@dataclass(frozen=True) class CosineSummary:   median: float; minimum: float; count: int
+@dataclass(frozen=True) class FidelityThresholds:
+    vs_official_median_min: float; vs_official_min_min: float
+    vs_fp16_reference_median_min: float; vs_fp16_reference_min_min: float
+    mae_vs_gt_ratio_max: float; requires_calibration: bool
+@dataclass(frozen=True) class LatencySummary:   p10/p50/p90/min/max_ms, iters, group_medians_ms
+    @classmethod from_samples(samples_ms) -> LatencySummary
+@dataclass(frozen=True) class LatencyBaseline:  p50_ms: float; margin: float; source: str
+@dataclass(frozen=True) class DeviceLatencyPolicy: device: str; gated: bool; reason: str; baselines: dict[str, LatencyBaseline]
+@dataclass(frozen=True) class GateCheck:        name: str; status: "pass"|"fail"|"ungated"|"skipped"; value; limit; detail
+class FidelityGate:  evaluate(vs_official, vs_fp16_reference, mae_mean, reference_mae_mean, all_finite) -> list[GateCheck]
+class LatencyGate:   evaluate(precision, summary) -> GateCheck   # p50 < baseline*(1+margin)
+@dataclass class GateReport: checks + context; verdict ("pass"|"fail"|"skipped"|"blocked"); to_dict()
+
+# flash_rt/datasets/imagewam_gate_fixture.py
+FIXTURE_FORMAT_VERSION = 1
+@dataclass class ImageWAMGateFixture:  view1 (N,224,224,3) u8, view2, state (N,8) f32, task_index (N,),
+    episode, frame, gt_actions (N,H,7) f32 (NaN-padded), gt_len (N,), prompts (T,),
+    context_bf16_bits (T,L,D) u16, context_mask (T,L) bool, seeds (S,),
+    noise (N,S,H,7) f32, official_actions (N,S,H,7) f32 (normalized),
+    fp16_reference_actions (N,S,H,7) f32 (normalized)
+class GateFixtureStore:  save(fixture, directory, metadata) -> FixtureManifest; load(directory, manifest) -> ImageWAMGateFixture
+@dataclass class FixtureManifest: name, format_version, files{name: sha256,bytes}, arrays{name: shape,dtype,sha256}, metadata
+
+# fp8_static hand-off (tests/gate_imagewam_libero.py)
+FP8_CALIBRATION_ENV = "IMAGEWAM_FP8_CALIBRATION"      # or --fp8-calibration PATH
+FP8_CALIBRATION_FRONTEND_KWARG = "calibration_path"   # the calibration stream's keyword
+```
+
+`fp8_static` contract: a precision whose thresholds say
+`requires_calibration` is gated only when a calibration file path is
+given and exists; otherwise the report verdict is `skipped` with the
+reason. When the file exists, the runner passes its path to
+`ImageWAMTorchFrontendThor(..., calibration_path=<path>)` only if the
+constructor declares that keyword explicitly; if not, the verdict is
+`blocked`, naming the missing keyword. The runner never runs
+`fp8_static` on the placeholder `N(0, 0.1)` calibration. The file's
+SHA-256 goes into the report.
+
+Exit codes: 0 for `pass` and `skipped`, 1 for `fail` and `blocked`.
+
+## Flow
+
+Generator (H100, once per fixture version):
+1. `load_samples()` from the end-to-end script (env `SUITE`, `N_TASKS`,
+   `FRAMES`, `SEEDS`); `center_crop_resize` both views to 224x224.
+2. Official model: per task `_prepare_flux2_infer_text` gives context and
+   mask; per sample and seed, noise emulated exactly as the official
+   sampler draws it (CPU generator, bf16 round trip), then
+   `infer_action_flux2(..., seed)` gives the official normalized actions.
+3. Free the official model; construct FlashRT `fp16` (real checkpoint,
+   AE, dataset stats, no Qwen3); per sample and seed, `set_prompt(context)`
+   and `infer(obs, action_noise=noise)`; store the renormalized actions.
+4. `GateFixtureStore.save` writes `fixture.npz` and the manifest.
+
+Runner (any CUDA device):
+1. Load and verify the fixture against the committed manifest.
+2. Resolve fidelity thresholds for the precision; apply the `fp8_static`
+   contract above.
+3. Read the clock state (item 10) and the device policy.
+4. Construct the frontend (no Qwen3); per sample and seed run served
+   `infer(obs, action_noise=noise)`; cosine in normalized action space
+   against the official and `fp16` references; MAE against ground truth
+   in real units.
+5. Latency: served `infer(obs)` with default noise, warmup then timed
+   iterations (`time.perf_counter` around each call; `infer()`
+   synchronizes).
+6. Evaluate, write `result.json`, print one `__IMAGEWAM_GATE__ <json>`
+   line, exit.
+
+## Code Mapping
+
+| item | file |
+|---|---|
+| gate policy | `flash_rt/core/regression_gate.py` (new) |
+| fixture format | `flash_rt/datasets/imagewam_gate_fixture.py` (new) |
+| generator | `benchmarks/imagewam_gate_fixture_generate.py` (new) |
+| runner | `tests/gate_imagewam_libero.py` (new) |
+| configs and manifest | `tests/fixtures/imagewam_gate/*.json` (new) |
+| explicit noise hook | `flash_rt/frontends/torch/imagewam_thor.py` (`infer`) |
+| unit tests | `tests/test_imagewam_regression_gate.py` (new) |
+| fixture data | `/home/user1/workspace/jingwu/artifacts/deploy-gates/imagewam_libero_gate_v1/` (not in git) |
+
+## Implementation Phases
+
+### Phase 1 — gate policy and fixture format, CPU tests
+
+Phase Status: completed
+
+Goal: `regression_gate.py`, `imagewam_gate_fixture.py`, the two config
+JSON files, unit tests.
+Modified files: those files and `tests/test_imagewam_regression_gate.py`.
+Observation method: pytest on CPU; tamper test (flip one byte of a
+fixture array) must fail verification.
+
+### Phase 2 — explicit initial-noise hook in `infer()`
+
+Phase Status: completed
+
+Goal: `infer(observation, *, action_noise=None)`; default path
+unchanged.
+Modified files: `flash_rt/frontends/torch/imagewam_thor.py`.
+Observation method: on H100 fp16 real checkpoint, `infer(obs,
+action_noise=n)` equals the end-to-end script's
+`flashrt_infer_with_noise` (bit-exact after denormalization);
+regression suite unchanged.
+
+### Phase 3 — fixture generator, fixture v1 on H100
+
+Phase Status: completed
+
+Goal: `imagewam_libero_gate_v1` (libero_spatial, 10 tasks, frames 0 and
+60, seeds 0 and 1) generated; manifest committed.
+Modified files: `benchmarks/imagewam_gate_fixture_generate.py`,
+`tests/fixtures/imagewam_gate/imagewam_libero_gate_v1.manifest.json`.
+Observation method: generator prints per-sample official-vs-fp16
+cosine; its summary must reproduce the end-to-end baseline.
+
+### Phase 4 — gate runner, real fp16 gate on H100
+
+Phase Status: completed
+
+Goal: `tests/gate_imagewam_libero.py`; real `fp16` run on H100 passes
+fidelity with latency ungated; `fp8_static` without a calibration file
+reports `skipped`; `nvfp4` on H100 fails at construction with the
+existing clear NVFP4 build error.
+Modified files: `tests/gate_imagewam_libero.py`.
+Observation method: result JSON values next to the end-to-end baseline.
+
+### Phase 5 — Thor handoff
+
+Phase Status: blocked
+
+Goal: Thor checklist: copy fixture, verify checksums, run `nvfp4` and
+`fp16`, report result JSON.
+Modified files: none.
+Observation method: owner's Thor run.
+Blocker: needs the Thor hardware and a copy of the v1 fixture there.
+
+## Results (H100, shared GPU)
+
+- Phase 1: `tests/test_imagewam_regression_gate.py` 19 passed on CPU
+  without the compiled extension; a flipped byte in `fixture.npz` and a
+  mismatched array record are both rejected.
+- Phase 2: `tests/test_imagewam_infer_action_noise.py` 4 passed; the
+  fixed-noise path equals the direct buffer write plus graph replay
+  (max abs difference 0.0), the default path is unchanged.
+- Phase 3: fixture v1 generated (81 MiB). FlashRT fp16 against official,
+  seed 0: median 0.99840, min 0.99567, mean MAE 0.18359, equal to the
+  end-to-end baseline; official seed spread median 0.99630, min 0.97154.
+- Phase 4: `fp16` gate verdict `pass` (vs official median 0.99836, min
+  0.99554 over 40 runs; vs fp16 reference bit-identical; MAE 0.18364);
+  latency P50 158.2 ms recorded and ungated. `nvfp4` on sm_90 is
+  `blocked` at construction; `fp8_static` is `skipped` without a
+  calibration file and `blocked` with one (no constructor keyword yet).
+- Review follow-ups: an ungated latency is a top-level result field and
+  part of the verdict reason, and `--require-latency` makes it
+  `blocked`; `--iters` is validated before any GPU work; the checkpoint
+  is verified by SHA-256 (`--skip-checkpoint-hash` for size only);
+  provenance records untracked files and the generator's SHA-256; the
+  calibration keyword is the calibration stream's `calibration_path`.
+  Regression suite 150 passed, 6 skipped; the fp16 gate still passes
+  with the same fidelity values.
+
 # Plan: VAE image preprocessing kernel with normalization LUT (roadmap item 2)
 
 Plan Status: completed

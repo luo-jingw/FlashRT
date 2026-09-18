@@ -1044,8 +1044,15 @@ class ImageWAMTorchFrontendThor:
             self._capture_graph()
         self._current_prompt = cache_key
 
-    def infer(self, observation: dict) -> dict:
+    def infer(self, observation: dict, *, action_noise: torch.Tensor | None = None) -> dict:
         """Replay the captured graph with a new observation.
+
+        `action_noise`: optional `(num_action, action_dim)` initial action
+        latent for the flow-matching sampler, copied in as given. `None`
+        (the default) keeps the served sampler: `0.01 * N(0,1)` drawn on
+        the device (issues.md ISSUE-002). The regression gate
+        (`tests/gate_imagewam_libero.py`) passes the fixture's fixed noise
+        here so every run of the served path starts from the same latent.
 
         `observation` random-fills `img_raw` by default (unchanged
         placeholder, standing in for whatever a real VAE would have
@@ -1112,8 +1119,15 @@ class ImageWAMTorchFrontendThor:
             proprio_tok = torch.nn.functional.linear(
                 proprio_t.to(dtype=BF16), self._proprio_w, self._proprio_b)
             self._context[self._proprio_row].copy_(proprio_tok[0])
-        self._action_latent.normal_()
-        self._action_latent.mul_(0.01)
+        if action_noise is None:
+            self._action_latent.normal_()
+            self._action_latent.mul_(0.01)
+        else:
+            if tuple(action_noise.shape) != tuple(self._action_latent.shape):
+                raise ValueError(
+                    f"action_noise shape {tuple(action_noise.shape)} != action latent "
+                    f"{tuple(self._action_latent.shape)}")
+            self._action_latent.copy_(action_noise)
         self._graph.replay()
         torch.cuda.synchronize()
         actions = self._action_latent.detach()

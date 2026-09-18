@@ -58,6 +58,7 @@ import statistics
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
+from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
 from _imagewam_vae_stub import build_vae_encoder, pack_latents, VAE_PATCH_TOKEN_DIM
 
@@ -520,6 +521,7 @@ class FullImageWAMInt8:
 
 
 def main():
+    report_jetson_clock_state()
     print(f"Dims: hidden={HIDDEN} HD={HD} NH={NH} mlp_hidden={MLP_HIDDEN} "
           f"| action_hidden_dim={ACTION_HIDDEN_DIM} action_attn_width={ACTION_ATTN_WIDTH} "
           f"action_mlp_hidden={ACTION_MLP_HIDDEN} "
