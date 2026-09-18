@@ -721,3 +721,83 @@ class Nvfp4SwiGluMlp:
         self._combine(self._gate_buf.packed.data_ptr(), self._gate_buf.sfa.data_ptr(),
                       self._up_buf.packed.data_ptr(), self._up_buf.sfa.data_ptr(),
                       out.data_ptr(), m, self.mlp_hidden, stream)
+
+
+class E0m3HadamardLinear:
+    """`out[M,N]` (fp16) `= x[M,K]` (fp16) `@ W[K,N]` with both operands
+    in E0M3 (uniform INT4, codes -7..7, one UE4M3 scale per 16 K values)
+    after the same orthonormal 16-point Hadamard rotation of every
+    16-wide K block (`opportunities.md` OPT-024). The rotation is its own
+    inverse and block-diagonal along K, so the product is unchanged in
+    exact arithmetic and any `K % 16 == 0` works.
+
+    Construction (once): transpose the `(K,N)` fp16 weight to `(N,K)`,
+    rotate in fp32 (the activation kernel's butterfly), multiply by a per-tensor power of two `2^e` chosen so
+    the largest block scale `amax/7` stays at or below UE4M3's 448 (this
+    moves the block scales out of UE4M3's subnormal range, where ImageWAM's
+    weights otherwise put more than 90% of them), store as fp16, quantize
+    with `quantize_e0m3_dynamic_sfa_fp16` into packed codes + SFB. The
+    GEMM `alpha = 2^-e` undoes the pre-scale exactly.
+
+    Call: `quantize_e0m3_dynamic_sfa_fp16_vec(use_rht=1)` rotates and
+    quantizes the activation into this object's scratch (allocated on
+    the first call, grown if `m` grows), then
+    `cutlass_fp4_gemm_e0m3w_variant(a_format=0)` runs the SM110
+    runtime-descriptor block-scaled GEMM with the tile the NVFP4 path
+    picks for the same `(N, K)` (`fp4_utils.pick_variant`).
+
+    Thor/Blackwell only: raises `RuntimeError` at construction without
+    `flash_rt.flash_rt_fp4`.
+    """
+
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int):
+        try:
+            import flash_rt.flash_rt_fp4 as fvk_fp4
+            from flash_rt.executors.fp4_utils import pick_variant
+        except ImportError as e:
+            raise RuntimeError(
+                "E0m3HadamardLinear requires a Blackwell/Thor build "
+                "(flash_rt.flash_rt_fp4) -- configure cmake with -DGPU_ARCH=110 and rebuild."
+            ) from e
+        from flash_rt.models.imagewam.blockscaled_ref import BLOCK, E0M3_MAX, UE4M3_MAX, fwht16_butterfly
+
+        if k % BLOCK != 0 or n % BLOCK != 0:
+            raise ValueError(f"E0M3 requires N and K divisible by {BLOCK}, got N={n} K={k}")
+        self._fp4 = fvk_fp4
+        self.n, self.k = int(n), int(k)
+        # Butterfly in plain fp32 adds (exact order of the activation kernel's
+        # FWHT, independent of any TF32 matmul setting). (N,K) fp32.
+        w_rot = fwht16_butterfly(_wrap_fp16(weight_fp16_ptr, self.k, self.n).t().contiguous())
+        amax = float(w_rot.abs().max())
+        e = int(np.floor(np.log2(UE4M3_MAX * E0M3_MAX / amax))) if amax > 0 else 0
+        w_in = (w_rot * (2.0 ** e)).to(FP16).contiguous()
+        del w_rot
+        self.alpha = float(2.0 ** -e)
+        self.w_packed = torch.empty(self.n, self.k // 2, dtype=torch.uint8, device=DEV)
+        # Zero-init: SF layout padding is never written and must stay inert.
+        self.w_sfb = torch.zeros(fvk_fp4.sfa_size_bytes(self.n, self.k, True), dtype=torch.uint8, device=DEV)
+        rc = fvk_fp4.quantize_e0m3_dynamic_sfa_fp16(
+            w_in.data_ptr(), self.w_packed.data_ptr(), self.w_sfb.data_ptr(), self.n, self.k, True, 0)
+        torch.cuda.synchronize()
+        if rc != 0:
+            raise RuntimeError(f"quantize_e0m3_dynamic_sfa_fp16 (weight) failed rc={rc}")
+        self.variant = int(pick_variant(self.n, self.k))
+        self.a_packed = None
+        self.a_sfa = None
+        self._max_m = 0
+
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
+        if m > self._max_m:
+            self.a_packed = torch.empty(m, self.k // 2, dtype=torch.uint8, device=DEV)
+            self.a_sfa = torch.zeros(self._fp4.sfa_size_bytes(m, self.k, False), dtype=torch.uint8, device=DEV)
+            self._max_m = m
+        rc = self._fp4.quantize_e0m3_dynamic_sfa_fp16_vec(
+            x_ptr, self.a_packed.data_ptr(), self.a_sfa.data_ptr(), m, self.k, False, 1, stream)
+        if rc != 0:
+            raise RuntimeError(f"quantize_e0m3_dynamic_sfa_fp16_vec failed rc={rc} (x_ptr must be 16-byte aligned)")
+        rc = self._fp4.cutlass_fp4_gemm_e0m3w_variant(
+            self.variant, self.a_packed.data_ptr(), self.a_sfa.data_ptr(),
+            self.w_packed.data_ptr(), self.w_sfb.data_ptr(), out_ptr,
+            m, self.n, self.k, self.alpha, 0.0, stream, 0)
+        if rc != 0:
+            raise RuntimeError(f"cutlass_fp4_gemm_e0m3w_variant({self.variant}) failed rc={rc:#x}")

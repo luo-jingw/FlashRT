@@ -751,6 +751,139 @@ would settle whether the difference matters beyond open loop.
 
 ## Resolution
 
+# ISSUE-050
+
+Status: open
+
+Area: NVFP4 and E0M3 weight block scales (`quantize_fp4_dynamic_sfa_fp16`, `quantize_e0m3_dynamic_sfa_fp16`), used by `Nvfp4Linear` (`flash_rt/models/imagewam/quant_linear.py`)
+
+## Observation
+
+The repository's block-scaled weight quantizers store `amax/6` (NVFP4)
+or `amax/7` (E0M3) per 16 K values directly as UE4M3, with no
+per-tensor scale. ImageWAM's weights have a median per-16 block amax of
+about 0.05, so most block scales fall below 2^-6, the smallest normal
+UE4M3 value.
+
+## Impact
+
+Below 2^-6, UE4M3 has an absolute step of 2^-9. A scale near 0.007 then
+carries up to about 14% rounding error, versus at most 6.25% in the
+normal range. This adds weight quantization error to the shipped
+`nvfp4` tier.
+
+## Evidence
+
+H100, real checkpoint, 30 sampled weight tensors across backbone and
+ActionDiT: fraction of blocks whose scale is subnormal is 69-100% for
+NVFP4 (typically above 95%) and 84-100% for E0M3.
+
+Simulated per-GEMM weight-only output error on real activations
+(`benchmarks/imagewam_e0m3_accuracy_study.py`, 4 LIBERO frames, 180
+weights pooled): `nvfp4` 0.03431, `nvfp4` with a per-tensor power-of-two
+weight pre-scale 0.03299 (all 180 weights improve), `nvfp4` with MSE
+scale search (`quantize_fp4_dynamic_sfa_mse_fp16`) 0.03185.
+
+## Hypotheses
+
+A power-of-two per-tensor pre-scale, undone exactly through the GEMM
+`alpha`, removes the subnormal-scale error at zero run-time cost. The
+`e0m3_hadamard` tier applies it; `nvfp4` does not.
+
+## Next Experiment
+
+On Thor, run `nvfp4` with the weight pre-scale and with the MSE weight
+quantizer against plain `nvfp4` using
+`benchmarks/imagewam_e0m3_hadamard_thor_check.py`-style fp16
+comparisons, before changing the shipped tier.
+
+## Resolution
+
+# ISSUE-051
+
+Status: open
+
+Area: NVFP4 activation quantization of the backbone text-stream `txt_mlp2` input (`Nvfp4Linear`, `quantize_fp4_dynamic_sfa_fp16`)
+
+## Observation
+
+The text-stream MLP down-projection input in the backbone double blocks
+reaches an absolute value of 5580 on real LIBERO prompts. An NVFP4
+block scale for that block would be 930, above UE4M3's maximum of 448,
+so the scale saturates and the block's large values clip at
+6 x 448 = 2688.
+
+## Impact
+
+Simulated `nvfp4` output error at `txt_mlp2` is 0.0948, against 0.03-0.06
+for comparable GEMMs, and it dominates the pooled per-GEMM error. The
+tokens involved are text tokens whose keys and values feed every
+attention that follows.
+
+## Evidence
+
+`benchmarks/imagewam_e0m3_accuracy_study.py` activation statistics (4
+frames): `txt_mlp2` absmax 5580, fraction of saturated blocks 6e-6.
+Per-GEMM error at `txt_mlp2`: `nvfp4` 0.09482; with a per-16 Hadamard
+rotation (outlier spread to 1395) 0.04147; with a per-tensor
+activation pre-scale 0.03350; `e0m3_hadamard` 0.03440.
+
+## Hypotheses
+
+A single outlier channel in the text stream, amplified by SwiGLU,
+exceeds the scale range of an unscaled UE4M3 block scale.
+
+## Next Experiment
+
+Confirm the saturation on Thor by dumping the `txt_mlp2` input scale
+bytes (0x7E = 448) from `Nvfp4Linear`'s activation scratch on one
+frame.
+
+## Resolution
+
+# ISSUE-052
+
+Status: open
+
+Area: 4-bit activation quantization of the MLP down-projection inputs (backbone `mlp_down`, `img_mlp2`/`txt_mlp2`; ActionDiT `mlp_down`/`mlp2`)
+
+## Observation
+
+The SwiGLU outputs that feed the down projections are small and sparse.
+In the backbone single blocks, 52% of per-16 activation blocks have a
+subnormal NVFP4 scale (55% for E0M3) and 0.2% round to a zero scale,
+which zeroes the whole block. The per-16 Hadamard rotation raises these
+fractions (57%, 60%, 0.5%) because it spreads large values and lowers
+the block amax.
+
+## Impact
+
+`bb.single.mlp_down` stays among the highest-error GEMMs in every
+simulated tier (`nvfp4` 0.0863, `e0m3_hadamard` 0.0743; the attention
+output projection is the other). A per-tensor activation pre-scale
+computed from each call's own amax does not lower it (0.08432 to
+0.08430 under `nvfp4`), because the same tensors also carry large
+outliers.
+
+## Evidence
+
+`benchmarks/imagewam_e0m3_accuracy_study.py`, 4 LIBERO frames, activation
+block statistics and per-GEMM table.
+
+## Hypotheses
+
+A per-row (token) activation scale, or a static per-GEMM scale
+calibrated on real data (roadmap item 7), would move these blocks into
+UE4M3's normal range.
+
+## Next Experiment
+
+Simulate a per-row power-of-two pre-scale for the down-projection
+inputs in the accuracy study and measure the per-GEMM and whole-pipeline
+change.
+
+## Resolution
+
 # ISSUE-080
 
 Status: open (owner decision after Thor: served default of `text_trim`)
@@ -803,4 +936,3 @@ and `1` on three suites, `infer()` A/B, capture time and memory per
 length, FA4 on and off. Owner decision on the default after that.
 
 ## Resolution
-

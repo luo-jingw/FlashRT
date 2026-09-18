@@ -73,6 +73,7 @@ from flash_rt.models.imagewam.quant_linear import (
     Bf16OutLinear,
     CutlassFp16Linear,
     CutlassFp16SwiGluMlp,
+    E0m3HadamardLinear,
     Fp8Linear,
     Fp16Linear,
     Nvfp4Linear,
@@ -83,7 +84,7 @@ from flash_rt.models.imagewam.text_context import pack_trimmed_context, trimmed_
 from flash_rt.models.imagewam.vae_preprocess import RESIZE_MODES, VaePreprocessor
 from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeStageSpec
 
-_PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass")
+_PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass", "e0m3_hadamard")
 # OPT-004 step 6 (plan.md): the two `StaticFp8Linear` variants need a
 # one-time calibration call in set_prompt() before graph capture (see
 # _calibrate_fp8 below) -- everything else needs no such step.
@@ -727,6 +728,16 @@ class ImageWAMTorchFrontendThor:
             if n % 16 != 0 or k % 16 != 0:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return Nvfp4Linear(w.data_ptr(), n, k)
+        if self._precision == "e0m3_hadamard":
+            # opportunities.md OPT-024: E0M3 weights and activations with a
+            # per-16 Hadamard rotation on both. Same block-scaled operand
+            # layout as nvfp4, so the same K%16/N%16 requirement and the
+            # same fallback for action_encoder (K=7) and head.linear (N=7).
+            # The merged single-stream linear1 is one ordinary (K, N)
+            # weight here; the rotation runs along K only.
+            if n % 16 != 0 or k % 16 != 0:
+                return Fp16Linear(self._gemm, w.data_ptr(), n, k)
+            return E0m3HadamardLinear(w.data_ptr(), n, k)
         if self._precision == "fp8_static":
             # Same K=7/N=7 FP8 alignment gap as the "fp8" branch above --
             # _calibrate_fp8() already skips non-StaticFp8Linear objects
@@ -1175,8 +1186,9 @@ class ImageWAMTorchFrontendThor:
         max dims.
 
         `Nvfp4Linear`, `Fp8Linear`, `StaticFp8Linear`,
-        `CutlassFp16SwiGluMlp` and `Nvfp4SwiGluMlp` size their activation
-        scratch by the largest `m` they have been called with and
+        `CutlassFp16SwiGluMlp`, `Nvfp4SwiGluMlp` and `E0m3HadamardLinear`
+        size their activation scratch by the largest `m` they have been
+        called with and
         reallocate it for a larger one, which would free a buffer an
         already captured graph reads. After this pass every backbone
         weight op has seen its largest `m` (`x0` or `a0` of the max dims),
