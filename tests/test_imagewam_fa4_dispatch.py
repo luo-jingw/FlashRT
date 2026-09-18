@@ -264,3 +264,66 @@ def test_frontend_end_to_end_with_fa4_on_both_sites(fa4_calls):
     assert sites == {8, 16}  # backbone a0=8, mot num_action=16 (default small dims)
     assert torch.isfinite(outs["fa4"]).all()
     assert cos > 0.999
+
+
+def _raising_fa4(mode: str, calls: list[dict]):
+    """FA4 stand-in that fails the way a broken runtime can: `always`
+    raises on every call (a compile error at first use), `capture`
+    raises only inside CUDA stream capture, and `capture_sync` issues a
+    device sync inside capture, which CUDA rejects and which invalidates
+    the capture."""
+    good = _fa4_stand_in(calls)
+
+    def fwd(q, k, v, **kw):
+        capturing = torch.cuda.is_current_stream_capturing()
+        if mode == "always":
+            raise RuntimeError("stand-in: FA4 kernel compilation failed")
+        if mode == "capture" and capturing:
+            raise RuntimeError("stand-in: FA4 launch rejected during capture")
+        if mode == "capture_sync" and capturing:
+            torch.cuda.synchronize()
+        return good(q, k, v, **kw)
+    return fwd
+
+
+def _actions(**kw) -> tuple[torch.Tensor, object]:
+    fe = _frontend(**kw)
+    torch.manual_seed(1)
+    fe.set_prompt("fallback")
+    torch.manual_seed(2)
+    return torch.from_numpy(fe.infer({})["actions"]).float(), fe
+
+
+@pytest.mark.parametrize("mode", ["always", "capture", "capture_sync"])
+def test_fa4_failure_falls_back_to_the_cublas_chain(monkeypatch, mode):
+    calls: list[dict] = []
+    monkeypatch.setattr(fa4_backend, "fa4_fwd", lambda: _raising_fa4(mode, calls))
+    ref, _ = _actions(use_fa4=False)
+    with pytest.warns(RuntimeWarning, match="falling back to the cuBLAS attention chain"):
+        out, fe = _actions(use_fa4=True, use_fa4_mot=True)
+    print(f"\nmode={mode}: fallback reason = {fe.fa4_fallback_reason!r}; "
+          f"FA4 calls before failing = {len(calls)}; vs chain-only frontend: cosine={_stats(out, ref)[0]:.7f} "
+          f"max_abs={_stats(out, ref)[1]:.3e}")
+    assert fe.use_fa4 is False and fe.use_fa4_mot is False
+    assert fe._attn._use_fa4 is False and fe._attn._use_fa4_mot is False
+    assert fe.fa4_fallback_reason
+    assert torch.cuda.current_stream() == torch.cuda.default_stream()  # no capture stream left current
+    # Same weights and inputs, the cuBLAS chain after the fallback; the two
+    # frontends' GEMM autotune picks can differ, so not bit-exact.
+    cos, max_abs, _ = _stats(out, ref)
+    assert cos > 0.99999 and max_abs < 1e-3
+    # The captured graph keeps replaying, deterministically.
+    torch.manual_seed(2)
+    assert torch.equal(torch.from_numpy(fe.infer({})["actions"]).float(), out)
+
+
+def test_failure_without_fa4_is_not_swallowed(monkeypatch):
+    fe = _frontend(use_fa4=False)
+
+    def broken() -> None:
+        raise RuntimeError("stand-in: capture failed for a reason unrelated to FA4")
+
+    monkeypatch.setattr(fe, "_capture_graph", broken)
+    with pytest.raises(RuntimeError, match="unrelated to FA4"):
+        fe.set_prompt("no fallback")
+    assert fe.fa4_fallback_reason is None

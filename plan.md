@@ -3388,7 +3388,12 @@ evaluated.
 - `flash_rt/hardware/thor/fa4_backend.py`: owns FA4 availability. It
   gains `thor_default_enabled() -> bool`, true only on an sm_11x
   device with an active FA4 runtime.
-- `flash_rt/frontends/torch/imagewam_thor.py`: owns the default.
+- `flash_rt/frontends/torch/imagewam_thor.py`: owns the FA4 output
+  buffer, and the FA4-failure fallback in `set_prompt()`
+  (`_capture_graph_or_fall_back`): on an exception during warmup or
+  capture with FA4 on, it logs, warns, records `fa4_fallback_reason`,
+  rebuilds the backend with FA4 off, and captures again. It also owns
+  the default.
   `use_fa4: bool | None = None` resolves, through `_resolve_use_fa4`, to
   False unless `FLASHRT_THOR_FA4=1`. With the variable set, it resolves
   to `fa4_backend.thor_default_enabled()`. An explicit `True` still
@@ -3408,6 +3413,8 @@ State ownership:
 | FA4 on/off per site | `ImageWAMAttnBackend` instance (`_use_fa4`, `_use_fa4_mot`) |
 | default resolution | frontend `_resolve_use_fa4` (`FLASHRT_THOR_FA4`, then `fa4_backend.thor_default_enabled()`) |
 | FA4 runtime availability | `fa4_backend` module |
+| FA4 output buffer `_fa4_out` | frontend (passed to the backend as `fa4_out` slots) |
+| `fa4_fallback_reason` | frontend |
 
 ## Interface
 

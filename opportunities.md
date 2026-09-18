@@ -4101,6 +4101,21 @@ On Thor, FA4 at the backbone site already measured 3.75x per call and
   used it only when FA4 was on. The tests now pre-fill a guard band
   after `fa4_out`, and `logits`, with a sentinel, and fail on any FA4
   write outside `fa4_out`; they fail on the old staging.
+- Falling back when FA4 fails. FA4 compiles on its first call, which
+  lands in the eager warmup of `set_prompt()`'s graph capture, and it
+  can fail there or inside the capture. One way is an FA4 runtime that
+  imports but cannot compile for sm_110, as with `nvidia-cutlass-dsl`
+  4.4.x (see `fa4_backend`). On such a failure with FA4 on,
+  `set_prompt()` logs an error, emits a `RuntimeWarning`, stores the
+  reason in `frontend.fa4_fallback_reason`, rebuilds the attention
+  backend with FA4 off at both sites, and captures again. It also
+  restores the caller's CUDA stream first, because an invalidated
+  capture leaves the capture stream current. A failure with FA4 off
+  still raises. Tested with stand-ins that raise on every call, raise
+  only inside capture, and issue a device sync inside capture, which
+  invalidates the capture. All three recover to the cuBLAS chain's
+  output: cosine 1.0000000, max-abs up to 9.5e-7, the difference
+  coming from the two frontends' own cuBLASLt autotune picks.
 - Local verification, `tests/test_imagewam_fa4_dispatch.py` (6
   tests): FA4 is replaced by an fp32 PyTorch stand-in with
   `_flash_attn_fwd`'s calling convention, and each FA4 branch is

@@ -48,7 +48,9 @@ sums to a fixed 128, so every default/override dims dict below keeps
 """
 from __future__ import annotations
 
+import logging
 import os
+import warnings
 
 import numpy as np
 import torch
@@ -91,6 +93,8 @@ _VARIANT_TUNED_PRECISIONS = ("nvfp4", "fp8_static_cutlass")
 # Making FA4 the default is a one-line change: the "0" below becomes "1".
 _FA4_OPT_IN_ENV = "FLASHRT_THOR_FA4"
 _FA4_OPT_IN_DEFAULT = "0"
+
+logger = logging.getLogger(__name__)
 # Stage 3 default precision decision (opportunities.md, real Thor
 # checklist against real checkpoint weights + real open-loop LIBERO
 # data): nvfp4 is the fastest AND closest to fp16/GT (actions
@@ -150,6 +154,9 @@ class ImageWAMTorchFrontendThor:
         # kernel choice, fixed for this frontend's lifetime.
         self.use_fa4: bool = self._resolve_use_fa4(use_fa4)
         self.use_fa4_mot: bool = bool(use_fa4_mot)
+        # Set when FA4 failed during warmup or capture and the frontend
+        # fell back to the cuBLAS chain (see `_capture_graph_or_fall_back`).
+        self.fa4_fallback_reason: str | None = None
         # Real VAE + text-context wiring plan: independent of ckpt_path
         # (OPT-001) -- one loads real transformer weights, this loads a
         # real image encoder. Loaded here (once), used inside infer().
@@ -986,6 +993,45 @@ class ImageWAMTorchFrontendThor:
                                    deltas=self._deltas)
         self._graph = graph
 
+    def _capture_graph_or_fall_back(self) -> None:
+        """`_capture_graph()`, falling back to the cuBLAS chain when FA4
+        fails.
+
+        FA4 compiles on its first call, during `_capture_graph`'s eager
+        warmup, and can fail there or during capture: an FA4 runtime can
+        import and then fail to compile for sm_110 (see `fa4_backend`),
+        or a kernel can be rejected inside stream capture. If any site
+        runs FA4 and warmup or capture raises, this logs an error, emits
+        a `RuntimeWarning`, records the reason in
+        `self.fa4_fallback_reason`, rebuilds the attention backend with
+        FA4 off at both sites, and captures again. A failure with FA4 off,
+        or a second failure after the fallback, propagates.
+
+        An invalidated capture (for example a device sync inside it)
+        makes `torch.cuda.graph`'s exit raise before it restores the
+        caller's stream, so the current stream is restored here first.
+        """
+        caller_stream = torch.cuda.current_stream()
+        try:
+            self._capture_graph()
+            return
+        except Exception as exc:  # FA4 compile/launch/capture errors are not one exception type
+            torch.cuda.set_stream(caller_stream)
+            if not (self.use_fa4 or self.use_fa4_mot):
+                raise
+            reason = f"{type(exc).__name__}: {exc}"
+        message = (f"ImageWAM FA4 attention failed during warmup/capture "
+                   f"(use_fa4={self.use_fa4}, use_fa4_mot={self.use_fa4_mot}): {reason} -- "
+                   f"falling back to the cuBLAS attention chain at both sites")
+        logger.error(message)
+        warnings.warn(message, RuntimeWarning, stacklevel=3)
+        self.fa4_fallback_reason = reason
+        self.use_fa4 = False
+        self.use_fa4_mot = False
+        self._attn = self._build_attn_backend()
+        torch.cuda.synchronize()
+        self._capture_graph()
+
     def _set_context_with_optional_proprio(self, text_ctx: torch.Tensor, text_mask: torch.Tensor) -> None:
         """`text_ctx`: `(text_len, joint_attention_dim)` BF16 -- the
         real (or precomputed) Qwen3 text context, BEFORE proprio.
@@ -1076,7 +1122,7 @@ class ImageWAMTorchFrontendThor:
                 self._proprio_row = self.dims["x0"] - 1
         if self._graph is None:
             self._calibrate_fp8(self.dims)
-            self._capture_graph()
+            self._capture_graph_or_fall_back()
         self._current_prompt = cache_key
 
     def infer(self, observation: dict) -> dict:
