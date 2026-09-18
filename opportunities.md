@@ -5201,8 +5201,22 @@ Area: `flash_rt/models/imagewam/text_context.py`,
   dims already run odd lengths, 905 and 969); the even-`kv_seq` guard
   belongs to the non-per-head kernel, which the frontend never selects.
   FA4 output staging (`fa4_out`) is sized at the max dims.
-- The FA4 fallback drops every cached graph, so all graphs use the same
-  attention.
+- The FA4 fallback drops every cached graph once the cuBLAS recapture
+  has succeeded, so all graphs use the same attention; until then the
+  old graphs and their RoPE tables stay alive.
+- A capture that raises leaves no graph active (`infer()` refuses until
+  a `set_prompt` succeeds) and clears the prompt cache key: `set_prompt`
+  has already written the new context, which no captured graph matches.
+  Cached captures of other lengths stay valid.
+- Python's cyclic garbage collector is run once before each capture and
+  kept off during it. `torch.cuda.graph` no longer collects before a
+  capture, and destroying a CUDA graph held by a dead reference cycle
+  while a stream captures invalidates the capture; with `text_trim` new
+  lengths are captured while the process serves.
+- `run_eager()` (the calibration recorder's forward) runs the active
+  length's dims and RoPE table, bit-identical to the active graph.
+- `precapture_text_lengths(x0s)` captures known lengths ahead of their
+  first `set_prompt` without changing the active prompt.
 
 ## Result (H100, shared GPU)
 
@@ -5268,25 +5282,30 @@ The fp16 autotune of a new length's shapes is 0.3-0.6 s of the capture
 cost; the eager warmup and capture are 0.27-0.35 s. Before the shared
 pool, each length with the VAE in the graph added 218 MiB.
 
-## Interfaces for streams merging later
+## Constraints on consumers of a trimmed frontend
 
-- Runtime export / native pipeline (abi-native): with `text_trim=True`
-  the graph `infer()` replays changes on every `set_prompt` of a new
-  length, and the active `x0/a0/total` are `frontend.active_dims`, not
-  `frontend.dims` (the buffer sizes). A runtime surface must be read
-  after each `set_prompt`: `graph_exec` from the active `_graph`,
-  `context_rows` = active `x0`, the RoPE table from the active
-  `_rope_table`, and `text_trim` plus the active dims in the setup
-  identity. The capture stream is one per frontend
-  (`_capture_stream`), the same for every length. A native pipeline
-  records one graph per length from the active dims, or implements the
-  same trimmed packing.
-- Calibration: activation statistics for a trimmed served path must be
-  collected at the trimmed length (the eager run over `active_dims` and
-  the active RoPE table). At the untrimmed length the text and
-  single-stream GEMM inputs include about 490 padded rows that the
-  trimmed path never computes. The calibration identity should record
-  `text_trim`.
+With `text_trim=True` the sequence length changes with the prompt.
+`frontend.dims` holds the buffer sizes (the maximum); the dims the active
+graph runs are `frontend.active_dims`. Any code that exports, replays or
+re-records the frontend's forward must:
+
+- read the graph, the context length and the RoPE table after every
+  `set_prompt`: the active graph (`_graph`) changes on a new length,
+  the context holds `active_dims["x0"]` rows, and the backbone RoPE
+  table (`_rope_table`) has `active_dims["a0"]` rows. A setup identity
+  that describes the graph includes `text_trim` and the active dims.
+  The capture stream (`_capture_stream`) is the same for every length;
+- when it records its own graph of the forward (a native pipeline),
+  record it from the active dims, one graph per length, or pack the
+  context the same way (`text_context.pack_trimmed_context`);
+- when it records activation statistics, run the forward at the active
+  dims (`run_eager()` does). The untrimmed forward's text and
+  single-stream GEMM inputs include about 490 padded context rows that
+  a trimmed frontend never computes; on the LIBERO calibration frames
+  the per-site static FP8 scale differs by 0.85x-1.50x between the two.
+  The calibration file records `text_trim` (format version 2), and a
+  frontend refuses a file recorded with the other setting; version-1
+  files were recorded untrimmed and load as `text_trim=False`.
 
 ## Open
 

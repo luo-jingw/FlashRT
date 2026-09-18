@@ -5543,7 +5543,7 @@ Phase Status: completed
 
 # Plan: text-context trimming to the prompt's valid length (issues.md ISSUE-020)
 
-Plan Status: completed
+Plan Status: approved
 
 ## Problem
 
@@ -5738,6 +5738,10 @@ State transitions:
 | e2e option `TEXT_TRIM` | `benchmarks/imagewam_e2e_official_compare.py` | 5 |
 | capture cost, memory, A/B speed tool (also the Thor tool) | new `benchmarks/imagewam_text_trim_bench.py` | 5 |
 | records | `opportunities.md` OPT-030, `issues.md` ISSUE-020 / ISSUE-060, this plan | 6 |
+| failed-capture rollback, FA4-fallback ordering, collector off during capture, `run_eager` at the active dims, `precapture_text_lengths` | `flash_rt/frontends/torch/imagewam_thor.py` | 7 |
+| multi-length safety check at any precision (the Thor tool) | new `tests/test_imagewam_text_trim_graph_safety.py` | 7 |
+| `text_trim` in the calibration identity (format version 2, version 1 read as untrimmed) | `flash_rt/models/imagewam/calibration_file.py`, `benchmarks/imagewam_build_calibration.py` (`--text-trim`), `tests/test_imagewam_calibration_file.py` | 7 |
+| fidelity vs fp16 with trimming | `benchmarks/imagewam_precision_fidelity.py` (`SUITE`, `TEXT_TRIM`) | 7 |
 
 ## Implementation Phases
 
@@ -5818,6 +5822,27 @@ Modified files: `opportunities.md`, `issues.md`, `plan.md`.
 Observation method: `sm110_check.sh` exit code; every number labeled
 H100 or Thor.
 
+### Phase 7 — failure paths, calibration under trimming, multi-length safety check
+
+Phase Status: active
+
+Goal:
+- a capture that raises leaves no graph active and keeps the cached
+  captures; the FA4 fallback frees old graphs only after the
+  replacement exists;
+- no cyclic garbage collection inside a capture;
+- `run_eager()` at the active dims;
+- `text_trim` in the calibration-file identity, a trimmed calibration
+  file, and `fp8_static` + trimming validated end to end;
+- a committed multi-length safety check that runs at any precision
+  (fp8 and fp8_static locally, nvfp4 / e0m3 / FA4 on Thor).
+Modified files: see Code Mapping (phase 7).
+Observation method: tests with a capture that raises, an FA4 stand-in
+that fails, the collector's state during capture, `run_eager` vs replay
+(bit-exact); the safety check's comparison against fresh single-length
+frontends, pointer census and poisoning; e2e compare and
+`imagewam_precision_fidelity.py` on libero_goal for `fp8_static`.
+
 ## Thor Check
 
 Environment as for the other ImageWAM Thor checks (`CKPT_PATH`,
@@ -5870,5 +5895,22 @@ first (`sudo nvpmodel -m 0 && sudo jetson_clocks`) and report the
    (`process_used_mib` is null where NVML has no per-process memory;
    then report `torch_reserved_mib` and `device_free_drop_mib`).
 
-Decision for the owner after steps 2-4: serve `text_trim=True` by
-default (issues.md ISSUE-080).
+6. Multi-length graph and buffer safety at the served precision, FA4 off
+   and on:
+   ```
+   TRIM_PRECISION=nvfp4 python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s
+   TRIM_PRECISION=nvfp4 TRIM_FA4=on python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s
+   TRIM_PRECISION=nvfp4 TRIM_DIMS=real python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s
+   TRIM_PRECISION=e0m3_hadamard python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s
+   ```
+   Expected: every test passes (none skipped except the VAE test without
+   the AE); every `after switching vs fresh single-length frontend` line
+   `equal=True`; `weight-op tensors: N; moved ... 0; added ... 0` with
+   N > 0 (the NVFP4 / E0M3 scratch and packed weights); `poison bytes
+   overwritten by replays: 0`; `fa4_fallback_reason=None` with FA4 on.
+   Report the printed lines. With a trimmed calibration file on Thor,
+   also `TRIM_PRECISION=fp8_static_cutlass TRIM_DIMS=real
+   TRIM_WEIGHTS=real TRIM_CALIBRATION=<file>`.
+
+Decision for the owner after steps 2-4 and 6: serve `text_trim=True` by
+default (issues.md ISSUE-080 lists the conditions).
