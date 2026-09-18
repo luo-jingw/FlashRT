@@ -35,7 +35,10 @@ UE4M3's normal range, undone through the GEMM `alpha`), `*_ags` (the
 same for the activation, from each call's own amax).
 
 Env: SUITE (libero_spatial), N_TASKS (10), FRAMES ("0,60"),
-PROBE_FRAMES (4), PROBE_TIERS, PIPE_TIERS (comma lists), OUT (json path).
+PROBE_FRAMES (4), PROBE_TIERS, PIPE_TIERS (comma lists), MERGE_LINEAR2
+("1"/"0" forces the merged/split single-stream `linear2`; unset keeps the
+frontend default), CONTEXT ("qwen3", or "random" for `set_prompt()`'s
+N(0,1) fallback), OUT (json path).
 Needs the variables of /home/user1/workspace/jingwu/imagewam_env.sh.
 Peak GPU memory is about 22 GB.
 """
@@ -46,6 +49,7 @@ import math
 import os
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -65,6 +69,8 @@ from flash_rt.models.imagewam.blockscaled_ref import (  # noqa: E402
     UE4M3_MAX,
     dequantize_blocks,
     fake_quantize,
+    fwht16_butterfly,
+    prepare_e0m3_hadamard_weight,
     quantize_blocks,
     rotate_k_blocks,
 )
@@ -82,6 +88,13 @@ SUITE = os.environ.get("SUITE", "libero_spatial")
 N_TASKS = int(os.environ.get("N_TASKS", "10"))
 FRAMES = [int(x) for x in os.environ.get("FRAMES", "0,60").split(",")]
 PROBE_FRAMES = int(os.environ.get("PROBE_FRAMES", "4"))
+# "1"/"0" forces the merged/split single-stream linear2; unset keeps the
+# frontend default (merged whenever linear1 is merged).
+MERGE_LINEAR2 = os.environ.get("MERGE_LINEAR2")
+# "qwen3" (default): real Qwen3 context per task. "random": `set_prompt()`'s
+# fallback without a text encoder (context filled with N(0,1), proprio in
+# the last row), seeded per task so every tier sees the same values.
+CONTEXT = os.environ.get("CONTEXT", "qwen3")
 HORIZON, STEPS, SHIFT = 64, 10, 5.0
 OUT = os.environ.get("OUT", "/home/user1/workspace/jingwu/artifacts/hadamard-int4/accuracy_study.json")
 
@@ -150,28 +163,34 @@ PIPE_TIERS = [_tier(t) for t in os.environ.get(
 
 # ── simulated operands ──────────────────────────────────────────────
 
-def _chunked(fn, x: torch.Tensor, rows: int = 4096) -> torch.Tensor:
+def _chunked(fn: Callable[[torch.Tensor], torch.Tensor], x: torch.Tensor, rows: int = 4096) -> torch.Tensor:
     return torch.cat([fn(x[i:i + rows]) for i in range(0, x.shape[0], rows)], 0)
+
+
+def _rotate(x: torch.Tensor, block: int) -> torch.Tensor:
+    """fp32 rotation; the 16-point case uses the kernels' butterfly."""
+    return fwht16_butterfly(x) if block == 16 else rotate_k_blocks(x, block)
 
 
 def sim_weight(w_kn: torch.Tensor, tier: Tier) -> torch.Tensor:
     """(K,N) fp16 weight -> dequantized (N,K) float32 in the tier's
-    (possibly rotated) domain, divided back by the pre-scale."""
+    (possibly rotated) domain, divided back by the pre-scale.
+
+    The served `e0m3_hadamard` tier (E0M3, H16, weight pre-scale, amax
+    rule) uses `prepare_e0m3_hadamard_weight` itself. Other tiers follow
+    the same order: rotate in fp32, pre-scale by a power of two, round to
+    fp16, quantize."""
+    w_nk = w_kn.t().contiguous()
+    if tier.w_fmt == "e0m3" and tier.rot == 16 and tier.w_gs and tier.w_rule == "amax":
+        w_in, alpha = prepare_e0m3_hadamard_weight(w_nk)
+        return _chunked(lambda w: dequantize_blocks(quantize_blocks(w, "e0m3")) * alpha, w_in)
     qmax = E2M1_MAX if tier.w_fmt == "e2m1" else E0M3_MAX
-
-    def one(w_nk: torch.Tensor) -> torch.Tensor:
-        w = w_nk.float()
-        if tier.rot:
-            # Offline rotation is done in fp32 and stored as fp16 before the
-            # fp16-input quantizer, as `pi05_thor_fp4.py` does.
-            w = rotate_k_blocks(w, tier.rot).half().float()
-        return w
-
-    w_rot = _chunked(one, w_kn.t())
+    w_rot = _chunked(lambda w: _rotate(w.float(), tier.rot) if tier.rot else w.float(), w_nk)
     g = 1.0
     if tier.w_gs:
         g = 2.0 ** math.floor(math.log2(UE4M3_MAX * qmax / float(w_rot.abs().max())))
-    return _chunked(lambda w: dequantize_blocks(quantize_blocks(w * g, tier.w_fmt, tier.w_rule)) / g, w_rot)
+    return _chunked(lambda w: dequantize_blocks(quantize_blocks((w * g).half(), tier.w_fmt, tier.w_rule)) / g,
+                    w_rot)
 
 
 def sim_act(x: torch.Tensor, tier: Tier) -> torch.Tensor:
@@ -179,7 +198,7 @@ def sim_act(x: torch.Tensor, tier: Tier) -> torch.Tensor:
     (dynamic amax scales, as every activation quantizer uses)."""
     xf = x.float()
     if tier.rot:
-        xf = rotate_k_blocks(xf, tier.rot)
+        xf = _rotate(xf, tier.rot)
     if tier.a_gs:
         qmax = E2M1_MAX if tier.a_fmt == "e2m1" else E0M3_MAX
         g = 2.0 ** math.floor(math.log2(UE4M3_MAX * qmax / max(float(xf.abs().max()), 1e-30)))
@@ -190,7 +209,7 @@ def sim_act(x: torch.Tensor, tier: Tier) -> torch.Tensor:
 def act_block_stats(x: torch.Tensor, rot: int) -> dict:
     xf = x.float()
     if rot:
-        xf = rotate_k_blocks(xf, rot)
+        xf = _rotate(xf, rot)
     amax = xf.reshape(xf.shape[0], -1, BLOCK).abs().amax(-1)
     return dict(
         n=amax.numel(),
@@ -210,7 +229,7 @@ def view_fp16(ptr: int, rows: int, cols: int) -> torch.Tensor:
     return torch.as_tensor(owner, device=DEV)
 
 
-def group_of(key: tuple) -> str:
+def group_of(key: tuple[str, str, int, str]) -> str:
     model, kind, _, slot = key
     return f"{'bb' if model == 'backbone' else 'ad'}.{kind}.{slot.replace('.weight', '')}"
 
@@ -218,7 +237,8 @@ def group_of(key: tuple) -> str:
 class ProbeLinear:
     """Runs the real fp16 GEMM, then scores one tier on the same input."""
 
-    def __init__(self, inner: Fp16Linear, key: tuple, tier: Tier, study: "ProbeStudy"):
+    def __init__(self, inner: Fp16Linear, key: tuple[str, str, int, str], tier: Tier,
+                 study: "ProbeStudy") -> None:
         self.inner, self.key, self.tier, self.study = inner, key, tier, study
 
     def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
@@ -230,7 +250,7 @@ class FakeQuantLinear:
     """Fake-quantizes the activation, then runs the fp16 GEMM against the
     already fake-quantized weight buffer."""
 
-    def __init__(self, inner: Fp16Linear, tier: Tier, study: "PipelineStudy"):
+    def __init__(self, inner: Fp16Linear, tier: Tier, study: "PipelineStudy") -> None:
         self.inner, self.tier, self.study = inner, tier, study
 
     def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
@@ -244,10 +264,13 @@ class FakeQuantLinear:
 # ── frontend driving ────────────────────────────────────────────────
 
 class Runner:
-    def __init__(self, frames: list[LiberoFrame]):
+    def __init__(self, frames: list[LiberoFrame]) -> None:
         t = time.time()
+        dims = dict(REAL_DIMS)
+        if MERGE_LINEAR2 is not None:
+            dims["merge_linear2"] = MERGE_LINEAR2 == "1"
         self.fe = ImageWAMTorchFrontendThor(
-            precision="fp16", dims_override=dict(REAL_DIMS), ckpt_path=CKPT,
+            precision="fp16", dims_override=dims, ckpt_path=CKPT,
             ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
             qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"], dataset_stats_path=STATS)
         print(f"fp16 frontend constructed in {time.time() - t:.1f}s", flush=True)
@@ -262,7 +285,8 @@ class Runner:
         torch.cuda.empty_cache()
         self.tokens = []
         for f in frames:
-            tok = encode_to_tokens(fe._ae, torch.from_numpy(f.view1), torch.from_numpy(f.view2))
+            tok = encode_to_tokens(fe._ae, torch.from_numpy(f.view1.copy()), torch.from_numpy(f.view2.copy()),
+                                   preprocessor=fe._vae_pre, encoder=fe._vae_encoder)
             self.tokens.append(tok[0].to(BF16).clone())
         self.frames = frames
         self.keepalive = {t.data_ptr(): t for t in fe._keepalive}
@@ -277,22 +301,30 @@ class Runner:
               f"fp16-fallback: {[k[-1] for k, v in fe._weights.items() if isinstance(v, Fp16Linear) and k not in self.orig_linears]}",
               flush=True)
 
-    def weight_tensor(self, key: tuple) -> torch.Tensor:
+    def weight_tensor(self, key: tuple[str, str, int, str]) -> torch.Tensor:
         lin = self.orig_linears[key]
         w = self.keepalive[lin.weight_ptr]
         assert tuple(w.shape) == (lin.k, lin.n), (key, w.shape)
         return w
 
-    def set_linears(self, factory) -> None:
+    def set_linears(self, factory: Callable[[tuple[str, str, int, str], Fp16Linear], object]) -> None:
         for k in self.quant_keys:
             self.fe._weights[k] = factory(k, self.orig_linears[k])
+
+    def n_valid(self, i: int) -> int:
+        """Real token count of frame `i`'s prompt (Qwen3 mask)."""
+        return int(self.ctx[self.frames[i].task][1].sum())
 
     def prepare(self, i: int, noise: torch.Tensor) -> None:
         fe, f = self.fe, self.frames[i]
         if f.task != self.cur_task:
             fe._current_prompt = None
-            c, msk = self.ctx[f.task]
-            fe.set_prompt(context=c, context_mask=msk)
+            if CONTEXT == "random":
+                torch.cuda.manual_seed(1000 + sorted(self.ctx).index(f.task))
+                fe.set_prompt()
+            else:
+                c, msk = self.ctx[f.task]
+                fe.set_prompt(context=c, context_mask=msk)
             self.cur_task = f.task
         fe._img_raw.copy_(self.tokens[i])
         p = fe._state_norm.forward(torch.as_tensor(f.state, device=DEV).reshape(1, -1))
@@ -331,14 +363,14 @@ def cos(a: torch.Tensor, b: torch.Tensor) -> float:
 # ── pass 1: per-GEMM error on real activations ──────────────────────
 
 class ProbeStudy:
-    def __init__(self, runner: Runner):
+    def __init__(self, runner: Runner) -> None:
         self.r = runner
         self.err = {}      # (group, tier) -> [err2_total, err2_w_only, err2_a_only, ref2]
         self.per_key = {}  # (key, tier) -> [err2, ref2]
         self.act = {}      # (group, rot) -> summed stats
         self.wcache = {}
 
-    def observe(self, key: tuple, tier: Tier, x: torch.Tensor, lin: Fp16Linear) -> None:
+    def observe(self, key: tuple[str, str, int, str], tier: Tier, x: torch.Tensor, lin: Fp16Linear) -> None:
         w_kn = self.r.weight_tensor(key)
         if key not in self.wcache:
             self.wcache[key] = sim_weight(w_kn, tier).half()
@@ -347,10 +379,10 @@ class ProbeStudy:
         w_ref = w_kn.float()
         y_ref = xf @ w_ref                                   # exact fp32 product
         xq = sim_act(x, tier)
-        xr = rotate_k_blocks(xf, tier.rot) if tier.rot else xf
+        xr = _rotate(xf, tier.rot) if tier.rot else xf
         y_t = xq @ wq.t()
         y_w = xr @ wq.t()
-        y_a = xq @ (rotate_k_blocks(w_ref.t(), tier.rot).t() if tier.rot else w_ref)
+        y_a = xq @ (_rotate(w_ref.t().contiguous(), tier.rot).t() if tier.rot else w_ref)
         ref2 = float((y_ref.double() ** 2).sum())
         e = [float(((y - y_ref).double() ** 2).sum()) for y in (y_t, y_w, y_a)]
         g = group_of(key)
@@ -428,7 +460,7 @@ class ProbeStudy:
 # ── pass 2: whole-pipeline fake quantization ────────────────────────
 
 class PipelineStudy:
-    def __init__(self, runner: Runner):
+    def __init__(self, runner: Runner) -> None:
         self.r = runner
         self.act_inexact = 0
         self.cpu_orig = {k: runner.weight_tensor(k).detach().cpu() for k in runner.quant_keys}
@@ -467,8 +499,8 @@ class PipelineStudy:
         graph_vs_eager = float((r.fe._action_latent.float().cpu() - ref[-1]["al"]).abs().max())
         print(f"[pipe] fp16 graph replay vs eager, action_latent max|diff| = {graph_vs_eager:.3e}", flush=True)
 
-        rows = {"fp16_seed1": [self._metrics(seed1[i], ref[i], r.frames[i]) for i in range(n)]}
-        rows["fp16"] = [self._metrics(ref[i], ref[i], r.frames[i]) for i in range(n)]
+        rows = {"fp16_seed1": [self._metrics(seed1[i], ref[i], i) for i in range(n)]}
+        rows["fp16"] = [self._metrics(ref[i], ref[i], i) for i in range(n)]
         inexact = {}
         for tier in PIPE_TIERS:
             t = time.time()
@@ -479,7 +511,7 @@ class PipelineStudy:
             for i in range(n):
                 r.prepare(i, noise_for(0))
                 r.run_eager()
-                out.append(self._metrics(r.outputs(), ref[i], r.frames[i]))
+                out.append(self._metrics(r.outputs(), ref[i], i))
             rows[tier.name] = out
             inexact[tier.name] = (inexact[tier.name], self.act_inexact)
             print(f"[pipe] {tier.name}: {time.time() - t:.1f}s  non-fp16-exact weight/act elements: "
@@ -488,14 +520,23 @@ class PipelineStudy:
         self.load_weights(None)
         return self._report(rows, graph_vs_eager, inexact)
 
-    @staticmethod
-    def _metrics(o: dict, ref: dict, f: LiberoFrame) -> dict:
+    def _metrics(self, o: dict, ref: dict, i: int) -> dict:
+        """Cosines and MAEs, plus the share of the `backbone_hidden` squared
+        error in the rows the real prompt's tokens occupy
+        (`[0, n_valid)`), the remaining text rows (`[n_valid, x0)`,
+        padding and the proprio row), and the image rows."""
+        f = self.r.frames[i]
         gt = torch.from_numpy(f.gt)
         n_gt = min(len(gt), HORIZON)
+        row_err = ((o["bh"] - ref["bh"]).double() ** 2).sum(-1)
+        tot = float(row_err.sum())
+        nv, x0 = self.r.n_valid(i), self.r.fe.dims["x0"]
+        share = (lambda a, b: float(row_err[a:b].sum()) / tot) if tot > 0 else (lambda a, b: float("nan"))
         return dict(
             bh_cos=cos(o["bh"], ref["bh"]), al_cos=cos(o["al"], ref["al"]), act_cos=cos(o["act"], ref["act"]),
             act_mae_vs_fp16=float((o["act"] - ref["act"]).abs().mean()),
             mae_vs_gt=float((o["act"][:n_gt] - gt[:n_gt]).abs().mean()),
+            bh_err_valid_text=share(0, nv), bh_err_pad_text=share(nv, x0), bh_err_image=share(x0, row_err.numel()),
             finite=bool(torch.isfinite(o["act"]).all()))
 
     @staticmethod
@@ -513,11 +554,18 @@ class PipelineStudy:
                      act_cos_median=float(np.median(a["act_cos"])), act_cos_min=float(a["act_cos"].min()),
                      act_err_median=float(np.median(1 - a["act_cos"])),
                      act_mae_vs_fp16_mean=float(a["act_mae_vs_fp16"].mean()),
-                     mae_vs_gt_mean=float(a["mae_vs_gt"].mean()), all_finite=bool(a["finite"].all()))
+                     mae_vs_gt_mean=float(a["mae_vs_gt"].mean()), all_finite=bool(a["finite"].all()),
+                     bh_err_share_median={k: float(np.median(a[k])) for k in
+                                          ("bh_err_valid_text", "bh_err_pad_text", "bh_err_image")})
             summary[name] = s
             print(f"{name:14s}{s['bh_cos_median']:11.5f}{s['bh_cos_min']:9.5f}{s['al_cos_median']:11.5f}"
                   f"{s['al_cos_min']:9.5f}{s['act_cos_median']:12.5f}{s['act_cos_min']:9.5f}"
                   f"{s['act_err_median']:11.2e}{s['act_mae_vs_fp16_mean']:12.5f}{s['mae_vs_gt_mean']:11.5f}")
+        print("\nbackbone_hidden squared-error share by rows (median over frames): "
+              "real-prompt token rows / other text rows (padding, proprio) / image rows")
+        for name, sm in summary.items():
+            sh = sm["bh_err_share_median"]
+            print(f"{name:14s}{sh['bh_err_valid_text']:8.3f}{sh['bh_err_pad_text']:8.3f}{sh['bh_err_image']:8.3f}")
         return dict(summary=summary, per_frame=rows, graph_vs_eager=graph_vs_eager, inexact=inexact)
 
 
@@ -528,7 +576,9 @@ def main() -> None:
     print(f"frames: {len(frames)} ({SUITE}, frames {FRAMES}); probe frames: {min(PROBE_FRAMES, len(frames))}",
           flush=True)
     runner = Runner(frames)
-    result = dict(suite=SUITE, frames=[(f.episode, f.frame) for f in frames],
+    print(f"merge_linear2={runner.fe.dims.get('merge_linear2')} context={CONTEXT}", flush=True)
+    result = dict(suite=SUITE, frames=[(f.episode, f.frame) for f in frames], context=CONTEXT,
+                  merge_linear2=bool(runner.fe.dims.get("merge_linear2")),
                   probe_tiers=[t.name for t in PROBE_TIERS], pipe_tiers=[t.name for t in PIPE_TIERS])
     if PROBE_FRAMES > 0:
         probe = ProbeStudy(runner)

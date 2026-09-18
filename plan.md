@@ -5028,6 +5028,7 @@ def rotate_k_blocks(x: torch.Tensor, block: int) -> torch.Tensor     # last dim,
 def fwht16_butterfly(x: torch.Tensor) -> torch.Tensor                # kernel's butterfly order
 def quantize_blocks(x: torch.Tensor, fmt: str, scale_rule: str) -> BlockQuantized
 def dequantize_blocks(q: BlockQuantized) -> torch.Tensor
+def prepare_e0m3_hadamard_weight(w_nk: torch.Tensor) -> tuple[torch.Tensor, float]  # fp16 (N,K), alpha
 def pack_codes(codes: torch.Tensor) -> torch.Tensor                  # [R,K] -> [R,K/2] uint8
 def sf_offsets(rows: int, k: int) -> torch.Tensor                    # [rows, K/16] byte offsets
 def sf_size_bytes(rows: int, k: int) -> int
@@ -5047,11 +5048,16 @@ class E0m3HadamardLinear:
 ```
 
 State transitions of `E0m3HadamardLinear`: construction reads the
-`(K,N)` fp16 weight once, transposes to `(N,K)`, rotates every 16-wide
-K block by `H16/4`, quantizes to E0M3 + SFB, and keeps only the packed
-result. Each call quantizes the activation with the H16 rotation into
-its own scratch (allocated on the first call, grown if `m` grows) and
-runs `cutlass_fp4_gemm_e0m3w(a_format=0)`.
+`(K,N)` fp16 weight once, transposes to `(N,K)`, and prepares it with
+`prepare_e0m3_hadamard_weight` (every 16-wide K block rotated by the
+orthonormal `H16/4` butterfly in fp32, the whole tensor multiplied by a
+power of two `2^e` that keeps the largest block scale at most 448,
+rounded to fp16). It quantizes that to E0M3 + SFB, stores
+`alpha = 2^-e`, picks the tile with `pick_variant(N, K)`, and keeps only
+the packed result. Each call quantizes the activation with the H16
+rotation into its own scratch (allocated on the first call, grown if `m`
+grows) and runs `cutlass_fp4_gemm_e0m3w_variant(variant, a_format=0)`
+with that `alpha`.
 
 ## Flow
 
@@ -5157,10 +5163,383 @@ Phase Status: completed
   (`cutlass_fp4_gemm_e0m3w_variant`) so the tier runs the same tiles as
   `nvfp4`. No new rotation kernel: rotations larger than 16 were not
   more accurate, and the existing in-register H16 quantizer is used.
+- On the integration tree the single-stream `linear2` is merged
+  (OPT-016). The merged E0M3 `linear2` weights dequantize bit-identically
+  to the split halves; the whole-pipeline decision holds (merged
+  `e0m3_hadamard` 2.97e-4 vs `nvfp4` 6.71e-4, OPT-024 Result 2b).
 - Thor verification (kernel tests, whole pipeline, latency) is listed
   in OPT-024 "Open" and runs through
   `tests/test_imagewam_e0m3_hadamard.py` and
   `benchmarks/imagewam_e0m3_hadamard_thor_check.py`.
+
+# Plan: Real calibration data pipeline for `fp8_static*` (roadmap item 7)
+
+Plan Status: completed
+
+## Problem
+
+### Current
+
+- `imagewam_thor.py::_calibrate_fp8()` freezes every `StaticFp8Linear`
+  activation scale from `N(0, 0.1)` noise of the site's shape. The
+  `img_in` special case in `_REAL_CALIB_STATS` is dead code: `img_in`
+  and `txt_in` are always `Bf16OutLinear`, never `StaticFp8Linear`.
+- Real Thor result (`opportunities.md` OPT-014, result 1): against
+  `fp16` on the same real frame, `fp8_static` gives `backbone_hidden`
+  cosine 0.467 and `actions` 0.697; `fp8_static_cutlass` gives 0.461 and
+  0.897. Open-loop MAE is 1.43x `fp16`. CUTLASS and cuBLASLt degrade
+  the same way, so the cause is the activation scales.
+- `fp8_gemm_descale_fp16`/`_f32out` request an NN cuBLASLt FP8 layout
+  (`issues.md` ISSUE-001). cuBLASLt supports FP8 on sm_89/sm_90 only
+  in the TN layout, so `fp8` and `fp8_static` cannot run on the H100
+  dev machine, and no FP8 accuracy can be checked end to end off Thor.
+
+### Problem
+
+No real per-layer activation statistics exist for ImageWAM, so every
+static FP8 scale is a guess. The house calibration method
+(`docs/calibration.md` §2, §10; `flash_rt/core/calibration.py`) needs
+per-site absmax from real forward passes, reduced across samples by a
+percentile.
+
+### Measurable goal
+
+- `fp8` and `fp8_static` run end to end on H100 with the real
+  checkpoint (ISSUE-001 resolved).
+- A versioned calibration file, keyed by weight name and checkpoint
+  identity, is built from real LIBERO observations disjoint from the
+  evaluation frames, and `_calibrate_fp8()` loads it.
+- On H100, `fp8_static` with the real file versus the placeholder is
+  measured against `fp16` (`backbone_hidden`, `action_latent`,
+  `actions` cosine, open-loop MAE) and against official
+  (`benchmarks/imagewam_e2e_official_compare.py`).
+
+## Structure
+
+- `csrc/kernels/decoder_fused.cu` / `.cuh`, `csrc/bindings.cpp`: new
+  TN variants `fp8_gemm_descale_fp16_tn` / `fp8_gemm_descale_f32out_tn`
+  (weight stored `(N,K)` row-major, `TRANSA=T`). The existing NN
+  functions are unchanged. Owner of the TN cuBLASLt descriptor cache.
+- `flash_rt/models/imagewam/quant_linear.py`: `Fp8Linear` and
+  `StaticFp8Linear(use_cutlass=False)` pick the layout per GPU
+  (`nn` on compute capability >= 10, `tn` below) and store the weight
+  in the matching layout. `StaticFp8Linear` gains
+  `set_activation_scale()`. Owner of each weight's layout and scales.
+- `benchmarks/_imagewam_libero_frames.py` (shared with roadmap item 9's scripts): LIBERO
+  LeRobot-v2.1 frame loading with the official eval preprocessing, and
+  stratified calibration-frame selection. Owner of which frames are
+  calibration frames.
+- `flash_rt/models/imagewam/activation_recorder.py` (new): wraps
+  weight callables and records per-call input statistics (absmax,
+  |x| percentiles, per-channel absmax), reduced per sample by max over
+  calls. Owner of per-sample statistics.
+- `flash_rt/models/imagewam/calibration_file.py` (new): the versioned
+  calibration file (safetensors + JSON metadata): build from
+  per-sample statistics with the house percentile reducer, save, load,
+  validate identity. Owner of the persisted scales.
+- `flash_rt/frontends/torch/imagewam_thor.py`: `calibration_path=`
+  constructor argument; `_calibrate_fp8()` applies the file's scales,
+  or the `N(0, 0.1)` placeholder with a warning when no file is given.
+  New `stage_inputs()` (the pre-replay half of `infer()`) and
+  `run_eager()` (prefill + denoise without a graph) so a recorder can
+  observe a real forward pass. Owner of the calibration lifecycle.
+- `benchmarks/imagewam_build_calibration.py` (new): builds the file.
+- `benchmarks/imagewam_precision_fidelity.py` (new): a precision's
+  `backbone_hidden` / `action_latent` / `actions` cosine against `fp16`
+  and open-loop MAE on held-out frames. Also the Thor check.
+- `benchmarks/imagewam_e2e_official_compare.py`: `CALIBRATION` env var
+  passes `calibration_path=` to the frontend.
+
+## Interface
+
+```python
+# csrc (bindings)
+fp8_gemm_descale_fp16_tn(A_act_MK, B_weight_NK, C_MN, M, N, K, act_descale, w_descale, stream=0)
+fp8_gemm_descale_f32out_tn(A_act_MK, B_weight_NK, C_MN, M, N, K, act_descale, w_descale, stream=0)
+
+# quant_linear.py
+def fp8_cublaslt_layout() -> str                     # "nn" (cc >= 10) or "tn"
+class Fp8Linear:        __init__(weight_fp16_ptr, n, k, *, layout: str | None = None)
+class StaticFp8Linear:  __init__(weight_fp16_ptr, n, k, *, use_cutlass=False, layout: str | None = None)
+                        set_activation_scale(scale: float) -> None   # same ordering contract as calibrate()
+
+# benchmarks/_imagewam_libero_frames.py
+@dataclass class FrameRef: suite: str; episode: int; frame: int
+@dataclass class LiberoFrame: suite, episode, frame, task, view1, view2 (224x224x3 uint8), state (8,), gt (T,7)
+def select_calibration_frames(data_root, suites, n, *, exclude) -> list[FrameRef]
+def load_frame(data_root, ref, horizon) -> LiberoFrame
+
+# activation_recorder.py
+class ActivationRecorder:
+    def wrap(self, weights: dict) -> dict            # same keys, recording callables
+    def begin_sample(self) -> None
+    def end_sample(self) -> SampleStats              # per site: absmax, p99/p99.9/p99.99, channel_amax
+
+# calibration_file.py
+@dataclass class ImageWAMCalibration: version, checkpoint_id, dims, percentile, frames, sites
+def build_calibration(samples: list[SampleStats], *, percentile, checkpoint_id, dims, frames) -> ImageWAMCalibration
+def save_calibration(cal, path) / load_calibration(path) -> ImageWAMCalibration
+def site_name(key: tuple) -> str                     # ("backbone","single",3,"linear1.weight") -> "backbone.single.3.linear1.weight"
+
+# imagewam_thor.py
+ImageWAMTorchFrontendThor(..., calibration_path: str | None = None)
+def stage_inputs(self, observation: dict, noise: torch.Tensor | None = None) -> None
+def run_eager(self, weights: dict | None = None) -> None
+```
+
+State transitions: `StaticFp8Linear.act_scale` is written once, by
+`calibrate()` or `set_activation_scale()`, before the first
+`__call__`, and never after. The calibration file is read-only after
+`save_calibration()`.
+
+## Flow
+
+Build (once per checkpoint and dims):
+1. `select_calibration_frames()` picks N frames from suites other than
+   the evaluation suite (`libero_object`, `libero_goal`, `libero_10`),
+   stratified by episode x frame position (house rule).
+2. An `fp16` frontend with the real checkpoint, VAE, Qwen3, proprio and
+   shift schedule runs, per frame: `set_prompt(context=...)` for the
+   task prompt, `stage_inputs(obs, noise=N(0,1) seeded)`, then
+   `run_eager(recorder.wrap(weights))`.
+3. The recorder reduces each site by max over the calls in one sample
+   (all 10 denoise steps for ActionDiT sites).
+4. `build_calibration()` reduces across samples with
+   `flash_rt.core.calibration.accumulate_amax(percentile=99.9)`; scale =
+   amax / 448 in float32. The file is saved with the checkpoint
+   identity (`_checkpoint_hash`: first 64KB + size) and the dims.
+
+Serve:
+1. `ImageWAMTorchFrontendThor(precision="fp8_static", calibration_path=...)`
+   loads and validates the file at construction.
+2. `set_prompt()` -> `_calibrate_fp8()` sets each `StaticFp8Linear`
+   scale from the file, then captures the graph.
+
+## Code Mapping
+
+| Module / interface / state | File |
+|---|---|
+| TN FP8 cuBLASLt GEMM | `csrc/kernels/decoder_fused.cu`, `.cuh`, `csrc/bindings.cpp` |
+| FP8 layout choice, weight layout, `set_activation_scale` | `flash_rt/models/imagewam/quant_linear.py` |
+| LIBERO frame loading and selection | `benchmarks/_imagewam_libero_frames.py` |
+| Per-sample activation statistics | `flash_rt/models/imagewam/activation_recorder.py` |
+| Calibration file and scale derivation | `flash_rt/models/imagewam/calibration_file.py` |
+| Calibration lifecycle, `stage_inputs`, `run_eager` | `flash_rt/frontends/torch/imagewam_thor.py` |
+| Build script | `benchmarks/imagewam_build_calibration.py` |
+| Fidelity check (H100 and Thor) | `benchmarks/imagewam_precision_fidelity.py` |
+| End-to-end harness option | `benchmarks/imagewam_e2e_official_compare.py` |
+| Tests | `tests/test_imagewam_quant_linear.py`, `tests/test_imagewam_calibration_file.py` |
+
+## Implementation Phases
+
+### Phase 1: TN FP8 cuBLASLt path (ISSUE-001)
+
+Phase Status: completed
+
+- Goal: `Fp8Linear` / `StaticFp8Linear(use_cutlass=False)` run on
+  sm_89/sm_90; Thor keeps the NN path unchanged.
+- Files: `csrc/kernels/decoder_fused.cu`, `.cuh`, `csrc/bindings.cpp`,
+  `quant_linear.py`, `tests/test_imagewam_quant_linear.py`.
+- Observation: FP8 tests run on H100 (no skip); cosine, max-abs,
+  rel_l2 vs `Fp16Linear` at the real shapes; `sm110_check.sh`;
+  `fp8`/`fp8_static` end to end on H100.
+
+### Phase 2: frontend eager-run hooks
+
+Phase Status: completed
+
+- Goal: `stage_inputs()` and `run_eager()`; `infer()` uses
+  `stage_inputs()` with unchanged behavior.
+- Files: `imagewam_thor.py`.
+- Observation: eager run equals graph replay bit-for-bit on the real
+  checkpoint; regression suite count.
+
+### Phase 3: recorder, frame selection, calibration file, build script
+
+Phase Status: completed
+
+- Goal: a real calibration file on disk.
+- Files: `benchmarks/_imagewam_libero_frames.py`, `activation_recorder.py`,
+  `calibration_file.py`, `benchmarks/imagewam_build_calibration.py`,
+  `tests/test_imagewam_calibration_file.py`.
+- Observation: recorder statistics equal a torch reference on toy
+  dims; file round trip; per-site amax/percentile summary of the real
+  build; build time.
+
+### Phase 4: `_calibrate_fp8()` loads the file
+
+Phase Status: completed
+
+- Goal: real scales applied before capture; placeholder only without a
+  file, with a warning.
+- Files: `imagewam_thor.py`, `quant_linear.py`,
+  `benchmarks/imagewam_e2e_official_compare.py`.
+- Observation: applied scales equal the file's scales; missing-site
+  and identity-mismatch errors.
+
+### Phase 5: H100 validation and Thor handoff
+
+Phase Status: completed
+
+- Goal: measured `fp8_static` accuracy with placeholder vs real
+  calibration, against `fp16` and official; Thor checklist.
+- Files: `benchmarks/imagewam_precision_fidelity.py`,
+  `opportunities.md` (OPT-022), `issues.md` (ISSUE-001 resolution).
+- Observation: fidelity table next to OPT-014's; e2e numbers next to
+  the fp16 baseline (median 0.99840, min 0.99567, MAE 0.18359).
+
+# Plan: AWQ per-channel scales folded into the NVFP4 weights (roadmap item 8)
+
+Plan Status: completed
+
+## Problem
+
+### Current
+
+- The shipped `nvfp4` precision quantizes every aligned projection
+  GEMM's weight and activation with 16-element blocks and E4M3 block
+  scales (`quantize_fp4_sfa.cu`), with no per-tensor global scale.
+  Real Thor accuracy vs `fp16` (`opportunities.md` OPT-014): actions
+  cosine 0.9998, `backbone_hidden` 0.9939, open-loop MAE 1.01x `fp16`.
+- Pi0.5 has an AWQ path (`pi05_thor_fp4.py::_awq_scale_weight`,
+  `s = clamp((a / mean(a)) ** alpha, 0.25, 4)`, inverse fused into the
+  pre-GEMM kernels) that its FP4 preset enables; ImageWAM has none.
+- NVFP4 cannot run on the H100 dev machine, so no NVFP4 accuracy
+  experiment can run here today.
+- Real activation statistics now exist (item 7's calibration file,
+  `channel_amax` per GEMM input site).
+
+### Problem
+
+It is unknown whether AWQ reduces ImageWAM's NVFP4 error, where its
+inverse scale can be applied without an extra kernel, and whether the
+fold is exact.
+
+### Measurable goal
+
+- A PyTorch NVFP4 simulator bit-exact to the real quantizer.
+- Per-layer and whole-pipeline simulated NVFP4 error vs `fp16`, with
+  and without AWQ, on held-out real frames.
+- An opt-in AWQ flag on the `nvfp4` path with exact folds, a unit test
+  of the fold in fp16, `sm110_check.sh`, and a Thor check.
+
+## Structure
+
+- `flash_rt/models/imagewam/blockscaled_ref.py` (roadmap item 9's
+  block-scaled reference, E2M1 path): NVFP4 quantizer emulation. Owner
+  of simulated NVFP4 numerics.
+- `flash_rt/models/imagewam/awq.py` (new): AWQ scale math, the
+  `AwqScaledLinear` ABC (weights that need their input divided by `s`),
+  the fold-A modulation math, and the per-weight AWQ plan (fold A rows,
+  fold B up columns). Owner of AWQ scales.
+- `flash_rt/models/imagewam/quant_linear.py`: `Nvfp4Linear` implements
+  `AwqScaledLinear` (`awq_inv_s=` argument, default `None`); new
+  `SimNvfp4Linear` (`precision="nvfp4_sim"`), the simulated GEMM with
+  the same interface.
+- `flash_rt/models/imagewam/pipeline_thor.py`: `_awq_folded()` swaps in
+  the folded AdaLN pair for AWQ-scaled GEMMs. Owner of the fold call
+  sites.
+- `flash_rt/frontends/torch/imagewam_thor.py`: `nvfp4_awq=`,
+  `awq_alpha=`, `awq_scope=` constructor arguments (with
+  `calibration_path=`); `precision="nvfp4_sim"`. Owner of the AWQ
+  weight transform lifecycle.
+- `benchmarks/imagewam_nvfp4_awq_study.py` (new): per-layer simulated
+  error study on held-out frames.
+- `benchmarks/imagewam_precision_fidelity.py`: AWQ env flags for the
+  whole-pipeline comparison (H100 `nvfp4_sim`, Thor `nvfp4`).
+
+## Interface
+
+```python
+# blockscaled_ref.py (E2M1 path)
+def quantize_blocks(x, "e2m1") -> BlockQuantized   # codes, UE4M3 scale bytes
+def fake_quantize(x, "e2m1") -> float32            # exact in fp16
+
+# quant_linear.py
+class SimNvfp4Linear(AwqScaledLinear): __init__(gemm, weight_ptr, n, k, *, awq_inv_s=None)
+class Nvfp4Linear(AwqScaledLinear):    __init__(weight_ptr, n, k, *, awq_inv_s=None)
+
+# awq.py
+def awq_scale(channel_amax, alpha) -> s
+def fold_inv_scale_into_modulation(shift, scale, inv_s) -> (shift_fp16, scale_fp16)
+class AwqScaledLinear(ABC): awq_inv_s -> Tensor | None; folded_modulation(shift, scale)
+def plan_awq(keys, channel_amax, dims, *, alpha, scope) -> dict[key, AwqWeightPlan]
+def apply_awq_plan(w_kn, plan) -> fp16 (K, N)
+
+# imagewam_thor.py
+ImageWAMTorchFrontendThor(precision="nvfp4" | "nvfp4_sim", calibration_path=...,
+                          nvfp4_awq=True, awq_alpha=0.5, awq_scope="adaln+down")
+```
+
+## Flow
+
+1. Construction: the calibration file is loaded; `plan_awq` computes
+   `s` per AWQ site from `channel_amax`; `apply_awq_plan` scales the fp16
+   weight rows (and the up columns of the gate/up weight that precedes
+   an AWQ down projection); the scaled weight is quantized by
+   `Nvfp4Linear` (or `SimNvfp4Linear`) with `awq_inv_s = 1/s` for fold-A
+   sites.
+2. Graph warmup: `_awq_folded()` computes and caches the folded AdaLN
+   pair per (layer, modulation); capture and replay read the cache.
+
+## Code Mapping
+
+| Module / interface / state | File |
+|---|---|
+| Simulated NVFP4 quantizer | `flash_rt/models/imagewam/blockscaled_ref.py` |
+| `SimNvfp4Linear` | `flash_rt/models/imagewam/quant_linear.py` |
+| AWQ scales, plan, fold math | `flash_rt/models/imagewam/awq.py` |
+| `Nvfp4Linear.awq_inv_s` | `flash_rt/models/imagewam/quant_linear.py` |
+| Fold call sites | `flash_rt/models/imagewam/pipeline_thor.py` |
+| Flags, weight transform | `flash_rt/frontends/torch/imagewam_thor.py` |
+| Study | `benchmarks/imagewam_nvfp4_awq_study.py` |
+| Whole-pipeline check | `benchmarks/imagewam_precision_fidelity.py` |
+| Tests | `tests/test_imagewam_nvfp4_sim.py`, `tests/test_imagewam_awq.py` |
+
+## Implementation Phases
+
+### Phase 1: NVFP4 simulator
+
+Phase Status: completed
+
+- Goal: bit-exact emulation of the real quantizer; `SimNvfp4Linear`.
+- Files: `blockscaled_ref.py` (E2M1 path), `quant_linear.py`, `tests/test_imagewam_nvfp4_sim.py`.
+- Observation: packed-code and scale-byte mismatches vs the real kernel
+  (JIT-built `quantize_fp4_dynamic.cu` on sm_90, `flash_rt_fp4` on
+  Thor); `SimNvfp4Linear` cosine vs the Thor-measured `Nvfp4Linear`
+  number on the same inputs.
+
+### Phase 2: AWQ math, folds, fold test
+
+Phase Status: completed
+
+- Goal: `awq.py`, pipeline fold hook, fp16 exactness test.
+- Files: `awq.py`, `pipeline_thor.py`, `tests/test_imagewam_awq.py`.
+- Observation: folded vs ideal modulation error (max-abs, rel_l2) next
+  to the kernel's own fp16 rounding; toy-dims pipeline with AWQ-scaled
+  fp16 weights vs unscaled.
+
+### Phase 3: simulated-accuracy study
+
+Phase Status: completed
+
+- Goal: per-layer and whole-pipeline NVFP4 error with and without AWQ
+  on held-out frames; pick alpha and scope.
+- Files: `benchmarks/imagewam_nvfp4_awq_study.py`,
+  `benchmarks/imagewam_precision_fidelity.py`, `imagewam_thor.py`
+  (`nvfp4_sim`, flags), `quant_linear.py`.
+- Observation: per-site-group rel_l2; `backbone_hidden` /
+  `action_latent` / `actions` cosine vs `fp16` and MAE.
+
+### Phase 4: opt-in flag on `nvfp4`, sm110 check, Thor handoff
+
+Phase Status: completed
+
+- Goal: `nvfp4_awq=True` on the real `nvfp4` path.
+- Files: `imagewam_thor.py`, `quant_linear.py`, `opportunities.md`
+  (OPT-023).
+- Observation: `sm110_check.sh`; Thor checklist (cosine vs `fp16`,
+  open-loop MAE, `infer()` P50 with and without AWQ).
 
 # Plan: ABI integration, `frt_model_runtime_v1` Python producer (roadmap item 12)
 

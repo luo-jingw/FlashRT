@@ -8,8 +8,9 @@ kernel path of `E0m3HadamardLinear` against `blockscaled_ref.py`.
   `nvfp4`. The class is replaced by a recording stub, so no NVFP4 build
   is needed.
 - Thor (skipped without `flash_rt.flash_rt_fp4`): the packed weight and
-  its SFB, and the rotated activation quantizer's packed/SFA bytes, are
-  compared byte for byte with the PyTorch reference; the GEMM is
+  its SFB, the rotated activation quantizer's packed/SFA bytes, and the
+  NVFP4 quantizer's bytes (including inputs on the E2M1 rounding
+  thresholds) are compared byte for byte with the PyTorch reference; the GEMM is
   compared with the reference product of the dequantized operands and
   with the fp32 product of the unquantized operands, at ImageWAM's real
   shapes and for every tile variant.
@@ -23,6 +24,7 @@ import torch
 import flash_rt.frontends.torch.imagewam_thor as imagewam_thor
 from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
 from flash_rt.models.imagewam.blockscaled_ref import (
+    BlockQuantized,
     dequantize_blocks,
     fwht16_butterfly,
     pack_codes,
@@ -58,11 +60,11 @@ REAL_SHAPES = [
 
 
 class _StubLinear:
-    def __init__(self, weight_fp16_ptr: int, n: int, k: int):
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int) -> None:
         self.n, self.k = n, k
 
 
-def test_precision_routing(monkeypatch):
+def test_precision_routing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(imagewam_thor, "E0m3HadamardLinear", _StubLinear)
     assert "e0m3_hadamard" in imagewam_thor._PRECISIONS
     default = inspect.signature(ImageWAMTorchFrontendThor.__init__).parameters["precision"].default
@@ -103,7 +105,7 @@ def _outlier_act(m: int, k: int, seed: int) -> torch.Tensor:
     return x.to(FP16).to(DEV)
 
 
-def _ref_weight(w_kn: torch.Tensor, alpha: float):
+def _ref_weight(w_kn: torch.Tensor, alpha: float) -> BlockQuantized:
     """Reference bytes for the weight: fp32 rotation, fp16 storage scaled
     by 1/alpha, E0M3 quantization."""
     w_in = (fwht16_butterfly(w_kn.t().float()) / alpha).half()
@@ -119,7 +121,7 @@ def _stats(y: torch.Tensor, ref: torch.Tensor) -> tuple[float, str]:
 
 @thor_only
 @pytest.mark.parametrize("n,k", [(3072, 9216), (27648, 3072), (17408, 1024), (1024, 4096)])
-def test_weight_packing_bit_exact(n, k):
+def test_weight_packing_bit_exact(n: int, k: int) -> None:
     from flash_rt.models.imagewam.quant_linear import E0m3HadamardLinear
     w = _outlier_weight(n, k, 0)
     lin = E0m3HadamardLinear(w.data_ptr(), n, k)
@@ -133,7 +135,7 @@ def test_weight_packing_bit_exact(n, k):
 
 @thor_only
 @pytest.mark.parametrize("m,k", [(905, 3072), (905, 9216), (64, 1024), (64, 4096), (513, 3072)])
-def test_rotated_activation_quantizer_bit_exact(m, k):
+def test_rotated_activation_quantizer_bit_exact(m: int, k: int) -> None:
     x = _outlier_act(m, k, 1)
     packed = torch.empty(m, k // 2, dtype=torch.uint8, device=DEV)
     sfa = torch.zeros(fvk_fp4.sfa_size_bytes(m, k, False), dtype=torch.uint8, device=DEV)
@@ -148,9 +150,60 @@ def test_rotated_activation_quantizer_bit_exact(m, k):
     assert bad_codes == 0 and bad_sf == 0
 
 
+def _nvfp4_tie_blocks(rows: int, k: int, seed: int) -> torch.Tensor:
+    """fp16 blocks built on the E2M1 decision thresholds: every block has
+    amax = 6*s for a UE4M3 value s (all mantissas, normal and subnormal),
+    and its other elements are +-t*s with t a threshold (0.25 ... 5.0) or
+    a grid value. After scaling by 1/s about half the elements sit exactly
+    on a threshold, where the kernel's `rcp.approx.ftz` reciprocal
+    (`quantize_fp4_sfa.cu`, `1.f / bs_dq` under `--use_fast_math`) and the
+    reference's round-to-nearest reciprocal could pick different codes."""
+    g = torch.Generator(device="cpu").manual_seed(seed)
+    scales = torch.arange(1, 127, dtype=torch.uint8).view(torch.float8_e4m3fn).float()
+    s = scales[torch.randint(0, scales.numel(), (rows, k // 16), generator=g)]
+    levels = torch.tensor([0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0])
+    t = levels[torch.randint(0, levels.numel(), (rows, k // 16, 16), generator=g)]
+    t[..., 0] = 6.0
+    sign = torch.where(torch.rand(rows, k // 16, 16, generator=g) < 0.5, -1.0, 1.0)
+    return (t * sign * s.unsqueeze(-1)).reshape(rows, k).to(FP16).to(DEV)
+
+
+@thor_only
+@pytest.mark.parametrize("case", ["ties_weight", "ties_act", "outlier_weight_3072x9216",
+                                  "outlier_act_905x9216", "outlier_act_64x4096"])
+def test_nvfp4_quantizer_bit_exact(case: str) -> None:
+    """`quantize_fp4_dynamic_sfa_fp16` (the `nvfp4` weight and activation
+    quantizer) vs `blockscaled_ref`. The H100 accuracy study's NVFP4 arm
+    assumes the kernel's approximate reciprocal and `amax / 6` lower to
+    the reference's arithmetic; that was checked only on sm_90 (the same
+    sources compiled for sm_90a, `tools/check_blockscaled_quantizers_sm90.py`,
+    including this tie construction). This checks it on Thor."""
+    if case.startswith("ties"):
+        x = _nvfp4_tie_blocks(2048, 1024, 4)
+        is_sfb = case == "ties_weight"
+    elif case == "outlier_weight_3072x9216":
+        x = _outlier_weight(3072, 9216, 5).t().contiguous()  # (N, K), as quant_weight_nvfp4 receives it
+        is_sfb = True
+    else:
+        m, k = (905, 9216) if case == "outlier_act_905x9216" else (64, 4096)
+        x = _outlier_act(m, k, 6)
+        is_sfb = False
+    rows, k = x.shape
+    packed = torch.empty(rows, k // 2, dtype=torch.uint8, device=DEV)
+    sf = torch.zeros(fvk_fp4.sfa_size_bytes(rows, k, is_sfb), dtype=torch.uint8, device=DEV)
+    rc = fvk_fp4.quantize_fp4_dynamic_sfa_fp16(x.data_ptr(), packed.data_ptr(), sf.data_ptr(), rows, k, is_sfb, 0)
+    torch.cuda.synchronize()
+    assert rc == 0
+    q = quantize_blocks(x, "e2m1")
+    bad_codes = int((packed != pack_codes(q.codes)).sum())
+    bad_sf = int((sf != pack_scales(q.scale_bytes)).sum())
+    print(f"{case} [{rows}, {k}]: packed mismatches={bad_codes}/{packed.numel()} sf mismatches={bad_sf}/{sf.numel()}")
+    assert bad_codes == 0 and bad_sf == 0
+
+
 @thor_only
 @pytest.mark.parametrize("m,n,k", REAL_SHAPES)
-def test_gemm_matches_reference(m, n, k):
+def test_gemm_matches_reference(m: int, n: int, k: int) -> None:
     from flash_rt.models.imagewam.quant_linear import E0m3HadamardLinear
     w = _outlier_weight(n, k, 2)
     x = _outlier_act(m, k, 3)
@@ -184,7 +237,7 @@ def test_gemm_matches_reference(m, n, k):
 
 
 @thor_only
-def test_frontend_small_dims_end_to_end():
+def test_frontend_small_dims_end_to_end() -> None:
     fe = ImageWAMTorchFrontendThor(precision="e0m3_hadamard")
     fe.set_prompt("pick up the red cup")
     for _ in range(3):

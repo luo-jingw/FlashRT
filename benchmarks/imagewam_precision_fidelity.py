@@ -1,0 +1,175 @@
+"""A served precision's fidelity to `fp16` on real held-out LIBERO frames.
+
+For each evaluation frame (the end-to-end harness's rule: libero_spatial,
+first episode of each task, frames FRAMES), an `fp16` reference frontend
+and a candidate frontend (PRECISION, optional CALIBRATION file) run the
+captured graph on the same real observation, prompt and initial noise.
+Reported per frame and summarized (min / median / mean):
+
+  backbone_hidden   cosine of the prefill output residual (a0 x hidden)
+  action_hidden     cosine of the ActionDiT residual after the last
+                    denoise step's blocks, before the head (num_action x
+                    action_hidden_dim)
+  action_latent     cosine of the final flow-matching state, normalized
+                    action space (num_action x 7)
+  actions           cosine of the denormalized action chunk
+  mae_*_vs_gt       mean |action - ground truth| over the chunk, raw units
+
+then `infer()` latency (P10/P50/P90 over ITERS calls, wall clock around
+the synchronizing call; indicative only on a shared GPU).
+
+The frontends run one after the other (reference first, outputs kept on
+the CPU), so peak memory is one frontend plus Qwen3.
+
+Env: CKPT_PATH, FLUX2_AE_MODEL_PATH, FLUX2_SRC, QWEN3_MODEL_SPEC, DATA_ROOT;
+PRECISION (candidate, default fp8_static; nvfp4 on Thor, nvfp4_sim anywhere),
+CALIBRATION (path, optional), NVFP4_AWQ (0/1, nvfp4*/needs CALIBRATION),
+AWQ_ALPHA (0.5), AWQ_SCOPE (adaln+down), N_TASKS (10), FRAMES ("0,60"),
+NOISE_SCALE (1.0 = official N(0,1) sampler; 0.01 = the served infer()
+convention, issues.md ISSUE-002), ITERS (30), REF_CACHE (optional .pt path:
+the fp16 reference outputs and latency are loaded from it when it exists
+for the same frames and noise, else computed and saved there).
+"""
+from __future__ import annotations
+
+import os
+import time
+
+import numpy as np
+import pandas as pd
+import torch
+
+from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
+from flash_rt.models.imagewam.libero_dims import LIBERO_HORIZON, LIBERO_REAL_DIMS
+
+from _imagewam_libero_frames import LiberoFrame, evaluation_frames, load_frame  # benchmarks/ helper
+
+DEV = "cuda"
+BF16 = torch.bfloat16
+CKPT = os.environ["CKPT_PATH"]
+PRECISION = os.environ.get("PRECISION", "fp8_static")
+CALIBRATION = os.environ.get("CALIBRATION") or None
+N_TASKS = int(os.environ.get("N_TASKS", "10"))
+FRAMES = tuple(int(x) for x in os.environ.get("FRAMES", "0,60").split(","))
+NOISE_SCALE = float(os.environ.get("NOISE_SCALE", "1.0"))
+ITERS = int(os.environ.get("ITERS", "30"))
+NVFP4_AWQ = os.environ.get("NVFP4_AWQ", "0") == "1"
+AWQ_ALPHA = float(os.environ.get("AWQ_ALPHA", "0.5"))
+AWQ_SCOPE = os.environ.get("AWQ_SCOPE", "adaln+down")
+REF_CACHE = os.environ.get("REF_CACHE") or None
+
+
+def cos(a: torch.Tensor, b: torch.Tensor) -> float:
+    a, b = a.double().flatten(), b.double().flatten()
+    return float(a @ b / (a.norm() * b.norm() + 1e-30))
+
+
+def noise_for(i: int) -> torch.Tensor:
+    g = torch.Generator(device="cpu").manual_seed(i)
+    n = torch.randn((1, LIBERO_HORIZON, 7), generator=g, dtype=torch.float32)
+    return n.to(DEV, BF16).float()[0] * NOISE_SCALE
+
+
+def build(precision: str, calibration: str | None, *, awq: bool = False) -> ImageWAMTorchFrontendThor:
+    awq_kw = dict(nvfp4_awq=True, awq_alpha=AWQ_ALPHA, awq_scope=AWQ_SCOPE) if awq else {}
+    return ImageWAMTorchFrontendThor(
+        precision=precision, dims_override=dict(LIBERO_REAL_DIMS), ckpt_path=CKPT,
+        ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
+        qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"],
+        dataset_stats_path=os.path.join(os.path.dirname(CKPT), "dataset_stats.json"),
+        calibration_path=calibration, **awq_kw)
+
+
+def obs_of(fr: LiberoFrame) -> dict:
+    return {"view1": torch.from_numpy(fr.view1), "view2": torch.from_numpy(fr.view2), "proprio": fr.state}
+
+
+@torch.no_grad()
+def run(fe: ImageWAMTorchFrontendThor, frames: list[LiberoFrame]) -> list[dict]:
+    """Graph replay per frame; returns the four compared tensors on CPU."""
+    d = fe.dims
+    out = []
+    for i, fr in enumerate(frames):
+        fe.set_prompt(fr.task)
+        fe.stage_inputs(obs_of(fr), noise=noise_for(i))
+        fe._graph.replay()
+        torch.cuda.synchronize()
+        bufs = fe._bufs
+        n_act, ahd = d["num_action"], d["action_hidden_dim"]
+        interface = {"data": (int(bufs["action_hidden"]), False), "shape": (n_act, ahd),
+                     "typestr": "<f2", "version": 3}
+        action_hidden = torch.as_tensor(type("_V", (), {"__cuda_array_interface__": interface})(),
+                                        device=DEV).float().cpu()
+        latent = fe._action_latent.detach().clone()
+        out.append(dict(backbone_hidden=fe._backbone_hidden.float().cpu(),
+                        action_hidden=action_hidden, action_latent=latent.cpu(),
+                        actions=fe._action_norm.backward(latent).cpu()))
+    return out
+
+
+def latency(fe: ImageWAMTorchFrontendThor, fr: LiberoFrame) -> tuple[float, float, float]:
+    obs = obs_of(fr)
+    for _ in range(5):
+        fe.infer(obs)
+    ts = []
+    for _ in range(ITERS):
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        fe.infer(obs)
+        ts.append((time.perf_counter() - t0) * 1e3)
+    return tuple(float(v) for v in np.percentile(ts, [10, 50, 90]))
+
+
+def main() -> None:
+    refs = evaluation_frames(os.environ["DATA_ROOT"], n_tasks=N_TASKS, frames=FRAMES)
+    frames = [load_frame(os.environ["DATA_ROOT"], r, LIBERO_HORIZON) for r in refs]
+    label = f"{PRECISION}" + (f" +AWQ(alpha={AWQ_ALPHA}, {AWQ_SCOPE})" if NVFP4_AWQ else "")
+    print(f"{len(frames)} held-out frames (libero_spatial, frames {FRAMES}); candidate "
+          f"{label} calibration={CALIBRATION}; noise scale {NOISE_SCALE}", flush=True)
+
+    ref_key = dict(frames=[(r.suite, r.episode, r.frame) for r in refs], noise_scale=NOISE_SCALE)
+    cached = torch.load(REF_CACHE) if REF_CACHE and os.path.exists(REF_CACHE) else None
+    if cached is not None and cached["key"] == ref_key:
+        ref_out, ref_lat = cached["out"], cached["lat"]
+        print(f"fp16 reference loaded from {REF_CACHE}", flush=True)
+    else:
+        fe = build("fp16", None)
+        ref_out = run(fe, frames)
+        ref_lat = latency(fe, frames[0])
+        del fe
+        torch.cuda.empty_cache()
+        if REF_CACHE:
+            torch.save(dict(key=ref_key, out=ref_out, lat=ref_lat), REF_CACHE)
+
+    fe = build(PRECISION, CALIBRATION, awq=NVFP4_AWQ)
+    cand_out = run(fe, frames)
+    cand_lat = latency(fe, frames[0])
+
+    rows = []
+    for fr, r, c in zip(frames, ref_out, cand_out):
+        gt = torch.from_numpy(fr.gt)
+        n = min(len(gt), LIBERO_HORIZON)
+        row = dict(ep=fr.episode, frame=fr.frame,
+                   backbone_hidden=cos(c["backbone_hidden"], r["backbone_hidden"]),
+                   action_hidden=cos(c["action_hidden"], r["action_hidden"]),
+                   action_latent=cos(c["action_latent"], r["action_latent"]),
+                   actions=cos(c["actions"], r["actions"]),
+                   mae_fp16_vs_gt=(r["actions"][:n] - gt[:n]).abs().mean().item(),
+                   mae_cand_vs_gt=(c["actions"][:n] - gt[:n]).abs().mean().item(),
+                   finite=bool(torch.isfinite(c["actions"]).all()))
+        rows.append(row)
+        print({k: (round(v, 5) if isinstance(v, float) else v) for k, v in row.items()}, flush=True)
+    df = pd.DataFrame(rows)
+    print(f"\n=== {label} vs fp16, calibration={CALIBRATION}, noise scale {NOISE_SCALE} ===")
+    for col in ("backbone_hidden", "action_hidden", "action_latent", "actions",
+                "mae_fp16_vs_gt", "mae_cand_vs_gt"):
+        print(f"{col:16s} min={df[col].min():.5f} median={df[col].median():.5f} mean={df[col].mean():.5f}")
+    print(f"MAE ratio (candidate / fp16): {df['mae_cand_vs_gt'].mean() / df['mae_fp16_vs_gt'].mean():.3f}")
+    print(f"all finite: {bool(df['finite'].all())}")
+    print(f"infer() ms  fp16: P10={ref_lat[0]:.1f} P50={ref_lat[1]:.1f} P90={ref_lat[2]:.1f} | "
+          f"{label}: P10={cand_lat[0]:.1f} P50={cand_lat[1]:.1f} P90={cand_lat[2]:.1f}")
+    print(f"peak GPU mem: {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB")
+
+
+if __name__ == "__main__":
+    main()

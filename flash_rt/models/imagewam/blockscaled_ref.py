@@ -25,15 +25,24 @@ write for the tcgen05 block-scaled GEMMs (`cutlass_fp4_gemm_variant`,
   the CUTLASS `Sm1xxBlockScaledConfig<16>` scale-factor layout used for
   both SFA (rows = M) and SFB (rows = N).
 
+Every function allocates only on the input's device (no host-to-device
+copies), so the E2M1 path also runs inside CUDA Graph capture
+(`quant_linear.SimNvfp4Linear`, `precision="nvfp4_sim"`).
+
 Measured against the CUDA kernels compiled for sm_90 from the same
-sources and flags (real ImageWAM weights, 65M weight elements, and
-activations with outliers): NVFP4 amax and E0M3 (plain and rotated)
-match byte for byte; the NVFP4 MSE search differs on about 2 codes per
-million, where its sequential fp32 error sum ties differently from
-`torch.sum`.
+sources and flags (`tools/check_blockscaled_quantizers_sm90.py`: 130M
+real ImageWAM weight elements, activations with outliers, and blocks
+built on the E2M1 rounding thresholds): NVFP4 amax and E0M3 (plain,
+rotated, and the `e0m3_hadamard` weight preparation) match byte for
+byte. The NVFP4 MSE search differs on about 2 codes per million: the
+kernel accumulates its per-candidate squared error sequentially and its
+PTX contracts `e * scale - v` and `err += d * d` into `fma.rn`, so
+near-equal candidates can tie-break differently from `torch.sum` over
+separately rounded products.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -84,7 +93,7 @@ def _e2m1_codes(v: torch.Tensor) -> torch.Tensor:
     a = v.abs()
     mant = torch.full_like(v, 7, dtype=torch.uint8)
     for idx in range(len(_E2M1_UPPER) - 1, -1, -1):
-        mant = torch.where(a <= _E2M1_UPPER[idx], torch.tensor(idx, dtype=torch.uint8, device=v.device), mant)
+        mant.masked_fill_(a <= _E2M1_UPPER[idx], idx)
     sign = (v < 0).to(torch.uint8) << 3
     return sign | mant
 
@@ -101,12 +110,12 @@ def _e0m3_codes(v: torch.Tensor) -> torch.Tensor:
 
 def decode_codes(codes: torch.Tensor, fmt: str) -> torch.Tensor:
     """4-bit codes -> element values (float32, before scaling)."""
-    mag_idx = (codes & 7).long()
+    mag_idx = (codes & 7).float()
     if fmt == "e2m1":
-        lut = torch.tensor(_E2M1_LEVELS, dtype=torch.float32, device=codes.device)
-        mag = lut[mag_idx]
+        # _E2M1_LEVELS by index, exactly: i/2 for 0..3, i-2 for 4..6, 6 for 7.
+        mag = torch.where(mag_idx < 4, mag_idx * 0.5, torch.where(mag_idx < 7, mag_idx - 2.0, 6.0))
     elif fmt == "e0m3":
-        mag = mag_idx.float()
+        mag = mag_idx
     else:
         raise ValueError(f"fmt must be one of {FORMATS}, got {fmt!r}")
     return torch.where((codes & 8) != 0, -mag, mag)
@@ -162,7 +171,9 @@ def _desired_scale(amax: torch.Tensor, fmt: str) -> torch.Tensor:
     division (it differs exactly at the ties `amax / 7` hits often, e.g.
     amax = 1.3671875 gives exactly 25/128)."""
     if fmt == "e2m1":
-        return amax * torch.tensor(1.0 / E2M1_MAX, dtype=torch.float32, device=amax.device)
+        # A Python scalar multiplies a float32 tensor as its float32
+        # rounding, the same constant as the kernels' reciprocal of 6.
+        return amax * (1.0 / E2M1_MAX)
     return torch.div(amax, torch.full_like(amax, E0M3_MAX))
 
 
@@ -236,6 +247,23 @@ def fwht16_butterfly(x: torch.Tensor) -> torch.Tensor:
         v[:, idx + step] = a - b
         step <<= 1
     return (v * 0.25).reshape(x.shape)
+
+
+def prepare_e0m3_hadamard_weight(w_nk: torch.Tensor) -> tuple[torch.Tensor, float]:
+    """Offline weight preparation of the `e0m3_hadamard` tier
+    (`quant_linear.E0m3HadamardLinear`): `(N, K)` weight -> the fp16
+    `(N, K)` tensor handed to `quantize_e0m3_dynamic_sfa_fp16`, and the
+    GEMM `alpha`.
+
+    Steps: 16-point butterfly per K block in fp32 (the activation kernel's
+    order); multiply by `2^e`, the largest power of two that keeps the
+    largest block scale `amax/7` at or below UE4M3's 448 (this moves the
+    block scales out of UE4M3's subnormal range); round to fp16.
+    `alpha = 2^-e` undoes the pre-scale exactly in the GEMM."""
+    w_rot = fwht16_butterfly(w_nk)
+    amax = float(w_rot.abs().max())
+    e = math.floor(math.log2(UE4M3_MAX * E0M3_MAX / amax)) if amax > 0 else 0
+    return (w_rot * (2.0 ** e)).to(torch.float16).contiguous(), float(2.0 ** -e)
 
 
 def pack_codes(codes: torch.Tensor) -> torch.Tensor:

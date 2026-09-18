@@ -1,0 +1,173 @@
+"""Versioned ImageWAM activation-calibration file.
+
+Holds, for every GEMM input site of the served pipeline (site names from
+`activation_recorder.site_name`, e.g. `backbone.single.3.linear1.weight`),
+statistics recorded on real LIBERO observations through the real fp16
+pipeline, reduced across samples with the house reducer
+(`flash_rt.core.calibration.accumulate_amax`, default percentile 99.9):
+
+- `amax`: per-tensor |x| max -> the static FP8 activation scale
+  `amax / 448` (float32, same as `quantize_fp8_device_fp16`'s
+  `compute_scale_kernel`);
+- `channel_amax`: per-input-channel |x| max (length K), the AWQ statistic;
+- `abs_percentiles`: the 99 / 99.9 / 99.99th percentiles of |x|
+  (diagnostics);
+- `sample_absmax`: each sample's own amax before the reduction.
+
+Identity: the checkpoint (`flash_rt.core.quant.calibrator._checkpoint_hash`:
+SHA-256 of the first 64KB + file size, first 16 hex chars) and every dims
+entry that changes GEMM shapes or activation distributions. A frontend
+refuses a file whose identity differs from its own.
+
+On disk: one safetensors file. Arrays are tensors named
+`<site>.channel_amax` / `<site>.sample_absmax`; everything else is JSON
+in the metadata entry `imagewam_calibration`.
+"""
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+
+import numpy as np
+import torch
+from safetensors import safe_open
+from safetensors.torch import save_file
+
+from flash_rt.core.calibration import accumulate_amax
+from flash_rt.core.quant.calibrator import _checkpoint_hash
+from flash_rt.models.imagewam.activation_recorder import ABS_PERCENTILES, SampleStats
+
+FORMAT_NAME = "imagewam_activation_calibration"
+FORMAT_VERSION = 1
+FP8_E4M3_MAX = 448.0
+DEFAULT_PERCENTILE = 99.9
+IDENTITY_DIM_KEYS = (
+    "hidden", "HD", "NH", "mlp_hidden", "joint_attention_dim", "x0", "a0",
+    "num_layers_double", "num_layers_single", "action_hidden_dim", "action_attn_width",
+    "action_mlp_hidden", "num_action", "action_dim", "action_num_layers_double",
+    "action_num_layers_single", "num_denoise_steps", "shift", "num_train_timesteps",
+    "proprio_dim", "ref_h", "ref_w", "merge_qkv_mlp", "merge_linear2",
+)
+
+
+@dataclass
+class SiteCalibration:
+    amax: float
+    abs_percentiles: np.ndarray   # (len(ABS_PERCENTILES),) float32
+    channel_amax: np.ndarray      # (K,) float32
+    sample_absmax: np.ndarray     # (num_samples,) float32
+    rows: int
+
+    def fp8_act_scale(self) -> float:
+        """Static FP8 E4M3 activation scale, `amax / 448` in float32,
+        floored at 1e-12 (`compute_scale_kernel`, `csrc/kernels/quantize.cu`)."""
+        s = np.float32(self.amax) / np.float32(FP8_E4M3_MAX)
+        return float(max(s, np.float32(1e-12)))
+
+
+@dataclass
+class ImageWAMCalibration:
+    version: int
+    checkpoint_id: str
+    checkpoint_size: int
+    dims: dict
+    percentile: float
+    frames: list[tuple[str, int, int]]   # (suite, episode, frame)
+    noise: str
+    sites: dict[str, SiteCalibration]
+
+    def validate_for(self, *, checkpoint_path: str, dims: dict) -> None:
+        """Raise `ValueError` unless this file was built for exactly this
+        checkpoint and these dims."""
+        if self.version != FORMAT_VERSION:
+            raise ValueError(f"calibration file version {self.version} != {FORMAT_VERSION}")
+        ckpt_id, ckpt_size = checkpoint_identity(checkpoint_path)
+        if (ckpt_id, ckpt_size) != (self.checkpoint_id, self.checkpoint_size):
+            raise ValueError(f"calibration file is for checkpoint {self.checkpoint_id} "
+                             f"({self.checkpoint_size} bytes), not {checkpoint_path} "
+                             f"({ckpt_id}, {ckpt_size} bytes)")
+        want = identity_dims(dims)
+        if want != self.dims:
+            diff = {k: (self.dims.get(k), want.get(k)) for k in set(want) | set(self.dims)
+                    if self.dims.get(k) != want.get(k)}
+            raise ValueError(f"calibration file dims differ (file, frontend): {diff}")
+
+
+def checkpoint_identity(checkpoint_path: str) -> tuple[str, int]:
+    return _checkpoint_hash(checkpoint_path), os.path.getsize(checkpoint_path)
+
+
+def identity_dims(dims: dict) -> dict:
+    return {k: dims[k] for k in IDENTITY_DIM_KEYS if k in dims}
+
+
+def build_calibration(samples: list[SampleStats], *, percentile: float, checkpoint_path: str,
+                      dims: dict, frames: list[tuple[str, int, int]], noise: str) -> ImageWAMCalibration:
+    """Reduce per-sample statistics across samples with the house
+    percentile reducer (`accumulate_amax`: linear interpolation along the
+    sample axis; 100.0 is the plain max)."""
+    if not samples:
+        raise ValueError("build_calibration needs at least one sample")
+    names = sorted(samples[0].sites)
+    for i, s in enumerate(samples):
+        if sorted(s.sites) != names:
+            raise ValueError(f"sample {i} recorded a different site set")
+    per_sample_amax = [np.array([s.sites[n].absmax for n in names], dtype=np.float32) for s in samples]
+    amax = accumulate_amax(per_sample_amax, percentile=percentile)
+    sites = {}
+    for j, n in enumerate(names):
+        pct = accumulate_amax([s.sites[n].abs_percentiles for s in samples], percentile=percentile)
+        ch = accumulate_amax([s.sites[n].channel_amax for s in samples], percentile=percentile)
+        sites[n] = SiteCalibration(
+            amax=float(amax[j]), abs_percentiles=pct.astype(np.float32),
+            channel_amax=ch.astype(np.float32),
+            sample_absmax=np.array([s.sites[n].absmax for s in samples], dtype=np.float32),
+            rows=samples[0].sites[n].rows)
+    ckpt_id, ckpt_size = checkpoint_identity(checkpoint_path)
+    return ImageWAMCalibration(version=FORMAT_VERSION, checkpoint_id=ckpt_id, checkpoint_size=ckpt_size,
+                               dims=identity_dims(dims), percentile=float(percentile),
+                               frames=[tuple(f) for f in frames], noise=noise, sites=sites)
+
+
+def save_calibration(cal: ImageWAMCalibration, path: str) -> None:
+    tensors = {}
+    site_meta = {}
+    for n, s in cal.sites.items():
+        tensors[f"{n}.channel_amax"] = torch.from_numpy(np.ascontiguousarray(s.channel_amax, dtype=np.float32))
+        tensors[f"{n}.sample_absmax"] = torch.from_numpy(np.ascontiguousarray(s.sample_absmax, dtype=np.float32))
+        site_meta[n] = {"amax": s.amax, "rows": s.rows,
+                        "abs_percentiles": [float(v) for v in s.abs_percentiles]}
+    meta = {
+        "format": FORMAT_NAME, "version": cal.version,
+        "checkpoint_id": cal.checkpoint_id, "checkpoint_size": cal.checkpoint_size,
+        "dims": cal.dims, "percentile": cal.percentile,
+        "abs_percentile_levels": list(ABS_PERCENTILES),
+        "frames": [list(f) for f in cal.frames], "noise": cal.noise, "sites": site_meta,
+    }
+    tmp = path + ".tmp"
+    save_file(tensors, tmp, metadata={"imagewam_calibration": json.dumps(meta)})
+    os.replace(tmp, path)
+
+
+def load_calibration(path: str) -> ImageWAMCalibration:
+    with safe_open(path, framework="pt") as f:
+        raw = (f.metadata() or {}).get("imagewam_calibration")
+        if raw is None:
+            raise ValueError(f"{path}: not an ImageWAM calibration file (no metadata)")
+        meta = json.loads(raw)
+        if meta.get("format") != FORMAT_NAME:
+            raise ValueError(f"{path}: format {meta.get('format')!r} != {FORMAT_NAME!r}")
+        sites = {}
+        for n, sm in meta["sites"].items():
+            sites[n] = SiteCalibration(
+                amax=float(sm["amax"]),
+                abs_percentiles=np.asarray(sm["abs_percentiles"], dtype=np.float32),
+                channel_amax=f.get_tensor(f"{n}.channel_amax").numpy(),
+                sample_absmax=f.get_tensor(f"{n}.sample_absmax").numpy(),
+                rows=int(sm["rows"]))
+    return ImageWAMCalibration(
+        version=int(meta["version"]), checkpoint_id=meta["checkpoint_id"],
+        checkpoint_size=int(meta["checkpoint_size"]), dims=meta["dims"],
+        percentile=float(meta["percentile"]), frames=[tuple(f) for f in meta["frames"]],
+        noise=meta["noise"], sites=sites)
