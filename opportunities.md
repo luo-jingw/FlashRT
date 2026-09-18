@@ -3911,3 +3911,48 @@ Checklist item in the stream's final report: `fp8_static` and
 OPT-014 result 1/2; `infer()` P50 against OPT-014 result 4 (243.0 ms
 `fp8_static_cutlass`, 236.9 ms `nvfp4`). Calibration changes scale
 values only, not the captured graph, so P50 should not move.
+
+# OPT-023: AWQ per-channel scales folded into the NVFP4 weights (roadmap item 8)
+
+Status: implemented behind `nvfp4_awq=True` (default off); accuracy
+measured on H100 with simulated NVFP4; real `nvfp4` accuracy and speed
+pending on Thor. Plan: `plan.md` "AWQ per-channel scales folded into the
+NVFP4 weights (roadmap item 8)". Mechanism, fold points and exactness:
+`docs/imagewam_nvfp4_awq.md`.
+
+## H100 results (simulated NVFP4, bit-exact quantizer, real checkpoint)
+
+Whole pipeline vs `fp16`, 20 held-out `libero_spatial` frames, median
+(min) cosine, `benchmarks/imagewam_precision_fidelity.py`:
+
+| | backbone_hidden | action_latent | actions | MAE / fp16 |
+|---|---:|---:|---:|---:|
+| `nvfp4_sim` | 0.99819 (0.99762) | 0.99937 (0.99911) | 0.99931 (0.99848) | 1.010 |
+| `nvfp4_sim` + AWQ 0.5, folds A + B | **0.99956 (0.99916)** | **0.99973 (0.99944)** | **0.99965 (0.99882)** | **1.000** |
+| Thor `nvfp4`, OPT-014 result 1/2 (1 frame; 50 frames for MAE) | 0.9939 | 0.9997 | 0.9998 | 1.01 |
+
+AWQ cuts the backbone_hidden error (1 - cosine) 4x and the action error
+about 2x, and brings the open-loop MAE ratio from 1.010 to 1.000.
+Per-layer: alpha 0.5 is best for both fold classes (0.25-1.0 swept);
+fold A sites 0.0742 -> 0.0610 rel_l2, fold B sites 0.0788 -> 0.0679;
+sites without a fold point would gain ~1% at most.
+
+Speed: AWQ changes weight values and the AdaLN constants only. At toy
+dims the AWQ pipeline launches the same kernels per forward (413 = 413);
+at real dims one `nvfp4_sim` graph replay recorded 61112 GPU kernel
+events without AWQ and 61107 with it. Thor `infer()` P50 should not
+move; that and the real-hardware cosines are the Thor check.
+
+## Follow-up, not started
+
+- Per-tensor power-of-two weight scale for NVFP4. ~96% of real weight
+  blocks get a subnormal E4M3 block scale (`amax / 6 < 2^-6`), because
+  the quantizer has no global scale. Multiplying the weight by `2^e`
+  (largest `e` with `max|W| 2^e <= 6 * 448`) before quantization and
+  passing `alpha = 2^-e` to `fp4_gemm` (a host float it already takes)
+  lifts every block into E4M3's normal range, exactly. Per-layer study:
+  2-3% lower rel_l2 alone (fold A 0.0742 -> 0.0725), and AWQ 0.5 +
+  scale 0.0595 vs AWQ alone 0.0610. Whole-pipeline effect not measured.
+- `proj` / `attn_out_proj` have no exact fold point; a fused
+  multiply-and-quantize of the attention output would be needed to
+  scale them, for at most ~1% per-layer gain.

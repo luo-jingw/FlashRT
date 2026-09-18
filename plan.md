@@ -3361,7 +3361,7 @@ ImageWAMTorchFrontendThor(precision="nvfp4" | "nvfp4_sim", calibration_path=...,
 
 ### Phase 1: NVFP4 simulator
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: bit-exact emulation of the real quantizer; `SimNvfp4Linear`.
 - Files: `nvfp4_sim.py`, `tests/test_imagewam_nvfp4_sim.py`.
@@ -3372,7 +3372,7 @@ Phase Status: active
 
 ### Phase 2: AWQ math, folds, fold test
 
-Phase Status: pending
+Phase Status: completed
 
 - Goal: `awq.py`, pipeline fold hook, fp16 exactness test.
 - Files: `awq.py`, `pipeline_thor.py`, `tests/test_imagewam_awq.py`.
@@ -3382,7 +3382,7 @@ Phase Status: pending
 
 ### Phase 3: simulated-accuracy study
 
-Phase Status: pending
+Phase Status: completed
 
 - Goal: per-layer and whole-pipeline NVFP4 error with and without AWQ
   on held-out frames; pick alpha and scope.
@@ -3394,7 +3394,7 @@ Phase Status: pending
 
 ### Phase 4: opt-in flag on `nvfp4`, sm110 check, Thor handoff
 
-Phase Status: pending
+Phase Status: active
 
 - Goal: `nvfp4_awq=True` on the real `nvfp4` path.
 - Files: `imagewam_thor.py`, `quant_linear.py`, `opportunities.md`

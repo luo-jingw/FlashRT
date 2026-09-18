@@ -176,3 +176,37 @@ def test_pipeline_with_awq_folds_matches_unscaled_fp16():
               f"backbone_hidden cos={c_h:.7f} action_latent cos={c_a:.7f} rel_l2={rl_a:.2e}")
         assert n_fold_a > 0 and (scope == "adaln" or n_fold_b > 0)
         assert c_h > 0.9999 and c_a > 0.9999
+
+
+def _count_kernels(fn) -> int:
+    from torch.profiler import ProfilerActivity, profile
+    torch.cuda.synchronize()
+    with profile(activities=[ProfilerActivity.CUDA]) as prof:
+        fn()
+        torch.cuda.synchronize()
+    return sum(1 for e in prof.events() if e.device_type == torch.autograd.DeviceType.CUDA)
+
+
+def test_fold_a_adds_no_kernels_after_first_call():
+    """The folded modulation is computed once per (layer, modulation) and
+    then read from the cache: after one warmup run (graph capture's own
+    warmup), an AWQ pipeline launches exactly as many kernels as the
+    plain one."""
+    torch.manual_seed(4)
+    fe = ImageWAMTorchFrontendThor(precision="fp16")
+    fe.set_prompt()
+    fe.stage_inputs({}, noise=torch.randn(fe.dims["num_action"], fe.dims["action_dim"], device=DEV))
+    linears = {k: v for k, v in fe.weights.items() if isinstance(v, Fp16Linear)}
+    amax = {k: torch.rand(v.k, device=DEV) + 0.1 for k, v in linears.items()}
+    plans = plan_awq(list(linears), amax, fe.dims, alpha=0.5, scope="adaln+down")
+    weights = dict(fe.weights)
+    for key, plan in plans.items():
+        lin = linears[key]
+        weights[key] = _Fp16Awq(fe._gemm, apply_awq_plan(_view(lin.weight_ptr, lin.k, lin.n), plan),
+                                lin.n, lin.k, (1.0 / plan.input_scale) if plan.fold_input else None)
+    fe.run_eager()
+    fe.run_eager(weights)  # warmup: fills the fold caches
+    n_plain = _count_kernels(fe.run_eager)
+    n_awq = _count_kernels(lambda: fe.run_eager(weights))
+    print(f"kernels per eager forward: plain={n_plain} awq={n_awq}")
+    assert n_awq == n_plain

@@ -18,7 +18,9 @@ it), FLUX2_MODEL_PATH, FLUX2_AE_MODEL_PATH, QWEN3_MODEL_SPEC, DATA_ROOT
 Optional env: SUITE (libero_spatial), N_TASKS (10), FRAMES ("0,40"),
 PRECISION (fp16), SEEDS ("0,1"), CALIBRATION (activation-calibration file
 for fp8_static*, see benchmarks/imagewam_build_calibration.py; unset uses
-the frontend's placeholder).
+the frontend's placeholder; also the AWQ statistics), NVFP4_AWQ (0/1, with
+PRECISION=nvfp4 or nvfp4_sim and CALIBRATION), AWQ_ALPHA (0.5), AWQ_SCOPE
+(adaln+down).
 """
 from __future__ import annotations
 
@@ -47,6 +49,9 @@ FRAMES = [int(x) for x in os.environ.get("FRAMES", "0,40").split(",")]
 PRECISION = os.environ.get("PRECISION", "fp16")
 SEEDS = [int(x) for x in os.environ.get("SEEDS", "0,1").split(",")]
 CALIBRATION = os.environ.get("CALIBRATION") or None
+AWQ_KW = (dict(nvfp4_awq=True, awq_alpha=float(os.environ.get("AWQ_ALPHA", "0.5")),
+               awq_scope=os.environ.get("AWQ_SCOPE", "adaln+down"))
+          if os.environ.get("NVFP4_AWQ", "0") == "1" else {})
 HORIZON, STEPS, SHIFT = 64, 10, 5.0
 
 REAL_DIMS = dict(
@@ -157,9 +162,9 @@ def main():
         precision=PRECISION, dims_override=dict(REAL_DIMS), ckpt_path=CKPT,
         ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
         qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"], dataset_stats_path=STATS,
-        calibration_path=CALIBRATION)
-    print(f"flashrt ({PRECISION}, calibration={CALIBRATION}) constructed in {time.time() - t:.1f}s",
-          flush=True)
+        calibration_path=CALIBRATION, **AWQ_KW)
+    print(f"flashrt ({PRECISION}, calibration={CALIBRATION}, awq={AWQ_KW}) constructed in "
+          f"{time.time() - t:.1f}s", flush=True)
 
     rows, cur_task = [], None
     for s in samples:
