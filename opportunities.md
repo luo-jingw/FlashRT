@@ -4085,6 +4085,20 @@ SEEDS=0,1` (20 frames), vs official ImageWAM:
 With real scales `fp8_static` is indistinguishable from `fp16` against
 official ImageWAM (official's own seed-to-seed spread: median 0.99630).
 
+Sensitivity to the calibration set (same 20 held-out frames, vs `fp16`,
+median (min)):
+
+| calibration file | backbone_hidden | actions | MAE / fp16 |
+|---|---:|---:|---:|
+| N = 64, 22/21/21 frames per suite (the shipped build) | 0.99994 (0.99984) | 0.99997 (0.99989) | 1.000 |
+| N = 64, 31/27/6 frames per suite | 0.99994 (0.99985) | 0.99997 (0.99991) | 1.001 |
+| N = 8, 3/3/2 frames per suite | 0.99993 (0.99984) | 0.99997 (0.99991) | 1.000 |
+
+The regression gate (`tests/gate_imagewam_libero.py`, roadmap item 13,
+fixture v1, 40 runs) passes `fp8_static` with the N = 64 file on H100:
+vs official median 0.99834 / min 0.99540, vs its `fp16` reference median
+0.999968 / min 0.999943, MAE 0.18373 against the reference's 0.18364.
+
 ## Thor check
 
 Checklist item in the stream's final report: `fp8_static` and

@@ -111,3 +111,10 @@ Cells are median (min-) cosine. Against official ImageWAM
 | `fp16` | 0.99840 | 0.99567 | 0.18359 |
 | `fp8_static`, placeholder | 0.87576 | 0.66887 | 0.30207 |
 | `fp8_static`, real file | 0.99844 | 0.99559 | 0.18372 |
+
+The result does not depend on the calibration set's size or suite mix:
+N = 8 (3/3/2 frames per suite) and a second N = 64 set (31/27/6) give
+the same `backbone_hidden` (0.99993-0.99994 median) and `actions`
+(0.99997 median) cosines and MAE ratio (1.000-1.001).
+`tests/gate_imagewam_libero.py --precision fp8_static --fp8-calibration
+<file>` passes on H100 (vs official median 0.99834, min 0.99540).
