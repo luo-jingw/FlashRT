@@ -3314,3 +3314,175 @@ Phase Status: active
 - Observation: the script's non-Thor paths (argument parsing, shape
   table, cuBLASLt fp16 reference timing) run on H100 and print SKIP
   for families this build lacks.
+
+# Plan: attention-chain fusion recheck at ImageWAM's real shapes (roadmap item 6)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+Both attention sites run a cuBLAS-composed chain in
+`ImageWAMAttnBackend.run()` (`flash_rt/hardware/thor/attn_backend.py`):
+a strided-batched QK^T GEMM into a `logits` buffer, a softmax kernel,
+then a strided-batched PV GEMM (`fvk.attention_qkv_fp16_perhead`,
+`csrc/kernels/attention_cublas.cuh`). The frontend always constructs
+the backend with `use_perhead_kv=True, use_real_mot_mask=True`.
+
+- `"backbone"` site: prefill self-attention, 25 layers, `q = kv = a0 =
+  905` tokens, 24 heads, HD 128, no mask. FA4 is wired in as
+  `use_fa4=True` (opportunities.md OPT-005). On Thor it measured
+  cosine 1.000000 against the cuBLAS chain, 3.75x per call at the real
+  per-head shape, and -10.5% prefill in the per-layer benchmark. The
+  frontend default is `use_fa4=False`, because the previous dev box had
+  no FA4 runtime and `use_fa4=True` raises when the runtime is missing.
+- `"mot"` site: ActionDiT joint attention, 25 layers x 10 steps = 250
+  calls per `infer()`, `q = 64` action queries over `kv = total = 969`
+  keys. With `use_real_mot_mask=True`, the rule the frontend always
+  uses, the call is plain unmasked attention through the same
+  `attention_qkv_fp16_perhead`. Upstream `_build_mot_attention_mask_flux2`
+  with `target_len = 0` lets action rows see every key, and only
+  padded text keys are masked, which `pipeline_thor.py` does not model
+  at any site. FA4 has never been evaluated here.
+- Pi0.5 rejected a fused SIMT attention chain at decoder `M = 10`,
+  HD 256, as 5-7x slower (`docs/pi05_thor_decoder_fp4_e2e.md`). At that
+  shape the QK^T/PV GEMMs are about 1 us of tensor-core work, and FA4
+  has no KV-split path at HD 256.
+
+### Problem
+
+Nobody has measured which share of ImageWAM prefill and denoise time
+attention takes at the real shapes. The Thor FA4 win is not on by
+default. The `mot` site's fused-kernel eligibility has never been
+evaluated.
+
+### Measurable goal
+
+- H100, indicative only: the attention share of prefill and of one
+  denoise step at the real shapes, measured in-graph as graph time with
+  the real attention minus graph time with attention removed. Also
+  per-call cuBLAS chain vs fused kernels available on sm_90 (PyTorch
+  SDPA flash / cuDNN / mem-efficient) at both sites' shapes, with
+  cosine against the cuBLAS chain.
+- Recommendation with evidence per site.
+- If cheap: FA4 on by default on Thor for `"backbone"`, with automatic
+  fallback to the cuBLAS chain when the FA4 runtime is missing or the
+  device is not Thor, and an opt-in FA4 path for `"mot"`. Dispatch
+  logic verified locally against the cuBLAS chain with a
+  reference-backed FA4 stand-in. FA4 itself goes on the Thor
+  checklist.
+
+## Structure
+
+- NEW `benchmarks/imagewam_attention_share_bench.py`: owns the
+  measurements (in-graph attention share; per-call chain vs fused
+  kernels; on Thor it also times FA4 per call, with `num_splits` swept
+  for the `mot` shape).
+- `flash_rt/hardware/thor/attn_backend.py`: `ImageWAMAttnBackend`
+  owns per-site kernel dispatch. It gains `use_fa4_mot: bool` for the
+  `"mot"` site FA4 branch. That branch is valid only with
+  `use_real_mot_mask=True` and `use_perhead_kv=True`, the unmasked
+  per-head rule, and the constructor rejects any other combination.
+- `flash_rt/hardware/thor/fa4_backend.py`: owns FA4 availability. It
+  gains `thor_default_enabled() -> bool`, true only on an sm_11x
+  device with an active FA4 runtime.
+- `flash_rt/frontends/torch/imagewam_thor.py`: owns the default.
+  `use_fa4: bool | None = None` resolves to
+  `fa4_backend.thor_default_enabled()`. An explicit `True` still
+  requires the runtime, and an explicit `False` forces the cuBLAS
+  chain. It also gains `use_fa4_mot: bool = False`, passed through.
+- Tests: `tests/test_imagewam_fa4_dispatch.py` (new) checks the
+  backend's FA4 branches for both sites against the cuBLAS chain, with
+  FA4 replaced by a PyTorch-SDPA stand-in that has FA4's
+  `_flash_attn_fwd` signature. It also checks the default resolution.
+  `tests/test_imagewam_fa4_backbone.py` gains a real-FA4 `mot` case
+  that skips without FA4.
+
+State ownership:
+
+| state | owner |
+|---|---|
+| FA4 on/off per site | `ImageWAMAttnBackend` instance (`_use_fa4`, `_use_fa4_mot`) |
+| default resolution | frontend constructor, via `fa4_backend.thor_default_enabled()` |
+| FA4 runtime availability | `fa4_backend` module |
+
+## Interface
+
+```python
+# flash_rt/hardware/thor/fa4_backend.py
+def thor_default_enabled() -> bool: ...   # sm_11x device AND FA4 runtime active
+
+# flash_rt/hardware/thor/attn_backend.py
+class ImageWAMAttnBackend:
+    def __init__(self, spec, ctx, *, backbone_slots: dict, mot_slots: dict,
+                 use_fa4: bool = False, use_perhead_kv: bool = False,
+                 use_real_mot_mask: bool = False, use_fa4_mot: bool = False): ...
+
+# flash_rt/frontends/torch/imagewam_thor.py
+class ImageWAMTorchFrontendThor:
+    def __init__(..., use_fa4: bool | None = None, use_fa4_mot: bool = False, ...): ...
+    use_fa4: bool        # resolved value, read-only after construction
+    use_fa4_mot: bool
+```
+
+FA4 `"mot"` call: Q `(1, q_seq, NH, HD)` at row offset `a0` of `Q_O`,
+K/V `(1, kv_seq, NH, HD)` per layer, `causal=False`, `pack_gqa=False`,
+`num_splits=1`. Output goes to the `logits` scratch, then is copied
+back to the Q rows. This is the same pattern as the verified
+`"backbone"` per-head branch.
+
+## Flow
+
+```
+frontend __init__(use_fa4=None)
+  -> use_fa4 = fa4_backend.thor_default_enabled()      # False on sm_90 / missing runtime
+  -> ImageWAMAttnBackend(..., use_fa4=use_fa4, use_fa4_mot=use_fa4_mot)
+prefill:  attn.run("backbone", ...) -> FA4 if use_fa4 else attention_qkv_fp16_perhead
+denoise:  attn.run("mot", ...)      -> FA4 if use_fa4_mot else attention_qkv_fp16_perhead
+```
+
+## Code Mapping
+
+| item | file |
+|---|---|
+| measurements | `benchmarks/imagewam_attention_share_bench.py` |
+| `thor_default_enabled` | `flash_rt/hardware/thor/fa4_backend.py` |
+| `use_fa4_mot` dispatch | `flash_rt/hardware/thor/attn_backend.py` |
+| default resolution, `use_fa4_mot` pass-through | `flash_rt/frontends/torch/imagewam_thor.py` |
+| dispatch tests | `tests/test_imagewam_fa4_dispatch.py`, `tests/test_imagewam_fa4_backbone.py` |
+| results, recommendation | `opportunities.md` OPT-019 |
+
+## Implementation Phases
+
+### Phase 1: measurement
+
+Phase Status: pending
+
+- Goal: attention share (H100) and per-call chain vs fused kernels at
+  real shapes.
+- Files: `benchmarks/imagewam_attention_share_bench.py`.
+- Observation: printed P10/P50/P90 for graphs with and without
+  attention, per stage. Per-call medians for each kernel, with cosine
+  against the cuBLAS chain.
+
+### Phase 2: FA4 default on Thor, opt-in FA4 for `mot`
+
+Phase Status: pending
+
+- Goal: `use_fa4=None` auto-resolution, `use_fa4_mot`.
+- Files: `fa4_backend.py`, `attn_backend.py`, `imagewam_thor.py`,
+  tests.
+- Observation: dispatch tests show the FA4 branches, with an SDPA
+  stand-in, matching the cuBLAS chain at real shapes (cosine,
+  max-abs, rel_l2). Resolution resolves to False on H100. The
+  regression count is unchanged apart from the new tests. An fp16
+  end-to-end quick run matches the baseline, since the default
+  resolves to off on H100.
+
+### Phase 3: recommendation and Thor handoff
+
+Phase Status: pending
+
+- Goal: OPT-019 with evidence, recommendation, and Thor checks.
+- Files: `opportunities.md`.
