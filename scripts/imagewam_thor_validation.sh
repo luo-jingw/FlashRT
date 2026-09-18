@@ -16,7 +16,10 @@
 #   2. Copy the artifact bundle (gate fixture v1 + calibration files) and
 #      check it: (cd $BUNDLE && sha256sum -c SHA256SUMS)
 #   3. pip install av pandas pyarrow safetensors pillow
-#   4. Lock clocks: sudo nvpmodel -m 0 && sudo jetson_clocks
+#
+# The script never changes machine state: no sudo, no nvpmodel -m, no
+# jetson_clocks. Thor is shared and runs as is (MAXN, DVFS-managed clocks);
+# step 0 only records that state.
 #
 # Environment (required): CKPT_PATH (model.pt with dataset_stats.json and
 # config.yaml beside it), FLUX2_SRC, FLUX2_MODEL_PATH, FLUX2_AE_MODEL_PATH,

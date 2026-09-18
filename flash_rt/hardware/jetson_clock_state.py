@@ -1,20 +1,21 @@
-"""Jetson power-mode and clock-lock state, read before a latency benchmark.
+"""Jetson power-mode and clock state, read before a latency benchmark.
 
-A Jetson GPU's frequency is set by devfreq (DVFS). Unless the power mode
-is MAXN and ``jetson_clocks`` has pinned ``min_freq == max_freq``, the
-GPU and EMC clocks move with load, and a latency number depends on the
-clock state it happened to see. This module reads that state and returns
-it as a structured record so a benchmark can print it next to its
-numbers.
+A Jetson GPU's frequency is set by devfreq (DVFS). At MAXN the GPU and
+EMC clocks still move with load unless something has pinned
+``min_freq == max_freq``, so a latency number depends on the clock state
+it happened to see. This module reads that state and returns it as a
+structured record so a benchmark can print it next to its numbers.
 
-Sources, all read-only:
+The module only reads. It never runs ``sudo``, ``jetson_clocks`` or
+``nvpmodel -m``, and never writes sysfs. The Thor this project deploys
+to is shared, and benchmarks run in its existing power mode (MAXN) with
+dynamic clocks; changing global power or clock state is out of bounds.
+
+Sources, all read-only and all usable without root:
 
 * Jetson detection: ``/etc/nv_tegra_release`` or a ``nvidia,tegra``
   entry in ``/proc/device-tree/compatible``.
 * ``nvpmodel -q``: power-mode name (``NV Power Mode: MAXN``) and id.
-* ``jetson_clocks --show``: the tool's own report. It needs root on most
-  L4T releases; without root the record says so. The tool is never run
-  through ``sudo``.
 * ``/sys/class/devfreq/<name>/{cur_freq,min_freq,max_freq,governor}``:
   GPU nodes (names containing ``gpu``, e.g. Thor's ``gpu-gpc-0`` and
   ``gpu-nvd-0``, or a Tegra GPU id such as ``17000000.ga10b``) and EMC
@@ -22,15 +23,17 @@ Sources, all read-only:
 * ``/sys/kernel/nvpmodel_clk_cap/*``: the clock caps the power mode sets
   (Thor exposes ``emc`` here).
 
-Lock verdict (``JetsonClockState.locked``): the machine is a Jetson, at
-least one GPU devfreq node is visible and every GPU node has
-``cur == min == max``, no visible EMC devfreq node is unlocked, and the
-nvpmodel mode, when readable, is MAXN. Anything unlocked or unobservable
-adds a warning.
+Pinned verdict (``JetsonClockState.locked``): the machine is a Jetson,
+at least one GPU devfreq node is visible and every GPU node has
+``cur == min == max``, no visible EMC devfreq node is dynamic, and the
+nvpmodel mode, when readable, is MAXN. Dynamic (unpinned) clocks at MAXN
+are the expected serving state and are recorded, not warned about.
+Warnings cover only a power mode other than MAXN and state that cannot
+be observed.
 
 Pi0.5's end-to-end benchmark (``tests/bench_pi05_decoder_fp4_e2e.py``,
-``machine_state``) applies the same GPU rule and raises instead of
-warning. This module only reports; the caller decides.
+``machine_state``) raises on unpinned GPU clocks. This module only
+reports; the caller decides.
 
 The module is stdlib-only, so it imports on any machine.
 """
@@ -90,7 +93,6 @@ class JetsonClockState:
     nvpmodel: ToolQuery
     nvpmodel_mode: str | None
     nvpmodel_mode_id: int | None
-    jetson_clocks: ToolQuery
     gpu: tuple[DevfreqNode, ...]
     emc: tuple[DevfreqNode, ...]
     clock_caps_hz: tuple[tuple[str, int], ...]
@@ -139,8 +141,8 @@ class JetsonClockProbe:
     """Reads the clock state under a filesystem root.
 
     ``root`` is ``/`` on a real machine; tests pass a temporary directory
-    holding a fake sysfs tree. ``runner`` executes ``nvpmodel`` and
-    ``jetson_clocks``.
+    holding a fake sysfs tree. ``runner`` executes ``nvpmodel -q``, the
+    only external tool this probe runs.
     """
 
     def __init__(self, root: Path = Path("/"), runner: CommandRunner | None = None) -> None:
@@ -155,14 +157,12 @@ class JetsonClockProbe:
                 is_jetson=False, platform=platform or reason,
                 nvpmodel=ToolQuery(False, "not queried: not a Jetson"),
                 nvpmodel_mode=None, nvpmodel_mode_id=None,
-                jetson_clocks=ToolQuery(False, "not queried: not a Jetson"),
                 gpu=(), emc=(), clock_caps_hz=(),
                 gpu_locked=False, emc_locked=None, power_mode_max=None,
                 locked=False, warnings=())
 
         nvpmodel = self._runner.run(("nvpmodel", "-q"))
         mode, mode_id = self._parse_nvpmodel(nvpmodel)
-        jetson_clocks = self._runner.run(("jetson_clocks", "--show"))
         gpu, emc = self._devfreq_nodes()
         caps = self._clock_caps()
 
@@ -170,11 +170,11 @@ class JetsonClockProbe:
         emc_locked = None if not emc else all(n.locked for n in emc)
         power_mode_max = None if mode is None else mode.upper().startswith("MAXN")
         locked = gpu_locked and emc_locked is not False and power_mode_max is not False
-        warnings = self._warnings(nvpmodel, mode, power_mode_max, gpu, emc)
+        warnings = self._warnings(nvpmodel, mode, power_mode_max, gpu)
         return JetsonClockState(
             is_jetson=True, platform=platform or "Jetson (model unreadable)",
             nvpmodel=nvpmodel, nvpmodel_mode=mode, nvpmodel_mode_id=mode_id,
-            jetson_clocks=jetson_clocks, gpu=gpu, emc=emc, clock_caps_hz=caps,
+            gpu=gpu, emc=emc, clock_caps_hz=caps,
             gpu_locked=gpu_locked, emc_locked=emc_locked,
             power_mode_max=power_mode_max, locked=locked, warnings=warnings)
 
@@ -256,21 +256,14 @@ class JetsonClockProbe:
 
     @staticmethod
     def _warnings(nvpmodel: ToolQuery, mode: str | None, power_mode_max: bool | None,
-                  gpu: tuple[DevfreqNode, ...], emc: tuple[DevfreqNode, ...]) -> tuple[str, ...]:
+                  gpu: tuple[DevfreqNode, ...]) -> tuple[str, ...]:
         warnings = []
         if mode is None:
             warnings.append(f"nvpmodel mode unobservable ({nvpmodel.text[:200]})")
         elif not power_mode_max:
-            warnings.append(f"nvpmodel mode is {mode!r}, not MAXN (sudo nvpmodel -m 0)")
+            warnings.append(f"nvpmodel mode is {mode!r}, not MAXN; latency is not a MAXN number")
         if not gpu:
-            warnings.append("no GPU devfreq node under /sys/class/devfreq; GPU clock lock unobservable")
-        for node in gpu + emc:
-            if not node.locked:
-                warnings.append(
-                    f"{node.kind} devfreq {node.name} not locked: cur={node.cur_hz} "
-                    f"min={node.min_hz} max={node.max_hz} governor={node.governor} (sudo jetson_clocks)")
-        if not emc:
-            warnings.append("no EMC devfreq node under /sys/class/devfreq; EMC clock lock unobservable")
+            warnings.append("no GPU devfreq node under /sys/class/devfreq; GPU clock state unobservable")
         return tuple(warnings)
 
 
@@ -282,20 +275,20 @@ def report_jetson_clock_state(probe: JetsonClockProbe | None = None,
                               emit: Callable[[str], None] = _print_flushed) -> JetsonClockState:
     """Read the clock state, print it, and return it.
 
-    Prints one ``[jetson-clock-state] <json>`` line, then one ``WARNING``
-    line per warning when the clocks are not locked, or one line saying
-    the machine is not a Jetson.
+    Prints one ``[jetson-clock-state] <json>`` line, then one summary line
+    (power mode, and whether the GPU clocks are pinned or dynamic), then
+    one ``WARNING`` line per warning. Off-Jetson the summary says so.
+    Nothing is changed on the machine.
     """
     state = (probe if probe is not None else JetsonClockProbe()).read()
     emit(f"{_RECORD_PREFIX} {json.dumps(state.to_dict(), sort_keys=True)}")
     if not state.is_jetson:
         emit(f"{_RECORD_PREFIX} not a Jetson ({os.uname().nodename}); "
-             f"clock locking does not apply and latency here is not a Jetson number")
+             f"Jetson clock state does not apply and latency here is not a Jetson number")
         return state
-    if state.locked:
-        emit(f"{_RECORD_PREFIX} clocks locked ({state.nvpmodel_mode})")
-    else:
-        emit(f"{_RECORD_PREFIX} WARNING: clocks NOT locked; latency below is not a locked-clock number")
+    clocks = "pinned" if state.gpu_locked else "dynamic (DVFS, not pinned)"
+    emit(f"{_RECORD_PREFIX} power mode {state.nvpmodel_mode or 'unknown'}; GPU clocks {clocks}; "
+         f"read-only record, machine state unchanged")
     for warning in state.warnings:
         emit(f"{_RECORD_PREFIX} WARNING: {warning}")
     return state

@@ -239,7 +239,7 @@ Checks:
 
 # ISSUE-061
 
-Status: open
+Status: open (clock policy decided; baseline re-seed pending on Thor)
 
 Area: regression-gate latency baseline for Thor `nvfp4` (`tests/fixtures/imagewam_gate/latency_baselines.json`)
 
@@ -253,9 +253,8 @@ state of every run (`flash_rt/hardware/jetson_clock_state.py`).
 
 ## Impact
 
-If the baseline was measured with locked clocks or FA4 and a gate run
-is not (or the reverse), the latency check compares different
-configurations. A run that differs by a few percent could pass or fail
+If the baseline and a gate run differ in clock state or FA4, the
+latency check compares different configurations. A run that differs by a few percent could pass or fail
 for that reason alone. The margin is 5% (limit 243.18 ms).
 
 ## Evidence
@@ -271,17 +270,19 @@ Clock state and FA4 each move `infer()` P50 by a few percent on Thor.
 
 ## Next Experiment
 
-On Thor, run the gate for `nvfp4` twice: once as the machine is, and
-once after `sudo nvpmodel -m 0 && sudo jetson_clocks`. Re-seed the
-baseline from the locked-clock run and record its clock state in the
+On Thor, as the machine is (MAXN, DVFS-managed clocks), run the gate
+for `nvfp4`, with and without `FLASHRT_THOR_FA4=1`. Re-seed the baseline
+from that run and record its clock record and FA4 state in the
 baseline's `source` field.
 
-Owner decision: the latency check records the clock state in every
-result but does not refuse unlocked clocks, unlike Pi0.5's
-`machine_state()`, which raises. Whether an unlocked Thor run should
-turn the latency verdict into `blocked` is open.
-
 ## Resolution
+
+Clock policy decided: Thor is shared, and no benchmark or gate changes
+its power mode or clocks (no `sudo`, `nvpmodel -m` or `jetson_clocks`).
+Runs happen at the existing MAXN mode with DVFS-managed clocks. The
+latency check records the clock state and never refuses dynamic clocks;
+the baseline comes from a run in the same state. Re-seeding the baseline
+from a Thor run is still pending.
 
 # ISSUE-020
 

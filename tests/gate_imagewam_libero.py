@@ -23,9 +23,9 @@ fixture v1 measures vs-official median 0.99683 and min 0.98591 over the
 N(0,1) noise it measures 0.99836 / 0.99554. The latency loop does use
 the served default draw.
 
-The latency check records the Jetson clock state but does not refuse
-unlocked clocks; whether it should is an open owner decision
-(issues.md ISSUE-061).
+The latency check records the Jetson clock state and never refuses
+dynamic clocks: Thor runs as is, at MAXN with DVFS-managed clocks, and
+the latency baseline is measured in that state (issues.md ISSUE-061).
 
 The official model and Qwen3 are not loaded: the fixture carries the
 official Qwen3 context. Gate policy: ``flash_rt/core/regression_gate.py``;

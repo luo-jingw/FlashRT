@@ -219,6 +219,16 @@ Do not record token values or other secrets here.
 
 ## Project-Specific Constraints
 
+- The Thor used for validation is shared. Scripts, tests and
+  benchmarks must not change its global state:
+  - no `sudo`;
+  - no `nvpmodel -m`;
+  - no `jetson_clocks`;
+  - no writes to sysfs.
+
+  Everything runs in the existing power mode (MAXN) with DVFS-managed
+  clocks. `flash_rt/hardware/jetson_clock_state.py` only reads and
+  records that state, and latency baselines are measured in it.
 - This fork does not send pull requests to `flashrt-project/FlashRT`
   upstream. `CONTRIBUTING.md`'s upstream PR workflow does not apply to
   work done here.

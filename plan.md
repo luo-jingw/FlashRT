@@ -3119,20 +3119,23 @@ shipped `nvfp4` P50 of 231.6 ms, carries a clock record.
 
 ### Goal
 
-One reusable helper that reads the nvpmodel mode, the `jetson_clocks`
-state, and GPU/EMC devfreq `cur/min/max/governor` from sysfs; prints and
-returns a structured record; warns when clocks are not locked; and
-returns an explicit "not a Jetson" record on any other machine. Every
-listed benchmark prints this record once before timing. Measurable:
-unit tests on x86 against a fake sysfs tree cover the locked, unlocked,
+One reusable, read-only helper that reads the nvpmodel mode and
+GPU/EMC devfreq `cur/min/max/governor` from sysfs without root; prints
+and returns a structured record (power mode; clocks pinned or dynamic);
+warns only for a non-MAXN mode or unobservable state; and returns an
+explicit "not a Jetson" record on any other machine. It never changes
+machine state (no `sudo`, `jetson_clocks` or `nvpmodel -m`): Thor is
+shared and runs as is, at MAXN with DVFS-managed clocks. Every listed
+benchmark prints this record once before timing. Measurable: unit tests
+on x86 against a fake sysfs tree cover the pinned, dynamic,
 missing-nvpmodel, EMC and non-Jetson cases; on Thor the record is
-captured before and after `sudo jetson_clocks`.
+captured as the machine is.
 
 ## Structure
 
 | module | responsibility | state owned |
 |---|---|---|
-| `flash_rt/hardware/jetson_clock_state.py` | read the sysfs tree and the nvpmodel/jetson_clocks tools under an injectable root and command runner; derive the lock verdict; print the record | none (reads only) |
+| `flash_rt/hardware/jetson_clock_state.py` | read the sysfs tree and `nvpmodel -q` under an injectable root and command runner; derive the pinned verdict; print the record | none (reads only) |
 | benchmark entry points | call `report_jetson_clock_state()` once before timing | none |
 | `tests/test_jetson_clock_state.py` | fake sysfs trees in `tmp_path`, fake command runner | none |
 
@@ -3158,7 +3161,6 @@ class ToolQuery:              # one external tool invocation
 class JetsonClockState:
     is_jetson: bool; platform: str
     nvpmodel: ToolQuery; nvpmodel_mode: str | None; nvpmodel_mode_id: int | None
-    jetson_clocks: ToolQuery
     gpu: tuple[DevfreqNode, ...]; emc: tuple[DevfreqNode, ...]
     clock_caps_hz: tuple[tuple[str, int], ...]   # /sys/kernel/nvpmodel_clk_cap/*
     gpu_locked: bool; emc_locked: bool | None; power_mode_max: bool | None
@@ -3181,16 +3183,16 @@ node locked. `emc_locked` = `None` when no EMC devfreq node is visible,
 else every EMC node locked. `power_mode_max` = `None` when `nvpmodel` is
 unavailable, else the mode name starts with `MAXN`. `locked` = Jetson,
 `gpu_locked`, and neither `emc_locked` nor `power_mode_max` is `False`.
-Every condition that makes the record unobservable or unlocked adds a
-warning line.
+A non-MAXN power mode or unobservable state adds a warning line;
+dynamic clocks at MAXN are recorded without a warning.
 
 ## Flow
 
 1. `JetsonClockProbe.read()` checks `/etc/nv_tegra_release` and
    `/proc/device-tree/{model,compatible}`. Neither present: return a
    record with `is_jetson=False` and no tool calls.
-2. On a Jetson: run `nvpmodel -q` and `jetson_clocks --show` through the
-   runner (timeout, never `sudo`); list `/sys/class/devfreq/*`; classify
+2. On a Jetson: run `nvpmodel -q` through the runner (timeout, never
+   `sudo`); list `/sys/class/devfreq/*`; classify
    names containing `gpu` (and the Tegra GPU ids `gp10b/gv11b/ga10b/gb10b`)
    as GPU and names containing `emc` as EMC; read `cur_freq`, `min_freq`,
    `max_freq`, `governor`; read `/sys/kernel/nvpmodel_clk_cap/*`.
@@ -3231,21 +3233,20 @@ on H100 far enough to see the record line (fp16 row).
 
 Phase Status: blocked
 
-Goal: Thor checklist entry: record before and after
-`sudo nvpmodel -m 0 && sudo jetson_clocks`.
+Goal: Thor checklist entry: the record captured as the machine is.
 Modified files: none (checklist in the stream report).
 Observation method: owner's Thor run.
 Blocker: needs the Thor hardware. The checklist command is
 `python -c "from flash_rt.hardware.jetson_clock_state import
-report_jetson_clock_state; report_jetson_clock_state()"`, run before and
-after locking; on the shared H100 the record is `is_jetson=false`.
+report_jetson_clock_state; report_jetson_clock_state()"`, run as the
+machine is; on the shared H100 the record is `is_jetson=false`.
 
 ## Results
 
 - `tests/test_jetson_clock_state.py`: 11 passed on x86 (fake sysfs trees
-  for locked, unlocked GPU, non-MAXN, missing `nvpmodel`, EMC node
-  locked/unlocked, Jetson without GPU devfreq, unreadable frequency,
-  reporter output, off-Jetson).
+  for pinned, dynamic GPU at MAXN, non-MAXN, missing `nvpmodel`, EMC node
+  pinned/dynamic, Jetson without GPU devfreq, unreadable frequency,
+  reporter output with no `sudo` or `jetson_clocks`, off-Jetson).
 - `benchmarks/imagewam_thor_graph_bench.py` on H100 prints the
   `[jetson-clock-state]` record (`is_jetson=false`) before its table.
 
@@ -6366,8 +6367,8 @@ frontends, pointer census and poisoning; e2e compare and
 Environment as for the other ImageWAM Thor checks (`CKPT_PATH`,
 `FLUX2_SRC`, `FLUX2_MODEL_PATH`, `FLUX2_AE_MODEL_PATH` / `AE_MODEL_PATH`,
 `QWEN3_MODEL_SPEC`, `DATA_ROOT`, ImageWAM `src/` on `PYTHONPATH`),
-`flash_rt_kernels` and `flash_rt_fp4` built for sm_110. Lock clocks
-first (`sudo nvpmodel -m 0 && sudo jetson_clocks`) and report the
+`flash_rt_kernels` and `flash_rt_fp4` built for sm_110. Run on the
+machine as it is (no clock or power-mode changes) and report the
 `[jetson-clock-state]` line of each run.
 
 1. `python -m pytest tests/test_imagewam_text_trim.py -q -s`. Expected:

@@ -1,7 +1,7 @@
 """``flash_rt.hardware.jetson_clock_state`` against fake sysfs trees.
 
 Each test builds a Jetson-like (or plain) filesystem under ``tmp_path``
-and a fake ``nvpmodel``/``jetson_clocks`` runner, so the probe runs on any
+and a fake ``nvpmodel -q`` runner, so the probe runs on any
 machine. Node names follow Thor's devfreq layout (``gpu-gpc-0``,
 ``gpu-nvd-0``) as used by ``tests/bench_pi05_decoder_fp4_e2e.py``.
 """
@@ -23,7 +23,7 @@ MAXN_QUERY = "NV Power Mode: MAXN\n0\n"
 
 
 class FakeRunner:
-    """Answers ``nvpmodel -q`` and ``jetson_clocks --show`` from a table."""
+    """Answers ``nvpmodel -q`` from a table and records every call."""
 
     def __init__(self, answers: dict[str, ToolQuery]) -> None:
         self.answers = answers
@@ -64,7 +64,7 @@ def _thor_tree(root: Path, *, gpu_cur: int = GPU_MAX_HZ, gpu_min: int = GPU_MAX_
 
 
 def _runner(nvpmodel_text: str | None = MAXN_QUERY) -> FakeRunner:
-    answers = {"jetson_clocks": ToolQuery(False, "jetson_clocks --show: exit 1: run as root")}
+    answers = {}
     if nvpmodel_text is not None:
         answers["nvpmodel"] = ToolQuery(True, nvpmodel_text)
     return FakeRunner(answers)
@@ -80,8 +80,9 @@ def test_not_a_jetson(tmp_path):
     assert runner.calls == []  # no tool is run off-Jetson
 
 
-def test_locked_thor(tmp_path):
-    state = JetsonClockProbe(_thor_tree(tmp_path), _runner()).read()
+def test_pinned_thor(tmp_path):
+    runner = _runner()
+    state = JetsonClockProbe(_thor_tree(tmp_path), runner).read()
     print(json.dumps(state.to_dict(), indent=1))
     assert state.is_jetson and state.platform.startswith("NVIDIA Jetson AGX Thor")
     assert [n.name for n in state.gpu] == ["gpu-gpc-0", "gpu-nvd-0"]
@@ -92,17 +93,18 @@ def test_locked_thor(tmp_path):
     assert state.emc_locked is None  # no EMC devfreq node: unobservable, not unlocked
     assert state.locked is True
     assert dict(state.clock_caps_hz) == {"emc": EMC_HZ, "gpu": GPU_MAX_HZ}
-    assert state.jetson_clocks.available is False
-    assert state.warnings == (
-        "no EMC devfreq node under /sys/class/devfreq; EMC clock lock unobservable",)
+    assert state.warnings == ()
+    assert runner.calls == [("nvpmodel", "-q")]  # the only tool run; no sudo, no jetson_clocks
 
 
-def test_unlocked_gpu_devfreq(tmp_path):
+def test_dynamic_gpu_clocks_at_maxn_are_recorded_not_warned(tmp_path):
+    """MAXN with DVFS-managed clocks is the expected serving state."""
     root = _thor_tree(tmp_path, gpu_cur=306_000_000, gpu_min=306_000_000)
     state = JetsonClockProbe(root, _runner()).read()
+    assert state.power_mode_max is True
     assert state.gpu_locked is False and state.locked is False
-    assert any("gpu devfreq gpu-gpc-0 not locked" in w for w in state.warnings)
-    assert any("cur=306000000" in w for w in state.warnings)
+    assert [n.cur_hz for n in state.gpu] == [306_000_000, 306_000_000]
+    assert state.warnings == ()
 
 
 def test_non_maxn_power_mode(tmp_path):
@@ -111,6 +113,7 @@ def test_non_maxn_power_mode(tmp_path):
     assert state.power_mode_max is False
     assert state.gpu_locked is True and state.locked is False
     assert any("not MAXN" in w for w in state.warnings)
+    assert not any("sudo" in w for w in state.warnings)
 
 
 def test_missing_nvpmodel_is_unobservable_not_unlocked(tmp_path):
@@ -127,7 +130,7 @@ def test_emc_devfreq_node_participates(tmp_path):
     unlocked = JetsonClockProbe(
         _thor_tree(tmp_path / "b", with_emc_node=True, emc_cur=2_133_000_000), _runner()).read()
     assert unlocked.emc_locked is False and unlocked.locked is False
-    assert any("emc devfreq emc not locked" in w for w in unlocked.warnings)
+    assert unlocked.warnings == ()
 
 
 def test_jetson_without_gpu_devfreq(tmp_path):
@@ -147,7 +150,7 @@ def test_unreadable_frequency_is_not_locked(tmp_path):
     assert nvd.cur_hz is None and nvd.locked is False and state.locked is False
 
 
-def test_report_prints_record_and_warnings(tmp_path):
+def test_report_prints_record_and_summary(tmp_path):
     lines: list[str] = []
     root = _thor_tree(tmp_path, gpu_cur=306_000_000, gpu_min=306_000_000)
     state = report_jetson_clock_state(JetsonClockProbe(root, _runner()), emit=lines.append)
@@ -155,8 +158,9 @@ def test_report_prints_record_and_warnings(tmp_path):
     assert record["locked"] is False and record["is_jetson"] is True
     assert record["gpu"][0]["name"] == "gpu-gpc-0" and record["gpu"][0]["locked"] is False
     assert record["clock_caps_hz"] == {"emc": EMC_HZ, "gpu": GPU_MAX_HZ}
-    assert "clocks NOT locked" in lines[1]
+    assert "power mode MAXN" in lines[1] and "dynamic" in lines[1]
     assert len(lines) == 2 + len(state.warnings)
+    assert not any("sudo" in line or "jetson_clocks" in line for line in lines)
 
 
 def test_report_off_jetson(tmp_path):

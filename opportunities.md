@@ -3861,14 +3861,18 @@ Area: latency measurement provenance on Jetson
 ## What exists
 
 `flash_rt/hardware/jetson_clock_state.py` reads the nvpmodel mode
-(`nvpmodel -q`), the `jetson_clocks --show` report (root only; never run
-through `sudo`), every GPU and EMC devfreq node under
+(`nvpmodel -q`), every GPU and EMC devfreq node under
 `/sys/class/devfreq` (`cur_freq`, `min_freq`, `max_freq`, `governor`),
-and `/sys/kernel/nvpmodel_clk_cap/*`. It returns a `JetsonClockState`
-with a lock verdict (every GPU node `cur == min == max`, no unlocked EMC
-node, MAXN when readable) and warnings, and returns `is_jetson=false`
-on any other machine. `report_jetson_clock_state()` prints the record as
-one `[jetson-clock-state]` JSON line plus warning lines.
+and `/sys/kernel/nvpmodel_clk_cap/*`, all without root. It never runs
+`sudo`, `jetson_clocks` or `nvpmodel -m` and never writes sysfs: Thor is
+shared and benchmarks run in its existing state (MAXN, DVFS-managed
+clocks). It returns a `JetsonClockState` with a pinned verdict (every GPU
+node `cur == min == max`, no dynamic EMC node, MAXN when readable) and
+warnings only for a non-MAXN power mode or unobservable state, and
+returns `is_jetson=false` on any other machine.
+`report_jetson_clock_state()` prints the record as one
+`[jetson-clock-state]` JSON line, a summary line (power mode; GPU clocks
+pinned or dynamic), and warning lines.
 
 Printed before timing by `benchmarks/imagewam_thor_graph_bench.py`,
 `benchmarks/imagewam_thor_int4_bench.py`,
@@ -3982,7 +3986,8 @@ noise, the official sampler's per-seed draw, passed through
 `0.01 * N(0,1)` (ISSUE-002); the latency loop does use the served draw.
 
 Clock policy: the latency check records the clock state in every result
-but does not refuse unlocked clocks; ISSUE-061 holds that decision.
+and never refuses dynamic clocks. Thor runs at MAXN with DVFS-managed
+clocks, and baselines are measured in that same state (ISSUE-061).
 
 ## Measured (H100, shared GPU)
 
