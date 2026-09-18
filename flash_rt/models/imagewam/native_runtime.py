@@ -164,5 +164,5 @@ class ImageWAMNativeRuntime:
             self.library.lib.frt_imagewam_native_release(self.handle)
             self.handle = 0
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.close()

@@ -51,6 +51,7 @@ from __future__ import annotations
 import logging
 import os
 import warnings
+from typing import TYPE_CHECKING, Mapping
 
 import numpy as np
 import torch
@@ -67,14 +68,15 @@ from flash_rt.models.imagewam.pipeline_resources import (
     AttentionResource,
     DoubleLayerResource,
     ImageWAMPipelineResources,
+    LinearResource,
     PipelineBuffers,
     PipelineDims,
     SingleLayerResource,
     linear_resource,
 )
 from flash_rt.models.imagewam.pipeline_thor import (
-    _fuse_mod_group,
-    _fuse_mod_pair,
+    fp16_adaln_operands,
+    fp16_adaln_shift_scale,
     imagewam_denoise_loop,
     imagewam_prefill,
 )
@@ -97,6 +99,12 @@ from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbon
 from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSurface
 from flash_rt.models.imagewam.vae_preprocess import RESIZE_MODES, VaePreprocessor
 from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeStageSpec
+
+if TYPE_CHECKING:
+    # Type-only: `runtime.export` loads the built runtime module on import,
+    # and the frontend works without it.
+    from flash_rt.models.imagewam.native_runtime import ImageWAMNativeRuntime
+    from flash_rt.runtime.export import ModelRuntime
 
 _PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass", "e0m3_hadamard")
 # OPT-004 step 6 (plan.md): the two `StaticFp8Linear` variants need a
@@ -1434,7 +1442,7 @@ class ImageWAMTorchFrontendThor:
         prefill and denoise loop as `pipeline_thor.py` over this frontend's
         buffers and weights (`flash_rt/models/imagewam/pipeline_resources.py`).
         Every AdaLN site carries the fp16 form `pipeline_thor`'s
-        `_fuse_mod_group` / `_fuse_mod_pair` build (the unfused path and the
+        `fp16_adaln_operands` / `fp16_adaln_shift_scale` build (the unfused path and the
         standalone AdaLN that starts each chain) and the FP32 modulation
         chunks the fused gated residual + next AdaLN kernel reads
         (`dims["fuse_res_norm"]`)."""
@@ -1452,14 +1460,15 @@ class ImageWAMTorchFrontendThor:
         img_len = d["a0"] - d["x0"]
         hidden, ahd, na = d["hidden"], d["action_hidden_dim"], d["num_action"]
 
-        def adaln(group, rows: int, dim: int) -> AdaLNResource:
+        def adaln(group: tuple[torch.Tensor, torch.Tensor, torch.Tensor], rows: int,
+                  dim: int) -> AdaLNResource:
             shift, scale, gate = group
-            return AdaLNResource(*_fuse_mod_group(shift, scale, gate, rows, dim),
+            return AdaLNResource(*fp16_adaln_operands(shift, scale, gate, rows, dim),
                                  shift_f32=shift, scale_f32=scale, gate_f32=gate)
 
-        def head_adaln(pair) -> AdaLNResource:
+        def head_adaln(pair: tuple[torch.Tensor, torch.Tensor]) -> AdaLNResource:
             shift, scale = pair
-            return AdaLNResource(*_fuse_mod_pair(shift, scale), None,
+            return AdaLNResource(*fp16_adaln_shift_scale(shift, scale), None,
                                  shift_f32=shift, scale_f32=scale, gate_f32=None)
 
         def single_layer(stack: str, L: int) -> SingleLayerResource:
@@ -1472,10 +1481,11 @@ class ImageWAMTorchFrontendThor:
                 query_norm=int(weight(stack, "single", L, "query_norm")),
                 key_norm=int(weight(stack, "single", L, "key_norm")))
 
-        def weight(stack: str, block: str, layer: int, slot: str):
+        def weight(stack: str, block: str, layer: int, slot: str) -> object:
+            """One `self._weights` entry: a linear op, or a norm/bias pointer."""
             return self._weights[(stack, block, layer, slot)]
 
-        def lin(stack: str, block: str, layer: int, slot: str):
+        def lin(stack: str, block: str, layer: int, slot: str) -> LinearResource:
             return linear_resource(weight(stack, block, layer, slot))
 
         steps = []
@@ -1543,7 +1553,8 @@ class ImageWAMTorchFrontendThor:
         same kernel."""
         return self._gemm.cached_algo(kind, m, n, k)
 
-    def export_model_runtime(self, *, identity: dict | None = None, io: str = "python", native=None):
+    def export_model_runtime(self, *, identity: Mapping[str, str] | None = None, io: str = "python",
+                             native: ImageWAMNativeRuntime | None = None) -> ModelRuntime:
         """Package the captured graph as an `frt_model_runtime_v1`. See
         `flash_rt.models.imagewam.runtime_export.export_model_runtime`.
         Needs the exec/ and runtime/ native modules (built separately);

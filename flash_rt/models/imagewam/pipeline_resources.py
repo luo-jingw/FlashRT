@@ -63,7 +63,7 @@ def linear_resource(op: object) -> LinearResource:
 @dataclass(frozen=True)
 class AdaLNResource:
     """One AdaLN site. `shift`/`scale`: fp16 `(dim,)` and `gate`: fp16
-    materialized to `(rows, dim)`, exactly as `_fuse_mod_group` builds them
+    materialized to `(rows, dim)`, exactly as `fp16_adaln_operands` builds them
     (unfused path, and the standalone AdaLN that starts each chain).
     `*_f32`: the `(1, 1, dim)` FP32 modulation chunks the fused gated
     residual + next AdaLN kernel reads (`dims["fuse_res_norm"]`). Gates are

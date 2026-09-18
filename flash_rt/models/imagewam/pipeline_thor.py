@@ -356,6 +356,23 @@ def _fuse_mod_pair(shift, scale):
     return shift_t, scale_t
 
 
+def fp16_adaln_operands(shift: torch.Tensor, scale: torch.Tensor, gate: torch.Tensor, rows: int,
+                        dim: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Public interface of `_fuse_mod_group` for other modules: the fp16
+    `(dim,)` shift and scale and the `(rows, dim)` materialized gate that the
+    unfused AdaLN and gated-residual kernels read, from `(1, 1, dim)` FP32
+    modulation chunks. The caller keeps the returned tensors alive while
+    any kernel reads their pointers."""
+    return _fuse_mod_group(shift, scale, gate, rows, dim)
+
+
+def fp16_adaln_shift_scale(shift: torch.Tensor, scale: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Public interface of `_fuse_mod_pair`: the fp16 `(dim,)` shift and
+    scale of a gate-less AdaLN pair. Same lifetime contract as
+    `fp16_adaln_operands`."""
+    return _fuse_mod_pair(shift, scale)
+
+
 def _add_inplace(dst_ptr: int, src_ptr: int, seq: int, dim: int) -> None:
     """Plain `dst += src`, in place -- used to sum the single-stream
     block's attn-out and mlp-down projections before their ONE shared
