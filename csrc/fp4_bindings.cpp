@@ -389,6 +389,25 @@ callers fall back to the scalar kernel.
         "runtime instruction descriptor (tile 128x64x256). a_format selects "
         "the activation element format: 1 = E2M1 (default), 0 = E0M3.");
 
+  m.def("cutlass_fp4_gemm_e0m3w_variant",
+        [](int idx, uintptr_t A, uintptr_t SFA, uintptr_t B, uintptr_t SFB,
+           uintptr_t D, int M, int N, int K, float alpha, float beta,
+           uintptr_t stream, int a_format) -> int {
+          return flash_rt::fp4::cutlass_fp4_gemm_e0m3w_variant(
+              idx,
+              reinterpret_cast<void const*>(A), reinterpret_cast<void const*>(SFA),
+              reinterpret_cast<void const*>(B), reinterpret_cast<void const*>(SFB),
+              reinterpret_cast<void*>(D), M, N, K, alpha, beta,
+              reinterpret_cast<cudaStream_t>(stream), a_format);
+        },
+        py::arg("idx"), py::arg("A"), py::arg("SFA"),
+        py::arg("B"), py::arg("SFB"), py::arg("D"),
+        py::arg("M"), py::arg("N"), py::arg("K"),
+        py::arg("alpha") = 1.0f, py::arg("beta") = 0.0f,
+        py::arg("stream") = 0, py::arg("a_format") = 1,
+        "cutlass_fp4_gemm_e0m3w with the tile/cluster chosen by the NVFP4 "
+        "variant index (1, 6, 8, 10); any other index returns -99.");
+
   m.def("quantize_e0m3_dynamic_sfa_fp16_vec",
         [](uintptr_t src, uintptr_t packed, uintptr_t sfa,
            int N, int D, bool is_sfb, int use_rht, uintptr_t stream) -> int {
