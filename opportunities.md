@@ -4143,18 +4143,58 @@ On Thor, FA4 at the backbone site already measured 3.75x per call and
   invalidates the capture. All three recover to the cuBLAS chain's
   output: cosine 1.0000000, max-abs up to 9.5e-7, the difference
   coming from the two frontends' own cuBLASLt autotune picks.
-- Local verification, `tests/test_imagewam_fa4_dispatch.py` (6
-  tests): FA4 is replaced by an fp32 PyTorch stand-in with
-  `_flash_attn_fwd`'s calling convention, and each FA4 branch is
-  compared against the cuBLAS chain at the real shapes. Backbone
-  q=kv=905: cosine 1.000000, max-abs 4.9e-4, rel_l2 5.8e-4. `mot` q=64
-  at row 905, kv=969: cosine 1.000000, max-abs 3.7e-4, rel_l2 5.6e-4,
-  with rows `[0, a0)` untouched. Small-dims frontend end to end, both
-  sites on the stand-in vs the chain: actions cosine 1.000000. The
-  tests also check the constructor guard and the default resolution
-  (False on this sm_90 device).
+- Local verification, `tests/test_imagewam_fa4_dispatch.py` (23
+  tests). FA4 is replaced by a stand-in with `_flash_attn_fwd`'s
+  calling convention that computes an fp32 matmul-softmax-matmul in
+  PyTorch, and each FA4 branch is compared against the cuBLAS chain at
+  the real shapes:
+  - Backbone q=kv=905: cosine 1.000000, max-abs 4.9e-4, rel_l2 5.8e-4.
+  - `mot` q=64 at row 905, kv=969: cosine 1.000000, max-abs 3.7e-4,
+    rel_l2 5.6e-4, with rows `[0, a0)` untouched.
+  - Small-dims frontend end to end, both sites on the stand-in vs the
+    chain: actions cosine 1.000000.
+  - Also covered: the constructor guard, the `fa4_out` bounds and
+    capacity, `use_fa4` resolution over the environment variable,
+    runtime availability and explicit argument, and the FA4-failure
+    fallback.
 - `tests/test_imagewam_fa4_backbone.py` gains a real-FA4 test for both
   sites at the real shapes. It skips without FA4.
+
+## Thor check
+
+FA4 is opt-in, so every FA4 step below opts in explicitly: an
+environment variable, `--fa4 on`, or the bench's own FA4
+configurations. In any run with FA4 on, a line containing `falling back
+to the cuBLAS attention chain` means FA4 failed and the numbers are the
+chain's. Report it with the reason.
+
+1. Runtime:
+   `FLASHRT_THOR_FA4=1 python -c "from flash_rt.hardware.thor import fa4_backend as f; from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor as F; print(f.status(), F._resolve_use_fa4(None))"`.
+   Expect `active True`. Without the variable, the second value must be
+   `False`.
+2. Real-FA4 correctness at the served shapes:
+   `pytest tests/test_imagewam_fa4_backbone.py -q -s -k both_sites_real_shapes`
+   (`test_fa4_matches_cublas_both_sites_real_shapes`). This covers the
+   backbone at q = kv = 905, whose last tile is partial, and `mot` at
+   64 over 969. Expect a pass, not a skip. Report both printed cosines
+   (expect > 0.999) and max-abs values.
+3. Per-call kernels: `python benchmarks/imagewam_attention_share_bench.py --part kernels`.
+   Report both tables, including `fa4_splits1/2/4` for `mot`.
+4. Attention share on the shipped precision:
+   `python benchmarks/imagewam_attention_share_bench.py --part share --precision nvfp4 --fa4 off`,
+   then `--fa4 on`, then `--fa4 on --fa4-mot`. Report the three
+   "attention = ..." blocks.
+5. `infer()` A/B, FA4 on vs off, real checkpoint:
+   `CKPT_PATH=<model.pt> python benchmarks/imagewam_attention_share_bench.py --part infer --precision nvfp4 --iters 60`.
+   The bench builds chain, backbone-FA4 and both-sites-FA4 graphs from
+   one frontend. Report each configuration's action cosine against the
+   chain (expect >= 0.999) and the P10/P50/P90 plus delta.
+6. nvfp4 end-to-end official compare, FA4 off then on:
+   `PRECISION=nvfp4 N_TASKS=10 FRAMES=0,60 SEEDS=0,1 python benchmarks/imagewam_e2e_official_compare.py`,
+   then the same command with `FLASHRT_THOR_FA4=1` in front. Report
+   `fr_vs_off` median/min, mean `mae_fr_vs_gt`, and the printed `infer()`
+   P50 for both runs. Expect the FA4 run to match the FA4-off run
+   closely: `fr_vs_off` within about 1e-4 at the median.
 
 ## Recommendation
 
