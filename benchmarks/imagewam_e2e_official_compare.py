@@ -85,14 +85,13 @@ import torch
 from PIL import Image
 
 from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state
-from flash_rt.models.imagewam.config_resolver import format_effective_config, resolve_config
+from flash_rt.models.imagewam.config_resolver import format_effective_config
 from flash_rt.models.imagewam.libero_dims import (
     LIBERO_HORIZON as HORIZON,
     LIBERO_REAL_DIMS as REAL_DIMS,
     LIBERO_SHIFT as SHIFT,
     LIBERO_STEPS as STEPS,
 )
-from flash_rt.models.imagewam.structure import ImageWAMStructure
 from flash_rt.models.imagewam.workload import ImageWAMWorkload
 
 sys.path.insert(0, os.environ["FLUX2_SRC"] + "/src")
@@ -259,13 +258,6 @@ def main():
     print(f"official loaded in {time.time() - t:.1f}s", flush=True)
 
     from flash_rt.frontends.torch.imagewam_thor import load_imagewam
-    # The resolved configuration of this run, which the `effective_config`
-    # line at the end prints: the same workload, the same overrides and the
-    # same structure source as `load_imagewam` (`structure=None` reads the
-    # checkpoint), so the line is the resolver's own string for this run.
-    resolved = resolve_config(workload, ImageWAMStructure.from_checkpoint(CKPT), profile=PROFILE,
-                              precision=PRECISION, calibration_path=CALIBRATION,
-                              ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], **EXPERT)
     t = time.time()
     fe = load_imagewam(
         CKPT, workload, profile=PROFILE, precision=PRECISION, calibration_path=CALIBRATION,
@@ -345,8 +337,10 @@ def main():
     for _ in range(20):
         torch.cuda.synchronize(); t0 = time.perf_counter(); fe.infer(obs); ts.append((time.perf_counter() - t0) * 1e3)
     print(f"infer() P50={np.median(ts):.1f}ms min={min(ts):.1f}ms (shared GPU, not a perf number)")
-    # The configuration that actually ran: FA4 can fall back to cuBLAS at capture time.
-    print(format_effective_config(resolved.options, use_fa4=fe.use_fa4, use_fa4_mot=fe.use_fa4_mot,
+    # The configuration that actually ran: FA4 can fall back to cuBLAS at capture time. The
+    # configuration itself is the one `load_imagewam` resolved for this frontend
+    # (`fe.resolved_config`), not a second resolution here.
+    print(format_effective_config(fe.resolved_config.options, use_fa4=fe.use_fa4, use_fa4_mot=fe.use_fa4_mot,
                                   fa4_fallback_reason=fe.fa4_fallback_reason))
     print(f"peak GPU mem: {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB")
 
