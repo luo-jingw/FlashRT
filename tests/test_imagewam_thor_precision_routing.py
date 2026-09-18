@@ -221,10 +221,26 @@ def _recording_class(class_name: str, label: str,
     return type(class_name, (), {"__init__": __init__, "__module__": QUANT_LINEAR_MODULE})
 
 
+def _nvfp4_variant_index(variant: str) -> int:
+    """Stand-in for quant_linear's helper that `pipeline_resources` imports.
+
+    Never called by the routing tests; it exists so the frontend's import
+    chain resolves. `test_stub_signatures_match_quant_linear` pins its
+    signature to the real one.
+    """
+    return int(variant[1:])
+
+
+# Non-class names the frontend's import chain takes from quant_linear.
+QUANT_LINEAR_FUNCTION_STUBS = {"_nvfp4_variant_index": _nvfp4_variant_index}
+
+
 def _quant_linear_stub() -> types.ModuleType:
     module = types.ModuleType(QUANT_LINEAR_MODULE)
     for class_name, (label, params) in QUANT_LINEAR_STUBS.items():
         setattr(module, class_name, _recording_class(class_name, label, params))
+    for name, function in QUANT_LINEAR_FUNCTION_STUBS.items():
+        setattr(module, name, function)
     return module
 
 
@@ -544,6 +560,8 @@ def test_stub_signatures_match_quant_linear():
         real_params = [(p.name, p.kind, p.default)
                        for p in inspect.signature(getattr(real, class_name)).parameters.values()]
         assert real_params == list(params), class_name
+    for name, function in QUANT_LINEAR_FUNCTION_STUBS.items():
+        assert inspect.signature(getattr(real, name)) == inspect.signature(function), name
 
 
 def test_stubbed_import_leaves_modules_untouched():

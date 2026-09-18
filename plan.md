@@ -6488,8 +6488,11 @@ config, not assumed):
 - Backbone widths (`hidden`, `HD`, `NH`, `mlp_hidden`,
   `joint_attention_dim`, layer counts) are read from checkpoint tensor
   shapes and key counts, not from `config.yaml`. `config.yaml` carries the
-  action-expert dims, `max_action_horizon` (64), the noise schedule shifts,
-  `proprio_dim` and the step counts.
+  action-expert dims, `max_action_horizon` (64), the noise schedule shifts
+  and `proprio_dim`. There is no denoise step count in the served config
+  (`eval_num_inference_steps: 10` is a training-time eval setting), and
+  `data.train.context_len: 128` is not the served text length (512), so
+  `num_steps` and `text_max_len` belong to the workload only.
 - `benchmarks/imagewam_e2e_official_compare.py:REAL_DIMS` and
   `libero_dims.LIBERO_REAL_DIMS` describe one workload: two 224x224 views
   -> `ref_h=14, ref_w=28`, `x0=513` (512 text + 1 proprio), `a0=905`
@@ -6658,7 +6661,7 @@ Rules (each has an id, a test, and moves an existing check):
 
 | Rule | Combination | Today's location |
 |---|---|---|
-| R1 | `Precision.needs_calibration` without `calibration_path` | `_calibrate_fp8` path / `calibration_file.py` |
+| R1 | `Precision.needs_calibration` without `calibration_path`. Behaviour change vs today: the constructor only logs a warning and uses N(0, 0.1) placeholder scales (`_calibrate_fp8`); `resolve_config` raises unless `allow_placeholder_calibration=True`, the old constructor path keeps the warning | `_calibrate_fp8` path / `calibration_file.py` |
 | R2 | `gemm_variant_autotune` with a precision that does not support it | `imagewam_thor.py:226` |
 | R3 | native VAE in graph without `ae_model_path`/`flux2_src` | `imagewam_thor.py:255` |
 | R4 | `nvfp4_awq` with a non-AWQ precision or without calibration | AWQ setup |
