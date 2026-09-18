@@ -29,8 +29,14 @@ Environment:
     TRIM_FA4         off (default) | on: FA4 at both attention sites
                      (use_fa4, use_fa4_mot); skipped without an FA4 runtime
     TRIM_DIMS        small (default) | real: the real FLUX.2-4B / ActionDiT
-                     dims (x0=513 max, a0=905, 64 actions, 10 steps),
-                     random weights
+                     dims (x0=513 max, a0=905, 64 actions, 10 steps)
+    TRIM_WEIGHTS     random (default) | real: the checkpoint at CKPT_PATH
+                     (needs TRIM_DIMS=real)
+    TRIM_CALIBRATION activation-calibration file (`calibration_path=`) for
+                     fp8_static / fp8_static_cutlass; needs TRIM_WEIGHTS=real
+                     and a file recorded with text_trim (builder
+                     `--text-trim`). Without it the static FP8 scales are
+                     the frontend's placeholder calibration.
     TRIM_POISON_MIB  size of the regular-cache poison, default 1024
 
 A precision this machine cannot run (NVFP4 / E0M3 / SM100 CUTLASS without
@@ -57,6 +63,12 @@ PRECISION = os.environ.get("TRIM_PRECISION", "fp16")
 FA4 = os.environ.get("TRIM_FA4", "off") == "on"
 DIMS_NAME = os.environ.get("TRIM_DIMS", "small")
 POISON_MIB = int(os.environ.get("TRIM_POISON_MIB", "1024"))
+REAL_WEIGHTS = os.environ.get("TRIM_WEIGHTS", "random") == "real"
+CALIBRATION = os.environ.get("TRIM_CALIBRATION") or None
+if REAL_WEIGHTS and DIMS_NAME != "real":
+    raise ValueError("TRIM_WEIGHTS=real needs TRIM_DIMS=real")
+if CALIBRATION is not None and not REAL_WEIGHTS:
+    raise ValueError("TRIM_CALIBRATION needs TRIM_WEIGHTS=real (a calibration file belongs to one checkpoint)")
 
 if DIMS_NAME == "real":
     TEXT_LEN = 512
@@ -119,7 +131,11 @@ def _build(gemm_runner=None, *, vae: bool = False) -> ImageWAMTorchFrontendThor:
         pytest.skip(f"TRIM_FA4=on needs an FA4 runtime: {fa4_backend.status()}")
     kw: dict[str, object] = {}
     if vae:
-        kw = dict(ae_model_path=_AE_PATH, flux2_src=_FLUX2_SRC, vae_graph_input=(2, 224, 224))
+        kw.update(ae_model_path=_AE_PATH, flux2_src=_FLUX2_SRC, vae_graph_input=(2, 224, 224))
+    if REAL_WEIGHTS:
+        kw.update(ckpt_path=os.environ["CKPT_PATH"])
+    if CALIBRATION is not None:
+        kw.update(calibration_path=CALIBRATION)
     torch.manual_seed(0)  # the same random weights for every frontend
     try:
         return ImageWAMTorchFrontendThor(precision=PRECISION, dims_override=dict(DIMS), text_trim=True,
@@ -245,7 +261,8 @@ def _check_lengths(vae: bool) -> None:
         else:
             first[n] = out
             assert torch.isfinite(out).all(), f"n_valid={n}: non-finite actions"
-    print(f"\nprecision={PRECISION} fa4={FA4} dims={DIMS_NAME} vae={vae}: sequence {SEQUENCE}, "
+    print(f"\nprecision={PRECISION} fa4={FA4} dims={DIMS_NAME} weights={'real' if REAL_WEIGHTS else 'random'} "
+          f"calibration={CALIBRATION} vae={vae}: sequence {SEQUENCE}, "
           f"cached x0 {fe.captured_text_lengths}, fa4_fallback_reason={fe.fa4_fallback_reason!r}")
 
     ptrs = _owned_tensor_ptrs(fe)

@@ -1,12 +1,14 @@
 """A served precision's fidelity to `fp16` on real held-out LIBERO frames.
 
-For each evaluation frame (the end-to-end harness's rule: libero_spatial,
-first episode of each task, frames FRAMES), an `fp16` reference frontend
+For each evaluation frame (the end-to-end harness's rule: SUITE, default
+libero_spatial, first episode of each task, frames FRAMES), an `fp16`
+reference frontend
 and a candidate frontend (PRECISION, optional CALIBRATION file) run the
 captured graph on the same real observation, prompt and initial noise.
 Reported per frame and summarized (min / median / mean):
 
-  backbone_hidden   cosine of the prefill output residual (a0 x hidden)
+  backbone_hidden   cosine of the prefill output residual (a0 x hidden;
+                    with TEXT_TRIM=1 the prompt's trimmed a0 rows)
   action_hidden     cosine of the ActionDiT residual after the last
                     denoise step's blocks, before the head (num_action x
                     action_hidden_dim)
@@ -28,7 +30,9 @@ AWQ_ALPHA (0.5), AWQ_SCOPE (adaln+down), N_TASKS (10), FRAMES ("0,60"),
 NOISE_SCALE (1.0 = official N(0,1) sampler; 0.01 = the served infer()
 convention, issues.md ISSUE-002), ITERS (30), REF_CACHE (optional .pt path:
 the fp16 reference outputs and latency are loaded from it when it exists
-for the same frames and noise, else computed and saved there).
+for the same frames and noise, else computed and saved there), SUITE
+(libero_spatial), TEXT_TRIM (0/1: both frontends with text_trim=True;
+CALIBRATION must then be a file recorded with text_trim).
 """
 from __future__ import annotations
 
@@ -57,6 +61,8 @@ NVFP4_AWQ = os.environ.get("NVFP4_AWQ", "0") == "1"
 AWQ_ALPHA = float(os.environ.get("AWQ_ALPHA", "0.5"))
 AWQ_SCOPE = os.environ.get("AWQ_SCOPE", "adaln+down")
 REF_CACHE = os.environ.get("REF_CACHE") or None
+SUITE = os.environ.get("SUITE", "libero_spatial")
+TEXT_TRIM = os.environ.get("TEXT_TRIM", "0") == "1"
 
 
 def cos(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -77,7 +83,7 @@ def build(precision: str, calibration: str | None, *, awq: bool = False) -> Imag
         ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
         qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"],
         dataset_stats_path=os.path.join(os.path.dirname(CKPT), "dataset_stats.json"),
-        calibration_path=calibration, **awq_kw)
+        calibration_path=calibration, text_trim=TEXT_TRIM, **awq_kw)
 
 
 def obs_of(fr: LiberoFrame) -> dict:
@@ -101,7 +107,8 @@ def run(fe: ImageWAMTorchFrontendThor, frames: list[LiberoFrame]) -> list[dict]:
         action_hidden = torch.as_tensor(type("_V", (), {"__cuda_array_interface__": interface})(),
                                         device=DEV).float().cpu()
         latent = fe._action_latent.detach().clone()
-        out.append(dict(backbone_hidden=fe._backbone_hidden.float().cpu(),
+        a0 = fe.active_dims["a0"]  # rows past it belong to no prompt of this length
+        out.append(dict(backbone_hidden=fe._backbone_hidden[:a0].float().cpu(),
                         action_hidden=action_hidden, action_latent=latent.cpu(),
                         actions=fe._action_norm.backward(latent).cpu()))
     return out
@@ -121,13 +128,14 @@ def latency(fe: ImageWAMTorchFrontendThor, fr: LiberoFrame) -> tuple[float, floa
 
 
 def main() -> None:
-    refs = evaluation_frames(os.environ["DATA_ROOT"], n_tasks=N_TASKS, frames=FRAMES)
+    refs = evaluation_frames(os.environ["DATA_ROOT"], suite=SUITE, n_tasks=N_TASKS, frames=FRAMES)
     frames = [load_frame(os.environ["DATA_ROOT"], r, LIBERO_HORIZON) for r in refs]
     label = f"{PRECISION}" + (f" +AWQ(alpha={AWQ_ALPHA}, {AWQ_SCOPE})" if NVFP4_AWQ else "")
-    print(f"{len(frames)} held-out frames (libero_spatial, frames {FRAMES}); candidate "
-          f"{label} calibration={CALIBRATION}; noise scale {NOISE_SCALE}", flush=True)
+    print(f"{len(frames)} held-out frames ({SUITE}, frames {FRAMES}); candidate "
+          f"{label} calibration={CALIBRATION}; noise scale {NOISE_SCALE}; text_trim={TEXT_TRIM}", flush=True)
 
-    ref_key = dict(frames=[(r.suite, r.episode, r.frame) for r in refs], noise_scale=NOISE_SCALE)
+    ref_key = dict(frames=[(r.suite, r.episode, r.frame) for r in refs], noise_scale=NOISE_SCALE,
+                   text_trim=TEXT_TRIM)
     cached = torch.load(REF_CACHE) if REF_CACHE and os.path.exists(REF_CACHE) else None
     if cached is not None and cached["key"] == ref_key:
         ref_out, ref_lat = cached["out"], cached["lat"]
