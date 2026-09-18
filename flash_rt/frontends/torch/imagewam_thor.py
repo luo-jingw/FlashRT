@@ -53,7 +53,24 @@ import torch
 
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
-from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
+from flash_rt.models.imagewam.pipeline_resources import (
+    ActionDoubleLayerResource,
+    ActionStepResource,
+    AdaLNResource,
+    AttentionResource,
+    DoubleLayerResource,
+    ImageWAMPipelineResources,
+    PipelineBuffers,
+    PipelineDims,
+    SingleLayerResource,
+    linear_resource,
+)
+from flash_rt.models.imagewam.pipeline_thor import (
+    _fuse_mod_group,
+    _fuse_mod_pair,
+    imagewam_denoise_loop,
+    imagewam_prefill,
+)
 from flash_rt.models.imagewam.pipeline_real import (
     compute_action_head_modulation,
     compute_action_modulation,
@@ -1125,6 +1142,108 @@ class ImageWAMTorchFrontendThor:
             action_scale=None if self._action_norm is None else self._action_norm.scale,
             action_offset=None if self._action_norm is None else self._action_norm.offset,
         )
+
+    def pipeline_resources(self) -> ImageWAMPipelineResources:
+        """Everything the native C++ pipeline needs to record the same
+        prefill and denoise loop as `pipeline_thor.py` over this frontend's
+        buffers and weights (`flash_rt/models/imagewam/pipeline_resources.py`).
+        The AdaLN modulation is materialized with `pipeline_thor`'s own
+        `_fuse_mod_group` / `_fuse_mod_pair`, the values the captured graph
+        computes on every replay."""
+        if self._graph is None:
+            raise RuntimeError("call set_prompt() before pipeline_resources()")
+        if self._use_fa4:
+            raise ValueError("the native pipeline has no FA4 attention; construct with use_fa4=False")
+        d = self.dims
+        if not d.get("merge_qkv_mlp"):
+            raise ValueError("the native pipeline records the merged single-stream linear1 only "
+                             f"(precision {self._precision!r} uses the split path)")
+        img_len = d["a0"] - d["x0"]
+        hidden, ahd, na = d["hidden"], d["action_hidden_dim"], d["num_action"]
+
+        def adaln(group, rows: int, dim: int) -> AdaLNResource:
+            return AdaLNResource(*_fuse_mod_group(*group, rows, dim))
+
+        def weight(stack: str, block: str, layer: int, slot: str):
+            return self._weights[(stack, block, layer, slot)]
+
+        def lin(stack: str, block: str, layer: int, slot: str):
+            return linear_resource(weight(stack, block, layer, slot))
+
+        steps = []
+        for step in range(d["num_denoise_steps"]):
+            mod_double, mod_single = self._action_mods[step]
+            steps.append(ActionStepResource(
+                double1=adaln(mod_double[0], na, ahd), double2=adaln(mod_double[1], na, ahd),
+                single=adaln(mod_single, na, ahd),
+                head=AdaLNResource(*_fuse_mod_pair(*self._head_mods[step]), None),
+                delta=float(d["dt"] if self._deltas is None else self._deltas[step])))
+        return ImageWAMPipelineResources(
+            dims=PipelineDims(
+                hidden=hidden, head_dim=d["HD"], num_heads=d["NH"], mlp_hidden=d["mlp_hidden"],
+                joint_attention_dim=d["joint_attention_dim"], x0=d["x0"], a0=d["a0"], total=d["total"],
+                num_action=na, action_dim=d["action_dim"], action_hidden_dim=ahd,
+                action_attn_width=d["action_attn_width"], action_mlp_hidden=d["action_mlp_hidden"],
+                num_double=d["num_layers_double"], num_single=d["num_layers_single"],
+                action_num_double=d["action_num_layers_double"],
+                action_num_single=d["action_num_layers_single"],
+                num_steps=d["num_denoise_steps"], eps=1e-6),
+            buffers=PipelineBuffers(**{name: int(self._bufs[name])
+                                       for name in PipelineBuffers.__dataclass_fields__}),
+            attention=AttentionResource(
+                q_o=self._Q_O.data_ptr(), k_cache=self._K_cache.data_ptr(),
+                v_cache=self._V_cache.data_ptr(), logits=self._logits.data_ptr(),
+                kv_layer_stride_bytes=self._K_cache[0].numel() * self._K_cache.element_size(),
+                scale=1.0 / (d["HD"] ** 0.5), rope_table=self._rope_table.data_ptr(),
+                action_rope_table=self._action_rope_table.data_ptr()),
+            txt_in=lin("backbone", "double", 0, "txt_in.weight"),
+            img_in=lin("backbone", "double", 0, "img_in.weight"),
+            action_encoder=lin("action_dit", "shared", 0, "action_encoder.weight"),
+            head_linear=lin("action_dit", "shared", 0, "head.linear.weight"),
+            action_encoder_bias=int(weight("action_dit", "shared", 0, "action_encoder.bias")),
+            txt_mod1=adaln(self._mod_txt[0], d["x0"], hidden),
+            txt_mod2=adaln(self._mod_txt[1], d["x0"], hidden),
+            img_mod1=adaln(self._mod_img[0], img_len, hidden),
+            img_mod2=adaln(self._mod_img[1], img_len, hidden),
+            single_mod=adaln(self._mod_single, d["a0"], hidden),
+            double_layers=tuple(DoubleLayerResource(
+                **{slot: lin("backbone", "double", L, f"{slot}.weight")
+                   for slot in ("txt_qkv", "img_qkv", "txt_proj", "img_proj",
+                                "txt_mlp0", "img_mlp0", "txt_mlp2", "img_mlp2")},
+                **{slot: int(weight("backbone", "double", L, slot))
+                   for slot in ("txt_query_norm", "txt_key_norm", "img_query_norm", "img_key_norm")})
+                for L in range(d["num_layers_double"])),
+            single_layers=tuple(SingleLayerResource(
+                linear1=lin("backbone", "single", L, "linear1.weight"),
+                attn_out_proj=lin("backbone", "single", L, "attn_out_proj.weight"),
+                mlp_down=lin("backbone", "single", L, "mlp_down.weight"),
+                query_norm=int(weight("backbone", "single", L, "query_norm")),
+                key_norm=int(weight("backbone", "single", L, "key_norm")))
+                for L in range(d["num_layers_single"])),
+            action_double_layers=tuple(ActionDoubleLayerResource(
+                qkv=lin("action_dit", "double", L, "qkv.weight"),
+                proj=lin("action_dit", "double", L, "proj.weight"),
+                mlp0=lin("action_dit", "double", L, "mlp0.weight"),
+                mlp2=lin("action_dit", "double", L, "mlp2.weight"),
+                query_norm=int(weight("action_dit", "double", L, "query_norm")),
+                key_norm=int(weight("action_dit", "double", L, "key_norm")))
+                for L in range(d["action_num_layers_double"])),
+            action_single_layers=tuple(SingleLayerResource(
+                linear1=lin("action_dit", "single", L, "linear1.weight"),
+                attn_out_proj=lin("action_dit", "single", L, "attn_out_proj.weight"),
+                mlp_down=lin("action_dit", "single", L, "mlp_down.weight"),
+                query_norm=int(weight("action_dit", "single", L, "query_norm")),
+                key_norm=int(weight("action_dit", "single", L, "key_norm")))
+                for L in range(d["action_num_layers_single"])),
+            steps=tuple(steps),
+        )
+
+    def gemm_algo(self, kind: int, m: int, n: int, k: int) -> bytes | None:
+        """The cuBLASLt algorithm this frontend's GemmRunner uses for one
+        `bf16_nn` (kind 0) / `fp16_nn` (kind 1) shape, or None if that shape
+        has not been planned; the native pipeline installs it so both run the
+        same kernel."""
+        return self._gemm.cached_algo(kind, m, n, k)
 
     def export_model_runtime(self, *, identity: dict | None = None, io: str = "python", native=None):
         """Package the captured graph as an `frt_model_runtime_v1`. See

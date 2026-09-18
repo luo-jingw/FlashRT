@@ -10,6 +10,7 @@
 #include "flashrt/model_runtime.h"
 
 #include "io_transforms.h"
+#include "native_pipeline.h"
 #include "native_schema.h"
 #include "proprio_projection.h"
 
@@ -43,6 +44,15 @@ public:
     int schema_records(char* out, uint64_t capacity, uint64_t* written) const;
     int bind_declaration(const frt_model_runtime_v1* declaration);
 
+    // Native pipeline (setup): install, hand off GEMM algorithms, run eager
+    // segments for parity checks, capture the graph `step` replays.
+    int set_pipeline(const frt_imagewam_pipeline_config& config);
+    int gemm_shapes(frt_imagewam_gemm_shape* out, uint64_t capacity, uint64_t* count) const;
+    int set_gemm_algo(const frt_imagewam_gemm_shape& shape, const void* algo, uint64_t bytes);
+    int run(uint32_t segment, int32_t index);
+    int capture();
+    uint64_t graph_nodes() const { return graph_nodes_; }
+
     int set_input(uint32_t port, const void* data, uint64_t bytes, int stream);
     int get_output(uint32_t port, void* out, uint64_t capacity, uint64_t* written, int stream);
     int step();
@@ -66,7 +76,10 @@ private:
     NativeSchema schema_;
 
     cudaStream_t stream_ = nullptr;
-    cudaGraphExec_t graph_ = nullptr;
+    cudaGraphExec_t graph_ = nullptr;          // what step replays (borrowed or owned_graph_)
+    cudaGraphExec_t owned_graph_ = nullptr;    // captured from the native pipeline
+    uint64_t graph_nodes_ = 0;
+    std::unique_ptr<NativePipeline> pipeline_;
     int32_t proprio_row_ = -1;
     void* proprio_device_ = nullptr;           // bf16 (1, proprio_dim) staging scratch
     std::vector<float> proprio_normalized_;

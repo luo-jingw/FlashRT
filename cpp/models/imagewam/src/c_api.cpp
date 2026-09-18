@@ -79,6 +79,14 @@ const frt_model_runtime_verbs kVerbs = {
 
 extern "C" {
 
+void frt_imagewam_native_abi_sizes(uint64_t out[4]) {
+    if (!out) return;
+    out[0] = sizeof(frt_imagewam_io_config);
+    out[1] = sizeof(frt_imagewam_pipeline_config);
+    out[2] = sizeof(frt_imagewam_linear);
+    out[3] = sizeof(frt_imagewam_action_step);
+}
+
 int frt_imagewam_native_create(const frt_imagewam_io_config* config, frt_imagewam_native** out) {
     if (!out) return kInvalid;
     *out = nullptr;
@@ -160,5 +168,43 @@ int frt_imagewam_native_bind_declaration(frt_imagewam_native* h,
 }
 
 const frt_model_runtime_verbs* frt_imagewam_native_verbs(void) { return &kVerbs; }
+
+int frt_imagewam_native_set_pipeline(frt_imagewam_native* h,
+                                     const frt_imagewam_pipeline_config* config) {
+    if (!h || !config) return kInvalid;
+    try {
+        return h->runtime->set_pipeline(*config);
+    } catch (...) {
+        return kBackend;
+    }
+}
+
+int frt_imagewam_native_gemm_shapes(const frt_imagewam_native* h, frt_imagewam_gemm_shape* out,
+                                    uint64_t capacity, uint64_t* count) {
+    if (!h) return kInvalid;
+    return h->runtime->gemm_shapes(out, capacity, count);
+}
+
+int frt_imagewam_native_set_gemm_algo(frt_imagewam_native* h, const frt_imagewam_gemm_shape* shape,
+                                      const void* algo, uint64_t bytes) {
+    if (!h || !shape) return kInvalid;
+    return h->runtime->set_gemm_algo(*shape, algo, bytes);
+}
+
+int frt_imagewam_native_run(frt_imagewam_native* h, uint32_t segment, int32_t index) {
+    if (!h) return kInvalid;
+    return h->runtime->run(segment, index);
+}
+
+int frt_imagewam_native_capture(frt_imagewam_native* h) {
+    if (!h) return kInvalid;
+    return h->runtime->capture();
+}
+
+int frt_imagewam_native_graph_nodes(const frt_imagewam_native* h, uint64_t* count) {
+    if (!h || !count) return kInvalid;
+    *count = h->runtime->graph_nodes();
+    return 0;
+}
 
 }  // extern "C"

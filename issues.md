@@ -183,3 +183,55 @@ Insert `torch.cuda.synchronize()` after each `zero_()` in the three
 tests and re-run; all five should pass.
 
 ## Resolution
+
+# ISSUE-071
+
+Status: open
+
+Area: `ImageWAMTorchFrontendThor._graph` replay, final backbone residual
+(`backbone_hidden` after the last single-stream block)
+
+## Observation
+
+On H100 (fp16, small random dims), a scratch parity script that ran the
+Python pipeline eagerly (`pipeline_thor._single_stream_layer`,
+`_double_stream_layer`, `imagewam_prefill`, `imagewam_denoise_loop`) and
+the native pipeline eagerly, then replayed the Python graph once from a
+restored input state, saw that replay's final `backbone_hidden` differ
+from every other run by `max_abs` 0.0049 and 0.0035 in 2 of 7 script
+runs. In the same replays the K/V caches, `Q_O` and `action_latent` were
+bit-identical, and every later replay matched the eager result exactly.
+
+## Impact
+
+None on actions: after the last backbone layer, the residual is not read
+by the denoise loop (it reads only the K/V caches). Bit-exact parity
+checks that include `backbone_hidden` after a Python-graph replay can
+fail intermittently; the native-pipeline test compares the native graph
+with the eager Python run for that buffer.
+
+## Evidence
+
+- Targeted reproductions did not trigger it: 500 consecutive replays
+  (0 mismatches); first replay after eager Python denoise, eager native
+  denoise, or both (30 trials each, 0 mismatches).
+- The difference is confined to the last block's gated residual update,
+  i.e. to its `attn_out_proj` / `mlp_down` GEMMs, its `_add_inplace`, or
+  its in-graph gate tensor (`_fuse_mod_group` output in the graph's
+  private memory pool).
+
+## Hypotheses
+
+1. Memory in the graph's private pool that backs the last block's
+   in-graph gate tensor was modified between capture and that replay.
+2. A timing-dependent kernel choice or workspace effect in one of the
+   last block's GEMMs under a co-tenant load.
+
+## Next Experiment
+
+Replay with the per-layer gate tensors hoisted out of the graph (the
+native pipeline's precomputed modulation) and count mismatches over many
+first replays after mixed eager work; if they disappear, hypothesis 1
+holds.
+
+## Resolution

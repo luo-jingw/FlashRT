@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import ctypes
 
-from flash_rt.models.imagewam.native_library import ImageWAMNativeLibrary
-from flash_rt.models.imagewam.native_resources import NativeHandoff, build_io_config
+from flash_rt.models.imagewam.native_library import ImageWAMGemmShape, ImageWAMNativeLibrary
+from flash_rt.models.imagewam.native_resources import NativeHandoff, build_io_config, build_pipeline_config
+from flash_rt.models.imagewam.pipeline_resources import ImageWAMPipelineSource
 from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSurface
 
 
@@ -32,7 +33,9 @@ class ImageWAMNativeRuntime:
         self.handle = handle
         self._handoff = handoff
         self._surface = surface
+        self._pipeline_handoff: NativeHandoff | None = None
         self._graph_producer = ""
+        self.gemm_algos_installed = 0
 
     @classmethod
     def create(cls, surface: ImageWAMRuntimeSurface,
@@ -66,13 +69,53 @@ class ImageWAMNativeRuntime:
 
     @property
     def graph_producer(self) -> str:
-        """Who recorded the graph `step` replays: "python" after `use_graph`."""
+        """Who recorded the graph `step` replays: "python" after `use_graph`,
+        "native" after `capture`."""
         return self._graph_producer
 
     def use_graph(self, graph_exec: int) -> None:
         """Replay a graph the Python frontend captured (borrowed exec)."""
         self._check("use_graph", self.library.lib.frt_imagewam_native_use_graph(self.handle, graph_exec))
         self._graph_producer = "python"
+
+    def set_pipeline(self, source: ImageWAMPipelineSource) -> None:
+        """Install the native pipeline over `source`'s resources and hand off
+        every GEMM algorithm `source` has planned for the pipeline's shapes."""
+        handoff = build_pipeline_config(source.pipeline_resources())
+        self._check("set_pipeline", self.library.lib.frt_imagewam_native_set_pipeline(
+            self.handle, ctypes.byref(handoff.config)))
+        self._pipeline_handoff = handoff
+        count = ctypes.c_uint64(0)
+        self.library.lib.frt_imagewam_native_gemm_shapes(self.handle, None, 0, ctypes.byref(count))
+        shapes = (ImageWAMGemmShape * int(count.value))()
+        self._check("gemm_shapes", self.library.lib.frt_imagewam_native_gemm_shapes(
+            self.handle, shapes, count.value, ctypes.byref(count)))
+        installed = 0
+        for shape in shapes:
+            algo = source.gemm_algo(shape.kind, shape.m, shape.n, shape.k)
+            if algo is None:
+                continue
+            self._check("set_gemm_algo", self.library.lib.frt_imagewam_native_set_gemm_algo(
+                self.handle, ctypes.byref(shape), algo, len(algo)))
+            installed += 1
+        self.gemm_algos_installed = installed
+        self.gemm_shapes = [(s.kind, s.m, s.n, s.k) for s in shapes]
+
+    def run(self, segment: int, index: int = 0) -> None:
+        """One eager segment on the native stream (synchronized)."""
+        self._check(f"run({segment}, {index})",
+                    self.library.lib.frt_imagewam_native_run(self.handle, segment, index))
+
+    def capture(self) -> None:
+        """Warm up and capture prefill + denoise; `step` replays it."""
+        self._check("capture", self.library.lib.frt_imagewam_native_capture(self.handle))
+        self._graph_producer = "native"
+
+    @property
+    def graph_nodes(self) -> int:
+        count = ctypes.c_uint64(0)
+        self.library.lib.frt_imagewam_native_graph_nodes(self.handle, ctypes.byref(count))
+        return int(count.value)
 
     def set_proprio_row(self, row: int) -> None:
         self._check("set_proprio_row",

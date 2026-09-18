@@ -25,6 +25,7 @@ runtime/build and the `flashrt_imagewam_native` target.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import sys
@@ -63,6 +64,34 @@ def _percentiles(ms: list[float]) -> str:
     return f"P10={q[0]:.2f} P50={q[1]:.2f} P90={q[2]:.2f} ms (n={len(ms)})"
 
 
+def _cudart() -> ctypes.CDLL:
+    lib = ctypes.CDLL("libcudart.so")
+    lib.cudaGraphLaunch.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.cudaStreamSynchronize.argtypes = [ctypes.c_void_p]
+    lib.cudaGraphGetNodes.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+    return lib
+
+
+def _python_graph_nodes(fe) -> int:
+    """Node count of the Python pipeline recorded the way set_prompt() does
+    (a fresh torch graph kept un-instantiated for inspection)."""
+    import flash_rt.flash_rt_kernels as fvk
+    from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
+    graph = torch.cuda.CUDAGraph(keep_graph=True)
+    s = torch.cuda.Stream()
+    s.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.graph(graph, stream=s):
+        imagewam_prefill(fe._ctx, fvk, fe._gemm, fe._bufs, fe._weights, fe.dims, stream=s.cuda_stream,
+                         attn=fe._attn, mod_txt=fe._mod_txt, mod_img=fe._mod_img, mod_single=fe._mod_single,
+                         rope_table=fe._rope_table.data_ptr())
+        imagewam_denoise_loop(fe._ctx, fvk, fe._gemm, fe._bufs, fe._weights, fe.dims, stream=s.cuda_stream,
+                              attn=fe._attn, action_mods=fe._action_mods, head_mods=fe._head_mods,
+                              action_rope_table=fe._action_rope_table.data_ptr(), deltas=fe._deltas)
+    count = ctypes.c_size_t(0)
+    _cudart().cudaGraphGetNodes(graph.raw_cuda_graph(), None, ctypes.byref(count))
+    return int(count.value)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--precision", default="fp16")
@@ -96,7 +125,12 @@ def main() -> int:
     if args.graph == "python":
         native.use_graph(surface.graph_exec)
     else:
-        raise SystemExit("--graph native: the native pipeline is not wired yet")
+        t0 = time.time()
+        native.set_pipeline(fe)
+        native.capture()
+        print(f"native pipeline: {len(native.gemm_shapes)} GEMM shapes, {native.gemm_algos_installed} "
+              f"algorithms handed off, graph captured in {time.time() - t0:.1f}s, "
+              f"{native.graph_nodes} nodes (Python graph: {_python_graph_nodes(fe)} nodes)")
     mr = fe.export_model_runtime(io="native", native=native, identity={"gate": "imagewam_native_parity"})
     consumer = ModelRuntimeConsumer(mr.ptr, exec_library_path())
     python_face = fe.export_model_runtime(io="python")
@@ -136,6 +170,26 @@ def main() -> int:
         consumer.write_swap("noise", noise)
         consumer.step()
         rows.append(_compare("native proprio verb: actions", consumer.get_output("actions", np.float32, CHUNK), ref))
+
+        cudart = _cudart()
+        stream = native.stream
+        graphs = {"python graph": surface.graph_exec, "native graph": native.graph_exec}
+        if args.graph == "native":
+            # the two captured graphs replayed from identical inputs on one stream
+            finals = {}
+            for label, exec_ in graphs.items():
+                fe._context[row].copy_(ref_token)
+                fe._img_raw.copy_(torch.from_numpy(tokens).cuda().view(torch.bfloat16))
+                fe._action_latent.copy_(torch.from_numpy(noise).cuda())
+                torch.cuda.synchronize()
+                cudart.cudaGraphLaunch(exec_, stream)
+                cudart.cudaStreamSynchronize(stream)
+                finals[label] = (fe._action_latent.detach().cpu().numpy().copy(),
+                                 fe._K_cache.detach().view(torch.int16).cpu().numpy())
+            rows.append(_compare("native graph vs python graph: action latent",
+                                 finals["native graph"][0], finals["python graph"][0]))
+            rows.append(_compare("native graph vs python graph: K cache (fp16 bits)",
+                                 finals["native graph"][1], finals["python graph"][1]))
         ok = all(r["array_equal"] for r in rows)
 
         if args.bench_iters > 0:
@@ -156,9 +210,27 @@ def main() -> int:
                     t = time.perf_counter()
                     tick(c)
                     ms[label].append((time.perf_counter() - t) * 1e3)
-            print("latency, alternating A/B, same graph, SWAP image tokens (indicative only):")
+            print(f"latency, alternating A/B, SWAP image tokens, {native.graph_producer} graph in the native "
+                  "face (indicative only):")
             for label, v in ms.items():
                 print(f"  {label:<15} {_percentiles(v)}")
+            if args.graph == "native":
+                ext = torch.cuda.ExternalStream(stream)
+                for label, exec_ in graphs.items():
+                    cudart.cudaGraphLaunch(exec_, stream)
+                replay_ms = {label: [] for label in graphs}
+                for _ in range(args.bench_iters):
+                    for label, exec_ in graphs.items():
+                        start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+                        start.record(ext)
+                        cudart.cudaGraphLaunch(exec_, stream)
+                        end.record(ext)
+                        end.synchronize()
+                        replay_ms[label].append(start.elapsed_time(end))
+                print("graph replay only, CUDA events, alternating on one stream (indicative only):")
+                for label, v in replay_ms.items():
+                    print(f"  {label:<15} {_percentiles(v)}")
+                ms.update({f"replay {k}": v for k, v in replay_ms.items()})
             rows.append({"latency_ms": ms})
 
         if args.json_out:

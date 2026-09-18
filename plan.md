@@ -3409,6 +3409,9 @@ or read `actions_raw` after synchronizing the stream.
 | `io="native"` face | `flash_rt/models/imagewam/runtime_export.py` |
 | schema golden + gate | `tests/data/imagewam_native_schema.records`, `tests/gate_imagewam_native_schema_parity.py` |
 | step-by-step parity (small dims) | `tests/test_imagewam_native_pipeline.py` |
+| native pipeline resource interface (frontend -> native) | `flash_rt/models/imagewam/pipeline_resources.py`, `ImageWAMTorchFrontendThor.pipeline_resources` / `gemm_algo` |
+| csrc operations without a csrc header | `cpp/models/imagewam/src/csrc_operations.h` |
+| NVFP4 linear (SM100-class builds) | `cpp/models/imagewam/src/fp4_linear.{h,cpp}` |
 | real-checkpoint parity gate | `tests/gate_imagewam_native_parity.py` |
 | records | `docs/imagewam_native_cpp.md`, `opportunities.md` OPT-029, `issues.md` ISSUE-07x |
 
@@ -3438,7 +3441,7 @@ Python; the native proprio token vs torch `F.linear` reported as
 
 ### Phase 3 — native fp16 pipeline: block, prefill, denoise, graph
 
-Phase Status: active
+Phase Status: completed
 
 Goal: GEMM algo hand-off; `NativePipeline` recording one backbone
 single-stream block, then the full prefill, then the denoise loop, each
@@ -3455,7 +3458,7 @@ graph (H100, same process).
 
 ### Phase 4 — nvfp4 wiring and Thor handoff
 
-Phase Status: pending
+Phase Status: active
 
 Goal: NVFP4 linear descriptors (packed weight, SFB, activation scratch,
 CUTLASS variant) recorded natively with the `flash_rt_fp4` kernels;

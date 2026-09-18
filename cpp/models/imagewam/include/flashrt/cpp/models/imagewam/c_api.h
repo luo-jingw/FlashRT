@@ -65,6 +65,11 @@ typedef struct frt_imagewam_io_config {
     const float* action_offset;
 } frt_imagewam_io_config;
 
+/* sizeof of the config structs as compiled into the library, for binding
+ * layout checks: out[0] io_config, out[1] pipeline_config, out[2] linear,
+ * out[3] action_step. */
+FLASHRT_IMAGEWAM_C_API void frt_imagewam_native_abi_sizes(uint64_t out[4]);
+
 /* Create a handle with one reference. Validates the config, copies the
  * normalization constants, creates the native stream and the proprio
  * projection plan. */
@@ -114,6 +119,145 @@ FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_bind_declaration(
 
 /* The native verbs; `self` is the handle. Every entry is non-null. */
 FLASHRT_IMAGEWAM_C_API const frt_model_runtime_verbs* frt_imagewam_native_verbs(void);
+
+/* ------------------------------------------------------------------ */
+/* Native pipeline: records the backbone prefill and the ActionDiT     */
+/* denoise loop against the csrc kernels (the order of                 */
+/* flash_rt/models/imagewam/pipeline_thor.py) from a borrowed resource */
+/* table, and captures them as the graph `step` replays.               */
+/* ------------------------------------------------------------------ */
+
+enum frt_imagewam_linear_kind {
+    FRT_IMAGEWAM_LINEAR_FP16  = 0,   /* GemmRunner::fp16_nn, weight (k, n) fp16   */
+    FRT_IMAGEWAM_LINEAR_BF16  = 1,   /* GemmRunner::bf16_nn, weight (k, n) bf16   */
+    FRT_IMAGEWAM_LINEAR_NVFP4 = 2    /* dynamic NVFP4 activation + CUTLASS FP4    */
+};
+
+typedef struct frt_imagewam_linear {
+    uint32_t kind;                   /* frt_imagewam_linear_kind                  */
+    int32_t n;                       /* output features                            */
+    int32_t k;                       /* input features                             */
+    int32_t fp4_variant;             /* NVFP4: CUTLASS variant index               */
+    const void* weight;              /* FP16/BF16 (k, n); NVFP4 packed (n, k/2)    */
+    const void* weight_scales;       /* NVFP4: SFB                                  */
+    void* act_packed;                /* NVFP4: activation scratch (m, k/2)          */
+    void* act_scales;                /* NVFP4: activation SFA                       */
+} frt_imagewam_linear;
+
+/* One AdaLN site: fp16 shift/scale (dim) and the gate materialized to
+ * (rows, dim) as gate_res_* consumes it (null for the gate-less head). */
+typedef struct frt_imagewam_adaln {
+    const void* shift;
+    const void* scale;
+    const void* gate;
+} frt_imagewam_adaln;
+
+typedef struct frt_imagewam_double_layer {
+    frt_imagewam_linear txt_qkv, img_qkv, txt_proj, img_proj;
+    frt_imagewam_linear txt_mlp0, img_mlp0, txt_mlp2, img_mlp2;
+    const void* txt_query_norm;
+    const void* txt_key_norm;
+    const void* img_query_norm;
+    const void* img_key_norm;
+} frt_imagewam_double_layer;
+
+/* Backbone or ActionDiT single-stream block (merged linear1). */
+typedef struct frt_imagewam_single_layer {
+    frt_imagewam_linear linear1, attn_out_proj, mlp_down;
+    const void* query_norm;
+    const void* key_norm;
+} frt_imagewam_single_layer;
+
+typedef struct frt_imagewam_action_double_layer {
+    frt_imagewam_linear qkv, proj, mlp0, mlp2;
+    const void* query_norm;
+    const void* key_norm;
+} frt_imagewam_action_double_layer;
+
+typedef struct frt_imagewam_action_step {
+    frt_imagewam_adaln double1, double2, single, head;
+    float delta;                     /* Euler step size of this step            */
+    uint32_t reserved;
+} frt_imagewam_action_step;
+
+typedef struct frt_imagewam_pipeline_config {
+    uint32_t struct_size;            /* = sizeof(frt_imagewam_pipeline_config)  */
+    int32_t hidden, head_dim, num_heads, mlp_hidden, joint_attention_dim;
+    int32_t x0, a0, total, num_action, action_dim;
+    int32_t action_hidden_dim, action_attn_width, action_mlp_hidden;
+    int32_t num_double, num_single, action_num_double, action_num_single, num_steps;
+    float eps;
+    /* Borrowed buffers (pipeline_thor.py `bufs`); bf16: context, backbone_hidden,
+     * img_raw; f32: action_latent; every other one fp16. */
+    void *context, *backbone_hidden, *img_raw, *modded_scratch;
+    void *txt_qkv_merged, *img_qkv_merged, *single_linear1_merged, *action_linear1_merged;
+    void *action_qkv_merged, *action_latent_fp16, *velocity, *head_modded;
+    void *txt_mlp_merged, *txt_mlp_gated, *img_mlp_merged, *img_mlp_gated, *single_mlp_gated;
+    void *proj_scratch, *proj_scratch2, *action_latent, *action_hidden, *action_modded;
+    void *action_proj_scratch, *action_proj_scratch2, *action_mlp_merged, *action_mlp_gated;
+    /* Attention (borrowed): shared Q/O, per-layer K/V at base + layer * stride. */
+    void *q_o, *k_cache, *v_cache, *logits;
+    uint64_t kv_layer_stride_bytes;
+    float attn_scale;
+    uint32_t reserved;
+    const void* rope_table;          /* backbone (a0, HD) fp16                   */
+    const void* action_rope_table;   /* action (num_action, HD) fp16             */
+    /* Shared weights. */
+    frt_imagewam_linear txt_in, img_in, action_encoder, head_linear;
+    const void* action_encoder_bias;
+    /* Backbone modulation, shared by every layer of its stream type. */
+    frt_imagewam_adaln txt_mod1, txt_mod2, img_mod1, img_mod2, single_mod;
+    /* Arrays: num_double, num_single, action_num_double, action_num_single,
+     * num_steps entries. Copied by set_pipeline. */
+    const frt_imagewam_double_layer* double_layers;
+    const frt_imagewam_single_layer* single_layers;
+    const frt_imagewam_action_double_layer* action_double_layers;
+    const frt_imagewam_single_layer* action_single_layers;
+    const frt_imagewam_action_step* steps;
+} frt_imagewam_pipeline_config;
+
+/* Install the pipeline (copies the tables, creates the pipeline's own
+ * GemmRunner and cuBLAS handle). Setup only. */
+FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_set_pipeline(
+    frt_imagewam_native* h, const frt_imagewam_pipeline_config* config);
+
+/* One GEMM shape the pipeline launches through GemmRunner. */
+typedef struct frt_imagewam_gemm_shape {
+    int32_t kind;                    /* 0 = bf16_nn, 1 = fp16_nn (GemmRunner hand-off kinds) */
+    int32_t m, n, k;
+} frt_imagewam_gemm_shape;
+
+/* The distinct GEMM shapes of the installed pipeline; `count` receives the
+ * number; -5 when `capacity` is too small. */
+FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_gemm_shapes(
+    const frt_imagewam_native* h, frt_imagewam_gemm_shape* out, uint64_t capacity,
+    uint64_t* count);
+
+/* Install the cuBLASLt algorithm (GemmRunner::kAlgoBytes bytes) the setup
+ * producer selected for one shape, so both pipelines run the same kernel. */
+FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_set_gemm_algo(
+    frt_imagewam_native* h, const frt_imagewam_gemm_shape* shape,
+    const void* algo, uint64_t bytes);
+
+/* Eager segments on the native stream, synchronized before return. */
+enum frt_imagewam_segment {
+    FRT_IMAGEWAM_SEGMENT_DOUBLE_LAYER = 0,   /* backbone double-stream block `index` */
+    FRT_IMAGEWAM_SEGMENT_SINGLE_LAYER = 1,   /* backbone single-stream block `index` */
+    FRT_IMAGEWAM_SEGMENT_PREFILL      = 2,
+    FRT_IMAGEWAM_SEGMENT_DENOISE_STEP = 3,   /* denoise step `index`                 */
+    FRT_IMAGEWAM_SEGMENT_DENOISE      = 4,   /* all denoise steps                    */
+    FRT_IMAGEWAM_SEGMENT_FULL         = 5    /* prefill + denoise                    */
+};
+FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_run(
+    frt_imagewam_native* h, uint32_t segment, int32_t index);
+
+/* Warm up once eagerly, then capture prefill + denoise on the native stream
+ * into a graph the handle owns; `step` replays it from then on. */
+FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_capture(frt_imagewam_native* h);
+
+/* Number of kernel nodes in the captured graph (0 before capture). */
+FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_graph_nodes(
+    const frt_imagewam_native* h, uint64_t* count);
 
 #ifdef __cplusplus
 }  /* extern "C" */

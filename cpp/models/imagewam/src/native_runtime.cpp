@@ -4,12 +4,16 @@
 #include "flashrt/model_runtime.h"
 #include "flashrt/runtime.h"
 
+#include "gemm_runner.h"
 #include "io_transforms.h"
+#include "native_pipeline.h"
 #include "native_schema.h"
 
 #include <cuda_runtime_api.h>
 
 #include <cstring>
+#include <exception>
+#include <stdexcept>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,6 +33,8 @@ constexpr int kStorage = -5;
 constexpr int kBackend = -6;
 
 const char* kBufferNames[] = {"img_raw", "context", "action_latent"};
+
+constexpr int GemmRunnerAlgoBytes() { return GemmRunner::kAlgoBytes; }
 
 bool copy_field(const float* scale, const float* offset, uint32_t n, const char* what,
                 AffineField* field, std::string* error) {
@@ -105,6 +111,8 @@ std::unique_ptr<NativeRuntime> NativeRuntime::create(const frt_imagewam_io_confi
 
 NativeRuntime::~NativeRuntime() {
     if (stream_) cudaStreamSynchronize(stream_);
+    if (owned_graph_) cudaGraphExecDestroy(owned_graph_);
+    pipeline_.reset();
     if (proprio_device_) cudaFree(proprio_device_);
     if (stream_) cudaStreamDestroy(stream_);
 }
@@ -116,7 +124,117 @@ int NativeRuntime::fail(int status, const std::string& message) {
 
 int NativeRuntime::use_graph(cudaGraphExec_t graph_exec) {
     if (!graph_exec) return fail(kInvalid, "use_graph: null graph exec");
+    if (owned_graph_) {
+        cudaStreamSynchronize(stream_);
+        cudaGraphExecDestroy(owned_graph_);
+        owned_graph_ = nullptr;
+        graph_nodes_ = 0;
+    }
     graph_ = graph_exec;
+    return kOk;
+}
+
+int NativeRuntime::set_pipeline(const frt_imagewam_pipeline_config& config) {
+    if (config.action_latent != action_latent_ || config.img_raw != img_raw_ ||
+        config.context != context_) {
+        return fail(kInvalid, "set_pipeline: IO windows differ from the runtime's");
+    }
+    if (config.num_action != int32_t(dims_.num_action) ||
+        config.action_dim != int32_t(dims_.action_dim) ||
+        config.x0 != int32_t(context_rows_) ||
+        config.joint_attention_dim != int32_t(context_width_) ||
+        config.a0 - config.x0 != int32_t(dims_.img_len) ||
+        config.head_dim != int32_t(dims_.token_dim)) {
+        return fail(kShape, "set_pipeline: dimensions differ from the runtime's IO config");
+    }
+    std::string error;
+    std::unique_ptr<NativePipeline> pipeline = NativePipeline::create(config, &error);
+    if (!pipeline) return fail(kInvalid, "set_pipeline: " + error);
+    pipeline_ = std::move(pipeline);
+    return kOk;
+}
+
+int NativeRuntime::gemm_shapes(frt_imagewam_gemm_shape* out, uint64_t capacity,
+                               uint64_t* count) const {
+    if (!pipeline_) return kInvalid;
+    const auto& shapes = pipeline_->gemm_shapes();
+    if (count) *count = shapes.size();
+    if (capacity < shapes.size()) return kStorage;
+    for (size_t i = 0; i < shapes.size(); ++i) out[i] = shapes[i];
+    return kOk;
+}
+
+int NativeRuntime::set_gemm_algo(const frt_imagewam_gemm_shape& shape, const void* algo,
+                                 uint64_t bytes) {
+    if (!pipeline_) return fail(kInvalid, "set_gemm_algo: set_pipeline first");
+    if (!algo || bytes != uint64_t(GemmRunnerAlgoBytes())) {
+        return fail(kShape, "set_gemm_algo: algorithm must be " +
+                                std::to_string(GemmRunnerAlgoBytes()) + " bytes");
+    }
+    try {
+        pipeline_->set_gemm_algo(shape, algo);
+    } catch (const std::exception& e) {
+        return fail(kBackend, std::string("set_gemm_algo: ") + e.what());
+    }
+    return kOk;
+}
+
+int NativeRuntime::run(uint32_t segment, int32_t index) {
+    if (!pipeline_) return fail(kInvalid, "run: set_pipeline first");
+    try {
+        switch (segment) {
+            case FRT_IMAGEWAM_SEGMENT_DOUBLE_LAYER: pipeline_->double_layer(index, stream_); break;
+            case FRT_IMAGEWAM_SEGMENT_SINGLE_LAYER: pipeline_->single_layer(index, stream_); break;
+            case FRT_IMAGEWAM_SEGMENT_PREFILL: pipeline_->prefill(stream_); break;
+            case FRT_IMAGEWAM_SEGMENT_DENOISE_STEP: pipeline_->denoise_step(index, stream_); break;
+            case FRT_IMAGEWAM_SEGMENT_DENOISE: pipeline_->denoise(stream_); break;
+            case FRT_IMAGEWAM_SEGMENT_FULL:
+                pipeline_->prefill(stream_);
+                pipeline_->denoise(stream_);
+                break;
+            default: return fail(kInvalid, "run: unknown segment");
+        }
+    } catch (const std::out_of_range&) {
+        return fail(kNotFound, "run: layer or step index out of range");
+    } catch (const std::exception& e) {
+        return fail(kBackend, std::string("run: ") + e.what());
+    }
+    const cudaError_t rc = cudaStreamSynchronize(stream_);
+    if (rc != cudaSuccess) return fail(kBackend, cuda_message("run", rc));
+    return kOk;
+}
+
+int NativeRuntime::capture() {
+    if (!pipeline_) return fail(kInvalid, "capture: set_pipeline first");
+    // Warm-up: lazy cuBLAS/cuBLASLt initialisation must not happen under capture.
+    int rc = run(FRT_IMAGEWAM_SEGMENT_FULL, 0);
+    if (rc != kOk) return rc;
+    cudaGraph_t graph = nullptr;
+    cudaError_t err = cudaStreamBeginCapture(stream_, cudaStreamCaptureModeThreadLocal);
+    if (err != cudaSuccess) return fail(kBackend, cuda_message("cudaStreamBeginCapture", err));
+    std::string record_error;
+    try {
+        pipeline_->prefill(stream_);
+        pipeline_->denoise(stream_);
+    } catch (const std::exception& e) {
+        record_error = e.what();
+    }
+    err = cudaStreamEndCapture(stream_, &graph);
+    if (!record_error.empty() || err != cudaSuccess) {
+        if (graph) cudaGraphDestroy(graph);
+        return fail(kBackend, record_error.empty() ? cuda_message("cudaStreamEndCapture", err)
+                                                   : "capture: " + record_error);
+    }
+    size_t nodes = 0;
+    cudaGraphGetNodes(graph, nullptr, &nodes);
+    cudaGraphExec_t exec = nullptr;
+    err = cudaGraphInstantiate(&exec, graph, 0);
+    cudaGraphDestroy(graph);
+    if (err != cudaSuccess) return fail(kBackend, cuda_message("cudaGraphInstantiate", err));
+    if (owned_graph_) cudaGraphExecDestroy(owned_graph_);
+    owned_graph_ = exec;
+    graph_ = exec;
+    graph_nodes_ = nodes;
     return kOk;
 }
 
