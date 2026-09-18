@@ -3177,7 +3177,7 @@ int imagewam_vae_preprocess_bf16(
 
 ### Phase 1 — kernel, binding, table owner, bit-exact test
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: the kernel reproduces `_prep_view` (area and no-resize) and PIL
 `BILINEAR` + center crop bit-exactly.
@@ -3190,7 +3190,7 @@ inputs, and a non-square input; sm_90 build plus sm_110 compile check.
 
 ### Phase 2 — served eager path uses the kernel
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `infer()` preprocesses through the kernel by default (same
 bits), `vae_resize="pil_bilinear"` available as an opt-in.
@@ -3202,7 +3202,7 @@ regression suite.
 
 ### Phase 3 — preprocessing mismatch measurement and record
 
-Phase Status: pending
+Phase Status: active
 
 Goal: measure the action effect of area vs PIL bilinear on raw
 512x512 frames against the official model; record ISSUE-030 and

@@ -38,6 +38,8 @@ import sys
 
 import torch
 
+from flash_rt.models.imagewam.vae_preprocess import VaePreprocessor
+
 DEV = "cuda"
 FP16 = torch.float16
 BF16 = torch.bfloat16
@@ -98,7 +100,8 @@ def _prep_view(view: torch.Tensor, out_hw: tuple[int, int], device: str, dtype: 
 
 @torch.no_grad()
 def encode_to_tokens(ae, view1: torch.Tensor, view2: torch.Tensor | None = None,
-                      *, out_hw: tuple[int, int] = (224, 224)) -> torch.Tensor:
+                      *, out_hw: tuple[int, int] = (224, 224),
+                      preprocessor: VaePreprocessor | None = None) -> torch.Tensor:
     """Real image -> real `(1, img_len, HD)` **BF16** CUDA tokens, ready
     to copy into `img_raw` directly. BF16 here isn't about THIS
     tensor's own range -- real VAE tokens are small (absmax~4.7-4.9,
@@ -116,15 +119,33 @@ def encode_to_tokens(ae, view1: torch.Tensor, view2: torch.Tensor | None = None,
     grid -> 392 tokens). With one view, encoded alone (whatever
     `img_len` that resolution produces -- caller's own responsibility
     to match `imagewam_thor.py`'s own configured `img_raw` shape).
+
+    `preprocessor`: when given, the views are preprocessed by the fused
+    `imagewam_vae_preprocess_bf16` kernel (`vae_preprocess.py`) instead
+    of `_prep_view` + `torch.cat`: only uint8 bytes cross to the GPU and
+    one launch per view writes the concatenated BF16 image. With
+    `resize="area"` the result is bit-identical to the `_prep_view`
+    path (tests/test_imagewam_vae_preprocess.py); `_prep_view` remains
+    the reference implementation.
     """
     device = next(ae.parameters()).device
     dtype = next(ae.parameters()).dtype
-    x1 = _prep_view(view1, out_hw, str(device), dtype)
-    if view2 is not None:
-        x2 = _prep_view(view2, out_hw, str(device), dtype)
-        x = torch.cat([x1, x2], dim=-1)  # (1,3,H,2W) -- horizontal concat, real convention
+    if preprocessor is not None:
+        if tuple(preprocessor.out_hw) != tuple(out_hw):
+            raise ValueError(f"preprocessor.out_hw={preprocessor.out_hw} != out_hw={out_hw}")
+        if dtype != torch.bfloat16:
+            raise ValueError(f"the preprocessing kernel writes BF16; the AE is {dtype}")
+        views = [view1] if view2 is None else [view1, view2]
+        views = [v.to(device=device).contiguous() for v in views]
+        x = torch.empty(1, 3, out_hw[0], out_hw[1] * len(views), dtype=dtype, device=device)
+        preprocessor.run(views, x, torch.cuda.current_stream(device).cuda_stream)
     else:
-        x = x1
+        x1 = _prep_view(view1, out_hw, str(device), dtype)
+        if view2 is not None:
+            x2 = _prep_view(view2, out_hw, str(device), dtype)
+            x = torch.cat([x1, x2], dim=-1)  # (1,3,H,2W) -- horizontal concat, real convention
+        else:
+            x = x1
 
     z = ae.encode(x)  # (1, HD, latent_h, latent_w) -- real 2x2 patch-merge + BatchNorm baked in
     tokens = z.permute(0, 2, 3, 1).reshape(z.shape[0], -1, z.shape[1])  # (1, img_len, HD)

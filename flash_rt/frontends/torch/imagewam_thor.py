@@ -69,6 +69,7 @@ from flash_rt.models.imagewam.quant_linear import (
     StaticFp8Linear,
 )
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
+from flash_rt.models.imagewam.vae_preprocess import RESIZE_MODES, VaePreprocessor
 
 _PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass")
 # OPT-004 step 6 (plan.md): the two `StaticFp8Linear` variants need a
@@ -115,6 +116,7 @@ class ImageWAMTorchFrontendThor:
                  ae_model_path: str | None = None, flux2_src: str | None = None,
                  qwen3_model_spec: str | None = None,
                  dataset_stats_path: str | None = None,
+                 vae_resize: str = "area",
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
@@ -125,9 +127,18 @@ class ImageWAMTorchFrontendThor:
         if (ae_model_path is None) != (flux2_src is None):
             raise ValueError("ae_model_path and flux2_src must be given together, or not at all")
         self._ae = None
+        self._vae_pre = None
+        if vae_resize not in RESIZE_MODES:
+            raise ValueError(f"vae_resize={vae_resize!r} -- must be one of {RESIZE_MODES}")
         if ae_model_path is not None:
             from flash_rt.models.imagewam.vae_encoder import load_real_ae
             self._ae = load_real_ae(ae_model_path, flux2_src)
+            # Roadmap item 2 (plan.md): fused uint8 -> BF16 preprocessing
+            # kernel. `vae_resize="area"` is bit-identical to the former
+            # `_prep_view` path (the served default); `"pil_bilinear"`
+            # reproduces the official LIBERO eval's PIL center-crop resize
+            # bit-exactly (issues.md ISSUE-030).
+            self._vae_pre = VaePreprocessor(resize=vae_resize)
         # Live Qwen3 text encoding (real VAE + text-context wiring
         # plan's own deferred item, closed once real Qwen3-4B weights
         # were downloaded -- see opportunities.md). Independent of
@@ -1032,7 +1043,8 @@ class ImageWAMTorchFrontendThor:
             raise RuntimeError("call set_prompt() before infer()")
         if self._ae is not None and "view1" in observation:
             from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
-            tokens = encode_to_tokens(self._ae, observation["view1"], observation.get("view2"))
+            tokens = encode_to_tokens(self._ae, observation["view1"], observation.get("view2"),
+                                      preprocessor=self._vae_pre)
             self._img_raw.copy_(tokens[0].to(dtype=BF16))
         else:
             self._img_raw.normal_()

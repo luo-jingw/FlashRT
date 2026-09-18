@@ -1541,6 +1541,7 @@ pybind11_add_module(flash_rt_kernels
   csrc/kernels/elementwise.cu
   csrc/kernels/fusion.cu
   csrc/kernels/patch_embed.cu
+  csrc/kernels/imagewam_vae_preprocess.cu
   csrc/kernels/softmax.cu
   csrc/kernels/attention_cublas.cu
   csrc/kernels/attention_mha.cu

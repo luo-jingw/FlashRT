@@ -223,6 +223,7 @@ extern "C" void flash_rt_awq_quant_fp8_static_fp16(
 #include "kernels/gated_deltanet_qwen36.cuh"
 #endif
 #include "kernels/qwen3_qkv_post_proc.cuh"
+#include "kernels/imagewam_vae_preprocess.cuh"
 #if defined(FLASHRT_HAVE_HYVLA_THOR) || defined(FLASHRT_HAVE_HYVLA_ORIN)
 #include "kernels/hyvla_fused_thor.cuh"
 #include "kernels/hyvla_vit_fuse.cuh"
@@ -1617,6 +1618,32 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
                   reinterpret_cast<half*>(output), nv, to_stream(stream));
           }, py::arg("input"), py::arg("lut"), py::arg("output"),
              py::arg("nv"), py::arg("stream") = 0);
+
+    // ImageWAM VAE input preprocessing: one (H,W,3) uint8 view -> its
+    // column block of the (3,out_h,out_total_w) BF16 NCHW VAE input.
+    m.def("imagewam_vae_preprocess_bf16",
+          [](uintptr_t view, uintptr_t lut, uintptr_t out,
+             int in_h, int in_w, int out_h, int out_w, int out_total_w, int col_offset,
+             int mode,
+             uintptr_t h_bounds, uintptr_t h_coeffs, int h_ksize, int crop_left,
+             uintptr_t v_bounds, uintptr_t v_coeffs, int v_ksize, int crop_top,
+             float inv255, uintptr_t stream) -> int {
+              return imagewam_vae_preprocess_bf16(
+                  reinterpret_cast<const uint8_t*>(view),
+                  reinterpret_cast<const __nv_bfloat16*>(lut),
+                  reinterpret_cast<__nv_bfloat16*>(out),
+                  in_h, in_w, out_h, out_w, out_total_w, col_offset, mode,
+                  reinterpret_cast<const int*>(h_bounds), reinterpret_cast<const int*>(h_coeffs),
+                  h_ksize, crop_left,
+                  reinterpret_cast<const int*>(v_bounds), reinterpret_cast<const int*>(v_coeffs),
+                  v_ksize, crop_top, inv255, to_stream(stream));
+          },
+          py::arg("view"), py::arg("lut"), py::arg("out"),
+          py::arg("in_h"), py::arg("in_w"), py::arg("out_h"), py::arg("out_w"),
+          py::arg("out_total_w"), py::arg("col_offset"), py::arg("mode"),
+          py::arg("h_bounds"), py::arg("h_coeffs"), py::arg("h_ksize"), py::arg("crop_left"),
+          py::arg("v_bounds"), py::arg("v_coeffs"), py::arg("v_ksize"), py::arg("crop_top"),
+          py::arg("inv255"), py::arg("stream") = 0);
 
     m.def("patch_embed_bias_pos", [](uintptr_t output, uintptr_t bias, uintptr_t pos_emb,
                                       int S, int D, int S_per_view, uintptr_t stream) {
