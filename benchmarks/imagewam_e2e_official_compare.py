@@ -12,21 +12,47 @@ the same N(0,1) initial action noise. Reported per frame:
   served_vs_off        frontend.infer() as served vs official (denormalized)
   mae_*_vs_gt          denormalized action chunk vs dataset ground truth
 
+The frontend is built by the deployment entry
+`flash_rt.frontends.torch.imagewam_thor.load_imagewam` on an
+`ImageWAMWorkload` (plan.md "configuration consolidation", W11/W12): one named
+`PROFILE` carries the switches, the environment variables below are expert
+overrides on top of it, and the structure comes from the checkpoint itself
+(`structure=None`), not from a table typed here.
+
 Required env: FLUX2_SRC, CKPT_PATH (dataset_stats.json and config.yaml beside
 it), FLUX2_MODEL_PATH, FLUX2_AE_MODEL_PATH, QWEN3_MODEL_SPEC, DATA_ROOT
 (LIBERO-fastwam, LeRobot v2.1), and the ImageWAM `src/` on PYTHONPATH.
-Optional env: SUITE (libero_spatial), N_TASKS (10), FRAMES ("0,40"),
-PRECISION (fp16), SEEDS ("0,1"), CALIBRATION (activation-calibration file
-for fp8_static*, see benchmarks/imagewam_build_calibration.py; unset uses
-the frontend's placeholder; also the AWQ statistics), NVFP4_AWQ (0/1, with
-PRECISION=nvfp4 or nvfp4_sim and CALIBRATION), AWQ_ALPHA (0.5), AWQ_SCOPE
-(adaln+down).
+Optional env:
+  PROFILE      default -- the named profile (`config_resolver.PROFILES`).
+  SUITE        libero_spatial.
+  N_TASKS      10.
+  FRAMES       "0,40".
+  SEEDS        "0,1".
+  PRECISION    fp16 -- overrides the profile's precision.
+  CALIBRATION  activation-calibration file for fp8_static* (see
+               benchmarks/imagewam_build_calibration.py), and the AWQ
+               statistics. The resolver refuses fp8_static* without one
+               (rule R1); the N(0, 0.1) placeholder scales stay a
+               constructor-only path.
+  NVFP4_AWQ    0/1, with PRECISION=nvfp4 or nvfp4_sim and CALIBRATION.
+  AWQ_ALPHA    0.5.
+  AWQ_SCOPE    adaln+down.
+
+The switch variables below are expert overrides of the profile
+(`config_resolver.EXPERT_KEYS`), each applied only when it is set in the
+environment: an unset variable leaves the profile's own value in place, so
+`PROFILE=fast` alone runs the whole `fast` profile. `use_fa4` is never set
+from here -- the profile's own `use_fa4` (`None` in `default`) lets the
+frontend resolve the `FLASHRT_THOR_FA4` opt-in exactly as before.
 
 VAE options (roadmap items 2 and 5, plan.md):
-  VAE_ENCODER torch (default) | native -- frontend vae_encoder.
-  VAE_GRAPH   0 (default): VAE outside the CUDA graph. 1: inside it
-              (frontend vae_graph_input = (2, H, W) of the FlashRT views).
-  VAE_RESIZE  area (default) | pil_bilinear -- frontend vae_resize.
+  VAE_ENCODER torch | native -- frontend vae_encoder.
+  VAE_GRAPH   1: the VAE runs inside the CUDA graph, and the resolver derives
+              `vae_graph_input` from the workload ((2, H, W) of the FlashRT
+              views, so it follows RAW_VIEWS/RAW_SIZE). 0 or unset: outside
+              the graph.
+  VAE_RESIZE  area (default) | pil_bilinear -- frontend vae_resize, a
+              constructor argument of `load_imagewam`, not a profile option.
   RAW_VIEWS   0 (default): FlashRT gets the same PIL-resized 224x224 views
               as the official side. 1: FlashRT gets the raw 512x512
               dataset frames and resizes them itself (vae_resize), while
@@ -39,10 +65,11 @@ VAE options (roadmap items 2 and 5, plan.md):
               official eval renders at 256x256).
 
 Text context option (issues.md ISSUE-020):
-  TEXT_TRIM   0 (default): FlashRT attends to all 512 padded text rows.
-              1: frontend text_trim=True, the sequence holds only the
+  TEXT_TRIM   1: frontend text_trim=True, the sequence holds only the
               valid tokens and the proprio row (one graph per length);
-              the per-frame `x0` column is the context length used.
+              the per-frame `x0` column is the context length used. Unset:
+              the profile's own text_trim (all 512 padded text rows for
+              `default`, trimmed for `fast`).
 """
 from __future__ import annotations
 
@@ -58,12 +85,15 @@ import torch
 from PIL import Image
 
 from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state
+from flash_rt.models.imagewam.config_resolver import format_effective_config, resolve_config
 from flash_rt.models.imagewam.libero_dims import (
     LIBERO_HORIZON as HORIZON,
     LIBERO_REAL_DIMS as REAL_DIMS,
     LIBERO_SHIFT as SHIFT,
     LIBERO_STEPS as STEPS,
 )
+from flash_rt.models.imagewam.structure import ImageWAMStructure
+from flash_rt.models.imagewam.workload import ImageWAMWorkload
 
 sys.path.insert(0, os.environ["FLUX2_SRC"] + "/src")
 sys.path.insert(0, os.environ["FLUX2_SRC"])
@@ -73,6 +103,7 @@ BF16 = torch.bfloat16
 CKPT = os.environ["CKPT_PATH"]
 CKPT_DIR = os.path.dirname(CKPT)
 STATS = os.path.join(CKPT_DIR, "dataset_stats.json")
+PROFILE = os.environ.get("PROFILE", "default")
 SUITE = os.environ.get("SUITE", "libero_spatial")
 N_TASKS = int(os.environ.get("N_TASKS", "10"))
 FRAMES = [int(x) for x in os.environ.get("FRAMES", "0,40").split(",")]
@@ -91,6 +122,32 @@ TEXT_TRIM = os.environ.get("TEXT_TRIM", "0") == "1"
 # FA4_MOT=1 also runs the ActionDiT ("mot") attention through FA4; the
 # backbone site is switched by FLASHRT_THOR_FA4=1 as before.
 FA4_MOT = os.environ.get("FA4_MOT", "0") == "1"
+
+
+def expert_overrides() -> dict:
+    """The option environment variables that are actually set, as expert
+    overrides of the profile (`config_resolver.EXPERT_KEYS`).
+
+    A variable that is not in the environment is absent from the dict, so the
+    profile's own value for that switch is what runs: a profile row is the
+    profile, not the profile plus this script's defaults. `use_fa4` is not an
+    override here (the profile decides, and `None` leaves the
+    `FLASHRT_THOR_FA4` opt-in to the frontend).
+    """
+    expert = {}
+    if "TEXT_TRIM" in os.environ:
+        expert["text_trim"] = TEXT_TRIM
+    if "FA4_MOT" in os.environ:
+        expert["use_fa4_mot"] = FA4_MOT
+    if "VAE_GRAPH" in os.environ:
+        expert["vae_graph"] = VAE_GRAPH
+    if "VAE_ENCODER" in os.environ:
+        expert["vae_encoder"] = VAE_ENCODER
+    expert.update(AWQ_KW)
+    return expert
+
+
+EXPERT = expert_overrides()
 
 
 def cos(a, b):
@@ -186,25 +243,37 @@ def flashrt_infer_with_noise(fe, v1, v2, state, noise):
 def main():
     samples = load_samples()
     print(f"samples: {len(samples)} ({SUITE}, frames {FRAMES})", flush=True)
-    print(f"VAE_ENCODER={VAE_ENCODER} VAE_GRAPH={int(VAE_GRAPH)} VAE_RESIZE={VAE_RESIZE} "
-          f"RAW_VIEWS={int(RAW_VIEWS)} RAW_SIZE={RAW_SIZE} TEXT_TRIM={int(TEXT_TRIM)}", flush=True)
+    print(f"PROFILE={PROFILE} overrides={EXPERT} VAE_RESIZE={VAE_RESIZE} RAW_VIEWS={int(RAW_VIEWS)} "
+          f"RAW_SIZE={RAW_SIZE}", flush=True)
+
+    # The served workload (plan.md W1): the dims, the sequence layout and the
+    # in-graph VAE input are derived from it, not typed here. RAW_VIEWS=1
+    # feeds the VAE the raw dataset frames, so their own size is the workload's.
+    view_h, view_w = samples[0]["v1"].shape[:2] if RAW_VIEWS else (224, 224)
+    workload = ImageWAMWorkload(
+        num_views=2, image_h=int(view_h), image_w=int(view_w), text_max_len=512,
+        action_horizon=HORIZON, action_dim=7, proprio_dim=8, num_steps=STEPS, shift=SHIFT)
 
     t = time.time()
     off = build_official()
     print(f"official loaded in {time.time() - t:.1f}s", flush=True)
 
-    from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
+    from flash_rt.frontends.torch.imagewam_thor import load_imagewam
+    # The resolved configuration of this run, which the `effective_config`
+    # line at the end prints: the same workload, the same overrides and the
+    # same structure source as `load_imagewam` (`structure=None` reads the
+    # checkpoint), so the line is the resolver's own string for this run.
+    resolved = resolve_config(workload, ImageWAMStructure.from_checkpoint(CKPT), profile=PROFILE,
+                              precision=PRECISION, calibration_path=CALIBRATION,
+                              ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], **EXPERT)
     t = time.time()
-    fe = ImageWAMTorchFrontendThor(
-        precision=PRECISION, dims_override=dict(REAL_DIMS), ckpt_path=CKPT,
+    fe = load_imagewam(
+        CKPT, workload, profile=PROFILE, precision=PRECISION, calibration_path=CALIBRATION,
         ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
         qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"], dataset_stats_path=STATS,
-        calibration_path=CALIBRATION, **AWQ_KW,
-        vae_encoder=VAE_ENCODER, vae_resize=VAE_RESIZE, text_trim=TEXT_TRIM,
-        use_fa4_mot=FA4_MOT,
-        vae_graph_input=(2,) + tuple(samples[0]["v1"].shape[:2] if RAW_VIEWS else (224, 224)) if VAE_GRAPH else None)
-    print(f"flashrt ({PRECISION}, calibration={CALIBRATION}, awq={AWQ_KW}) constructed in "
-          f"{time.time() - t:.1f}s", flush=True)
+        vae_resize=VAE_RESIZE, **EXPERT)
+    print(f"flashrt (profile={PROFILE}, {PRECISION}, calibration={CALIBRATION}, awq={AWQ_KW}) "
+          f"constructed in {time.time() - t:.1f}s", flush=True)
 
     rows, cur_task = [], None
     for s in samples:
@@ -277,9 +346,8 @@ def main():
         torch.cuda.synchronize(); t0 = time.perf_counter(); fe.infer(obs); ts.append((time.perf_counter() - t0) * 1e3)
     print(f"infer() P50={np.median(ts):.1f}ms min={min(ts):.1f}ms (shared GPU, not a perf number)")
     # The configuration that actually ran: FA4 can fall back to cuBLAS at capture time.
-    print(f"effective_config precision={PRECISION} text_trim={TEXT_TRIM} vae_encoder={VAE_ENCODER} "
-          f"vae_graph={VAE_GRAPH} use_fa4={fe.use_fa4} use_fa4_mot={fe.use_fa4_mot} "
-          f"fa4_fallback_reason={fe.fa4_fallback_reason} calibration={CALIBRATION} awq={bool(AWQ_KW)}")
+    print(format_effective_config(resolved.options, use_fa4=fe.use_fa4, use_fa4_mot=fe.use_fa4_mot,
+                                  fa4_fallback_reason=fe.fa4_fallback_reason))
     print(f"peak GPU mem: {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB")
 
 
