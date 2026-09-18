@@ -5046,14 +5046,10 @@ check.
 
 ## Follow-up, not started
 
-- Per-tensor power-of-two weight scale for NVFP4. ~96% of real weight
-  blocks get a subnormal E4M3 block scale (`amax / 6 < 2^-6`), because
-  the quantizer has no global scale. Multiplying the weight by `2^e`
-  (largest `e` with `max|W| 2^e <= 6 * 448`) before quantization and
-  passing `alpha = 2^-e` to `fp4_gemm` (a host float it already takes)
-  lifts every block into E4M3's normal range, exactly. Per-layer study:
-  2-3% lower rel_l2 alone (fold A 0.0742 -> 0.0725), and AWQ 0.5 +
-  scale 0.0595 vs AWQ alone 0.0610. Whole-pipeline effect not measured.
+- Per-tensor power-of-two NVFP4 weight pre-scale: tracked in
+  `issues.md` ISSUE-050. It combines with AWQ: in this study's
+  per-layer comparison, fold-A sites gave rel_l2 0.0610 with AWQ 0.5
+  alone and 0.0595 with AWQ 0.5 plus the pre-scale.
 - `proj` / `attn_out_proj` have no exact fold point; a fused
   multiply-and-quantize of the attention output would be needed to
   scale them, for at most ~1% per-layer gain.

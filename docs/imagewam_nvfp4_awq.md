@@ -34,7 +34,8 @@ fast path: every quantized GEMM adds PyTorch fake-quantization ops.
 
 On the real checkpoint 73-99% (median ~96%) of the weight blocks per
 site group have a subnormal or zero E4M3 scale: ImageWAM weights are
-~N(0, 0.02), so `amax / 6` of a block sits below 2^-6.
+~N(0, 0.02), so `amax / 6` of a block sits below 2^-6 (`issues.md`
+ISSUE-050).
 
 ## AWQ (`flash_rt/models/imagewam/awq.py`)
 
