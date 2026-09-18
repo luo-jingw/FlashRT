@@ -9,17 +9,20 @@ What is checked, and against what:
 - The served per-head attention (`ImageWAMAttnBackend`, both sites) at
   trimmed real shapes, odd and even lengths, against an fp32 PyTorch
   reference, and the FA4 dispatch at those shapes with an fp32 stand-in
-  for the FA4 kernel.
+  for the FA4 kernel; on Thor, with the FA4 kernel itself (`fa4_real`,
+  `real`, skipped without an FA4 runtime).
 - A small-dims frontend with random weights: the trimmed sequence against
   the untrimmed sequence with the padded text keys masked (the official
   rule), both with an fp32 PyTorch attention, so the only difference is
   the dropped rows; prompt switching between lengths and back; lazily
-  grown GEMM scratch; ISSUE-060.
+  grown GEMM scratch; ISSUE-060; the VAE stage inside every length's
+  graph (real AE, skipped without it).
 
 Every numeric comparison prints cosine, max-abs and rel_l2.
 """
 from __future__ import annotations
 
+import os
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -50,6 +53,8 @@ SMALL_DIMS = dict(x0=TEXT_LEN + 1, a0=TEXT_LEN + 1 + 10, total=TEXT_LEN + 1 + 10
 PROPRIO_VALUE = [0.1, -0.2, 0.3]
 
 needs_gpu = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA GPU")
+# The real FA4 kernel runs only on Thor (sm_110) with the FA4 runtime installed.
+REAL_FA4 = torch.cuda.is_available() and fa4_backend.fa4_fwd() is not None
 
 
 def _stats(a: torch.Tensor, b: torch.Tensor) -> tuple[float, float, float]:
@@ -168,16 +173,19 @@ def _fa4_fp32_stand_in(q, k, v, *, causal, num_splits, pack_gqa, out, softmax_sc
 
 
 @needs_gpu
-@pytest.mark.parametrize("kernel", ["cublas_perhead", "fa4_stand_in"])
+@pytest.mark.parametrize("kernel", ["cublas_perhead", "fa4_stand_in", "fa4_real"])
 @pytest.mark.parametrize("x0", [20, 21, 32, 33])
 def test_served_attention_at_trimmed_real_shapes(monkeypatch, kernel, x0):
     """Trimmed LIBERO lengths: x0 = n_valid + 1 in [17, 32]; a0 = x0 + 392
-    and total = a0 + 64 take both parities as x0 does."""
+    and total = a0 + 64 take both parities as x0 does. `fa4_real` runs
+    the FA4 kernel itself (Thor only)."""
     if kernel == "fa4_stand_in":
         monkeypatch.setattr(fa4_backend, "fa4_fwd", lambda: _fa4_fp32_stand_in)
+    if kernel == "fa4_real" and not REAL_FA4:
+        pytest.skip(f"no FA4 runtime: {fa4_backend.status()}")
     t = trimmed_sequence_dims(dict(REAL_MAX_DIMS), x0)
     a0, total = t["a0"], t["total"]
-    fa4 = kernel == "fa4_stand_in"
+    fa4 = kernel != "cublas_perhead"
     backend, (q_o, k, v, _, _) = _real_backend(REAL_MAX_DIMS["total"], REAL_MAX_DIMS["a0"],
                                                use_fa4=fa4, use_fa4_mot=fa4)
     q_in = q_o.clone()
@@ -424,16 +432,21 @@ def test_lazily_grown_scratch_is_sized_once_at_the_max(monkeypatch, reserve):
 
 
 @needs_gpu
-def test_trimmed_with_fa4_stand_in_matches_cublas(monkeypatch):
-    """FA4 at both sites (`use_fa4`, `use_fa4_mot`) at trimmed lengths,
-    FA4 replaced by an fp32 stand-in (FA4 itself runs on Thor only)."""
-    monkeypatch.setattr(fa4_backend, "fa4_fwd", lambda: _fa4_fp32_stand_in)
+@pytest.mark.parametrize("fa4", ["stand_in", "real"])
+def test_trimmed_with_fa4_matches_cublas(monkeypatch, fa4):
+    """FA4 at both sites (`use_fa4`, `use_fa4_mot`) at trimmed lengths:
+    `stand_in` replaces FA4 with fp32 PyTorch math (dispatch only);
+    `real` runs the FA4 kernel inside the captured graphs (Thor only)."""
+    if fa4 == "stand_in":
+        monkeypatch.setattr(fa4_backend, "fa4_fwd", lambda: _fa4_fp32_stand_in)
+    elif not REAL_FA4:
+        pytest.skip(f"no FA4 runtime: {fa4_backend.status()}")
     ctx = _context()
     cublas = _frontend(text_trim=True)
     fa4 = _frontend(text_trim=True, gemm_runner=cublas._gemm, use_fa4=True, use_fa4_mot=True)
     for n in (5, 6, 12):
         ref, out = _run(cublas, ctx, n), _run(fa4, ctx, n)
-        print(f"\n  x0={n + 1} " + _fmt("FA4 stand-in vs cuBLAS chain", out, ref))
+        print(f"\n  x0={n + 1} " + _fmt(f"FA4 ({fa4}) vs cuBLAS chain", out, ref))
         assert _stats(out, ref)[0] > 0.9999
     assert fa4.fa4_fallback_reason is None and fa4.captured_text_lengths == (6, 7, 13)
 
@@ -444,3 +457,41 @@ def test_too_many_valid_tokens_is_rejected():
     ctx = torch.randn(TEXT_LEN + 1, JA).to(BF16)
     with pytest.raises(ValueError, match="more than"):
         fe.set_prompt(context=ctx, context_mask=torch.ones(TEXT_LEN + 1, dtype=torch.bool))
+
+
+_FLUX2_SRC = os.environ.get("FLUX2_SRC", "")
+_FLUX2_SRC = os.path.join(_FLUX2_SRC, "src") if os.path.isdir(os.path.join(_FLUX2_SRC, "src", "flux2")) else _FLUX2_SRC
+_AE_PATH = os.environ.get("AE_MODEL_PATH") or os.environ.get("FLUX2_AE_MODEL_PATH", "")
+_AE_AVAILABLE = os.path.isdir(_FLUX2_SRC) and os.path.isfile(_AE_PATH)
+# Image span of the real 2x224x224 VAE output (392 tokens, 14x28 grid).
+_VAE_DIMS = dict(SMALL_DIMS, a0=SMALL_DIMS["x0"] + 392, total=SMALL_DIMS["x0"] + 392 + 4, ref_h=14, ref_w=28)
+
+
+@needs_gpu
+@pytest.mark.skipif(not _AE_AVAILABLE, reason="real flux2 clone / AE checkpoint not present")
+def test_vae_in_graph_shares_one_pool_across_lengths():
+    """`vae_graph_input` + `text_trim`: every length's graph records the VAE
+    stage, all in one shared graph pool. Switching lengths and back gives
+    the actions of the VAE-outside-the-graph frontend, bit for bit."""
+    g = torch.Generator().manual_seed(4)
+    views = {"view1": torch.randint(0, 256, (224, 224, 3), generator=g, dtype=torch.uint8),
+             "view2": torch.randint(0, 256, (224, 224, 3), generator=g, dtype=torch.uint8),
+             "proprio": PROPRIO_VALUE}
+    ctx = _context()
+
+    def build(**kw) -> ImageWAMTorchFrontendThor:
+        torch.manual_seed(0)
+        return ImageWAMTorchFrontendThor(precision="fp16", dims_override=dict(_VAE_DIMS), text_trim=True,
+                                         ae_model_path=_AE_PATH, flux2_src=_FLUX2_SRC, **kw)
+
+    def run(fe: ImageWAMTorchFrontendThor, n_valid: int) -> torch.Tensor:
+        fe.set_prompt(context=ctx, context_mask=_mask(n_valid))
+        return torch.from_numpy(fe.infer(dict(views), action_noise=_NOISE.to(DEV))["actions"]).double()
+
+    in_graph = build(vae_graph_input=(2, 224, 224))
+    outside = build(gemm_runner=in_graph._gemm)
+    for n in (5, 12, 5, 9, 12):
+        a, b = run(in_graph, n), run(outside, n)
+        print(f"\n  x0={n + 1} " + _fmt("VAE in graph vs VAE outside", a, b))
+        assert torch.equal(a, b)
+    assert in_graph.captured_text_lengths == (6, 10, 13)

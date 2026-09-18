@@ -475,6 +475,10 @@ class ImageWAMTorchFrontendThor:
         # `text_trim`: set once the max-dims eager prefill that sizes every
         # lazily grown GEMM scratch has run (`_capture_graph`).
         self._scratch_reserved = False
+        # Capture stream and CUDA-graph memory pool shared by every capture
+        # of this frontend (created at the first capture, `_capture_graph`).
+        self._capture_stream: torch.cuda.Stream | None = None
+        self._graph_pool: tuple[int, int] | None = None
         # Cache key of the live-Qwen3 and random `set_prompt` paths; a
         # precomputed `context` is always applied (issues.md ISSUE-060).
         self._current_prompt = None
@@ -534,7 +538,7 @@ class ImageWAMTorchFrontendThor:
         self._keepalive.append(t)
         return t
 
-    def _autotune_gemm(self, d: dict) -> None:
+    def _autotune_gemm(self, d: dict, *, fp16_nn_shapes: bool = True) -> None:
         """Autotune `GemmRunner.fp16_nn` once per distinct (M,N,K) shape
         this frontend's own real math uses (OPT-004 step 4,
         opportunities.md), at construction time -- before any weight/
@@ -561,7 +565,9 @@ class ImageWAMTorchFrontendThor:
         Shapes already tuned by this frontend (`self._tuned_gemm_shapes`)
         are skipped, so a trimmed text length (`text_trim`) tunes only the
         shapes it adds: the text GEMMs at `M = x0` and the single-stream
-        GEMMs at `M = a0`.
+        GEMMs at `M = a0`. `fp16_nn_shapes=False` tunes the `bf16_nn`
+        shapes only (`txt_in`/`img_in`, which run on cuBLASLt at every
+        precision).
         """
         hidden, mlp_hidden, HD = d["hidden"], d["mlp_hidden"], d["HD"]
         joint_attention_dim = d["joint_attention_dim"]
@@ -613,7 +619,7 @@ class ImageWAMTorchFrontendThor:
             (num_action, action_dim, ahd),                         # head.linear (OPT-001)
         }
         for m, n, k in shapes:
-            if ("fp16", m, n, k) in self._tuned_gemm_shapes:
+            if not fp16_nn_shapes or ("fp16", m, n, k) in self._tuned_gemm_shapes:
                 continue
             x = torch.zeros(m, k, dtype=FP16, device=DEV)
             w = torch.zeros(k, n, dtype=FP16, device=DEV)
@@ -1118,9 +1124,20 @@ class ImageWAMTorchFrontendThor:
 
     def _capture_graph(self) -> None:
         """Warm up and capture the active length (`self._active_dims`,
-        `self._rope_table`) into `self._graph`."""
+        `self._rope_table`) into `self._graph`.
+
+        Every capture of this frontend uses one capture stream and one
+        CUDA-graph memory pool, so the graphs of different text lengths
+        share the temporaries their captures allocate (the VAE stage's
+        activations, about 200 MB at 224x448, are the large ones). This
+        is safe because `infer()` replays one graph at a time, to
+        completion, and every value that outlives a replay lives in the
+        frontend's own buffers, not in the pool."""
         dims = self._active_dims
-        s = torch.cuda.Stream()
+        if self._capture_stream is None:
+            self._capture_stream = torch.cuda.Stream()
+            self._graph_pool = torch.cuda.graph_pool_handle()
+        s = self._capture_stream
         s.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(s):
             if self._text_trim and not self._scratch_reserved:
@@ -1139,7 +1156,7 @@ class ImageWAMTorchFrontendThor:
                                        deltas=self._deltas)
         torch.cuda.current_stream().wait_stream(s)
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph, stream=s):
+        with torch.cuda.graph(graph, pool=self._graph_pool, stream=s):
             if self._vae_stage is not None:
                 self._vae_stage.run()
             imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, self._weights,
@@ -1288,7 +1305,9 @@ class ImageWAMTorchFrontendThor:
         backbone RoPE table (text positions `0..x0-1`, image positions
         unchanged), the static FP8 calibration if nothing was captured
         yet, the GEMM autotune of the shapes it adds (only on a
-        `GemmRunner` this frontend owns), and a capture."""
+        `GemmRunner` this frontend owns; the `fp16_nn` weight-GEMM shapes
+        only for `precision="fp16"`, the one precision whose backbone
+        weight GEMMs run on `fp16_nn`), and a capture."""
         capture = self._captures.get(x0)
         if capture is None:
             dims = trimmed_sequence_dims(self.dims, x0)
@@ -1300,7 +1319,7 @@ class ImageWAMTorchFrontendThor:
             if self._graph is None:
                 self._calibrate_fp8(self.dims)
             if self._owns_gemm:
-                self._autotune_gemm(dims)
+                self._autotune_gemm(dims, fp16_nn_shapes=self._precision == "fp16")
             self._capture_graph_or_fall_back()
             capture = TextLengthCapture(dims=dims, rope_table=rope_table, graph=self._graph)
             self._captures[x0] = capture
