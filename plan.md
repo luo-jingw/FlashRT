@@ -4921,7 +4921,7 @@ Same environment as the item-2 Thor check.
 
 # Plan: text-context trimming to the prompt's valid length (issues.md ISSUE-020)
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -4993,11 +4993,11 @@ Audit of everything that depends on `x0/a0/total`:
 | `mot` site | `attn.run("mot", x0=, a0=, kv_seq=total)` | Q rows at the active `a0`; `0 < x0 <= a0 <= kv_seq` holds | none |
 | FA4 slots | `fa4_out` `(total_max, hidden)`, bounds-checked per call | smaller `q_seq` fits | none |
 | proprio row | `_proprio_row = n_valid` | same row as untrimmed | none |
-| GEMM autotune (`fp16`) | `_autotune_gemm`: `GemmRunner` caches one algorithm per `(op, M, N, K)`; an untuned shape gets cuBLASLt's heuristic top-1 on first call | txt GEMMs run at `M = x0`, single-stream at `M = a0` | tune the shapes a new length adds, once, when the frontend owns its `GemmRunner` |
+| GEMM autotune | `_autotune_gemm`: `GemmRunner` caches one algorithm per `(op, M, N, K)`; an untuned shape gets cuBLASLt's heuristic top-1 on first call | txt GEMMs run at `M = x0`, single-stream at `M = a0` | tune the shapes a new length adds, once, when the frontend owns its `GemmRunner`: `bf16_nn` `txt_in` at every precision, `fp16_nn` shapes only at `precision="fp16"` (the only precision whose backbone weight GEMMs use `fp16_nn`) |
 | lazily sized GEMM scratch | `Nvfp4Linear`, `Fp8Linear`, `StaticFp8Linear`, `CutlassFp16SwiGluMlp`, `Nvfp4SwiGluMlp` reallocate their activation scratch when called with a larger `m` | a later, longer length would free a buffer an earlier graph still points at | one eager prefill at the max dims before the first trimmed capture sizes every scratch at its max `m` |
 | ActionDiT tile tuner | `_tune_action_dit_gemm_variants` | `M = num_action`, unchanged | none |
 | static FP8 calibration | `_calibrate_fp8` at `m = a0_max` | placeholder scales are shape-independent | none |
-| VAE in-graph stage | `ImageWAMVaeStage.run()` recorded in each graph | writes `img_raw` (length-independent); its torch temporaries live in each graph's private pool | measured per graph |
+| VAE in-graph stage | `ImageWAMVaeStage.run()` recorded in each graph | writes `img_raw` (length-independent); its torch temporaries (about 206 MiB) live in the capturing graph's pool | one capture stream and one graph pool shared by every capture of the frontend (measured in Phase 5: 218 MiB per extra length with private pools, 12 MiB shared) |
 | `action_noise` | `(num_action, action_dim)` | independent | none |
 
 Modules and state ownership:
@@ -5021,6 +5021,10 @@ Modules and state ownership:
     record's values), set only by `_activate_text_length`;
   - `self._tuned_gemm_shapes`: the `(dtype, M, N, K)` shapes autotuned
     on this frontend's own `GemmRunner`;
+  - `self._capture_stream`, `self._graph_pool`: the capture stream and
+    CUDA-graph memory pool every capture uses, created at the first
+    capture;
+  - `self._scratch_reserved`: whether the max-dims eager prefill ran;
   - `self._current_prompt`: cache key of the live-Qwen3 and random
     paths only.
 - `pipeline_thor.py`, `attn_backend.py`: unchanged; they already read
@@ -5093,7 +5097,9 @@ State transitions:
      and, when trimming, the max-dims eager prefill, then
      `_autotune_gemm(active dims)`, `_capture_graph_or_fall_back()`,
      and a new `TextLengthCapture` in `_captures`.
-3. `_capture_graph()`: warmup and capture of VAE stage (if any),
+3. `_capture_graph()`: on the frontend's capture stream, (first
+   trimmed capture only) the max-dims eager prefill, then warmup and
+   capture into the shared graph pool of VAE stage (if any),
    `imagewam_prefill` and `imagewam_denoise_loop` with
    `self._active_dims` and `self._rope_table`.
 4. `infer()`: unchanged; replays `self._graph` (the active length).
@@ -5140,7 +5146,7 @@ Observation method: test: second context of the same length changes
 
 ### Phase 3 — `text_trim` in the frontend
 
-Phase Status: active
+Phase Status: completed
 
 Goal: the Interface above.
 Modified files: new `text_context.py`, `imagewam_thor.py`,
@@ -5154,7 +5160,7 @@ bit-identical to the previous frontend file on the same inputs.
 
 ### Phase 4 — H100 end to end and regression
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: per-suite `fr_vs_off` before/after on 3 suites; `text_trim=False`
 bit-identical at real dims; regression suite count.
@@ -5166,22 +5172,81 @@ tests/test_jetson_clock_state.py -q`.
 
 ### Phase 5 — cost and speed
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: capture time and device memory per new length (with and without
 the VAE in the graph); H100 A/B of trimmed vs full-length replay and
-`infer()`; the Thor tool.
-Modified files: new `benchmarks/imagewam_text_trim_bench.py`.
+`infer()`; the Thor tool. One capture stream and graph pool for all
+lengths, after the per-graph private pools measured 218 MiB per length
+with the VAE in the graph.
+Modified files: new `benchmarks/imagewam_text_trim_bench.py`,
+`imagewam_thor.py` (shared capture stream and pool),
+`tests/test_imagewam_text_trim.py`.
 Observation method: wall time of `set_prompt` for a new vs a cached
 length, `torch.cuda.mem_get_info` / `memory_reserved` deltas per
 capture; CUDA events P10/P50/P90, alternating, same process.
 
 ### Phase 6 — Thor compile check, records, Thor checklist
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `sm110_check.sh` passes; OPT-030, ISSUE-020, ISSUE-060 updated;
 Thor checklist written.
 Modified files: `opportunities.md`, `issues.md`, `plan.md`.
 Observation method: `sm110_check.sh` exit code; every number labeled
 H100 or Thor.
+
+## Thor Check
+
+Environment as for the other ImageWAM Thor checks (`CKPT_PATH`,
+`FLUX2_SRC`, `FLUX2_MODEL_PATH`, `FLUX2_AE_MODEL_PATH` / `AE_MODEL_PATH`,
+`QWEN3_MODEL_SPEC`, `DATA_ROOT`, ImageWAM `src/` on `PYTHONPATH`),
+`flash_rt_kernels` and `flash_rt_fp4` built for sm_110. Lock clocks
+first (`sudo nvpmodel -m 0 && sudo jetson_clocks`) and report the
+`[jetson-clock-state]` line of each run.
+
+1. `python -m pytest tests/test_imagewam_text_trim.py -q -s`. Expected:
+   all pass; with an FA4 runtime the `fa4_real` and `FA4 (real)` cases
+   run instead of skipping. Report the pass/skip counts, every
+   `fa4_real x0=...` line (expected cosine > 0.9999 at both sites) and
+   the `FA4 (real) vs cuBLAS chain` lines (cosine > 0.9999).
+2. `nvfp4` end to end, untrimmed vs trimmed, three suites:
+   ```
+   for s in libero_spatial libero_goal libero_10; do for t in 0 1; do
+     PRECISION=nvfp4 SUITE=$s N_TASKS=10 FRAMES=0,60 SEEDS=0,1 TEXT_TRIM=$t \
+       python benchmarks/imagewam_e2e_official_compare.py > e2e_nvfp4_${s}_trim$t.log 2>&1
+   done; done
+   ```
+   Expected: on every suite `fr_vs_off` median and min with
+   `TEXT_TRIM=1` at or above `TEXT_TRIM=0`, the largest gain on
+   libero_goal (fp16 on H100: min 0.92997 -> 0.99971);
+   `mae_fr_vs_gt` closer to `mae_off_vs_gt`. Report the six SUMMARY
+   blocks and the per-frame `x0` range of the trimmed runs.
+3. Capture cost, memory and `infer()` A/B, `nvfp4`, FA4 off:
+   `python benchmarks/imagewam_text_trim_bench.py --precision nvfp4
+   --section all --use-fa4 off --iters 20 --rounds 5`. Expected:
+   `ab_ratio_trimmed_over_full` below 1 for replay and `infer` (fp16 on
+   H100: 0.70 / 0.71); `new_length` seconds per length (the first one
+   includes the max-dims prefill); `cached_length` about 10 ms; memory
+   per extra length about the graph alone (H100: 12 MiB). Report every
+   `__TEXT_TRIM_BENCH__` line.
+4. FA4 on, with trimming: `FLASHRT_THOR_FA4=1 python
+   benchmarks/imagewam_text_trim_bench.py --precision nvfp4 --section
+   all --use-fa4 auto --use-fa4-mot on --iters 20 --rounds 5`.
+   Expected: `construct` shows `use_fa4: true, use_fa4_mot: true`;
+   `done` shows `fa4_fallback_reason: null`. Compare `ab` and
+   `new_length` with step 3. Then `FLASHRT_THOR_FA4=1 PRECISION=nvfp4
+   SUITE=libero_goal N_TASKS=10 FRAMES=0,60 TEXT_TRIM=1 python
+   benchmarks/imagewam_e2e_official_compare.py` (FA4 at the backbone
+   site): expected `fr_vs_off` within about 1e-3 of step 2's trimmed
+   libero_goal run. Report both.
+5. VAE inside the graph with trimming: `python
+   benchmarks/imagewam_text_trim_bench.py --precision nvfp4 --section
+   capture --vae-graph --use-fa4 off --lengths 16,20,24,28,31`.
+   Expected: the first `new_length` holds the shared VAE pool (H100:
+   +298 MiB), later lengths about the graph alone. Report the lines
+   (`process_used_mib` is null where NVML has no per-process memory;
+   then report `torch_reserved_mib` and `device_free_drop_mib`).
+
+Decision for the owner after steps 2-4: serve `text_trim=True` by
+default (issues.md ISSUE-080).

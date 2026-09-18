@@ -145,7 +145,7 @@ divergent layer.
 
 # ISSUE-060
 
-Status: open
+Status: resolved
 
 Area: `ImageWAMTorchFrontendThor.set_prompt` prompt cache (`flash_rt/frontends/torch/imagewam_thor.py`)
 
@@ -187,6 +187,25 @@ workarounds and confirm the gate's `fp16` result on the v1 fixture is
 unchanged.
 
 ## Resolution
+
+`set_prompt` returns early on its cache key only for the live-Qwen3 and
+random paths; a precomputed `context` is applied on every call
+(`flash_rt/frontends/torch/imagewam_thor.py`). The `_current_prompt`
+reset is removed from `benchmarks/imagewam_e2e_official_compare.py`,
+`benchmarks/imagewam_gate_fixture_generate.py` and
+`tests/gate_imagewam_libero.py`.
+
+Checks:
+
+- `tests/test_imagewam_text_trim.py::test_new_context_of_the_same_length_is_applied`
+  (both `text_trim` settings): a second context with the same mask
+  replaces the context rows, changes the actions, and equals a fresh
+  frontend given only that context, bit for bit.
+- `tests/gate_imagewam_libero.py --precision fp16` on fixture v1 (H100),
+  before (base code with the reset) and after (fix, no reset): the 40
+  per-sample `vs_official`, `vs_fp16_reference` and MAE values are
+  identical; `vs_official` median 0.998358, min 0.995532, mean
+  `mae_vs_gt` 0.183642.
 
 # ISSUE-061
 
@@ -236,7 +255,7 @@ turn the latency verdict into `blocked` is open.
 
 # ISSUE-020
 
-Status: open
+Status: resolved by the opt-in `text_trim=True`; the default stays untrimmed until Thor confirms it (ISSUE-080)
 
 Area: text-token key padding in every attention call
 (`flash_rt/hardware/thor/attn_backend.py` `ImageWAMAttnBackend`, both
@@ -367,6 +386,32 @@ run `benchmarks/imagewam_e2e_official_compare.py` on
 0.99998-level. Then re-measure `infer()` on Thor.
 
 ## Resolution
+
+`ImageWAMTorchFrontendThor(text_trim=True)` (opportunities.md OPT-030)
+builds the sequence from the valid tokens and the proprio row only
+(`x0 = n_valid + 1`, `a0 = x0 + 392`, `total = a0 + 64`), with one CUDA
+graph per distinct length over the max-size buffers. This is the
+official masked math with no mask kernel.
+
+H100, fp16 FlashRT vs official bf16, the same 60 frames
+(`benchmarks/imagewam_e2e_official_compare.py`, `N_TASKS=10
+FRAMES=0,60 SEEDS=0,1`, `TEXT_TRIM=0` / `1`), `fr_vs_off`:
+
+| suite | valid tokens | untrimmed median / min | trimmed median / min |
+|---|---|---:|---:|
+| libero_spatial | 26-31 | 0.99840 / 0.99566 | 0.99998 / 0.99993 |
+| libero_goal | 16-21 | 0.99680 / 0.92997 | 0.99998 / 0.99971 |
+| libero_10 | 20-31 | 0.99860 / 0.96654 | 0.99998 / 0.99654 |
+| all 60 frames | | 0.99809 / 0.92997 | 0.99998 / 0.99654 |
+
+- Frames below 0.99: 4 untrimmed, 0 trimmed. libero_goal ep 0 frame 0
+  goes from 0.92997 to 0.99998.
+- The trimmed minimum is libero_10 ep 0 frame 60: 0.99654 at seed 0 and
+  0.99986 at seed 1. Official's own seed 0 vs seed 1 cosine on that
+  frame is 0.77926.
+- Mean `mae_fr_vs_gt` moves onto official's own: libero_spatial
+  0.18359 -> 0.18555 (official 0.18538), libero_goal 0.16201 -> 0.15958
+  (0.15941), libero_10 0.13044 -> 0.13144 (0.13139).
 
 # ISSUE-021
 
@@ -705,3 +750,57 @@ A/B of `area` vs `pil_bilinear` at the eval's 256x256 rendering on Thor
 would settle whether the difference matters beyond open loop.
 
 ## Resolution
+
+# ISSUE-080
+
+Status: open (owner decision after Thor: served default of `text_trim`)
+
+Area: `ImageWAMTorchFrontendThor(text_trim=...)`
+(`flash_rt/frontends/torch/imagewam_thor.py`, opportunities.md OPT-030)
+
+## Observation
+
+`text_trim=True` removes FlashRT's largest deviation from official
+(ISSUE-020) and shortens every backbone GEMM and attention call, but
+it is opt-in. On H100 it is verified at `fp16` only. `nvfp4` and FA4 do
+not run on H100, and `fp8`/`fp8_static` stop at the ISSUE-001 cuBLASLt
+error (`cublasLtMatmulAlgoGetHeuristic ... status 15`) before capture.
+
+## Impact
+
+The served default (`nvfp4`, untrimmed) keeps attending to about 490
+padded text keys: action cosine vs official down to 0.930 at fp16 on
+libero_goal, and about 30% more replay time than trimmed at fp16 on
+H100.
+
+Costs that come with the flag:
+
+- The first `set_prompt` of each new text length captures a graph:
+  0.6-2.0 s at fp16 on H100 (fp16 GEMM autotune of the new shapes is
+  0.3-0.6 s of it; other precisions skip that part). Thor time is
+  unmeasured. A cached length switches in about 10 ms.
+- Each cached length holds one CUDA graph: 10-16 MiB on H100 (NVML,
+  per process). The cache has no bound; LIBERO has 15 distinct lengths
+  over its four suites, and the buffers allow up to 512.
+
+## Evidence
+
+opportunities.md OPT-030 (H100 numerics, speed, capture cost and
+memory).
+
+## Hypotheses
+
+On Thor, trimming improves `nvfp4` agreement with official on every
+suite by about as much as on fp16, and lowers `infer()` P50 because
+the backbone (about 46% of `infer()`) runs about 420 instead of 905
+rows.
+
+## Next Experiment
+
+The Thor check in plan.md, "Plan: text-context trimming to the
+prompt's valid length": `nvfp4` end-to-end compare with `TEXT_TRIM=0`
+and `1` on three suites, `infer()` A/B, capture time and memory per
+length, FA4 on and off. Owner decision on the default after that.
+
+## Resolution
+
