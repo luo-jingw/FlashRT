@@ -29,8 +29,8 @@ gives cosine 0.989133 against `Fp16Linear`, the value the real
 `Nvfp4Linear` gave on Thor.
 
 `precision="nvfp4_sim"` serves the simulator through the normal frontend
-(same K=7 / N=7 fp16 fallback as `nvfp4`). It is an accuracy tool:
-`infer()` takes ~440 ms on the H100 against ~150 ms for `fp16`.
+(same K=7 / N=7 fp16 fallback as `nvfp4`). It is an accuracy tool, not a
+fast path: every quantized GEMM adds PyTorch fake-quantization ops.
 
 On the real checkpoint 73-99% (median ~96%) of the weight blocks per
 site group have a subnormal or zero E4M3 scale: ImageWAM weights are

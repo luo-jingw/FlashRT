@@ -43,7 +43,6 @@ Environment: `CKPT_PATH` (with `dataset_stats.json` beside it),
    sample axis). The static FP8 scale is `amax / 448` in float32, floored
    at 1e-12, the same arithmetic as `compute_scale_kernel`.
 
-On the H100 dev machine the N = 64 build records at 2.3-3.0 s per sample.
 The site set follows the frontend's GEMM structure (`merge_qkv_mlp`,
 `merge_linear2` are part of the file's identity), so a file must be built
 with the same structure it is served with.

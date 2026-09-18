@@ -5040,10 +5040,9 @@ merged `linear2`), the same comparison gives `nvfp4_sim` 0.99820 /
 
 Speed: AWQ changes weight values and the AdaLN constants only. At toy
 dims the AWQ pipeline launches the same kernels per forward (413 = 413
-unfused, 285 = 285 fused);
-at real dims one `nvfp4_sim` graph replay recorded 61112 GPU kernel
-events without AWQ and 61107 with it. Thor `infer()` P50 should not
-move; that and the real-hardware cosines are the Thor check.
+unfused, 285 = 285 fused, `tests/test_imagewam_awq.py`). Thor `infer()`
+P50 should not move; that and the real-hardware cosines are the Thor
+check.
 
 ## Follow-up, not started
 
