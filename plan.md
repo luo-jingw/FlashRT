@@ -5997,7 +5997,7 @@ checkpoint gates on the merged tree.
 
 # Plan: text-context trimming to the prompt's valid length (issues.md ISSUE-020)
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -6196,6 +6196,7 @@ State transitions:
 | multi-length safety check at any precision (the Thor tool) | new `tests/test_imagewam_text_trim_graph_safety.py` | 7 |
 | `text_trim` in the calibration identity (format version 2, version 1 read as untrimmed) | `flash_rt/models/imagewam/calibration_file.py`, `benchmarks/imagewam_build_calibration.py` (`--text-trim`), `tests/test_imagewam_calibration_file.py` | 7 |
 | fidelity vs fp16 with trimming | `benchmarks/imagewam_precision_fidelity.py` (`SUITE`, `TEXT_TRIM`) | 7 |
+| `runtime_surface()` / `pipeline_resources()` / `export_model_runtime()` refuse `text_trim` | `flash_rt/frontends/torch/imagewam_thor.py`, new `tests/test_imagewam_text_trim_consumer_guards.py` | 7 |
 
 ## Implementation Phases
 
@@ -6278,7 +6279,7 @@ H100 or Thor.
 
 ### Phase 7 — failure paths, calibration under trimming, multi-length safety check
 
-Phase Status: active
+Phase Status: completed
 
 Goal:
 - a capture that raises leaves no graph active and keeps the cached
@@ -6289,7 +6290,10 @@ Goal:
 - `text_trim` in the calibration-file identity, a trimmed calibration
   file, and `fp8_static` + trimming validated end to end;
 - a committed multi-length safety check that runs at any precision
-  (fp8 and fp8_static locally, nvfp4 / e0m3 / FA4 on Thor).
+  (fp8 and fp8_static locally, nvfp4 / e0m3 / FA4 on Thor);
+- the runtime surface, the native pipeline resources and the runtime
+  export refuse a trimmed frontend (they describe one graph at the max
+  dims).
 Modified files: see Code Mapping (phase 7).
 Observation method: tests with a capture that raises, an FA4 stand-in
 that fails, the collector's state during capture, `run_eager` vs replay

@@ -5369,8 +5369,8 @@ inside the graph, and a native checkpoint loader (`native_v2`).
 # OPT-030: text context trimmed to the prompt's valid length (issues.md ISSUE-020)
 
 Status: implemented behind `ImageWAMTorchFrontendThor(text_trim=True)`
-(default `False`), verified on H100 at `fp16`; `nvfp4`, FA4, `fp8*` and
-Thor latency pending (Thor check in `plan.md`, "Plan: text-context
+(default `False`), verified on H100 at `fp16`, `fp8` and `fp8_static`;
+`nvfp4`, `e0m3_hadamard`, FA4 and Thor latency pending (Thor check in `plan.md`, "Plan: text-context
 trimming to the prompt's valid length"; issues.md ISSUE-080).
 
 Area: `flash_rt/models/imagewam/text_context.py`,
@@ -5451,6 +5451,9 @@ libero_10 ep 0 frame 60 (0.99654 at seed 0, 0.99986 at seed 1), is the
 frame where official's own seed 0 vs seed 1 cosine is 0.77926.
 `served_vs_off` and `fr_noise001_vs_off` use the served `0.01 * N(0,1)`
 initial noise (ISSUE-002) and are dominated by that sampler difference.
+At seed 1 the trimmed libero_goal minimum is ep 114 frame 60 (0.99487 to
+0.99510 over four runs), the frame where official's own seed 0 vs seed 1
+cosine is 0.93157.
 Repeat runs of libero_goal with the final code (VAE outside and inside
 the graph): median 0.99998, min 0.99966 and 0.99970, mean MAE 0.15957;
 per-frame values move by up to 5e-5 between processes because each
@@ -5469,6 +5472,11 @@ Other checks:
 | VAE stage inside every length's graph (shared pool), switching lengths | bit-identical to the VAE outside the graph |
 | `text_trim=False` vs the previous frontend file, same process, small and real dims | bit-identical actions (context, random prompt, explicit and served noise) |
 | fp16 gate, fixture v1 | 40 per-sample results identical before and after |
+| multi-length safety check (`tests/test_imagewam_text_trim_graph_safety.py`), lengths A, longer, shorter, A, max, ...: fp16 small and real dims; fp8 small and real dims; fp8_static small (placeholder scales) and real dims with real weights and the trimmed calibration file; each with the VAE outside and inside the graph | every length bit-identical to a fresh single-length frontend; weight-op tensors never reallocated after the first capture (144 at small dims, 560 at real dims for fp8/fp8_static); replays unchanged and no write into 0xFF-poisoned free memory (graph pool and 1152 MiB of the regular cache) |
+| same check without the max-dims prefill (control, growing-scratch stand-in ops) | 14 of 38 (small) and 60 of 142 (real) scratch tensors reallocated |
+| a capture that raises on a new length | no graph active, `infer()` refuses; the cached length replays its own result; the retried length equals a fresh frontend |
+| FA4 fallback (stand-in FA4 failing) | old graphs alive through the recapture, dropped after it; a second failure leaves no graph |
+| `run_eager()` vs replay at two lengths and back | bit-identical (before the fix: cosine 0.9999982, max-abs 4.8e-3) |
 
 Speed, `benchmarks/imagewam_text_trim_bench.py --precision fp16`, real
 dims, random weights, trimmed `x0 = 21` vs full `x0 = 513` in one
@@ -5500,35 +5508,67 @@ pool, each length with the VAE in the graph added 218 MiB.
 
 With `text_trim=True` the sequence length changes with the prompt.
 `frontend.dims` holds the buffer sizes (the maximum); the dims the active
-graph runs are `frontend.active_dims`. Any code that exports, replays or
-re-records the frontend's forward must:
+graph runs are `frontend.active_dims`.
 
-- read the graph, the context length and the RoPE table after every
-  `set_prompt`: the active graph (`_graph`) changes on a new length,
-  the context holds `active_dims["x0"]` rows, and the backbone RoPE
-  table (`_rope_table`) has `active_dims["a0"]` rows. A setup identity
-  that describes the graph includes `text_trim` and the active dims.
-  The capture stream (`_graph_stream`) is the same for every length;
-- when it records its own graph of the forward (a native pipeline),
-  record it from the active dims, one graph per length, or pack the
-  context the same way (`text_context.pack_trimmed_context`);
-- when it records activation statistics, run the forward at the active
-  dims (`run_eager()` does). The untrimmed forward's text and
-  single-stream GEMM inputs include about 490 padded context rows that
-  a trimmed frontend never computes; on the LIBERO calibration frames
-  the per-site static FP8 scale differs by 0.85x-1.50x between the two.
-  The calibration file records `text_trim` (format version 2), and a
-  frontend refuses a file recorded with the other setting; version-1
-  files were recorded untrimmed and load as `text_trim=False`.
+`runtime_surface()`, `pipeline_resources()` and `export_model_runtime()`
+describe one graph at `frontend.dims` and raise `ValueError` for a
+trimmed frontend. Per-length support there needs all of:
+
+- the active dims everywhere a length appears: `context_rows` is
+  `active_dims["x0"]`, the image rows start at it, the backbone RoPE
+  table (`_rope_table`) has `active_dims["a0"]` rows, the action rows
+  start at `active_dims["a0"]`;
+- `text_trim` and the active `x0` in the setup identity;
+- after the prompt verb (`set_prompt`), re-adopting the graph: a new
+  length activates, and may capture, another graph (`_graph`); the
+  capture stream (`_graph_stream`) is the same for every length;
+- for the native pipeline, one native graph per length, recorded from
+  that length's dims and RoPE table, or the same trimmed packing
+  (`text_context.pack_trimmed_context`) in native code.
+
+Activation statistics for a trimmed frontend are recorded at the active
+dims (`run_eager()` runs them). The untrimmed forward's text and
+single-stream GEMM inputs include about 490 padded context rows that a
+trimmed frontend never computes. The calibration file records
+`text_trim` (format version 2) and a frontend refuses a file recorded
+with the other setting; version-1 files were recorded untrimmed and load
+as `text_trim=False`.
+
+Trimmed calibration file (`benchmarks/imagewam_build_calibration.py
+--n 64 --text-trim`, the same 64 frames as the untrimmed N=64 file, H100):
+per-site static FP8 scale, trimmed over untrimmed, 0.85x-1.50x (median
+per site group 0.98x-1.32x; largest spread at ActionDiT `proj`, backbone
+`linear2` and the image-stream `mlp2`). `fp8_static` on libero_goal (10
+tasks x frames {0, 60}, seeds {0, 1}; one of the ten evaluation episodes,
+ep 0, also contributes calibration frames):
+
+| | vs official median / min | mean MAE (official 0.15941) |
+|---|---:|---:|
+| `fp8_static`, untrimmed, untrimmed file | 0.99678 / 0.92891 | 0.16214 |
+| `fp8_static`, trimmed, trimmed file | 0.99995 / 0.99927 | 0.15968 |
+| `fp16`, trimmed (reference) | 0.99998 / 0.99966 | 0.15957 |
+
+Trimmed `fp8_static` vs trimmed `fp16`
+(`benchmarks/imagewam_precision_fidelity.py`, `TEXT_TRIM=1
+SUITE=libero_goal`): actions cosine median 0.99998 / min 0.99981,
+backbone residual 0.99994 / 0.99989, MAE ratio 1.000. The untrimmed file
+forced onto the trimmed frontend (identity check bypassed) measures the
+same (actions 0.99998 / 0.99992): the identity rule keeps the statistics
+consistent with the served path; on these frames it is not an accuracy
+gain.
 
 ## Open
 
 - Thor: `nvfp4` end-to-end compare off/on, `infer()` P50 A/B, capture
-  time per new length, FA4 on/off, VAE-in-graph memory (plan.md Thor
-  check).
-- `fp8`/`fp8_static`: blocked on H100 by ISSUE-001 (the calibration
-  stream's fix), unverified with trimming.
+  time per new length, FA4 on/off, VAE-in-graph memory, and the
+  multi-length safety check at `nvfp4`, `e0m3_hadamard` and with FA4
+  (plan.md Thor check, steps 2-6).
+- `fp8`/`fp8_static` run on H100 since the TN FP8 path (issues.md
+  ISSUE-001) and are verified with trimming above;
+  `fp8_static_cutlass` runs on Thor only.
 - The per-length graph cache is unbounded (up to 512 lengths).
+  `precapture_text_lengths` captures known lengths at startup; a bound
+  on the cache does not exist yet.
 - Gate fixture v1 holds an untrimmed fp16 reference: trimmed fp16
   measures 0.99837 / 0.99579 (median / min) against it, under the fp16
   bounds 0.999 / 0.995, while vs official it is 0.99998 / 0.99992. A

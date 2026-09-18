@@ -1091,9 +1091,14 @@ Area: `ImageWAMTorchFrontendThor(text_trim=...)`
 
 `text_trim=True` removes FlashRT's largest deviation from official
 (ISSUE-020) and shortens every backbone GEMM and attention call, but
-it is opt-in. On H100 it is verified at `fp16` only. `nvfp4` and FA4 do
-not run on H100, and `fp8`/`fp8_static` stop at the ISSUE-001 cuBLASLt
-error (`cublasLtMatmulAlgoGetHeuristic ... status 15`) before capture.
+it is opt-in. On H100 it is verified at `fp16`, `fp8` and `fp8_static`
+(with a calibration file recorded trimmed). `nvfp4`, `e0m3_hadamard`,
+`fp8_static_cutlass` and FA4 run on Thor only.
+
+At seed 1 the trimmed fp16 libero_goal minimum vs official is
+ep 114 frame 60, 0.99487-0.99510 over four H100 runs, where official's
+own seed 0 vs seed 1 cosine is 0.93157 (seed 0 on the same frame:
+0.99966-0.99971).
 
 ## Impact
 
@@ -1134,9 +1139,35 @@ rows.
 
 ## Next Experiment
 
-The Thor check in plan.md, "Plan: text-context trimming to the
-prompt's valid length": `nvfp4` end-to-end compare with `TEXT_TRIM=0`
-and `1` on three suites, `infer()` A/B, capture time and memory per
-length, FA4 on and off. Owner decision on the default after that.
+Conditions for making `text_trim=True` the served default, all of them:
+
+1. Thor `nvfp4` end-to-end compare with `TEXT_TRIM=0` and `1` on
+   libero_spatial, libero_goal and libero_10, and the FA4 checks (plan.md
+   Thor check, steps 2-4): trimmed agreement with official at or above
+   untrimmed on every suite, `infer()` P50 lower.
+2. The multi-length safety check on Thor at the served precision, FA4
+   off and on (Thor check step 6,
+   `tests/test_imagewam_text_trim_graph_safety.py`): every length
+   bit-identical to a fresh single-length frontend, no weight-op tensor
+   reallocated, no write into poisoned free memory.
+3. A failed capture leaves no graph active (done: `set_prompt` raises,
+   `infer()` refuses, cached lengths keep working).
+4. Gate fixture v2 with a trimmed fp16 reference
+   (`benchmarks/imagewam_gate_fixture_generate.py`): fixture v1's fp16
+   reference is untrimmed and trimmed fp16 falls below its fp16 bounds
+   (0.99837 / 0.99579 vs 0.999 / 0.995).
+5. Every consumer of the frontend's graph and buffers uses the active
+   per-length dims (opportunities.md OPT-030, "Constraints on consumers
+   of a trimmed frontend"): the runtime surface and export with
+   `text_trim` and the active `x0` in the setup identity and the graph
+   re-adopted after the prompt verb, one native graph per length, and
+   calibration files recorded trimmed (the file identity enforces the
+   last). Until then `runtime_surface()`, `pipeline_resources()` and
+   `export_model_runtime()` refuse a trimmed frontend.
+6. Known prompt lengths captured at startup (`precapture_text_lengths`)
+   and a bounded per-length cache, so no capture happens while serving
+   and memory stays bounded.
+
+Then the owner decides the default.
 
 ## Resolution
