@@ -40,6 +40,11 @@ from collections.abc import Iterator
 
 import pytest
 import torch
+# Meta-tensor math in test_nvfp4_awq_routing lazily imports torch._dynamo,
+# which registers a TORCH_LIBRARY. Imported here, outside the stubbed
+# window, so the window's sys.modules restore never drops it (a second
+# import would re-register and fail).
+import torch._dynamo  # noqa: F401
 
 import flash_rt
 
