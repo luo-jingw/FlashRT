@@ -3850,3 +3850,75 @@ dramatically slower on Thor (same ISA-mismatch root cause already
 confirmed). **OPT-007 stays closed** -- this round only aligned the
 measurement tools with reality, it does not reopen the INT8/INT4-on-
 Thor question.
+
+# OPT-028: ImageWAM through `frt_model_runtime_v1` (Python producer)
+
+Status: implemented and verified on H100 (fp16, real checkpoint,
+bit-exact). Thor `nvfp4` parity pending on the Thor checklist.
+
+Area: deployment engineering, roadmap item 12 (`plan.md` "Plan: ABI
+integration, `frt_model_runtime_v1` Python producer").
+
+## Observation
+
+The ImageWAM Thor frontend was reachable only through `set_prompt()` /
+`infer()`. No runtime export existed, and the initial action noise was
+drawn inside `infer()` (`0.01 * N(0,1)`, ISSUE-002) rather than being
+an input.
+
+## Opportunity
+
+`ImageWAMTorchFrontendThor.export_model_runtime(io="python")`
+publishes the captured graph and its buffers through the generic ABI,
+with the same Python-producer construction path Pi0.5 uses
+(`flash_rt.runtime.export.build_model_runtime`). Port schema and
+ownership: `docs/imagewam_model_runtime.md`. The noise is an explicit
+SWAP input consumed as written; the `0.01` factor stays inside `infer()`.
+
+## Expected Mechanism
+
+No numerics change: the verbs call the frontend's own staging methods
+(`stage_images`, `stage_proprio`, `read_actions`, `set_prompt`), which
+`infer()` now also calls, and `step` replays the same instantiated graph
+exec through `frt_graph_replay`. Parity is bit-exact by construction and
+measured, not assumed.
+
+## Required Evidence
+
+H100 (shared GPU), `tests/gate_imagewam_model_runtime_export.py
+--precision fp16`, real checkpoint + VAE + Qwen3 + dataset stats,
+LIBERO spatial episode 0 frame 0, ctypes consumer vs `infer()`, same
+seed:
+
+| check | array_equal | max_abs |
+|---|---|---:|
+| control: `infer()` vs `infer()` | True | 0 |
+| `images` STAGED → `image_tokens` window | True | 0 |
+| `actions` (denormalized, STAGED) | True | 0 |
+| `actions_raw` (normalized, SWAP) | True | 0 |
+| `image_tokens` SWAP path → `actions` | True | 0 |
+| `prompt` SETUP (second task) → `actions` | True | 0 |
+
+The second task string moves the chunk by `max_abs = 0.0821`, so the
+prompt check is not vacuous. Peak GPU memory 17.2 GiB.
+
+Latency, H100 shared with a co-tenant at 100% utilization, indicative
+only, alternating A/B, 20 iterations each, wall time including VAE,
+proprio staging and host readback:
+
+| path | P10 | P50 | P90 |
+|---|---:|---:|---:|
+| `infer()` | 133.7 ms | 142.5 ms | 152.8 ms |
+| ABI tick (`images` + `proprio` + `noise` + `step` + `actions`) | 127.8 ms | 138.5 ms | 153.1 ms |
+
+Small random-weight dims (`tests/test_imagewam_model_runtime_export.py`,
+5 tests): schema, identity sensitivity, guards (`-3`, `-1`, `-5`) and an
+`array_equal` tick. Regression: `pytest tests/test_imagewam_*.py` 73
+passed, 6 skipped (baseline 68/6 plus these 5).
+
+Thor, `nvfp4`: pending (Thor checklist).
+
+## Promotion Condition
+
+Thor gate at `nvfp4` reports every parity row `array_equal=True`. The
+export is additive and opt-in; `infer()` behavior is unchanged.

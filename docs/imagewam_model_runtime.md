@@ -1,0 +1,121 @@
+# ImageWAM Model Runtime (`frt_model_runtime_v1`, `io="python"`)
+
+`ImageWAMTorchFrontendThor.export_model_runtime()` publishes the captured
+ImageWAM graph through the generic model-runtime ABI
+([`model_runtime_api.md`](model_runtime_api.md)). The producer is the
+Python frontend; any consumer that speaks the ABI (a C++/Rust host loop,
+a capsule/state host) drives the model without Python-level knowledge of
+ImageWAM.
+
+## Ownership
+
+- `flash_rt/frontends/torch/imagewam_thor.py` owns the weights, the
+  captured graph, its capture stream, every device buffer, and the
+  per-tick staging operations: `stage_images` (VAE encode into
+  `img_raw`), `stage_proprio` (state normalization and `proprio_encoder`
+  projection into the context row), `read_actions` (action
+  denormalization and readback). `infer()` is these operations plus the
+  initial noise fill and one graph replay.
+- `flash_rt/models/imagewam/runtime_surface.py` declares the interface
+  between the two: `ImageWAMRuntimeSurface` (graph exec, stream, the
+  `img_raw` / `context` / `action_latent` windows, setup identity) and the
+  `ImageWAMRuntimeSource` Protocol.
+- `flash_rt/models/imagewam/runtime_export.py` builds the runtime: one
+  exec context wrapping the capture stream, the torch graph exec adopted
+  (not owned) as graph `infer`, the device windows wrapped (not owned),
+  ports, one stage, one region, identity, and the Python verbs. The
+  verbs call the frontend's staging operations on the capture stream.
+  The runtime anchors the frontend for its lifetime.
+
+## Port schema
+
+Declaration order is the port index. Ports whose condition is false are
+omitted; the others keep this relative order.
+
+| port | dir | update | modality | dtype | shape | window | declared when |
+|---|---|---|---|---|---|---|---|
+| `images` | in | STAGED | IMAGE | u8 | (2, 224, 224, 3) | none | VAE loaded |
+| `image_tokens` | in | SWAP | TENSOR | bf16 | (392, 128) | `img_raw` | always |
+| `proprio` | in | STAGED | STATE | f32 | (8,) | none | `dims["proprio_dim"]` set |
+| `noise` | in | SWAP | TENSOR | f32 | (64, 7) | `action_latent` | always |
+| `actions` | out | STAGED | ACTION | f32 | (64, 7) | none | always |
+| `actions_raw` | out | SWAP | TENSOR | f32 | (64, 7) | `action_latent` | always |
+| `prompt` | in | SETUP | TEXT | u8 | (-1,) | none | Qwen3 loaded |
+
+Shapes are for the LIBERO release (`img_len=392`, `HD=128`,
+`num_action=64`, `action_dim=7`, `proprio_dim=8`); they follow the
+frontend's `dims`.
+
+- `images`: two `frt_image_view`, RGB8, 224x224, any row stride, in view
+  order `view1` (agent view), `view2` (wrist view). `set_input` runs the
+  VAE outside the graph and writes `img_raw`. The same window is exposed
+  raw as `image_tokens` for a host that brings its own VAE tokens.
+- `proprio`: raw robot state, f32. `set_input` applies the dataset
+  `state` min/max normalization (when `dataset_stats_path` was given),
+  the `proprio_encoder` linear, and writes the row `set_prompt()` reserved.
+- `noise`: the initial action latent. The graph reads it exactly as
+  written and integrates it in place, so after `step` the same window
+  holds the normalized chunk (`actions_raw`). The host rewrites it before
+  every `step`. `infer()` fills it with `0.01 * N(0,1)`; the ABI applies
+  no scale of its own (see `issues.md` ISSUE-002 for that factor).
+- `actions`: what `infer()` returns, the chunk denormalized with the
+  dataset `action` min/max when loaded, else the raw latent. The identity
+  record `action_denormalized` states which.
+- `prompt`: SETUP, legal only outside a tick. `set_input` runs
+  `set_prompt(text)`: Qwen3 encoding outside the graph into the context
+  buffer. It never recaptures (the graph already exists at export).
+- Stage plan: one GRAPH stage `infer` (backbone prefill plus the 10-step
+  denoise loop). Region: `rollout_boundary` = the `action_latent` window.
+- Buffers: `img_raw` (input), `context` (input, state), `action_latent`
+  (input, output).
+- Identity: `model=imagewam`, the frontend class, `precision`, `use_fa4`,
+  every `dims` entry, `io`, `views`, `has_vae`, `has_text_encoder`,
+  `proprio_dim`, `action_denormalized`, then caller pairs (production
+  callers pass a weights digest).
+
+## Verbs and ordering
+
+`set_input` / `get_output` / `step` are Python callables behind the
+builder's GIL-acquiring trampolines, callable from any host thread.
+STAGED verbs and `step` run on the exported stream (`streams[0]`, the
+capture stream). A host that writes or reads a SWAP window enqueues the
+copy on that stream (`native_handle`) or synchronizes it first. Status
+codes: `-2` unknown port index, `-3` `set_input` on a SWAP port, `-5`
+short `get_output` buffer (`written` = needed bytes); a malformed payload
+and `get_output` on a SWAP port return `-1` with the reason in
+`last_error`.
+
+## Build and use
+
+```bash
+cmake -S exec -B exec/build -DCMAKE_BUILD_TYPE=Release \
+  -DPython3_EXECUTABLE=$(which python) \
+  -Dpybind11_DIR=$(python -c "import pybind11; print(pybind11.get_cmake_dir())")
+cmake --build exec/build -j
+cmake -S runtime -B runtime/build -DCMAKE_BUILD_TYPE=Release \
+  -DPython3_EXECUTABLE=$(which python) \
+  -Dpybind11_DIR=$(python -c "import pybind11; print(pybind11.get_cmake_dir())")
+cmake --build runtime/build -j
+```
+
+```python
+fe = ImageWAMTorchFrontendThor(precision=..., dims_override=..., ckpt_path=...,
+                               ae_model_path=..., flux2_src=...,
+                               qwen3_model_spec=..., dataset_stats_path=...)
+fe.set_prompt("pick up the black bowl ...")          # captures the graph
+rt = fe.export_model_runtime(identity={"weights_sha256": digest})
+# hand rt.ptr (frt_model_runtime_v1*) to the native consumer; rt.release() when done
+```
+
+## Verification
+
+- `tests/test_imagewam_model_runtime_export.py`: small random-weight
+  dims. Schema, identity sensitivity, STAGED/SWAP guards, and a ctypes
+  consumer tick that is `array_equal` to `infer()`. Skips when
+  `exec/build` or `runtime/build` is missing.
+- `tests/gate_imagewam_model_runtime_export.py`: real checkpoint, VAE,
+  Qwen3 and dataset stats. On H100 at `fp16` with a real LIBERO frame,
+  the ABI consumer is bit-identical to `infer()` for the image tokens the
+  `images` port stages, the denormalized `actions`, `actions_raw`, the
+  `image_tokens` SWAP path, and the `prompt` SETUP path (all
+  `array_equal`, `max_abs = 0`).

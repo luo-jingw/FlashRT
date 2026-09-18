@@ -3040,7 +3040,7 @@ approved`.
 
 # Plan: ABI integration, `frt_model_runtime_v1` Python producer (roadmap item 12)
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -3236,7 +3236,7 @@ OPT-028.
 
 ### Phase 4 — Thor handoff and docs
 
-Phase Status: active
+Phase Status: completed
 
 Goal: `docs/imagewam_model_runtime.md` records the verified interface;
 the Thor checklist runs the gate at `nvfp4`.

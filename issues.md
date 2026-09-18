@@ -142,3 +142,44 @@ Compare the backbone per layer on H100 with the SDPA backend pinned
 divergent layer.
 
 ## Resolution
+
+# ISSUE-070
+
+Status: open
+
+Area: `exec/tests/test_exec.py` (execution-contract toy tests)
+
+## Observation
+
+On H100 (torch 2.14.0+cu126, `exec/build` built from this tree),
+`test_capture_replay`, `test_multistream_event` and `test_buffer_copy`
+fail their value checks (`capture/replay did not run the captured
+memset`, and the two equivalents); `test_bind_handoff` and
+`test_lru_eviction` pass.
+
+## Impact
+
+The toy suite reports failures that are not failures of the exec layer.
+Adoption and replay of real graphs are unaffected: the ImageWAM model
+runtime (OPT-028) replays through `frt_graph_replay` bit-identically to
+torch replay.
+
+## Evidence
+
+- `frt_ctx_create()` makes stream id 0 with `cudaStreamNonBlocking`
+  (`exec/src/context.cpp`, `exec/backend/cuda/cuda_backend.cpp`).
+- The tests zero the target tensor with torch on torch's current stream,
+  replay on exec stream 0, then `torch.cuda.synchronize()`. A
+  non-blocking stream does not order against the legacy default stream,
+  so the zero can land after the replay.
+
+## Hypotheses
+
+A host-side race in the tests, not a capture or replay defect.
+
+## Next Experiment
+
+Insert `torch.cuda.synchronize()` after each `zero_()` in the three
+tests and re-run; all five should pass.
+
+## Resolution
