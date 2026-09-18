@@ -2,7 +2,8 @@
 // runtime. Implements set_input(proprio), get_output(actions) and step on
 // its own CUDA stream against borrowed device windows; see
 // include/flashrt/cpp/models/imagewam/c_api.h for the ownership contract.
-// One tick at a time per instance: the verbs are not reentrant.
+// Not thread-safe: calls on one instance must not overlap (threading
+// contract in c_api.h); only the declaration count is atomic.
 #ifndef FLASHRT_CPP_MODELS_IMAGEWAM_NATIVE_RUNTIME_H
 #define FLASHRT_CPP_MODELS_IMAGEWAM_NATIVE_RUNTIME_H
 

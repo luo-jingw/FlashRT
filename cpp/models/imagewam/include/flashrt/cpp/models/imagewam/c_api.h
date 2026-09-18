@@ -17,6 +17,16 @@
  * storage, -6 backend. The message of the last failure is available from
  * frt_imagewam_native_last_error.
  *
+ * Threading: calls on one handle must not overlap. The verbs, the setup
+ * calls and last_error share the handle's stream, staging scratch and
+ * error string, so the host serializes them (one tick at a time per
+ * handle). Any host thread may make them; there is no thread affinity.
+ * The last_error string stays valid until the next call on the handle.
+ * retain / release and declaration_retain / declaration_release are
+ * thread-safe. Separate handles are independent, except that run and
+ * capture synchronize the device (cudaDeviceSynchronize), so they must
+ * not run while another thread captures a CUDA graph in global mode.
+ *
  * Interface record: docs/imagewam_native_cpp.md.
  */
 #ifndef FLASHRT_CPP_MODELS_IMAGEWAM_C_API_H
@@ -88,6 +98,8 @@ FLASHRT_IMAGEWAM_C_API void frt_imagewam_native_release(void* h);
 FLASHRT_IMAGEWAM_C_API void frt_imagewam_native_declaration_retain(void* h);
 FLASHRT_IMAGEWAM_C_API void frt_imagewam_native_declaration_release(void* h);
 
+/* Message of the handle's last failure; with a null handle, of the
+ * calling thread's last failed frt_imagewam_native_create. */
 FLASHRT_IMAGEWAM_C_API const char* frt_imagewam_native_last_error(
     const frt_imagewam_native* h);
 

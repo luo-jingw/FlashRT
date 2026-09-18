@@ -88,7 +88,10 @@ the graph and the frontend's `vae_graph_input` with the VAE inside it.
 ## Verbs and ordering
 
 `set_input` / `get_output` / `step` are Python callables behind the
-builder's GIL-acquiring trampolines, callable from any host thread.
+builder's GIL-acquiring trampolines, callable from any host thread. A
+tick is not atomic: calls on one runtime must not overlap (the host
+serializes set_input, step and get_output, one tick at a time), and
+`last_error` is per runtime, valid until its next verb call.
 STAGED verbs and `step` run on the exported stream (`streams[0]`, the
 capture stream). A host that writes or reads a SWAP window enqueues the
 copy on that stream (`native_handle`) or synchronizes it first. Status

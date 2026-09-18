@@ -16,11 +16,26 @@ of the same model is in [`imagewam_model_runtime.md`](imagewam_model_runtime.md)
 | fp16 AdaLN modulation tensors, transposed proprio weight | the Python handoff objects (`pipeline_resources()` result, `native_resources.py`), kept alive by `ImageWAMNativeRuntime` |
 | CUDA stream, captured graph exec, `GemmRunner` and cuBLAS/cuBLASLt handles and workspaces, proprio staging scratch, host copies of the min/max constants | the native handle (`frt_imagewam_native`, refcounted) |
 
-The native library never frees a borrowed pointer. The model runtime
-anchors the frontend through the declaration's Python owner and retains
-the native handle through the verb override, so borrowed memory outlives
-every verb call. The Python graph and the native graph share the same
-buffers and must not run concurrently.
+The native library never frees a borrowed pointer. `ImageWAMNativeRuntime`
+holds the runtime surface, whose `owner` is the frontend, and the source
+of its installed pipeline; the model runtime anchors the frontend through
+the declaration's Python owner and retains the native handle through the
+verb override. Borrowed memory therefore outlives every verb call, with or
+without an export. Replacing the pipeline (`set_pipeline`) destroys the
+graph captured from the previous one; while a model runtime over the
+handle is live, `use_graph`, `set_pipeline` and `capture` are refused.
+The Python graph and the native graph share the same buffers and must not
+run concurrently.
+
+Threading: calls on one handle (verbs, setup calls, `last_error`) must not
+overlap; the host serializes them, one tick at a time, from any thread.
+The handle has no locks: the verbs share its stream, proprio staging
+scratch and error string. `last_error` stays valid until the next call on
+the handle. Reference counting is thread-safe. `run` and `capture` first
+wait for all prior device work (`cudaDeviceSynchronize`), because the
+native stream is non-blocking and not ordered after work other streams
+queued on the shared buffers; they must not run while another thread
+captures a CUDA graph in global mode. The same contract is in `c_api.h`.
 
 What stays in Python: checkpoint loading and quantization, GEMM autotune,
 AdaLN modulation and RoPE precompute, VAE image encoding, Qwen3 prompt
