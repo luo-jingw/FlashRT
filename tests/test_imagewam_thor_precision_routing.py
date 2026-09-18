@@ -447,8 +447,12 @@ def test_real_entry_projections_are_shared_across_double_layers(frontend_module,
 
 def test_stub_signatures_match_quant_linear():
     """The stubs prove routing only if they mirror the real constructors."""
+    # exc_type=ImportError: a flash_rt_kernels .so that is present but does
+    # not load here (wrong ABI) raises ImportError, not ModuleNotFoundError,
+    # and must skip too.
     real = pytest.importorskip(
-        QUANT_LINEAR_MODULE, reason="real quant_linear needs the compiled flash_rt_kernels")
+        QUANT_LINEAR_MODULE, reason="real quant_linear needs a loadable flash_rt_kernels",
+        exc_type=ImportError)
     for class_name, (_, params) in QUANT_LINEAR_STUBS.items():
         real_params = [(p.name, p.kind, p.default)
                        for p in inspect.signature(getattr(real, class_name)).parameters.values()]
