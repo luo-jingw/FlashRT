@@ -3525,3 +3525,555 @@ Blocker: needs the Thor hardware and a copy of the v1 fixture there.
   calibration keyword is the calibration stream's `calibration_path`.
   Regression suite 150 passed, 6 skipped; the fp16 gate still passes
   with the same fidelity values.
+
+# Plan: ActionDiT small-M CUTLASS tile selection (roadmap item 1)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+Every ActionDiT weight GEMM runs at `M = num_action = 64`. The tile
+variant for the two CUTLASS-backed quantized precisions is chosen by
+an `(N, K)`-only heuristic that was tuned for other shapes:
+
+- `nvfp4` (shipped default): `Nvfp4Linear` calls
+  `flash_rt.executors.fp4_utils.fp4_gemm` without a variant, so
+  `pick_variant(N, K)` applies. That table was calibrated for Pi0.5's
+  encoder at `M = 968`.
+- `fp8_static_cutlass`: `StaticFp8Linear(use_cutlass=True)` uses
+  `_pick_fp8_cutlass_variant(N, K)`, which picks `wide` when
+  `N >= 4K` and `sq` otherwise. It is a provisional guess ported
+  from backbone shapes.
+
+Inventory at the real ActionDiT shapes (`M = 64`,
+`action_hidden_dim = 1024`, `action_attn_width = 3072`,
+`action_mlp_hidden = 4096`, `action_dim = 7`, 5 double and 20 single
+layers):
+
+| site | N | K | calls per step | `nvfp4` | `fp8_static_cutlass` | `fp16_cutlass` |
+|---|---:|---:|---:|---|---|---|
+| double `qkv` | 9216 | 1024 | 5 | v6 `128x256x128` c1x1x1 | `wide` `256x128x128` c2x2x1 | `wide` |
+| double `proj` | 1024 | 3072 | 5 | v6 | `sq` `256x256x128` c2x2x1 | `sq` |
+| double `mlp0` (merged gate/up) | 8192 | 1024 | 5 | v6 | `wide` | SwiGLU pair `k64_silu` + `k64_mul_aux` `256x256x64` c2x2x1 at N=4096 |
+| double `mlp2` | 1024 | 4096 | 5 | v6 | `sq` | `sq` |
+| single `linear1` (qkv + gate/up) | 17408 | 1024 | 20 | v8 `128x256x256` c1x1x1 | `wide` | not merged: `qkv` `wide` + SwiGLU pair at N=4096 |
+| single `attn_out_proj` | 1024 | 3072 | 20 | v6 | `sq` | `sq` |
+| single `mlp_down` | 1024 | 4096 | 20 | v6 | `sq` | `sq` |
+| `action_encoder` | 1024 | 7 | 1 | cuBLASLt `Fp16Linear` (alignment fallback) | same | same |
+| `head.linear` | 7 | 1024 | 1 | cuBLASLt `Fp16Linear` (alignment fallback) | same | same |
+
+At `M = 64` one output tile row covers the whole M extent, so the CTA
+count equals the number of N tiles. On Thor's 20 SMs, the `N = 1024`
+GEMMs launch 4 CTAs under v6 (N tile 256), and 4 useful CTA pairs
+under FP8 `sq` with a 2x2 cluster. Those GEMMs are weight-bandwidth
+bound (arithmetic intensity 2M = 128 FLOP per weight element), so a
+launch that occupies 4 of 20 SMs cannot reach DRAM bandwidth. There
+are 50 such calls per denoise step and 500 per `infer()`. FP8 CUTLASS
+has no tile narrower than 128 in N and no 1-SM (cluster 1x1x1) tile at
+all. On Thor it measured 1.44-1.68x slower than cuBLASLt at this M
+(opportunities.md OPT-014, result 3).
+
+Pi0.5 runs its decoder (`M = 10`) on the narrow-N v10 tile
+(`128x64x256`, cluster 1x1x1) for all four projections
+(`docs/pi05_thor_decoder_fp4_e2e.md`, "Decoder v10 Tiles"). v10 is
+already instantiated in `cutlass_fp4_gemm_variants.cu`, but ImageWAM
+never selects it.
+
+### Problem
+
+No ActionDiT GEMM tile choice is measured at `M = 64`. The existing
+choices are extrapolated from other shapes, and FP8 CUTLASS has no
+small-M tile to choose.
+
+### Measurable goal
+
+- A per-shape tile choice for the ActionDiT GEMMs, made by a one-time
+  measurement at construction on the device the frontend runs on,
+  cached per `(family, M, N, K)`. The candidate set includes the
+  current heuristic pick, and a candidate must reproduce the current
+  pick's output before it can be selected.
+- FP8 small-M 1-SM tiles, with the Pi0.5 v10 tile `128x64x256` as the
+  template.
+- Selection logic unit-tested with the kernels stubbed.
+- A Thor script that sweeps every candidate at every real ActionDiT
+  shape, reports cosine against fp16 and the per-shape winner, and
+  runs an `infer()` A/B of old vs new selection on `nvfp4` and
+  `fp8_static_cutlass`.
+- The shipped default selection stays unchanged (opt-in flag) until
+  Thor confirms correctness and speed.
+
+## Structure
+
+- NEW `flash_rt/models/imagewam/gemm_variant_tuner.py`: owns the
+  selection policy (candidate filtering, correctness gate, timing
+  comparison, hysteresis against the incumbent) and the per-frontend
+  result cache. Defines the `VariantTunableGemm` and `VariantTimer`
+  protocols and the result dataclasses. No CUDA code.
+- NEW `flash_rt/models/imagewam/gemm_variant_timer.py`: owns the
+  device timing mechanism (`CudaGraphVariantTimer`: CUDA-graph
+  capture of a launch batch, replay timed with CUDA events).
+- `flash_rt/models/imagewam/quant_linear.py`: `Nvfp4Linear` and
+  `StaticFp8Linear(use_cutlass=True)` implement `VariantTunableGemm`.
+  Each linear owns its own current variant. The default variant equals
+  today's heuristic pick, so `__call__` is unchanged until a variant is
+  set.
+- `csrc/gemm/gemm_types_sm100.h`, `csrc/gemm/cutlass_sm100.cu`,
+  `csrc/bindings.cpp`: four new FP8 1-SM tiles (cluster 1x1x1):
+  `t128x64x256` (v10 template), `t128x64x128`, `t128x128x128`,
+  `t128x256x128`.
+- `flash_rt/frontends/torch/imagewam_thor.py`: owns the decision to
+  tune (`gemm_variant_autotune: bool = False`), the grouping of
+  ActionDiT linears by shape, and the tuner instance and its results
+  (`gemm_variant_results`).
+- NEW `benchmarks/imagewam_thor_small_m_tile_sweep.py`: Thor sweep
+  and `infer()` A/B.
+- NEW `tests/test_imagewam_gemm_variant_tuner.py`: stubbed selection
+  tests (CPU) and a real-timer test (any CUDA GPU).
+
+State ownership:
+
+| state | owner |
+|---|---|
+| current tile variant of one linear | that `Nvfp4Linear` / `StaticFp8Linear` instance |
+| tuning results cache `(family, M, N, K) -> result` | the `GemmVariantTuner` instance owned by the frontend |
+| whether tuning runs | frontend constructor argument |
+
+## Interface
+
+```python
+# flash_rt/models/imagewam/gemm_variant_tuner.py
+@dataclass(frozen=True)
+class GemmShape:
+    m: int
+    n: int
+    k: int
+
+@dataclass(frozen=True)
+class VariantMeasurement:
+    variant: str
+    us_per_gemm: float | None      # None: not timed (rejected)
+    cosine_vs_default: float | None
+    status: str                     # "ok" | "launch_failed rc=.." | "mismatch" | "nonfinite"
+
+@dataclass(frozen=True)
+class VariantTuneResult:
+    family: str
+    shape: GemmShape
+    members: int
+    default_variant: str
+    chosen_variant: str
+    measurements: tuple[VariantMeasurement, ...]
+
+class VariantTunableGemm(Protocol):
+    family: str
+    n: int
+    k: int
+    default_variant: str
+    variant: str
+    def candidate_variants(self) -> tuple[str, ...]: ...
+    def set_variant(self, variant: str) -> None: ...
+    def prepare_tuning_input(self, x_ptr: int, m: int, stream: int) -> None: ...
+    def launch_variant(self, variant: str, out_ptr: int, m: int, stream: int) -> int: ...
+
+class VariantTimer(Protocol):
+    def us_per_launch(self, batches: Sequence[Callable[[int], None]],
+                      launches_per_batch: int) -> tuple[float | None, ...]: ...   # None: batch raised
+
+class GemmVariantTuner:
+    def __init__(self, timer: VariantTimer, *, device: str = "cuda",
+                 min_gain: float = 0.02, cosine_floor: float = 0.9999): ...
+    def tune(self, members: Sequence[VariantTunableGemm], m: int) -> VariantTuneResult: ...
+    def results(self) -> tuple[VariantTuneResult, ...]: ...
+
+# flash_rt/models/imagewam/gemm_variant_timer.py
+class CudaGraphVariantTimer:
+    def __init__(self, *, reps: int = 4, samples: int = 15, warmup: int = 3): ...
+    def us_per_launch(self, batches: Sequence[Callable[[int], None]],
+                      launches_per_batch: int) -> tuple[float | None, ...]: ...
+
+# flash_rt/frontends/torch/imagewam_thor.py
+class ImageWAMTorchFrontendThor:
+    def __init__(..., gemm_variant_autotune: bool = False, ...): ...
+    gemm_variant_results: tuple[VariantTuneResult, ...]
+```
+
+Selection rule, per group of linears sharing `(family, M, N, K)`:
+
+1. Stage the same random input into every member.
+2. For every candidate, launch it once per member eagerly. Record
+   `launch_failed` for a nonzero return code or a raised Python
+   exception, and `nonfinite` or `mismatch` when its output against the
+   default variant's output on the same member is non-finite or below
+   `cosine_floor`. The default variant failing or raising is an error.
+3. Time each surviving candidate as one launch per member, round
+   robin, so each launch reads a different layer's weight and the
+   timing does not run from a warm L2. The batch is captured in one
+   CUDA graph so launch overhead is excluded.
+   A candidate the timer cannot capture is `timing_failed`.
+4. Choose the fastest candidate. Keep the default unless the winner is
+   faster by more than `min_gain` (2%), or if the default itself could
+   not be timed.
+5. Apply the choice to every member and cache it.
+
+## Flow
+
+```
+ImageWAMTorchFrontendThor.__init__(gemm_variant_autotune=True, precision in {nvfp4, fp8_static_cutlass})
+  -> _load_real_weights / _alloc_random_weights      (linears built on default variants)
+  -> _tune_action_dit_gemm_variants(d)
+       group self._weights[("action_dit", ...)] implementing VariantTunableGemm by (family, n, k)
+       for each group: self._gemm_tuner.tune(members, m=d["num_action"])
+         -> member.prepare_tuning_input / launch_variant       (eager checks)
+         -> CudaGraphVariantTimer.us_per_launch                (graph-timed batches)
+         -> member.set_variant(chosen)
+       self.gemm_variant_results = self._gemm_tuner.results()
+  -> set_prompt(): _calibrate_fp8 (unchanged), _capture_graph (captures chosen variants)
+```
+
+Tuning never calls `__call__`, so `StaticFp8Linear`'s
+calibrate-before-call contract is unaffected.
+
+## Code Mapping
+
+| item | file |
+|---|---|
+| `GemmShape`, `VariantMeasurement`, `VariantTuneResult`, `VariantTunableGemm`, `VariantTimer`, `GemmVariantTuner` | `flash_rt/models/imagewam/gemm_variant_tuner.py` |
+| `CudaGraphVariantTimer` | `flash_rt/models/imagewam/gemm_variant_timer.py` |
+| protocol implementation | `flash_rt/models/imagewam/quant_linear.py` |
+| FP8 1-SM tiles | `csrc/gemm/gemm_types_sm100.h`, `csrc/gemm/cutlass_sm100.cu`, `csrc/bindings.cpp` |
+| flag, grouping, tuner ownership | `flash_rt/frontends/torch/imagewam_thor.py` |
+| Thor sweep + A/B | `benchmarks/imagewam_thor_small_m_tile_sweep.py` |
+| tests | `tests/test_imagewam_gemm_variant_tuner.py` |
+
+## Implementation Phases
+
+### Phase 1: tuner and timer
+
+Phase Status: completed
+
+- Goal: selection policy and device timer, independent of any kernel.
+- Files: `gemm_variant_tuner.py`, `gemm_variant_timer.py`,
+  `tests/test_imagewam_gemm_variant_tuner.py`.
+- Observation: stubbed tests cover argmin choice, hysteresis, launch
+  failure, mismatch rejection, nonfinite rejection, default failing,
+  every candidate failing, the cache, and group application. On H100,
+  a real-timer test tunes two real sm_90 kernels, and its printed
+  per-launch times are compared with a direct CUDA-event measurement.
+
+### Phase 2: FP8 1-SM small-M tiles
+
+Phase Status: completed
+
+- Goal: `cutlass_fp8_t128x64x256`, `_t128x64x128`, `_t128x128x128`,
+  `_t128x256x128` exported under `ENABLE_SM100_CUTLASS`.
+- Files: `csrc/gemm/gemm_types_sm100.h`, `csrc/gemm/cutlass_sm100.cu`,
+  `csrc/bindings.cpp`.
+- Observation: `sm110_check.sh` passes, and the sm_90 build is
+  unaffected. Correctness and speed are Thor checklist items.
+
+### Phase 3: quant_linear protocol implementation
+
+Phase Status: completed
+
+- Goal: `Nvfp4Linear` and `StaticFp8Linear(use_cutlass=True)` expose
+  `family`, `default_variant`, `variant`, `candidate_variants()`,
+  `set_variant()`, `prepare_tuning_input()`, and `launch_variant()`.
+  Default behavior stays unchanged.
+- Files: `flash_rt/models/imagewam/quant_linear.py`.
+- Observation: the regression suite is unchanged. Construction on
+  H100 still raises the same `RuntimeError`.
+
+### Phase 4: frontend wiring
+
+Phase Status: completed
+
+- Goal: `gemm_variant_autotune` flag, grouping ActionDiT linears by
+  shape, and `gemm_variant_results`.
+- Files: `flash_rt/frontends/torch/imagewam_thor.py`, tests.
+- Observation: a routing test with stubbed linear classes confirms
+  that only ActionDiT groups are tuned, with `m = num_action`, one
+  tune per distinct shape, and the chosen variant applied to every
+  member. With the flag off, nothing changes. The fp16 path and the
+  regression suite are unchanged.
+
+### Phase 5: Thor sweep and A/B script, handoff
+
+Phase Status: completed
+
+- Goal: `benchmarks/imagewam_thor_small_m_tile_sweep.py`, plus
+  results and Thor checklist in `opportunities.md` OPT-018.
+- Observation: the script's non-Thor paths (argument parsing, shape
+  table, cuBLASLt fp16 reference timing) run on H100 and print SKIP
+  for families this build lacks.
+
+### Phase 6: candidates that raise are rejected
+
+Phase Status: completed
+
+- Goal: a Python exception from a candidate's launch, such as an
+  `AttributeError` for a `cutlass_fp8_t128x*` symbol missing from a
+  stale build, rejects that candidate instead of aborting construction.
+  A batch the timer cannot capture is rejected as `timing_failed`.
+- Files: `gemm_variant_tuner.py`, `gemm_variant_timer.py`, tests, both
+  benchmarks.
+- Observation: stub tests cover a raising candidate, a raising default
+  (still an error), an untimeable candidate, and an untimeable default
+  (kept). The timer test feeds a raising batch and a
+  capture-invalidating batch. A routing test removes the `t128x*`
+  symbols and construction completes.
+
+### Phase 7: Thor confirmation
+
+Phase Status: blocked
+
+- Goal: the Thor checklist in opportunities.md OPT-018. The tile
+  sweep must show correct outputs for every tile, and the
+  `infer()` A/B of heuristic vs tuned tiles must show action cosine
+  >= 0.9999 and a P50 delta.
+- Blocker: no sm_110 device on the dev box. SM100 CUTLASS and NVFP4
+  kernels do not run on sm_90, which only compile-checks them
+  (`sm110_check.sh`). Recorded as issues.md ISSUE-023.
+
+# Plan: attention-chain fusion recheck at ImageWAM's real shapes (roadmap item 6)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+Both attention sites run a cuBLAS-composed chain in
+`ImageWAMAttnBackend.run()` (`flash_rt/hardware/thor/attn_backend.py`):
+a strided-batched QK^T GEMM into a `logits` buffer, a softmax kernel,
+then a strided-batched PV GEMM (`fvk.attention_qkv_fp16_perhead`,
+`csrc/kernels/attention_cublas.cuh`). The frontend always constructs
+the backend with `use_perhead_kv=True, use_real_mot_mask=True`.
+
+- `"backbone"` site: prefill self-attention, 25 layers, `q = kv = a0 =
+  905` tokens, 24 heads, HD 128, no mask. FA4 is wired in as
+  `use_fa4=True` (opportunities.md OPT-005). On Thor it measured
+  cosine 1.000000 against the cuBLAS chain, 3.75x per call at the real
+  per-head shape, and -10.5% prefill in the per-layer benchmark. The
+  frontend default is `use_fa4=False`, because the previous dev box had
+  no FA4 runtime and `use_fa4=True` raises when the runtime is missing.
+- `"mot"` site: ActionDiT joint attention, 25 layers x 10 steps = 250
+  calls per `infer()`, `q = 64` action queries over `kv = total = 969`
+  keys. With `use_real_mot_mask=True`, the rule the frontend always
+  uses, the call is unmasked attention through the same
+  `attention_qkv_fp16_perhead`. Upstream `_build_mot_attention_mask_flux2`
+  with `target_len = 0` removes only the region mask, but it still
+  excludes padded text keys for every query row, at the prefill call
+  and at the action call. `pipeline_thor.py` models that mask at
+  neither site (issues.md ISSUE-020). FA4 has never been evaluated
+  here.
+- Pi0.5 rejected a fused SIMT attention chain at decoder `M = 10`,
+  HD 256, as 5-7x slower (`docs/pi05_thor_decoder_fp4_e2e.md`). At that
+  shape the QK^T/PV GEMMs are about 1 us of tensor-core work, and FA4
+  has no KV-split path at HD 256.
+
+### Problem
+
+Nobody has measured which share of ImageWAM prefill and denoise time
+attention takes at the real shapes. The Thor FA4 win is not on by
+default. The `mot` site's fused-kernel eligibility has never been
+evaluated.
+
+### Measurable goal
+
+- H100, indicative only: the attention share of prefill and of one
+  denoise step at the real shapes, measured in-graph as graph time with
+  the real attention minus graph time with attention removed. Also
+  per-call cuBLAS chain vs fused kernels available on sm_90 (PyTorch
+  SDPA flash / cuDNN / mem-efficient) at both sites' shapes, with
+  cosine against the cuBLAS chain.
+- Recommendation with evidence per site.
+- If cheap: a Thor FA4 switch for `"backbone"` that resolves to the
+  cuBLAS chain when the FA4 runtime is missing or the device is not
+  Thor. It stays opt-in (`FLASHRT_THOR_FA4=1`) until Thor confirms FA4
+  at the served shapes. Also an opt-in FA4 path for `"mot"`. Dispatch
+  logic verified locally against the cuBLAS chain with a
+  reference-backed FA4 stand-in. FA4 itself goes on the Thor
+  checklist.
+
+## Structure
+
+- NEW `benchmarks/imagewam_attention_share_bench.py`: owns the
+  measurements (in-graph attention share; per-call chain vs fused
+  kernels; on Thor it also times FA4 per call, with `num_splits` swept
+  for the `mot` shape).
+- `flash_rt/hardware/thor/attn_backend.py`: `ImageWAMAttnBackend`
+  owns per-site kernel dispatch. It gains `use_fa4_mot: bool` for the
+  `"mot"` site FA4 branch. That branch is valid only with
+  `use_real_mot_mask=True` and `use_perhead_kv=True`, FlashRT's
+  unmasked per-head rule, and the constructor rejects any other
+  combination.
+- `flash_rt/hardware/thor/fa4_backend.py`: owns FA4 availability. It
+  gains `thor_default_enabled() -> bool`, true only on an sm_11x
+  device with an active FA4 runtime.
+- `flash_rt/frontends/torch/imagewam_thor.py`: owns the FA4 output
+  buffer, and the FA4-failure fallback in `set_prompt()`
+  (`_capture_graph_or_fall_back`): on an exception during warmup or
+  capture with FA4 on, it logs, warns, records `fa4_fallback_reason`,
+  rebuilds the backend with FA4 off, and captures again. It also owns
+  the default.
+  `use_fa4: bool | None = None` resolves, through `_resolve_use_fa4`, to
+  False unless `FLASHRT_THOR_FA4=1`. With the variable set, it resolves
+  to `fa4_backend.thor_default_enabled()`. An explicit `True` still
+  requires the runtime, and an explicit `False` forces the cuBLAS
+  chain. It also gains `use_fa4_mot: bool = False`, passed through.
+- Tests: `tests/test_imagewam_fa4_dispatch.py` (new) checks the
+  backend's FA4 branches for both sites against the cuBLAS chain, with
+  FA4 replaced by a stand-in that has FA4's `_flash_attn_fwd`
+  signature and computes attention as an fp32 matmul-softmax-matmul in
+  PyTorch. It also checks the default resolution.
+  `tests/test_imagewam_fa4_backbone.py` gains a real-FA4 `mot` case
+  that skips without FA4.
+
+State ownership:
+
+| state | owner |
+|---|---|
+| FA4 on/off per site | `ImageWAMAttnBackend` instance (`_use_fa4`, `_use_fa4_mot`) |
+| default resolution | frontend `_resolve_use_fa4` (`FLASHRT_THOR_FA4`, then `fa4_backend.thor_default_enabled()`) |
+| FA4 runtime availability | `fa4_backend` module |
+| FA4 output buffer `_fa4_out` | frontend (passed to the backend as `fa4_out` slots) |
+| `fa4_fallback_reason` | frontend |
+
+## Interface
+
+```python
+# flash_rt/hardware/thor/fa4_backend.py
+def thor_default_enabled() -> bool: ...   # sm_11x device AND FA4 runtime active
+
+# flash_rt/hardware/thor/attn_backend.py
+class ImageWAMAttnBackend:
+    def __init__(self, spec, ctx, *, backbone_slots: dict, mot_slots: dict,
+                 use_fa4: bool = False, use_perhead_kv: bool = False,
+                 use_real_mot_mask: bool = False, use_fa4_mot: bool = False): ...
+
+# flash_rt/frontends/torch/imagewam_thor.py
+class ImageWAMTorchFrontendThor:
+    def __init__(..., use_fa4: bool | None = None, use_fa4_mot: bool = False, ...): ...
+    use_fa4: bool        # resolved value, read-only after construction
+    use_fa4_mot: bool
+```
+
+FA4 `"mot"` call: Q `(1, q_seq, NH, HD)` at row offset `a0` of `Q_O`,
+K/V `(1, kv_seq, NH, HD)` per layer, `causal=False`, `pack_gqa=False`,
+`num_splits=1`. Output goes to the dedicated FA4 output buffer, then
+is copied back to the Q rows. This is the same pattern as the
+`"backbone"` per-head branch.
+
+FA4 output buffer: a site that runs FA4 gets `"fa4_out"` (fp16 pointer)
+and `"fa4_out_numel"` in its slots. The capacity must be at least that
+site's `max_q_seq * NH * HD`, checked at construction and on every call.
+The frontend owns one `(total, hidden)` buffer for both sites, allocated
+only when some site runs FA4. `logits` is sized for the cuBLAS chain's
+score matrix (`total*NH x total`), which at small dims is smaller than
+`q_seq*NH*HD`, so FA4 output never goes there.
+
+## Flow
+
+```
+frontend __init__(use_fa4=None)
+  -> use_fa4 = FLASHRT_THOR_FA4 == "1" and fa4_backend.thor_default_enabled()   # opt-in
+  -> ImageWAMAttnBackend(..., use_fa4=use_fa4, use_fa4_mot=use_fa4_mot)
+prefill:  attn.run("backbone", ...) -> FA4 if use_fa4 else attention_qkv_fp16_perhead
+denoise:  attn.run("mot", ...)      -> FA4 if use_fa4_mot else attention_qkv_fp16_perhead
+```
+
+## Code Mapping
+
+| item | file |
+|---|---|
+| measurements | `benchmarks/imagewam_attention_share_bench.py` |
+| `thor_default_enabled` | `flash_rt/hardware/thor/fa4_backend.py` |
+| `use_fa4_mot` dispatch | `flash_rt/hardware/thor/attn_backend.py` |
+| default resolution, `use_fa4_mot` pass-through | `flash_rt/frontends/torch/imagewam_thor.py` |
+| dispatch tests | `tests/test_imagewam_fa4_dispatch.py`, `tests/test_imagewam_fa4_backbone.py` |
+| results, recommendation | `opportunities.md` OPT-019 |
+
+## Implementation Phases
+
+### Phase 1: measurement
+
+Phase Status: completed
+
+- Goal: attention share (H100) and per-call chain vs fused kernels at
+  real shapes.
+- Files: `benchmarks/imagewam_attention_share_bench.py`.
+- Observation: printed P10/P50/P90 for graphs with and without
+  attention, per stage. Per-call medians for each kernel, with cosine
+  against the cuBLAS chain.
+
+### Phase 2: Thor FA4 switch (opt-in), opt-in FA4 for `mot`
+
+Phase Status: completed
+
+- Goal: `use_fa4=None` resolution (opt-in through `FLASHRT_THOR_FA4=1`),
+  `use_fa4_mot`.
+- Files: `fa4_backend.py`, `attn_backend.py`, `imagewam_thor.py`,
+  tests.
+- Observation: dispatch tests show the FA4 branches, with an fp32
+  matmul stand-in, matching the cuBLAS chain at real shapes (cosine,
+  max-abs, rel_l2). Resolution resolves to False on H100. The
+  regression count is unchanged apart from the new tests. An fp16
+  end-to-end quick run matches the baseline, since the default
+  resolves to off on H100.
+
+### Phase 3: recommendation and Thor handoff
+
+Phase Status: completed
+
+- Goal: OPT-019 with evidence, recommendation, and Thor checks.
+- Files: `opportunities.md`.
+
+### Phase 4: FA4 back to opt-in
+
+Phase Status: completed
+
+- Goal: `use_fa4=None` resolves to the cuBLAS chain on every device.
+  `FLASHRT_THOR_FA4=1` opts in, and making FA4 the default is a
+  one-line change (`_FA4_OPT_IN_DEFAULT`).
+- Files: `imagewam_thor.py`, `tests/test_imagewam_fa4_dispatch.py`.
+- Observation: resolution tests cover every combination of the
+  environment variable, runtime availability, and explicit argument.
+
+### Phase 5: dedicated FA4 output buffer
+
+Phase Status: completed
+
+- Goal: FA4 output goes to `fa4_out` slots, which the frontend owns as
+  `(total, hidden)`, instead of `logits`, which overruns at small dims.
+- Files: `attn_backend.py`, `imagewam_thor.py`, FA4 tests, FA4 benches.
+- Observation: guard-band tests after `fa4_out`, and on `logits`, at
+  (a0, total) = (8, 12), (8, 24), and (905, 969), plus a frontend range
+  check. Both fail on the old staging. Capacity is checked at
+  construction.
+
+### Phase 6: fall back to the cuBLAS chain when FA4 fails
+
+Phase Status: completed
+
+- Goal: an FA4 failure during `set_prompt()`'s warmup or capture logs,
+  warns, records `fa4_fallback_reason`, rebuilds the backend without
+  FA4, and captures again.
+- Files: `imagewam_thor.py`, `tests/test_imagewam_fa4_dispatch.py`.
+- Observation: stand-ins that fail at first call, inside capture, and
+  by invalidating the capture all recover to the chain's output with
+  the caller's stream restored. A failure with FA4 off still raises.
+
+### Phase 7: Thor confirmation
+
+Phase Status: blocked
+
+- Goal: the Thor checklist in opportunities.md OPT-019, with FA4
+  explicitly opted in:
+  - the real-FA4 real-shape test at 905/905 and 64/969;
+  - kernel timings;
+  - an nvfp4 end-to-end official compare with FA4 on vs off;
+  - an `infer()` A/B with FA4 on vs off.
+- Blocker: no sm_110 device and no FA4 runtime on the dev box (issues.md
+  ISSUE-023).

@@ -48,11 +48,18 @@ sums to a fixed 128, so every default/override dims dict below keeps
 """
 from __future__ import annotations
 
+import logging
+import os
+import warnings
+
 import numpy as np
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
+from flash_rt.hardware.thor import fa4_backend
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
+from flash_rt.models.imagewam.gemm_variant_timer import CudaGraphVariantTimer
+from flash_rt.models.imagewam.gemm_variant_tuner import GemmVariantTuner, VariantTuneResult
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
 from flash_rt.models.imagewam.pipeline_real import (
     compute_action_head_modulation,
@@ -75,6 +82,19 @@ _PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static
 # one-time calibration call in set_prompt() before graph capture (see
 # _calibrate_fp8 below) -- everything else needs no such step.
 _STATIC_FP8_PRECISIONS = ("fp8_static", "fp8_static_cutlass")
+# Precisions whose GEMMs run a switchable CUTLASS tile (roadmap item 1,
+# plan.md "Plan: ActionDiT small-M CUTLASS tile selection"): the only ones
+# `gemm_variant_autotune=True` applies to.
+_VARIANT_TUNED_PRECISIONS = ("nvfp4", "fp8_static_cutlass")
+# FA4 at the "backbone" site stays opt-in until Thor confirms it at the served
+# shapes, inside the captured graph, end to end (opportunities.md OPT-019).
+# `use_fa4=None` resolves to False unless this environment variable is "1"
+# (then FA4 is used exactly when `fa4_backend.thor_default_enabled()` holds).
+# Making FA4 the default is a one-line change: the "0" below becomes "1".
+_FA4_OPT_IN_ENV = "FLASHRT_THOR_FA4"
+_FA4_OPT_IN_DEFAULT = "0"
+
+logger = logging.getLogger(__name__)
 # Stage 3 default precision decision (opportunities.md, real Thor
 # checklist against real checkpoint weights + real open-loop LIBERO
 # data): nvfp4 is the fastest AND closest to fp16/GT (actions
@@ -110,15 +130,33 @@ class ImageWAMTorchFrontendThor:
     """
 
     def __init__(self, checkpoint_dir=None, *, dims_override: dict | None = None,
-                 use_fa4: bool = False, precision: str = "nvfp4",
+                 use_fa4: bool | None = None, precision: str = "nvfp4",
                  ckpt_path: str | None = None,
                  ae_model_path: str | None = None, flux2_src: str | None = None,
                  qwen3_model_spec: str | None = None,
                  dataset_stats_path: str | None = None,
+                 gemm_variant_autotune: bool = False,
+                 use_fa4_mot: bool = False,
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
             raise ValueError(f"precision={precision!r} -- must be one of {_PRECISIONS}")
+        # Roadmap item 1: measure the CUTLASS tile per ActionDiT GEMM shape
+        # (M = num_action) at construction instead of using the (N, K)
+        # heuristic. Opt-in until Thor confirms it (opportunities.md OPT-018).
+        if gemm_variant_autotune and precision not in _VARIANT_TUNED_PRECISIONS:
+            raise ValueError(
+                f"gemm_variant_autotune=True applies to {_VARIANT_TUNED_PRECISIONS}, "
+                f"got precision={precision!r}")
+        self._gemm_tuner: GemmVariantTuner | None = None
+        self.gemm_variant_results: tuple[VariantTuneResult, ...] = ()
+        # Roadmap item 6 (opportunities.md OPT-019): resolved attention
+        # kernel choice, fixed for this frontend's lifetime.
+        self.use_fa4: bool = self._resolve_use_fa4(use_fa4)
+        self.use_fa4_mot: bool = bool(use_fa4_mot)
+        # Set when FA4 failed during warmup or capture and the frontend
+        # fell back to the cuBLAS chain (see `_capture_graph_or_fall_back`).
+        self.fa4_fallback_reason: str | None = None
         # Real VAE + text-context wiring plan: independent of ckpt_path
         # (OPT-001) -- one loads real transformer weights, this loads a
         # real image encoder. Loaded here (once), used inside infer().
@@ -209,6 +247,8 @@ class ImageWAMTorchFrontendThor:
             del sd
         else:
             self._weights = self._alloc_random_weights(d)
+        if gemm_variant_autotune:
+            self._tune_action_dit_gemm_variants(d)
 
         # Real closed-loop robot-state conditioning (opportunities.md,
         # found 2026-09-15 scoping real closed-loop testing): a plain
@@ -297,37 +337,23 @@ class ImageWAMTorchFrontendThor:
         self._logits = self._own(
             torch.zeros(d["total"] * d["NH"], d["total"] + (d["total"] % 2), dtype=FP16, device=DEV))
         layer_stride = self._K_cache[0].numel() * 2
-        self._attn = ImageWAMAttnBackend(
-            spec, self._ctx,
-            backbone_slots={
-                "Q_O": self._Q_O.data_ptr(), "K": self._K_cache.data_ptr(),
-                "V": self._V_cache.data_ptr(), "logits": self._logits.data_ptr(),
-                "scale": 1.0 / (HD ** 0.5),
-            },
-            mot_slots={
-                "Q_O": self._Q_O.data_ptr(), "K": self._K_cache.data_ptr(),
-                "V": self._V_cache.data_ptr(), "logits": self._logits.data_ptr(),
-                "scale": 1.0 / (HD ** 0.5), "layer_stride": layer_stride,
-            },
-            # OPT-002: real per-head K/V + the real (no-mask) attention
-            # rule, both confirmed against the real trained checkpoint
-            # (benchmarks/imagewam_real_checkpoint_validation.py) --
-            # this is now the default for this frontend, not opt-in.
-            use_perhead_kv=True, use_real_mot_mask=True,
-            # OPT-005: FA4 for the "backbone" site only ("mot" has no
-            # FA4-equivalent mask support, unaffected either way).
-            # Default False, NOT True: this frontend also runs on this
-            # dev machine's own Ada GPU, which has no FA4 runtime at
-            # all -- `ImageWAMAttnBackend`'s own constructor raises if
-            # `use_fa4=True` without one, so a default-True here would
-            # break every local test/construction. Verified correct
-            # AND fast on real Thor hardware for the real per-head
-            # convention this class now always uses (cosine=1.000000,
-            # 3.75x standalone -- opportunities.md OPT-005's own
-            # 2026-09-14 entry); pass `use_fa4=True` explicitly when
-            # constructing this frontend on Thor to get the win.
-            use_fa4=use_fa4,
-        )
+        # FA4 output staging (OPT-019): FA4 cannot write over its own Q
+        # input. `(total, hidden)` holds either site's `q_seq * NH * HD`;
+        # `logits` (sized for the cuBLAS chain's scores) is too small for
+        # that at small dims. Allocated only when some site runs FA4.
+        self._fa4_out = None
+        if self.use_fa4 or self.use_fa4_mot:
+            self._fa4_out = self._own(torch.zeros(d["total"], hidden, dtype=FP16, device=DEV))
+        common = {
+            "Q_O": self._Q_O.data_ptr(), "K": self._K_cache.data_ptr(),
+            "V": self._V_cache.data_ptr(), "logits": self._logits.data_ptr(),
+            "scale": 1.0 / (HD ** 0.5),
+        }
+        if self._fa4_out is not None:
+            common.update(fa4_out=self._fa4_out.data_ptr(), fa4_out_numel=self._fa4_out.numel())
+        self._attn_spec = spec
+        self._attn_slots = {"backbone": dict(common), "mot": dict(common, layer_stride=layer_stride)}
+        self._attn = self._build_attn_backend()
 
         self._graph = None
         self._current_prompt = None
@@ -336,6 +362,43 @@ class ImageWAMTorchFrontendThor:
         # set_prompt() (depends on that prompt's own real token count),
         # reused by every infer() call until the next set_prompt().
         self._proprio_row = None
+
+    @staticmethod
+    def _resolve_use_fa4(use_fa4: bool | None) -> bool:
+        """`use_fa4` constructor argument -> the backbone-site FA4 choice.
+
+        - `True`: FA4; `ImageWAMAttnBackend` raises if the runtime is missing.
+        - `False`: the cuBLAS chain.
+        - `None` (default): opt-in. False unless `FLASHRT_THOR_FA4=1`; with
+          it, FA4 exactly when `fa4_backend.thor_default_enabled()` holds
+          (compute capability 11.x and an importable FA4 runtime), so it
+          never raises for a missing runtime. FA4 has been measured on Thor
+          at `a0=896` in the per-layer bench (OPT-005), not yet at the
+          served shapes or end to end (OPT-019).
+        """
+        if use_fa4 is not None:
+            return bool(use_fa4)
+        if os.environ.get(_FA4_OPT_IN_ENV, _FA4_OPT_IN_DEFAULT) != "1":
+            return False
+        return fa4_backend.thor_default_enabled()
+
+    def _build_attn_backend(self) -> ImageWAMAttnBackend:
+        """The attention backend for this frontend's own buffers, with
+        the current `self.use_fa4` / `self.use_fa4_mot` choice."""
+        return ImageWAMAttnBackend(
+            self._attn_spec, self._ctx,
+            backbone_slots=dict(self._attn_slots["backbone"]),
+            mot_slots=dict(self._attn_slots["mot"]),
+            # OPT-002: real per-head K/V + the real "mot" rule (no region
+            # mask), both confirmed against the real trained checkpoint
+            # (benchmarks/imagewam_real_checkpoint_validation.py).
+            use_perhead_kv=True, use_real_mot_mask=True,
+            # OPT-005 / OPT-019: FA4 for the "backbone" site, resolved by
+            # `_resolve_use_fa4` (opt-in; see `_FA4_OPT_IN_ENV`).
+            use_fa4=self.use_fa4,
+            # OPT-019: FA4 for the "mot" site. Opt-in until Thor confirms it.
+            use_fa4_mot=self.use_fa4_mot,
+        )
 
     def _own(self, t: torch.Tensor) -> torch.Tensor:
         """Keep a buffer tensor alive for the frontend's own lifetime.
@@ -533,6 +596,31 @@ class ImageWAMTorchFrontendThor:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=True)
         raise ValueError(f"unknown precision {self._precision!r}")  # pragma: no cover -- validated in __init__
+
+    @staticmethod
+    def _is_variant_tunable(lin: object) -> bool:
+        return isinstance(lin, Nvfp4Linear) or (isinstance(lin, StaticFp8Linear) and lin.use_cutlass)
+
+    def _tune_action_dit_gemm_variants(self, d: dict) -> None:
+        """Roadmap item 1 (plan.md "Plan: ActionDiT small-M CUTLASS tile
+        selection"): group every ActionDiT linear with a switchable
+        CUTLASS tile by `(family, N, K)` and let one `GemmVariantTuner`
+        measure and apply a tile per group at `M = num_action` (see
+        `gemm_variant_tuner.py` for the rule). Runs before `set_prompt()`,
+        so the captured graph uses the chosen tiles. Backbone GEMMs are
+        not tuned. Results land in `self.gemm_variant_results`."""
+        groups: dict[tuple[str, int, int], list] = {}
+        seen: set[int] = set()
+        for key, lin in self._weights.items():
+            if key[0] != "action_dit" or not self._is_variant_tunable(lin) or id(lin) in seen:
+                continue
+            seen.add(id(lin))
+            groups.setdefault((lin.family, lin.n, lin.k), []).append(lin)
+        tuner = GemmVariantTuner(CudaGraphVariantTimer())
+        for members in groups.values():
+            tuner.tune(members, d["num_action"])
+        self._gemm_tuner = tuner
+        self.gemm_variant_results = tuner.results()
 
     # OPT-004 step 6 follow-up (2026-09-15, real Thor measurement against
     # the real FLUX.2-dev VAE on real LIBERO-fastwam frames): calibrating
@@ -905,6 +993,45 @@ class ImageWAMTorchFrontendThor:
                                    deltas=self._deltas)
         self._graph = graph
 
+    def _capture_graph_or_fall_back(self) -> None:
+        """`_capture_graph()`, falling back to the cuBLAS chain when FA4
+        fails.
+
+        FA4 compiles on its first call, during `_capture_graph`'s eager
+        warmup, and can fail there or during capture: an FA4 runtime can
+        import and then fail to compile for sm_110 (see `fa4_backend`),
+        or a kernel can be rejected inside stream capture. If any site
+        runs FA4 and warmup or capture raises, this logs an error, emits
+        a `RuntimeWarning`, records the reason in
+        `self.fa4_fallback_reason`, rebuilds the attention backend with
+        FA4 off at both sites, and captures again. A failure with FA4 off,
+        or a second failure after the fallback, propagates.
+
+        An invalidated capture (for example a device sync inside it)
+        makes `torch.cuda.graph`'s exit raise before it restores the
+        caller's stream, so the current stream is restored here first.
+        """
+        caller_stream = torch.cuda.current_stream()
+        try:
+            self._capture_graph()
+            return
+        except Exception as exc:  # FA4 compile/launch/capture errors are not one exception type
+            torch.cuda.set_stream(caller_stream)
+            if not (self.use_fa4 or self.use_fa4_mot):
+                raise
+            reason = f"{type(exc).__name__}: {exc}"
+        message = (f"ImageWAM FA4 attention failed during warmup/capture "
+                   f"(use_fa4={self.use_fa4}, use_fa4_mot={self.use_fa4_mot}): {reason} -- "
+                   f"falling back to the cuBLAS attention chain at both sites")
+        logger.error(message)
+        warnings.warn(message, RuntimeWarning, stacklevel=3)
+        self.fa4_fallback_reason = reason
+        self.use_fa4 = False
+        self.use_fa4_mot = False
+        self._attn = self._build_attn_backend()
+        torch.cuda.synchronize()
+        self._capture_graph()
+
     def _set_context_with_optional_proprio(self, text_ctx: torch.Tensor, text_mask: torch.Tensor) -> None:
         """`text_ctx`: `(text_len, joint_attention_dim)` BF16 -- the
         real (or precomputed) Qwen3 text context, BEFORE proprio.
@@ -995,7 +1122,7 @@ class ImageWAMTorchFrontendThor:
                 self._proprio_row = self.dims["x0"] - 1
         if self._graph is None:
             self._calibrate_fp8(self.dims)
-            self._capture_graph()
+            self._capture_graph_or_fall_back()
         self._current_prompt = cache_key
 
     def infer(self, observation: dict, *, action_noise: torch.Tensor | None = None) -> dict:
