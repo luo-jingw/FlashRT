@@ -29,6 +29,10 @@ VAE options (roadmap items 2 and 5, plan.md):
               the official side keeps its PIL center-crop resize -- this
               measures the served preprocessing against the official one
               (issues.md ISSUE-030).
+  RAW_SIZE    0 (default): dataset frames as stored (512x512). S > 0: every
+              frame is first PIL-downscaled (BILINEAR) to SxS for BOTH
+              sides, a stand-in for a simulator rendering at SxS (the
+              official eval renders at 256x256).
 """
 from __future__ import annotations
 
@@ -63,6 +67,7 @@ VAE_ENCODER = os.environ.get("VAE_ENCODER", "torch")
 VAE_GRAPH = os.environ.get("VAE_GRAPH", "0") == "1"
 VAE_RESIZE = os.environ.get("VAE_RESIZE", "area")
 RAW_VIEWS = os.environ.get("RAW_VIEWS", "0") == "1"
+RAW_SIZE = int(os.environ.get("RAW_SIZE", "0"))
 
 REAL_DIMS = dict(
     hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
@@ -116,6 +121,9 @@ def load_samples():
                 continue
             v1 = read_frame(f"{root}/videos/chunk-000/observation.images.image/episode_{e:06d}.mp4", fr)
             v2 = read_frame(f"{root}/videos/chunk-000/observation.images.wrist_image/episode_{e:06d}.mp4", fr)
+            if RAW_SIZE:
+                v1, v2 = (np.array(Image.fromarray(v).resize((RAW_SIZE, RAW_SIZE), resample=Image.BILINEAR))
+                          for v in (v1, v2))
             state = np.asarray(df["observation.state"].iloc[fr], dtype=np.float32)
             gt = np.stack(df["action"].iloc[fr:fr + HORIZON].to_numpy()).astype(np.float32)
             out.append(dict(ep=e, frame=fr, task=tasks[ti], v1=v1, v2=v2, state=state, gt=gt))
@@ -166,7 +174,7 @@ def main():
     samples = load_samples()
     print(f"samples: {len(samples)} ({SUITE}, frames {FRAMES})", flush=True)
     print(f"VAE_ENCODER={VAE_ENCODER} VAE_GRAPH={int(VAE_GRAPH)} VAE_RESIZE={VAE_RESIZE} "
-          f"RAW_VIEWS={int(RAW_VIEWS)}", flush=True)
+          f"RAW_VIEWS={int(RAW_VIEWS)} RAW_SIZE={RAW_SIZE}", flush=True)
 
     t = time.time()
     off = build_official()

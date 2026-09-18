@@ -4,8 +4,11 @@
 
 Sections (`--section`, default `all`):
 
-  profile     torch-profiler op table of the real `AutoEncoder.encode` at
-              the real 224x448 input, plus kernels per encode.
+  profile     GPU kernel time per op family of the real
+              `AutoEncoder.encode` and of `NativeFlux2Encoder.encode` at the
+              real 224x448 input: median share and min-max range over
+              `--profile-repeats` separate profiler captures, kernels per
+              encode, then one per-kernel table each.
   preprocess  served torch `_prep_view` + cat vs the fused
               `imagewam_vae_preprocess_bf16` kernel, for raw 512x512 and
               pre-resized 224x224 views, CPU and GPU uint8 inputs.
@@ -147,38 +150,78 @@ def report_gpu(variants: dict[str, Callable[[], object]]) -> None:
         print(f"  {name:48s} kernels={k:6.1f}  gpu_kernel_time={gpu_ms:8.3f} ms  host_enqueue={enq_ms:8.3f} ms")
 
 
-def section_profile(ae: torch.nn.Module, v1: np.ndarray, v2: np.ndarray) -> None:
+_FAMILIES = (
+    ("cuDNN NCHW<->NHWC layout transform", ("nchwToNhwc", "nhwcToNchw")),
+    ("torch GroupNorm statistics", ("RowwiseMoments", "ComputeFusedParams")),
+    ("FlashRT GroupNorm stats + finalize", ("gn_stats", "gn_finalize")),
+    ("FlashRT GroupNorm(+SiLU) apply", ("gn_apply",)),
+    ("FlashRT bias + residual", ("bias_residual",)),
+    ("attention", ("fmha",)),
+    ("sigmoid", ("sigmoid",)),
+    ("convolution math", ("xmma_fprop", "implicit_convolve", "cutlass")),
+    ("GEMM (q/k/v, proj_out)", ("nvjet", "gemm")),
+)
+
+
+def _family(name: str) -> str:
+    for family, keys in _FAMILIES:
+        if any(k in name for k in keys):
+            return family
+    return "other elementwise (bias/residual add, mul, pad, copy)"
+
+
+def family_breakdown(label: str, fn: Callable[[], object], repeats: int, n: int = 10) -> None:
+    """GPU kernel time per op family from `repeats` separate torch-profiler
+    captures of `n` calls each. Prints, per family, the median share and
+    its min-max range over the captures, so a single capture inflated by
+    co-tenant time-slicing does not decide the split."""
+    from torch.profiler import ProfilerActivity, profile
+    for _ in range(5):
+        fn()
+    torch.cuda.synchronize()
+    shares: dict[str, list[float]] = {}
+    totals, counts = [], {}
+    for _ in range(repeats):
+        with profile(activities=[ProfilerActivity.CUDA]) as prof:
+            for _ in range(n):
+                fn()
+            torch.cuda.synchronize()
+        per: dict[str, float] = {}
+        cnt: dict[str, int] = {}
+        for e in prof.events():
+            if e.device_type.name != "CUDA":
+                continue
+            f = _family(e.name)
+            per[f] = per.get(f, 0.0) + e.device_time / n
+            cnt[f] = cnt.get(f, 0) + 1
+        total = sum(per.values())
+        totals.append(total / 1e3)
+        for f, v in per.items():
+            shares.setdefault(f, []).append(100.0 * v / total)
+        counts = {f: c / n for f, c in cnt.items()}
+    print(f"\n=== op families: {label} ({repeats} captures x {n} calls) ===")
+    print(f"kernels per call: {sum(counts.values()):.0f}; GPU kernel time per call: median "
+          f"{np.median(totals):.3f} ms (min {min(totals):.3f}, max {max(totals):.3f})")
+    for f, v in sorted(shares.items(), key=lambda kv: -np.median(kv[1])):
+        print(f"  {f:52s} median {np.median(v):5.1f}%  (min {min(v):5.1f}, max {max(v):5.1f})  "
+              f"kernels/call {counts.get(f, 0):.0f}")
+
+
+def section_profile(ae: torch.nn.Module, v1: np.ndarray, v2: np.ndarray, repeats: int) -> None:
     from torch.profiler import ProfilerActivity, profile
     x = torch.cat([_prep_view(torch.from_numpy(v).to(DEV), (224, 224), DEV, BF16) for v in (v1, v2)], dim=-1)
-    print(f"\n=== profile: AutoEncoder.encode, input {tuple(x.shape)} {x.dtype} ===")
-    with torch.no_grad():
-        for _ in range(5):
-            ae.encode(x)
-        torch.cuda.synchronize()
-        n = 10
-        with profile(activities=[ProfilerActivity.CUDA]) as prof:
-            for _ in range(n):
-                ae.encode(x)
-            torch.cuda.synchronize()
-    kernels = [e for e in prof.events() if e.device_type.name == "CUDA"]
-    total_us = sum(e.device_time for e in kernels) / n
-    print(f"CUDA kernels per encode: {len(kernels) / n:.0f}; GPU time per encode: {total_us / 1e3:.3f} ms")
-    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=30, max_name_column_width=90))
-
     native = NativeFlux2Encoder(ae)
-    print(f"\n=== profile: NativeFlux2Encoder.encode, input {tuple(x.shape)} {x.dtype} ===")
     with torch.no_grad():
-        for _ in range(5):
-            native.encode(x)
-        torch.cuda.synchronize()
-        with profile(activities=[ProfilerActivity.CUDA]) as prof:
-            for _ in range(n):
-                native.encode(x)
-            torch.cuda.synchronize()
-    kernels = [e for e in prof.events() if e.device_type.name == "CUDA"]
-    total_us = sum(e.device_time for e in kernels) / n
-    print(f"CUDA kernels per encode: {len(kernels) / n:.0f}; GPU time per encode: {total_us / 1e3:.3f} ms")
-    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20, max_name_column_width=90))
+        family_breakdown(f"AutoEncoder.encode {tuple(x.shape)}", lambda: ae.encode(x), repeats)
+        family_breakdown(f"NativeFlux2Encoder.encode {tuple(x.shape)}", lambda: native.encode(x), repeats)
+        for label, fn in (("AutoEncoder.encode", lambda: ae.encode(x)),
+                          ("NativeFlux2Encoder.encode", lambda: native.encode(x))):
+            with profile(activities=[ProfilerActivity.CUDA]) as prof:
+                for _ in range(10):
+                    fn()
+                torch.cuda.synchronize()
+            print(f"\n=== per-kernel table, one capture: {label} ===")
+            print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20, max_name_column_width=90))
 
 
 def section_preprocess(ae: torch.nn.Module, v1: np.ndarray, v2: np.ndarray, iters: int) -> None:
@@ -352,6 +395,7 @@ def main() -> None:
     ap.add_argument("--precision", default="nvfp4")
     ap.add_argument("--vae-variants", default="eager-torch,eager-native,graph-torch,graph-native")
     ap.add_argument("--raw-views", action="store_true")
+    ap.add_argument("--profile-repeats", type=int, default=5)
     args = ap.parse_args()
     print(f"torch {torch.__version__}, device {torch.cuda.get_device_name()}")
     v1, v2, src = load_views()
@@ -361,7 +405,7 @@ def main() -> None:
         return
     ae = load_real_ae(_ae_path(), _flux2_src())
     if args.section in ("all", "profile"):
-        section_profile(ae, v1, v2)
+        section_profile(ae, v1, v2, args.profile_repeats)
     if args.section in ("all", "preprocess"):
         section_preprocess(ae, v1, v2, args.iters)
     if args.section in ("all", "encode"):

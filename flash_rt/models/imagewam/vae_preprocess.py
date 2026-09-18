@@ -13,10 +13,13 @@ Resize modes:
   handling), then `x * 2.0 / 255.0 - 1.0` in float32, then BF16. When
   the view is already `out_hw`, the kernel reads a 256-entry BF16
   normalization table instead.
-- `"pil_bilinear"`: bit-identical to the official LIBERO eval
-  `eval_libero_single._center_crop_resize` (PIL `Image.resize(...,
-  BILINEAR)` to cover `out_hw` with the aspect ratio kept, then a
-  center crop), followed by the same normalization table.
+- `"pil_bilinear"`: the resize is bit-identical to the official LIBERO
+  eval's `eval_libero_single._center_crop_resize` (PIL `Image.resize(...,
+  BILINEAR)` to cover `out_hw` with the aspect ratio kept, then a center
+  crop); normalization is the same float32-derived table as `"area"`.
+  The official eval normalizes in BF16 arithmetic instead, which differs
+  from this table in 127 of 256 entries (issues.md ISSUE-030), so the
+  whole preprocessing is not bit-identical to the official eval.
 
 The normalization table is computed on the GPU with the same torch
 expression `_prep_view` uses, so it equals that path bit-for-bit by
