@@ -131,8 +131,12 @@ def _sweep_family(family: str, lins: list, variants: list[str], tiles: dict[str,
     rows: dict[str, Row] = {}
     for v in variants:
         out.zero_()
-        rc = lins[0].launch_variant(v, out.data_ptr(), M, 0)
-        torch.cuda.synchronize()
+        try:
+            rc = lins[0].launch_variant(v, out.data_ptr(), M, 0)
+            torch.cuda.synchronize()
+        except Exception as e:  # e.g. a kernel symbol this build does not export
+            rows[v] = Row(family, v, tiles.get(v, ""), None, None, f"raised {type(e).__name__}")
+            continue
         if rc != 0:
             rows[v] = Row(family, v, tiles.get(v, ""), None, None, f"rc={rc:#x}")
             continue
@@ -150,7 +154,7 @@ def _sweep_family(family: str, lins: list, variants: list[str], tiles: dict[str,
     times = timer.us_per_launch([make(v) for v in ok], len(lins))
     for v, t in zip(ok, times):
         r = rows[v]
-        rows[v] = Row(r.family, r.variant, r.tile, t, r.cos_fp16, r.status)
+        rows[v] = Row(r.family, r.variant, r.tile, t, r.cos_fp16, r.status if t is not None else "timing_failed")
     return [rows[v] for v in variants]
 
 
@@ -260,7 +264,7 @@ def run_kernels(timer: CudaGraphVariantTimer) -> list[dict]:
                                 winner_us=round(best.us, 3), tuner=t))
         ref_fp16 = next(r for r in rows if r.variant == "fp16")
         summary.append(dict(site=shape.site, n=shape.n, k=shape.k, family="cublaslt_fp16",
-                            us=round(ref_fp16.us, 3)))
+                            us=None if ref_fp16.us is None else round(ref_fp16.us, 3)))
         del weights
         torch.cuda.empty_cache()
     print("\nSUMMARY_JSON " + json.dumps(summary))

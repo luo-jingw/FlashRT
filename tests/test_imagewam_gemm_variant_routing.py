@@ -243,3 +243,18 @@ def test_flag_off_leaves_heuristic_tiles(monkeypatch, fake_fp4):
     lins = [lin for lin in fe._weights.values() if isinstance(lin, Nvfp4Linear)]
     assert lins and all(lin.variant == lin.default_variant for lin in lins)
     assert fake_fp4 == []
+
+
+def test_stale_build_without_small_m_fp8_tiles_still_constructs(monkeypatch, fake_fp8_cutlass):
+    """A `flash_rt_kernels` built before the 1-SM FP8 tiles existed lacks the
+    `cutlass_fp8_t128x*` symbols: those candidates are rejected with the
+    AttributeError, and tuning chooses among the tiles that exist."""
+    for v in ("t128x64x256", "t128x64x128", "t128x128x128", "t128x256x128"):
+        monkeypatch.delattr(fvk, f"cutlass_fp8_{v}", raising=False)
+    fe, _ = _build(monkeypatch, "fp8_static_cutlass", fake_fp8_cutlass, prefer="plain")
+    for r in fe.gemm_variant_results:
+        print(r.summary())
+        by_v = {x.variant: x for x in r.measurements}
+        assert all(by_v[v].status.startswith("launch_failed AttributeError")
+                   for v in by_v if v.startswith("t128x"))
+        assert r.chosen_variant == "plain"

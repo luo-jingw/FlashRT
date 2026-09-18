@@ -3190,7 +3190,8 @@ class VariantTunableGemm(Protocol):
     def launch_variant(self, variant: str, out_ptr: int, m: int, stream: int) -> int: ...
 
 class VariantTimer(Protocol):
-    def us_per_launch(self, launch_batch: Callable[[int], None], launches_per_batch: int) -> float: ...
+    def us_per_launch(self, batches: Sequence[Callable[[int], None]],
+                      launches_per_batch: int) -> tuple[float | None, ...]: ...   # None: batch raised
 
 class GemmVariantTuner:
     def __init__(self, timer: VariantTimer, *, device: str = "cuda",
@@ -3201,7 +3202,8 @@ class GemmVariantTuner:
 # flash_rt/models/imagewam/gemm_variant_timer.py
 class CudaGraphVariantTimer:
     def __init__(self, *, reps: int = 4, samples: int = 15, warmup: int = 3): ...
-    def us_per_launch(self, launch_batch: Callable[[int], None], launches_per_batch: int) -> float: ...
+    def us_per_launch(self, batches: Sequence[Callable[[int], None]],
+                      launches_per_batch: int) -> tuple[float | None, ...]: ...
 
 # flash_rt/frontends/torch/imagewam_thor.py
 class ImageWAMTorchFrontendThor:
@@ -3213,15 +3215,18 @@ Selection rule, per group of linears sharing `(family, M, N, K)`:
 
 1. Stage the same random input into every member.
 2. For every candidate, launch it once per member eagerly. Record
-   `launch_failed` for a nonzero return code, and `nonfinite` or
-   `mismatch` when its output against the default variant's output on
-   the same member is non-finite or below `cosine_floor`.
+   `launch_failed` for a nonzero return code or a raised Python
+   exception, and `nonfinite` or `mismatch` when its output against the
+   default variant's output on the same member is non-finite or below
+   `cosine_floor`. The default variant failing or raising is an error.
 3. Time each surviving candidate as one launch per member, round
    robin, so each launch reads a different layer's weight and the
    timing does not run from a warm L2. The batch is captured in one
    CUDA graph so launch overhead is excluded.
+   A candidate the timer cannot capture is `timing_failed`.
 4. Choose the fastest candidate. Keep the default unless the winner is
-   faster by more than `min_gain` (2%).
+   faster by more than `min_gain` (2%), or if the default itself could
+   not be timed.
 5. Apply the choice to every member and cache it.
 
 ## Flow

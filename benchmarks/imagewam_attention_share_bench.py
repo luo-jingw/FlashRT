@@ -289,7 +289,11 @@ def run_kernels(layers: int, samples: int) -> None:
         times = timer.us_per_launch([b for _, b, _ in ok_rows], layers)
         chain_us = times[0]
         for (name, _, (cos, mx, rl2)), us in zip(ok_rows, times):
-            print(f"{name:16s} {us:9.2f} {chain_us / us:9.3f} {cos:9.6f} {mx:9.2e} {rl2:9.2e}")
+            if us is None:
+                print(f"{name:16s} {'capture failed':>19s} {cos:9.6f} {mx:9.2e} {rl2:9.2e}")
+                continue
+            rel = f"{chain_us / us:9.3f}" if chain_us is not None else f"{'-':>9s}"
+            print(f"{name:16s} {us:9.2f} {rel} {cos:9.6f} {mx:9.2e} {rl2:9.2e}")
         del ks, vs
         torch.cuda.empty_cache()
 

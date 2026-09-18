@@ -34,7 +34,7 @@ class _StubGemm:
     def __init__(self, *, seed: int, family: str = "stub", n: int = 24, k: int = 32,
                  default: str = "a", candidates: tuple[str, ...] = ("a", "b", "c"),
                  rcs: dict[str, int] | None = None, perturb: dict[str, float] | None = None,
-                 nonfinite: frozenset[str] = frozenset()):
+                 nonfinite: frozenset[str] = frozenset(), raises: dict[str, Exception] | None = None):
         self.family, self.n, self.k = family, n, k
         self.default_variant = default
         self.variant = default
@@ -42,6 +42,7 @@ class _StubGemm:
         self._rcs = rcs or {}
         self._perturb = perturb or {}
         self._nonfinite = nonfinite
+        self._raises = raises or {}
         gen = torch.Generator().manual_seed(seed)
         self._w = torch.randn(k, n, generator=gen)
         self._x: torch.Tensor | None = None
@@ -60,6 +61,8 @@ class _StubGemm:
 
     def launch_variant(self, variant: str, out_ptr: int, m: int, stream: int) -> int:
         self.launch_log.append(variant)
+        if variant in self._raises:
+            raise self._raises[variant]
         rc = self._rcs.get(variant, 0)
         if rc != 0:
             return rc
@@ -76,14 +79,18 @@ class _StubGemm:
 
 class _StubTimer:
     """Runs each batch once and reports the fixed time of the variant the
-    batch launched (read back from the first member's launch log)."""
+    batch launched (read back from the first member's launch log);
+    variants listed in `untimeable` come back as `None`, as from a batch
+    that could not be captured."""
 
-    def __init__(self, members: list[_StubGemm], us: dict[str, float]):
+    def __init__(self, members: list[_StubGemm], us: dict[str, float],
+                 untimeable: frozenset[str] = frozenset()):
         self._members = members
         self._us = us
+        self._untimeable = untimeable
         self.calls = 0
 
-    def us_per_launch(self, batches, launches_per_batch: int) -> tuple[float, ...]:
+    def us_per_launch(self, batches, launches_per_batch: int) -> tuple[float | None, ...]:
         self.calls += 1
         out = []
         for batch in batches:
@@ -91,12 +98,14 @@ class _StubTimer:
             batch(0)
             launched = sum(len(m.launch_log) for m in self._members) - before
             assert launched == launches_per_batch
-            out.append(self._us[self._members[0].launch_log[-1]])
+            v = self._members[0].launch_log[-1]
+            out.append(None if v in self._untimeable else self._us[v])
         return tuple(out)
 
 
-def _tune(members: list[_StubGemm], us: dict[str, float], m: int = 4, **kw):
-    timer = _StubTimer(members, us)
+def _tune(members: list[_StubGemm], us: dict[str, float], m: int = 4,
+          untimeable: frozenset[str] = frozenset(), **kw):
+    timer = _StubTimer(members, us, untimeable)
     tuner = GemmVariantTuner(timer, device="cpu", **kw)
     result = tuner.tune(members, m)
     return tuner, timer, result
@@ -163,6 +172,41 @@ def test_failure_on_one_member_rejects_the_candidate():
     members[2]._rcs = {"b": 3}
     _, _, result = _tune(members, {"a": 10.0, "b": 1.0, "c": 8.0})
     assert result.chosen_variant == "c"
+
+
+def test_candidate_raising_is_rejected_not_fatal():
+    """A stale build without a candidate's kernel symbol raises
+    AttributeError from `getattr(fvk, ...)`; the candidate is rejected and
+    tuning completes."""
+    members = _group(raises={"b": AttributeError("module 'flash_rt_kernels' has no attribute "
+                                                 "'cutlass_fp8_t128x64x256'")})
+    _, _, result = _tune(members, {"a": 10.0, "b": 1.0, "c": 8.0})
+    by_v = {x.variant: x for x in result.measurements}
+    print(result.summary())
+    assert by_v["b"].status.startswith("launch_failed AttributeError:")
+    assert by_v["b"].us_per_gemm is None
+    assert result.chosen_variant == "c"
+
+
+def test_default_raising_is_an_error():
+    members = _group(raises={"a": AttributeError("missing default kernel")})
+    with pytest.raises(RuntimeError, match="default variant 'a' raised AttributeError"):
+        _tune(members, {"a": 10.0, "b": 5.0, "c": 8.0})
+
+
+def test_untimeable_candidate_is_rejected():
+    members = _group()
+    _, _, result = _tune(members, {"a": 10.0, "b": 1.0, "c": 8.0}, untimeable=frozenset({"b"}))
+    by_v = {x.variant: x for x in result.measurements}
+    assert by_v["b"].status == "timing_failed" and by_v["b"].us_per_gemm is None
+    assert result.chosen_variant == "c"
+
+
+def test_untimeable_default_is_kept():
+    members = _group()
+    _, _, result = _tune(members, {"a": 10.0, "b": 1.0, "c": 8.0}, untimeable=frozenset({"a"}))
+    assert result.chosen_variant == "a"
+    assert all(m.variant == "a" for m in members)
 
 
 def test_default_failure_raises():
@@ -253,3 +297,18 @@ def test_cuda_graph_timer_on_real_launches():
           f"eager event-timed x1 P50={eager[len(eager) // 2]:.2f}us (M={m} N={n} K={k}, shared GPU)")
     assert us_x1 > 0.0 and us_x4 > 0.0
     assert all(t == t and t != float("inf") for t in (us_x1, us_x4))
+
+    def raising(stream: int) -> None:
+        raise AttributeError("stand-in: kernel symbol missing")
+
+    def invalidating(stream: int) -> None:
+        batch(1)(stream)
+        if torch.cuda.is_current_stream_capturing():
+            torch.cuda.synchronize()  # not permitted during capture: invalidates it
+
+    caller = torch.cuda.current_stream()
+    times = timer.us_per_launch([raising, batch(1), invalidating], members)
+    print(f"batch that raises -> {times[0]}, good batch -> {times[1]:.2f}us, "
+          f"capture-invalidating batch -> {times[2]}")
+    assert times[0] is None and times[2] is None and times[1] > 0.0
+    assert torch.cuda.current_stream() == caller

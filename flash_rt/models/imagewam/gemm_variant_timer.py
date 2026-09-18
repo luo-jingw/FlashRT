@@ -8,7 +8,10 @@ into its own CUDA graph (`reps` copies back to back), and the graphs are
 replayed round robin, `samples` times each, bracketed by CUDA events.
 Interleaving the candidates keeps a clock or co-tenant load change from
 landing entirely on one candidate. The reported value is the median
-replay time divided by the launches it contains.
+replay time divided by the launches it contains. A batch that raises
+while being warmed up or captured gets `None` and the others are still
+timed; the caller's current stream is restored first, because an
+invalidated capture leaves the capture stream current.
 """
 from __future__ import annotations
 
@@ -34,42 +37,51 @@ class CudaGraphVariantTimer:
         self._samples = int(samples)
         self._warmup = int(warmup)
 
+    def _capture(self, batch: Callable[[int], None], stream: torch.cuda.Stream) -> torch.cuda.CUDAGraph:
+        stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(stream):
+            batch(stream.cuda_stream)
+        torch.cuda.current_stream().wait_stream(stream)
+        torch.cuda.synchronize()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, stream=stream):
+            for _ in range(self._reps):
+                batch(stream.cuda_stream)
+        return graph
+
     def us_per_launch(self, batches: Sequence[Callable[[int], None]],
-                      launches_per_batch: int) -> tuple[float, ...]:
+                      launches_per_batch: int) -> tuple[float | None, ...]:
         if len(batches) == 0:
             return ()
-        stream = torch.cuda.Stream()
-        graphs: list[torch.cuda.CUDAGraph] = []
+        caller_stream = torch.cuda.current_stream()
+        graphs: list[torch.cuda.CUDAGraph | None] = []
         for batch in batches:
-            stream.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(stream):
-                batch(stream.cuda_stream)
-            torch.cuda.current_stream().wait_stream(stream)
-            torch.cuda.synchronize()
-            graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph, stream=stream):
-                for _ in range(self._reps):
-                    batch(stream.cuda_stream)
-            graphs.append(graph)
+            try:
+                graphs.append(self._capture(batch, torch.cuda.Stream()))
+            except Exception:  # a candidate that cannot be captured is reported as None
+                torch.cuda.set_stream(caller_stream)
+                graphs.append(None)
         torch.cuda.synchronize()
+        live = [(idx, g) for idx, g in enumerate(graphs) if g is not None]
 
         for _ in range(self._warmup):
-            for graph in graphs:
+            for _, graph in live:
                 graph.replay()
         torch.cuda.synchronize()
 
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
-        samples: list[list[float]] = [[] for _ in graphs]
+        samples: dict[int, list[float]] = {idx: [] for idx, _ in live}
         for _ in range(self._samples):
-            for idx, graph in enumerate(graphs):
+            for idx, graph in live:
                 start.record()
                 graph.replay()
                 end.record()
                 end.synchronize()
                 samples[idx].append(start.elapsed_time(end))
         launches = self._reps * int(launches_per_batch)
-        result = tuple(median_us_per_launch(s, launches) for s in samples)
-        del graphs
+        result = tuple(median_us_per_launch(samples[idx], launches) if idx in samples else None
+                       for idx in range(len(batches)))
+        del graphs, live
         torch.cuda.synchronize()
         return result

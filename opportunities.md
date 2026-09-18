@@ -3889,13 +3889,18 @@ than cuBLASLt at this M.
 - `GemmVariantTuner` (`flash_rt/models/imagewam/gemm_variant_tuner.py`)
   works on each group of ActionDiT linears sharing `(family, M, N, K)`.
   Candidates must reproduce the default tile's output on every member
-  (return code 0, finite, cosine >= 0.9999). They are timed as one
-  launch per member, round robin, so every launch reads a different
-  layer's weight, inside CUDA graphs
-  (`gemm_variant_timer.CudaGraphVariantTimer`) and interleaved across
-  candidates. A candidate replaces the default only if it is more than
-  2% faster. The choice is cached per `(family, M, N, K)` and applied
-  before graph capture.
+  (return code 0, no Python exception, finite, cosine >= 0.9999). A
+  stale `flash_rt_kernels` that lacks the `cutlass_fp8_t128x*` symbols
+  raises `AttributeError` for those candidates, which rejects them
+  without aborting construction. They are timed as one launch per
+  member, round robin, so every launch reads a different layer's
+  weight, inside CUDA graphs (`gemm_variant_timer.CudaGraphVariantTimer`)
+  and interleaved across candidates. A candidate the timer cannot
+  capture is rejected (`timing_failed`), and the caller's stream is
+  restored. A candidate replaces the default only if it is more than 2%
+  faster, and the default is kept if it could not be timed itself. The
+  choice is cached per `(family, M, N, K)` and applied before graph
+  capture.
 - NVFP4 candidates: every cluster-1x1x1 tile, v4, v5, v6, v7, v8, and
   v10 `128x64x256` (Pi0.5's decoder tile). The clustered tiles are
   excluded because Pi0.5 measured them winning in isolation and losing
@@ -3915,16 +3920,20 @@ than cuBLASLt at this M.
 The SM100 CUTLASS and NVFP4 kernels do not run on sm_90, so every
 number below is about the mechanism, not about a tile.
 
-- `tests/test_imagewam_gemm_variant_tuner.py` (14 tests): the
+- `tests/test_imagewam_gemm_variant_tuner.py` (18 tests): the
   selection rule against stub GEMMs. It covers argmin choice, the 2%
-  hysteresis, rejection on launch failure, mismatch (cosine 0.7987 in
-  the test) and non-finite output, failure on one member only, an
-  error when the default itself fails, the cache, and a distinct M
-  counting as a distinct key. The real-timer test runs on real cuBLASLt
+  hysteresis, rejection on a nonzero return code, on a raised exception
+  (`AttributeError`) and on a candidate that cannot be timed, mismatch
+  (cosine 0.7987 in the test) and non-finite output, failure on one
+  member only, an error when the default itself fails or raises,
+  keeping an untimeable default, the cache, and a distinct M counting
+  as a distinct key. The timer test also feeds a raising batch and a
+  capture-invalidating batch; both come back as `None`, the good batch
+  is still timed, and the caller's stream is restored. The real-timer test runs on real cuBLASLt
   launches (M=64, N=1024, K=3072, 6 weights): graph-timed 7.75 us per
   launch against 11.30 us eager event-timed, so launch overhead is
   excluded. A batch with 4x the work measured 3.62x.
-- `tests/test_imagewam_gemm_variant_routing.py` (6 tests): only the
+- `tests/test_imagewam_gemm_variant_routing.py` (7 tests): only the
   GEMM entry points are replaced (the whole `flash_rt_fp4` module, and
   the `cutlass_fp8_*` attributes). The real `Nvfp4Linear` /
   `StaticFp8Linear`, frontend grouping, tuner, graph capture and
@@ -3933,7 +3942,9 @@ number below is about the mechanism, not about a tile.
   reaches every ActionDiT GEMM in the captured graph, and the backbone
   keeps its heuristic tile. Tuning leaves `StaticFp8Linear`'s
   calibrate-before-call contract intact. With the flag off, no GEMM
-  launches at construction.
+  launches at construction. With the `cutlass_fp8_t128x*` symbols
+  removed, which simulates a stale build, construction completes and
+  those candidates show `launch_failed AttributeError`.
 - `sm110_check.sh` (CUDA 13.0, `GPU_ARCH=110`): `flash_rt_kernels`
   and `flash_rt_fp4` build and link, and the four
   `cutlass_fp8_t128x*` symbols are exported.

@@ -15,18 +15,21 @@ Selection rule for one group (`GemmVariantTuner.tune`):
    (`prepare_tuning_input`).
 2. Correctness gate, eager: every member runs its default variant into
    a reference buffer, then every other candidate into a second buffer.
-   A candidate is rejected on a nonzero return code, a non-finite
-   output, or a cosine against the default's output below
-   `cosine_floor` on any member. All variants of one family compute the
+   A candidate is rejected on a nonzero return code, a Python exception
+   from its launch (e.g. an `AttributeError` for a kernel symbol a stale
+   build does not export), a non-finite output, or a cosine against the
+   default's output below `cosine_floor` on any member. All variants of one family compute the
    same math on the same quantized operands, so a correct candidate
    differs from the default only by fp32 accumulation order.
 3. Timing: each surviving candidate is timed as one launch per member,
    round robin, so consecutive launches read different layers' weights
    (the deployed pipeline reads each weight once per step, never from a
    warm L2). Launch overhead is excluded by the timer (see
-   `gemm_variant_timer.py`).
+   `gemm_variant_timer.py`). A candidate the timer could not capture or
+   time is rejected (`timing_failed`).
 4. The fastest candidate wins only if it beats the default by more than
-   `min_gain`; otherwise the default is kept.
+   `min_gain`; otherwise the default is kept. If the default itself
+   could not be timed, it is kept.
 5. The choice is applied to every member (`set_variant`) and cached per
    `(family, M, N, K)`; a later `tune` call with the same key applies
    the cached choice without re-measuring.
@@ -47,6 +50,7 @@ STATUS_OK = "ok"
 STATUS_MISMATCH = "mismatch"
 STATUS_NONFINITE = "nonfinite"
 STATUS_LAUNCH_FAILED = "launch_failed"
+STATUS_TIMING_FAILED = "timing_failed"
 
 
 @dataclass(frozen=True)
@@ -59,7 +63,8 @@ class GemmShape:
 @dataclass(frozen=True)
 class VariantMeasurement:
     """One candidate's outcome. `status` is `ok`, `mismatch`, `nonfinite`,
-    or `launch_failed rc=<code>`. `cosine_vs_default` is the minimum over
+    `launch_failed rc=<code>`, `launch_failed <Exception>: <message>`, or
+    `timing_failed`. `cosine_vs_default` is the minimum over
     the group's members (1.0 for the default itself); `us_per_gemm` is
     the timed cost of one GEMM launch, `None` for a rejected candidate."""
     variant: str
@@ -131,10 +136,11 @@ class VariantTunableGemm(Protocol):
 class VariantTimer(Protocol):
     """Times several launch batches, interleaved. Each batch issues
     `launches_per_batch` GEMM launches on the stream it is given. Returns
-    the per-launch time in microseconds for each batch, in order."""
+    the per-launch time in microseconds for each batch, in order, or
+    `None` for a batch that raised while being prepared or captured."""
 
     def us_per_launch(self, batches: Sequence[Callable[[int], None]],
-                      launches_per_batch: int) -> tuple[float, ...]: ...
+                      launches_per_batch: int) -> tuple[float | None, ...]: ...
 
 
 def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -189,12 +195,17 @@ class GemmVariantTuner:
         statuses, cosines = self._check_candidates(members, candidates, m, n, k, default)
         survivors = [v for v in candidates if statuses[v] == STATUS_OK]
         times = self._time_candidates(members, survivors, m, n)
+        for v in survivors:
+            if times[v] is None:
+                statuses[v] = STATUS_TIMING_FAILED
+        timed = [v for v in survivors if times[v] is not None]
 
-        default_us = times[default]
-        best = min(survivors, key=lambda v: times[v])
+        default_us = times.get(default)
         chosen = default
-        if best != default and times[best] < default_us * (1.0 - self._min_gain):
-            chosen = best
+        if default_us is not None and timed:
+            best = min(timed, key=lambda v: times[v])
+            if best != default and times[best] < default_us * (1.0 - self._min_gain):
+                chosen = best
 
         measurements = tuple(
             VariantMeasurement(variant=v, status=statuses[v], cosine_vs_default=cosines[v],
@@ -233,8 +244,13 @@ class GemmVariantTuner:
         cosines: dict[str, float | None] = {v: None for v in candidates}
         cosines[default] = 1.0
         for idx, member in enumerate(members):
-            rc = member.launch_variant(default, ref.data_ptr(), m, 0)
-            self._sync()
+            try:
+                rc = member.launch_variant(default, ref.data_ptr(), m, 0)
+                self._sync()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{member.family} default variant {default!r} raised {type(exc).__name__}: {exc} "
+                    f"(M={m}, N={n}, K={k}, member {idx}) -- the served path would fail too") from exc
             if rc != 0:
                 raise RuntimeError(
                     f"{member.family} default variant {default!r} failed rc={rc} "
@@ -247,8 +263,13 @@ class GemmVariantTuner:
                 if v == default or statuses[v] != STATUS_OK:
                     continue
                 out.fill_(0)
-                rc = member.launch_variant(v, out.data_ptr(), m, 0)
-                self._sync()
+                try:
+                    rc = member.launch_variant(v, out.data_ptr(), m, 0)
+                    self._sync()
+                except Exception as exc:  # e.g. AttributeError: kernel symbol missing from this build
+                    first_line = str(exc).splitlines()[0] if str(exc) else ""
+                    statuses[v] = f"{STATUS_LAUNCH_FAILED} {type(exc).__name__}: {first_line[:120]}"
+                    continue
                 if rc != 0:
                     statuses[v] = f"{STATUS_LAUNCH_FAILED} rc={rc}"
                     continue
@@ -263,7 +284,7 @@ class GemmVariantTuner:
         return statuses, cosines
 
     def _time_candidates(self, members: Sequence[VariantTunableGemm], survivors: list[str],
-                         m: int, n: int) -> dict[str, float]:
+                         m: int, n: int) -> dict[str, float | None]:
         out = torch.empty(m, n, dtype=FP16, device=self._device)
         out_ptr = out.data_ptr()
 
@@ -278,7 +299,7 @@ class GemmVariantTuner:
         if len(per_launch) != len(survivors):
             raise RuntimeError(f"timer returned {len(per_launch)} times for {len(survivors)} batches")
         del out
-        return {v: float(t) for v, t in zip(survivors, per_launch)}
+        return {v: (None if t is None else float(t)) for v, t in zip(survivors, per_launch)}
 
     def _sync(self) -> None:
         if self._device.startswith("cuda"):
