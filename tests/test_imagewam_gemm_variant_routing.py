@@ -164,7 +164,7 @@ def test_static_fp8_cutlass_default_matches_heuristic_and_switches(fake_fp8_cutl
         cublaslt.candidate_variants()
 
 
-_SMALL_DIMS = dict(num_action=16)
+_SMALL_DIMS = dict(num_action=16, total=24)  # total = a0 (8) + num_action
 
 
 def _action_shapes(d: dict) -> set[tuple[int, int]]:
