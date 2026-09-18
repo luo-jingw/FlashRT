@@ -128,18 +128,29 @@ rt = fe.export_model_runtime(identity={"weights_sha256": digest})
 
 ## Verification
 
+Before every ABI tick the tests and the gate NaN-fill each buffer the
+tick must write or refresh (`img_raw` or the in-graph uint8 views, the
+proprio row or the whole context, K/V caches, `Q_O`, backbone residual,
+action latent), and each parity row is re-run with the verb it exercises
+made a no-op (`tests/_helpers/imagewam_abi_checks.py`); every such mutant
+must make its row fail.
+
 - `tests/test_imagewam_model_runtime_export.py`: small random-weight
-  dims. Schema, identity sensitivity, STAGED/SWAP guards, and a ctypes
-  consumer tick that is `array_equal` to `infer()`. Skips when
-  `exec/build` or `runtime/build` is missing.
+  dims. Schema, identity (including sensitivity to caller pairs), status
+  codes equal to the `io="native"` face's (`EXPECTED_STATUSES`), and a
+  poisoned ctypes consumer tick that is `array_equal` to `infer()`; the
+  proprio-verb, `step` and unwritten-`image_tokens` mutants fail. Skips
+  when `exec/build` or `runtime/build` is missing.
 - `tests/test_imagewam_model_runtime_vae.py`: the real AE at the real
-  token count (random-weight backbone), both VAE placements; the `images`
-  STAGED path and (VAE inside the graph) the `image_views` SWAP path are
-  `array_equal` to `infer()`.
+  token count (random-weight backbone), both VAE placements; the poisoned
+  `images` STAGED path and (VAE inside the graph) the `image_views` SWAP
+  path are `array_equal` to `infer()`, and an `images` no-op fails.
 - `tests/gate_imagewam_model_runtime_export.py`: real checkpoint, VAE,
   Qwen3 and dataset stats. On H100 at `fp16` with a real LIBERO frame,
   with the VAE outside and inside the graph (`--vae-graph-input 224 224`),
-  the ABI consumer is bit-identical to `infer()` for the VAE tokens the
-  `images` port stages, the denormalized `actions`, `actions_raw`, the
-  `image_tokens` / `image_views` SWAP path, and the `prompt` SETUP path
-  (all `array_equal`, `max_abs = 0`).
+  the poisoned ABI tick is bit-identical to `infer()` for the VAE tokens
+  the `images` port stages, the denormalized `actions`, `actions_raw`,
+  the `image_tokens` / `image_views` SWAP path, and the `prompt` SETUP
+  path (all `array_equal`, `max_abs = 0`). All five mutants are detected
+  in both placements (images, proprio on each image path, prompt, step).
+  On Thor the gate runs with `--precision nvfp4` and has not been run yet.

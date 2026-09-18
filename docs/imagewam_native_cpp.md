@@ -46,11 +46,12 @@ graph: `io="native"` and the native pipeline refuse a frontend built with
 AWQ input-scale fold) and precisions whose weights it has no linear
 descriptor for (`nvfp4_sim`, `fp8*`, `e0m3_hadamard`). FA4 (`use_fa4` /
 `use_fa4_mot`) is not available to the native pipeline, which uses the cuBLAS-decomposed per-head attention
-(`attention_qkv_fp16_perhead`). Supported precisions: `fp16` and `nvfp4`
-(the merged single-stream `linear1` path), with either layer structure:
-the served one (single-stream `linear2` as one GEMM, each gated residual
-fused with the following AdaLN) or the split/unfused one
-(`merge_linear2` / `fuse_res_norm` off).
+(`attention_qkv_fp16_perhead`). Precisions (the merged single-stream
+`linear1` path): `fp16`, verified on H100; `nvfp4`, compiled for sm_110
+(SM100-class CUTLASS builds) and pending verification on Thor. Both
+layer structures are supported: the served one (single-stream `linear2`
+as one GEMM, each gated residual fused with the following AdaLN) and the
+split/unfused one (`merge_linear2` / `fuse_res_norm` off).
 
 ## Module map
 
@@ -155,21 +156,46 @@ rt = fe.export_model_runtime(io="native", native=native, identity={...})
 
 ## Verification
 
-On H100, fp16:
+On H100, fp16. Before every tick and every graph replay the tests and
+gates NaN-fill each buffer the tick must write (`img_raw`, the proprio
+row, K/V caches, `Q_O`, backbone residual, action latent), and each
+parity row is re-run against mutants that must make it fail.
 
 - `tests/test_imagewam_native_pipeline.py` (small random dims, both
   layer structures): one backbone double-stream block, one single-stream
   block, the full prefill, the full denoise loop, and the captured native
-  graph are `array_equal` to the Python pipeline in every state buffer
-  (`backbone_hidden`, K/V caches, `Q_O`, `action_latent`); the
-  `io="native"` tick on the native graph is `array_equal` to `infer()`.
+  graph are `array_equal` to the Python pipeline in every state buffer,
+  and the native graph to the Python graph, `backbone_hidden` included.
+  The poisoned `io="native"` tick on the native graph is `array_equal` to
+  `infer()` in the actions, the backbone residual and the K/V caches.
+  Native pipelines built from a mutated resource table (no backbone
+  block, last single-stream block dropped, last denoise step dropped, one
+  block fed another block's `linear1` weight) all fail that tick. Also:
+  a second `set_pipeline` leaves no graph and frees the first pipeline's
+  resources; a native handle alone keeps the frontend alive (without it
+  the replay faults); an AWQ frontend is refused.
 - `tests/test_imagewam_native_runtime.py`: the Python declaration's
-  records equal the C++ records; a tick through the C verbs enters no
-  Python function (the `io="python"` face enters 57); status codes.
+  records equal the C++ records; the poisoned tick matches `infer()` with
+  proprio staged by the frontend or by the native verb, and fails when
+  the consumer skips the proprio verb or `step`; a tick through the C
+  verbs enters no Python function (the `io="python"` face enters 57);
+  status codes equal the `io="python"` face's (`EXPECTED_STATUSES`);
+  `use_graph` / `set_pipeline` / `capture` are refused while exported.
 - `tests/gate_imagewam_native_schema_parity.py`: at the real dims the
   Python declaration, the C++ records and the golden file are identical.
-- `tests/gate_imagewam_native_parity.py --graph native`: with the real
-  checkpoint and the served layer structure, the native graph (4974
-  nodes; the Python graph has 4998) and the `io="native"` tick, including
-  the native proprio token, are `array_equal` to the Python graph and to
-  `infer()`.
+- `tests/gate_imagewam_native_parity.py --graph native`: real checkpoint,
+  served layer structure. The native graph has 4974 nodes (the Python
+  graph 4998). With proprio staged by the frontend or by the native verb,
+  the poisoned `io="native"` tick's actions, `actions_raw`, native
+  proprio token, backbone residual and K/V caches are `array_equal` to
+  `infer()`, and a poisoned native-graph replay equals a Python-graph
+  replay in the action latent, backbone residual and K/V caches. All six
+  mutants are detected (proprio verb or `step` not called, and the four
+  resource-table mutants). Without `--graph native` (the native verbs
+  replay the Python graph) the same tick rows and the two call mutants
+  pass.
+
+Thor (`nvfp4`): `sm110_check.sh` builds `flashrt_imagewam_native` for
+sm_110; the parity tests and gates above run there with
+`IMAGEWAM_NATIVE_PRECISION=nvfp4` and `--precision nvfp4` (plan.md,
+"Native C++ overlay", Thor checklist) and have not been run yet.
