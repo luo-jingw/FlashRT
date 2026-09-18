@@ -29,27 +29,28 @@ FP16 = torch.float16
 ITERS = int(os.environ.get("ITERS", "50"))
 ROUNDS = int(os.environ.get("ROUNDS", "20"))
 
+# Every distinct (M, N, K) of the served pipeline at the real LIBERO dims,
+# with the merged single-stream linear1 and linear2 (K = hidden +
+# mlp_hidden for linear2).
 REAL_SHAPES = {
     "txt_qkv": (513, 9216, 3072), "txt_proj": (513, 3072, 3072),
     "txt_mlp0": (513, 18432, 3072), "txt_mlp2": (513, 3072, 9216),
     "img_qkv": (392, 9216, 3072), "img_proj": (392, 3072, 3072),
     "img_mlp0": (392, 18432, 3072), "img_mlp2": (392, 3072, 9216),
-    "single_linear1": (905, 27648, 3072), "single_attn_out": (905, 3072, 3072),
-    "single_mlp_down": (905, 3072, 9216),
+    "single_linear1": (905, 27648, 3072), "single_linear2": (905, 3072, 12288),
     "action_qkv": (64, 9216, 1024), "action_proj": (64, 1024, 3072),
     "action_mlp0": (64, 8192, 1024), "action_mlp2": (64, 1024, 4096),
-    "action_linear1": (64, 17408, 1024),
+    "action_linear1": (64, 17408, 1024), "action_linear2": (64, 1024, 7168),
 }
-# Calls per infer() at the real dims (5 double + 20 single backbone
-# layers once; 5 double + 20 single ActionDiT layers x 10 steps). The
-# ActionDiT single-stream attn_out_proj / mlp_down share the double
-# stream's proj / mlp2 shapes.
+# Calls per infer(): backbone 5 double layers (one call per side and slot)
+# and 20 single layers, once; ActionDiT 5 double and 20 single layers,
+# once per denoise step (10 steps).
 CALLS_PER_INFER = {
     "txt_qkv": 5, "txt_proj": 5, "txt_mlp0": 5, "txt_mlp2": 5,
     "img_qkv": 5, "img_proj": 5, "img_mlp0": 5, "img_mlp2": 5,
-    "single_linear1": 20, "single_attn_out": 20, "single_mlp_down": 20,
-    "action_qkv": 50, "action_proj": 250, "action_mlp0": 50, "action_mlp2": 250,
-    "action_linear1": 200,
+    "single_linear1": 20, "single_linear2": 20,
+    "action_qkv": 50, "action_proj": 50, "action_mlp0": 50, "action_mlp2": 50,
+    "action_linear1": 200, "action_linear2": 200,
 }
 
 

@@ -221,20 +221,21 @@ def test_static_fp8_linear_cutlass_matches_fp16_reference():
     assert cos > 0.99, f"cosine too low: {cos}"
 
 
-# Every distinct (M, N, K) a quantized precision runs at the real LIBERO
-# dims (x0=513 text rows, img_len=392 image rows, a0=905 single-stream
-# rows, num_action=64 ActionDiT rows; hidden=3072, mlp_hidden=9216,
-# action_hidden_dim=1024, action_mlp_hidden=4096).
+# Every distinct (M, N, K) a quantized precision runs in the served
+# pipeline at the real LIBERO dims (x0=513 text rows, img_len=392 image
+# rows, a0=905 single-stream rows, num_action=64 ActionDiT rows;
+# hidden=3072, mlp_hidden=9216, action_hidden_dim=1024,
+# action_mlp_hidden=4096), with the merged single-stream linear1 and
+# linear2 (K = hidden + mlp_hidden).
 _REAL_SHAPES = {
     "txt_qkv": (513, 9216, 3072), "txt_proj": (513, 3072, 3072),
     "txt_mlp0": (513, 18432, 3072), "txt_mlp2": (513, 3072, 9216),
-    "img_qkv": (392, 9216, 3072), "img_mlp0": (392, 18432, 3072),
-    "img_mlp2": (392, 3072, 9216),
-    "single_linear1": (905, 27648, 3072), "single_attn_out": (905, 3072, 3072),
-    "single_mlp_down": (905, 3072, 9216),
+    "img_qkv": (392, 9216, 3072), "img_proj": (392, 3072, 3072),
+    "img_mlp0": (392, 18432, 3072), "img_mlp2": (392, 3072, 9216),
+    "single_linear1": (905, 27648, 3072), "single_linear2": (905, 3072, 12288),
     "action_qkv": (64, 9216, 1024), "action_proj": (64, 1024, 3072),
     "action_mlp0": (64, 8192, 1024), "action_mlp2": (64, 1024, 4096),
-    "action_linear1": (64, 17408, 1024),
+    "action_linear1": (64, 17408, 1024), "action_linear2": (64, 1024, 7168),
 }
 
 

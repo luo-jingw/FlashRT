@@ -61,9 +61,10 @@ The hypothesis held: the NN operation layout was the only cause.
   `[64,5120,1024]`; the NN call still returns status 15.
 - `tests/test_imagewam_quant_linear.py` runs its FP8 tests on H100: the
   small case gives cosine 0.999242 for dynamic and static FP8 (the same
-  value Thor measured), and every real ImageWAM shape (15 distinct
-  `(M,N,K)`) gives cosine 0.999295-0.999306, rel_l2 0.0373-0.0376
-  against `Fp16Linear` (random N(0,0.02) weight, N(0,1) input). The
+  value Thor measured), and every served ImageWAM shape (16 distinct
+  `(M,N,K)`, merged single-stream `linear1`/`linear2`) gives cosine
+  0.999291-0.999304, rel_l2 0.0373-0.0376 against `Fp16Linear` (random
+  N(0,0.02) weight, N(0,1) input). The
   NN-vs-TN test skips here (NN unsupported) and runs on Thor.
 - `sm110_check.sh`: builds; the Thor build exports the TN and NN symbols.
 - End to end on H100 with the real checkpoint
