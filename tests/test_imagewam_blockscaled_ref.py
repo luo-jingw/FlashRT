@@ -3,6 +3,8 @@ grids, UE4M3 scale rules, nibble packing, and the CUTLASS scale-factor
 byte layout -- at ImageWAM's real GEMM widths. Runs anywhere torch
 runs; the bit-exact comparison against the CUDA quantizers lives in
 `tests/test_imagewam_e0m3_hadamard.py` (Thor only)."""
+import math
+
 import pytest
 import torch
 
@@ -16,6 +18,7 @@ from flash_rt.models.imagewam.blockscaled_ref import (
     hadamard_matrix,
     pack_codes,
     pack_scales,
+    prepare_e0m3_hadamard_weight,
     quantize_blocks,
     rotate_k_blocks,
     sf_offsets,
@@ -38,7 +41,7 @@ def _outlier_matrix(rows: int, k: int, seed: int) -> torch.Tensor:
 
 
 @pytest.mark.parametrize("n", [16, 32, 64, 128, 256, 512])
-def test_hadamard_orthonormal(n):
+def test_hadamard_orthonormal(n: int) -> None:
     h = hadamard_matrix(n, device=DEV)
     err = (h @ h.t() - torch.eye(n, device=DEV)).abs().max().item()
     sym = (h - h.t()).abs().max().item()
@@ -48,7 +51,7 @@ def test_hadamard_orthonormal(n):
 
 @pytest.mark.parametrize("k", REAL_K)
 @pytest.mark.parametrize("block", [16, 128, 512])
-def test_block_rotation_preserves_gemm(k, block):
+def test_block_rotation_preserves_gemm(k: int, block: int) -> None:
     """<Hx, Hw> = <x, w> for the block-diagonal rotation, fp32 math."""
     if k % block:
         pytest.skip(f"K={k} not a multiple of {block}")
@@ -69,7 +72,7 @@ def test_block_rotation_preserves_gemm(k, block):
     assert (back - x).abs().max().item() < 1e-4 * x.abs().max().item()
 
 
-def test_fwht16_butterfly_matches_matrix():
+def test_fwht16_butterfly_matches_matrix() -> None:
     x = _outlier_matrix(128, 3072, 2)
     a = fwht16_butterfly(x)
     b = rotate_k_blocks(x, 16)
@@ -78,7 +81,7 @@ def test_fwht16_butterfly_matches_matrix():
     assert err < 1e-5 * x.abs().max().item()
 
 
-def test_ue4m3_round():
+def test_ue4m3_round() -> None:
     x = torch.tensor([0.0, 1e-12, 2.0 ** -9, 1.5 * 2.0 ** -9, 2.0 ** -6, 0.0137, 1.0625, 460.0, 1e9, -3.0], device=DEV)
     got = ue4m3_round(x).tolist()
     # 1.5*2^-9 ties to even (2^-8); 0.0137 -> subnormal 7*2^-9;
@@ -88,7 +91,7 @@ def test_ue4m3_round():
     assert got == want
 
 
-def test_element_grids():
+def test_element_grids() -> None:
     v = torch.tensor([0.25, 0.26, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0, 5.01, 99.0, -0.2, -2.6], device=DEV)
     assert e2m1_round(v).tolist() == [0.0, 0.5, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 6.0, -0.0, -3.0]
     u = torch.tensor([0.5, 1.5, 2.5, 6.49, 6.5, 7.6, -0.4, -3.5, -9.0], device=DEV)
@@ -100,7 +103,7 @@ def test_element_grids():
 
 
 @pytest.mark.parametrize("fmt,rule", [("e2m1", "amax"), ("e2m1", "mse"), ("e0m3", "amax")])
-def test_quantize_blocks_properties(fmt, rule):
+def test_quantize_blocks_properties(fmt: str, rule: str) -> None:
     x = _outlier_matrix(256, 3072, 3) * 0.05
     q = quantize_blocks(x, fmt, rule)
     qmax = 6.0 if fmt == "e2m1" else 7.0
@@ -114,7 +117,7 @@ def test_quantize_blocks_properties(fmt, rule):
     assert rel < 0.25
 
 
-def test_zero_scale_blocks_encode_like_kernels():
+def test_zero_scale_blocks_encode_like_kernels() -> None:
     x = torch.zeros(2, 32, device=DEV)
     x[0, :16] = 1e-4
     x[0, 3] = -1e-4
@@ -127,7 +130,7 @@ def test_zero_scale_blocks_encode_like_kernels():
         assert int(q.codes[0, 16]) == zero_code
 
 
-def test_pack_codes_nibble_order_and_roundtrip():
+def test_pack_codes_nibble_order_and_roundtrip() -> None:
     codes = torch.randint(0, 16, (8, 64), dtype=torch.uint8, device=DEV)
     packed = pack_codes(codes)
     assert packed.shape == (8, 32)
@@ -138,7 +141,7 @@ def test_pack_codes_nibble_order_and_roundtrip():
 @pytest.mark.parametrize("rows,k", [(9216, 3072), (3072, 9216), (27648, 3072), (1024, 4096),
                                     (17408, 1024), (905, 3072), (513, 3072), (392, 9216), (64, 1024),
                                     (64, 4096), (3, 7680 + 16)])
-def test_sf_offsets_layout(rows, k):
+def test_sf_offsets_layout(rows: int, k: int) -> None:
     off = sf_offsets(rows, k, device=DEV)
     size = sf_size_bytes(rows, k)
     flat = off.reshape(-1)
@@ -157,7 +160,7 @@ def test_sf_offsets_layout(rows, k):
     print(f"rows={rows} K={k}: sf bytes={size} used={flat.numel()}")
 
 
-def test_pack_scales_places_every_byte():
+def test_pack_scales_places_every_byte() -> None:
     rows, k = 200, 3072
     sb = torch.randint(1, 255, (rows, k // BLOCK), dtype=torch.uint8, device=DEV)
     buf = pack_scales(sb)
@@ -166,7 +169,7 @@ def test_pack_scales_places_every_byte():
     assert int((buf != 0).sum()) == rows * (k // BLOCK)
 
 
-def test_scale_rule_division_semantics():
+def test_scale_rule_division_semantics() -> None:
     """E0M3 divides by 7 exactly (`__fdiv_rn`): amax = 175/128 gives the
     exact tie 25/128, which rounds to the even UE4M3 value 0.1875. NVFP4
     multiplies by fp32(1/6) (fast-math lowering of `amax / 6.f`)."""
@@ -176,3 +179,20 @@ def test_scale_rule_division_semantics():
     x6 = torch.full((1, 16), 0.1, device=DEV)
     want = ue4m3_round(torch.tensor([0.1], device=DEV) * torch.tensor(1.0 / 6.0, device=DEV))
     assert float(quantize_blocks(x6, "e2m1").scales[0, 0]) == float(want[0])
+
+
+@pytest.mark.parametrize("n,k", [(3072, 9216), (1024, 12288), (17408, 1024)])
+def test_prepare_e0m3_hadamard_weight(n: int, k: int) -> None:
+    """Served weight prep: alpha is 2^-e, the largest block scale lands in
+    (224, 448], and undoing alpha and the rotation returns the weight to
+    fp16 rounding."""
+    w = _outlier_matrix(n, k, 7) * 0.02
+    w_in, alpha = prepare_e0m3_hadamard_weight(w)
+    e = -math.log2(alpha)
+    assert w_in.dtype == torch.float16 and w_in.shape == (n, k) and e == int(e)
+    top = float(w_in.float().abs().max()) / 7.0
+    back = rotate_k_blocks(w_in.float() * alpha, 16)
+    rel = float((back - w).norm() / w.norm())
+    print(f"N={n} K={k}: alpha=2^{-int(e)} largest block scale={top:.1f} round-trip rel_l2={rel:.2e}")
+    assert 224.0 < top <= 448.0
+    assert rel < 1e-3
