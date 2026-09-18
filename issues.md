@@ -142,3 +142,84 @@ Compare the backbone per layer on H100 with the SDPA backend pinned
 divergent layer.
 
 ## Resolution
+
+# ISSUE-010
+
+Status: open
+
+Area: `ImageWAMTorchFrontendThor._autotune_gemm` (`flash_rt/frontends/torch/imagewam_thor.py`), `fp16` precision only
+
+## Observation
+
+The merged single-stream `linear1` GEMM shapes, `(a0, 3*hidden +
+2*mlp_hidden, hidden)` and `(num_action, 3*action_attn_width +
+2*action_mlp_hidden, action_hidden_dim)`, are not in the autotune shape
+set. Every other `fp16` weight GEMM shape is, including the merged
+`linear2` shapes added by roadmap item 4. With `merge_qkv_mlp` on (the
+default for `fp16`), `GemmRunner.fp16_nn` runs `linear1` with the
+cuBLASLt heuristic's first pick.
+
+## Impact
+
+`fp16` only (quantized precisions do not use `fp16_nn` for these GEMMs).
+Size unknown: autotune can only match or beat the heuristic pick.
+
+## Evidence
+
+`_autotune_gemm`'s `shapes` set lists the split `qkv` and `mlp_in` shapes
+but no `3*hidden + 2*mlp_hidden` entry; commit 4e9f7d7 added the merged
+GEMM without adding its shape.
+
+## Hypotheses
+
+An omission in the `linear1` merge, not a deliberate choice.
+
+## Next Experiment
+
+Add both shapes, then A/B `fp16` `infer()` P50 on Thor with and without
+them in the same process.
+
+## Resolution
+
+# ISSUE-011
+
+Status: open
+
+Area: merged single-stream `linear2` (roadmap item 4) under `fp8`, `fp8_static`, `fp8_static_cutlass`
+
+## Observation
+
+`merge_linear2` is on for the FP8 precisions. `Fp8Linear` quantizes its
+input with one per-tensor absmax scale, and `StaticFp8Linear` with one
+calibrated per-tensor scale, so the merged GEMM quantizes the attention
+output and the SiLU-GLU activation with one shared scale where the split
+path used one scale per half.
+
+## Impact
+
+If the two halves differ strongly in magnitude, the smaller half loses
+FP8 resolution. None of these precisions is the shipped default
+(`nvfp4`, whose per-16-element block scales make the merged and split
+operands identical). No FP8 numbers exist for the merged path: FP8 GEMMs
+fail on H100 (ISSUE-001).
+
+## Evidence
+
+`quant_linear.py`: `Fp8Linear.__call__` runs `quantize_fp8_device_fp16`
+over the whole `(m, k)` input; `StaticFp8Linear.calibrate` freezes one
+`act_scale`.
+
+## Hypotheses
+
+The effect is small next to the existing FP8 calibration gap (the
+`N(0, 0.1)` placeholder activations), but it is unmeasured.
+
+## Next Experiment
+
+On Thor, `AB=merge_linear2 PRECISIONS=fp8,fp8_static` with `CKPT_PATH`
+set (`benchmarks/imagewam_fusion_ab.py`): compare merged vs split action
+cosine; if it is worse than `fp16`'s merged vs split, keep FP8 on the
+split path (`dims_override={"merge_linear2": False}` as the default for
+those precisions).
+
+## Resolution

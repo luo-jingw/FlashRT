@@ -1,9 +1,9 @@
 #!/usr/bin/env python
-"""A/B one `pipeline_thor.py` dims flag through the real served frontend.
+"""A/B `pipeline_thor.py` dims flags through the real served frontend.
 
 Builds two `ImageWAMTorchFrontendThor` instances at the real dims that
-differ only in one `dims` flag (A = flag False, B = flag True), captures
-both CUDA graphs, then reports, per precision:
+differ only in the `dims` flags named by `AB` (A = flags False, B =
+flags True), captures both CUDA graphs, then reports, per precision:
 
 1. Correctness: identical text context, image tokens and initial action
    noise into both, one graph replay each; `action_latent` (the final
@@ -15,14 +15,14 @@ both CUDA graphs, then reports, per precision:
    (uncaptured) prefill + denoise pass per side, from `torch.profiler`
    -- the same launches the captured graph replays.
 
-Flags (`AB=`):
+Flags (`AB=`, one or a comma list toggled together):
 - `merge_linear2`: single-stream `linear2` as one GEMM (roadmap item 4,
   plan.md "single-stream `linear2` merge").
 - `fuse_res_norm`: gated residual fused with the next AdaLN (roadmap
   item 3, plan.md "gated-residual + next-AdaLN fusion").
 
 Env:
-- `AB` (required): the flag to toggle.
+- `AB` (required): the flag(s) to toggle.
 - `PRECISIONS` (default `nvfp4,fp16`): comma list from `_PRECISIONS`.
 - `CKPT_PATH` (optional): real `model.pt`. Unset -> random weights drawn
   from the same seed for both sides. The merged `linear2` weight is drawn
@@ -30,6 +30,8 @@ Env:
   different weight values and only the speed numbers are comparable;
   its correctness comparison needs `CKPT_PATH`.
 - `ITERS` (default 50), `WARMUP` (default 10), `COUNT_KERNELS` (default 0).
+- `USE_FA4` (default 0): `use_fa4=True` for the "backbone" attention site
+  (Thor only; match the production configuration being compared).
 
 Speed on a shared GPU is indicative only; Thor numbers come from Thor.
 """
@@ -40,10 +42,9 @@ import os
 import numpy as np
 import torch
 
+import flash_rt.flash_rt_kernels as fvk
 from flash_rt.frontends.torch.imagewam_thor import _PRECISIONS, ImageWAMTorchFrontendThor
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
-
-import flash_rt.flash_rt_kernels as fvk
 
 REAL_DIMS = dict(
     hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
@@ -73,10 +74,11 @@ def _pcts(ts: list[float]) -> str:
     return f"P10={p10:8.2f}  P50={p50:8.2f}  P90={p90:8.2f} ms"
 
 
-def _build(precision: str, flag: str, value: bool, ckpt: str | None) -> ImageWAMTorchFrontendThor:
+def _build(precision: str, flags: list[str], value: bool, ckpt: str | None,
+           use_fa4: bool) -> ImageWAMTorchFrontendThor:
     torch.manual_seed(0)
-    dims = dict(REAL_DIMS, **{flag: value})
-    return ImageWAMTorchFrontendThor(precision=precision, dims_override=dims, ckpt_path=ckpt)
+    dims = dict(REAL_DIMS, **{flag: value for flag in flags})
+    return ImageWAMTorchFrontendThor(precision=precision, dims_override=dims, ckpt_path=ckpt, use_fa4=use_fa4)
 
 
 def _replay_with(fe: ImageWAMTorchFrontendThor, img: torch.Tensor, noise: torch.Tensor):
@@ -101,11 +103,13 @@ def _count_kernels(fe: ImageWAMTorchFrontendThor) -> int:
                and not e.name.startswith(("Memcpy", "Memset")))
 
 
-def run(precision: str, flag: str, ckpt: str | None, iters: int, warmup: int, count_kernels: bool) -> None:
-    print(f"\n=== {precision}: A = {flag}=False, B = {flag}=True "
-          f"({'real checkpoint' if ckpt else 'random weights'}) ===", flush=True)
-    a = _build(precision, flag, False, ckpt)
-    b = _build(precision, flag, True, ckpt)
+def run(precision: str, flags: list[str], ckpt: str | None, iters: int, warmup: int, count_kernels: bool,
+        use_fa4: bool) -> None:
+    names = "+".join(flags)
+    print(f"\n=== {precision}: A = {names} off, B = {names} on "
+          f"({'real checkpoint' if ckpt else 'random weights'}, use_fa4={use_fa4}) ===", flush=True)
+    a = _build(precision, flags, False, ckpt, use_fa4)
+    b = _build(precision, flags, True, ckpt, use_fa4)
     x0, jad = REAL_DIMS["x0"], REAL_DIMS["joint_attention_dim"]
     g = torch.Generator(device=DEV).manual_seed(1)
     ctx = torch.randn(x0, jad, generator=g, device=DEV).to(BF16)
@@ -117,7 +121,7 @@ def run(precision: str, flag: str, ckpt: str | None, iters: int, warmup: int, co
 
     act_a, hid_a = _replay_with(a, img, noise)
     act_b, hid_b = _replay_with(b, img, noise)
-    note = "" if (ckpt or flag != "merge_linear2") else "  (different random weights per side, see docstring)"
+    note = "" if (ckpt or "merge_linear2" not in flags) else "  (different random weights per side, see docstring)"
     print(f"actions         B vs A: {_stats(act_b, act_a)}{note}")
     print(f"backbone_hidden B vs A: {_stats(hid_b, hid_a)}{note}")
 
@@ -155,9 +159,9 @@ def run(precision: str, flag: str, ckpt: str | None, iters: int, warmup: int, co
 
 
 def main() -> None:
-    flag = os.environ.get("AB")
-    if flag not in FLAGS:
-        raise SystemExit(f"set AB to one of {FLAGS}")
+    flags = [f for f in os.environ.get("AB", "").split(",") if f]
+    if not flags or any(f not in FLAGS for f in flags):
+        raise SystemExit(f"set AB to one or more (comma-separated) of {FLAGS}")
     precisions = os.environ.get("PRECISIONS", "nvfp4,fp16").split(",")
     for p in precisions:
         if p not in _PRECISIONS:
@@ -166,10 +170,11 @@ def main() -> None:
     iters = int(os.environ.get("ITERS", "50"))
     warmup = int(os.environ.get("WARMUP", "10"))
     count_kernels = os.environ.get("COUNT_KERNELS", "0") == "1"
-    print(f"torch {torch.__version__}, device {torch.cuda.get_device_name()}, AB={flag}, "
+    use_fa4 = os.environ.get("USE_FA4", "0") == "1"
+    print(f"torch {torch.__version__}, device {torch.cuda.get_device_name()}, AB={flags}, "
           f"precisions={precisions}, iters={iters}")
     for p in precisions:
-        run(p, flag, ckpt, iters, warmup, count_kernels)
+        run(p, flags, ckpt, iters, warmup, count_kernels, use_fa4)
 
 
 if __name__ == "__main__":

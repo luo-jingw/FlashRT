@@ -3040,7 +3040,7 @@ approved`.
 
 # Plan: single-stream `linear2` merge (roadmap item 4)
 
-Plan Status: approved
+Plan Status: completed (locally verified; Thor results pending, opportunities.md OPT-016)
 
 ## Problem
 
@@ -3232,7 +3232,7 @@ Phase Status: completed
 
 ### Phase 5: Thor handoff
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: a self-contained Thor check for `nvfp4` and `fp16`.
 - Files: `opportunities.md` (OPT-016).
@@ -3240,7 +3240,7 @@ Phase Status: active
 
 # Plan: gated-residual + next-AdaLN fusion (roadmap item 3)
 
-Plan Status: approved
+Plan Status: completed (locally verified bit-exact; Thor results pending, opportunities.md OPT-017)
 
 ## Problem
 
@@ -3405,7 +3405,7 @@ Phase Status: completed
 
 ### Phase 3: regression, end to end, local A/B, sm_110 build
 
-Phase Status: active
+Phase Status: completed
 
 - Observation: `pytest tests/test_imagewam_*.py` count; e2e fp16 numbers
   vs baseline; `AB=fuse_res_norm` P10/P50/P90 on H100 (indicative);
@@ -3413,7 +3413,7 @@ Phase Status: active
 
 ### Phase 4: Thor handoff
 
-Phase Status: pending
+Phase Status: completed
 
 - Files: `opportunities.md` (OPT-017).
 - Observation: commands, expected observations, what to report.
