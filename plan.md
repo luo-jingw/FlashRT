@@ -2948,9 +2948,11 @@ Modified files: `opportunities.md` (new entry).
 
 # Roadmap: Pi0.5-derived optimization tracks
 
-Roadmap Status: pending (documentation/tracking only -- no item below
-is approved for implementation; each gets its own `# Plan: <item>`
-section, full `plan` skill rigor, when picked up individually)
+Roadmap Status: approved. All 14 items and the ISSUE-020 text-trim fix
+are implemented, verified on H100 and merged into `roadmap/integration`.
+Thor validation is pending; see "Execution status" and "Thor validation
+checklist" below. Each item has its own `# Plan: <item>` section later in
+this file.
 
 ## Problem
 
@@ -3016,6 +3018,64 @@ can start in any order, in parallel, immediately.
 
 Every other item (1, 2, 3, 4, 5, 6, 9, 10, 11, 12) has zero
 prerequisites and can start immediately, in parallel.
+
+## Execution status
+
+Measured on H100 (sm_90, shared GPU). Each item's own plan section and
+OPT entry hold the details. "Default" says whether the served
+configuration changed.
+
+| id | result | default | record |
+|---|---|---|---|
+| 1 | Per-shape measured tile choice for ActionDiT NVFP4/FP8 CUTLASS GEMMs, plus four 1-SM FP8 small-M tiles. Compiled for sm_110; correctness and speed not yet measured on Thor. | off (`gemm_variant_autotune=True`) | OPT-018 |
+| 2 | Fused uint8→BF16 VAE preprocessing kernel with a 256-entry table. Bit-exact to the previous path. | on | OPT-020 |
+| 3 | Gated residual fused with the following AdaLN, including across layer boundaries. Bit-exact over the whole pass. Together with item 4, cuts kernels per pass from 7082 to 4968. | on | OPT-017 |
+| 4 | Single-stream `attn_out_proj` + `mlp_down` merged into one `linear2` GEMM. NVFP4 operands are identical to the split path; only the accumulation order changes. | on, except `fp16_cutlass` | OPT-016 |
+| 5 | VAE stage capturable in the main graph, plus a native NHWC encoder with fused GroupNorm(+SiLU). VAE stage takes 4.3 ms on H100, against about 12 ms for the torch encoder. | off (`vae_encoder="native"`, `vae_graph_input`) | OPT-021 |
+| 6 | FA4 backbone and `mot` attention with a dedicated output buffer and a fallback to cuBLAS on failure. Not run on Thor at the served shapes. | off (`FLASHRT_THOR_FA4=1`, `use_fa4_mot=True`) | OPT-019 |
+| 7 | Real `fp8_static` calibration from 64 LIBERO frames (142 sites). Against fp16, actions cos is 0.99997 with the real calibration, vs 0.90 with the placeholder. Resolves ISSUE-001 with a TN FP8 layout on sm_89/sm_90. | opt-in (`calibration_path=`) | OPT-022 |
+| 8 | AWQ per-channel scales folded into NVFP4 weights. In simulation, backbone cos goes from 0.99820 to 0.99956. | off (`nvfp4_awq=True`) | OPT-023 |
+| 9 | `e0m3_hadamard` precision tier. Simulated 1 − actions cos is 2.97e-4, against 6.71e-4 for `nvfp4`. | off (`precision="e0m3_hadamard"`) | OPT-024 |
+| 10 | Jetson clock-state probe, printed by the ImageWAM benchmarks. | on (reporting only) | OPT-025 |
+| 11 | CPU-only precision-routing contract test. Eight precision columns. | n/a | OPT-026 |
+| 12 | `frt_model_runtime_v1` export (`io="python"`). Bit-exact to `infer()`; parity gates carry mutation tests. | n/a | OPT-028 |
+| 13 | LIBERO fidelity and latency gate: fixture v1, runner, per-device baselines. fp16 passes on H100. | n/a | OPT-027 |
+| 14 | Native C++ overlay (`io="native"`). Bit-exact; runs a tick without Python. Latency is equal to `io="python"` (4974 vs 4998 graph nodes). | n/a | OPT-029 |
+| ISSUE-020 | `text_trim`: each prompt runs at its valid text length, which reproduces official's masked attention. On libero_goal (fp16), vs official, median/min goes from 0.99680/0.92997 to 0.99998/0.99963. H100 `infer()` is about 30% faster. | off (`text_trim=True`) | OPT-030, ISSUE-080 |
+
+The fp16 served default matches the baseline end to end:
+`fr_vs_off` 0.99840/0.99566 and MAE 0.18359 on libero_spatial.
+
+Decisions that depend on Thor results or the owner:
+
+- Default precision: `nvfp4`, `nvfp4_awq`, `e0m3_hadamard`, or
+  `fp8_static(_cutlass)` with a calibration file.
+- Default-on for `text_trim` (conditions in ISSUE-080), FA4, the native VAE
+  encoder, and the tile tuner.
+- The initial-noise scale in `infer()` (ISSUE-002) and the served resize
+  filter (ISSUE-030).
+- Gate fixture v2 with a trimmed fp16 reference, and re-seeding the Thor
+  latency baseline (ISSUE-061, ISSUE-080).
+
+## Thor validation checklist
+
+`scripts/imagewam_thor_validation.sh` runs all steps. Its header lists
+the build, environment and artifact-bundle prerequisites. It writes one log
+per command and `SUMMARY.txt`. `STEPS="..."` selects steps. The bundle
+(`thor_bundle`: gate fixture v1 plus calibration files, with `SHA256SUMS`)
+is built on the H100 dev box.
+
+| step | checks | decides |
+|---|---|---|
+| 0 | commit, clock state, bundle checksums | provenance of every number |
+| 1 | full `pytest` suite; Thor-only tests run instead of skipping | correctness of every Thor-only kernel path |
+| 2 | served `nvfp4` default vs official; fusion A/B (items 3, 4); LIBERO gate for `nvfp4` and fp16; VAE preprocessing kernel | whether items 2-4 stay default-on; new `nvfp4` latency baseline |
+| 3 | `text_trim` off/on on three suites; speed and capture cost; multi-length graph safety at `nvfp4` and `e0m3_hadamard` | `text_trim` default (ISSUE-080) |
+| 4 | `e0m3_hadamard` vs `nvfp4`; NVFP4 with and without AWQ; `fp8_static(_cutlass)` with real and placeholder calibration; FP8 TN vs NN; `fp8_static` gate; trimmed `fp8_static_cutlass` | default precision; FP8 layout on Thor |
+| 5 | FA4 runtime, real-shape correctness, end to end, attention A/B, FA4 with `text_trim` | FA4 default |
+| 6 | VAE encode latency (torch/native, eager/graph); `infer()` A/B; native in-graph end to end | native VAE and in-graph defaults |
+| 7 | small-M tile sweep and `infer()` A/B | tile tuner default, or a fixed tile |
+| 8 | ABI export and native parity gates with mutants at `nvfp4` | Thor readiness of items 12 and 14 |
 
 ## Not planned (confirmed, not cost-gated)
 

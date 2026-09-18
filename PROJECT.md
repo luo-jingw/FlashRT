@@ -173,11 +173,15 @@ this fork covers Jetson AGX Thor (sm_110).
   The first build takes about 10-15 minutes at `-j24`; later builds are
   incremental. A passing build shows only that the code compiles and
   links. Correctness and speed still have to be checked on Thor.
-- Baseline on this machine: `pytest tests/test_imagewam_*.py` gave 68
-  passed and 6 skipped before ISSUE-001 was resolved. FP8 cuBLASLt now
-  runs here through the TN layout; the remaining skips are FA4, NVFP4,
-  SM100 CUTLASS FP8, and the FP8 NN-vs-TN comparison (needs a GPU that
-  supports both layouts).
+- Baseline on this machine, at commit 72b8c1d on `roadmap/integration`:
+  `pytest tests/test_imagewam_*.py tests/test_jetson_clock_state.py` gives
+  412 passed and 36 skipped.
+  - The count requires three extra builds: the `flashrt_imagewam_native`
+    target, `exec/build`, and `runtime/build`. Without them the native and
+    model-runtime test modules skip.
+  - Every skip needs Thor, FA4, or the FP8 NN-vs-TN comparison, which needs
+    a GPU that supports both layouts.
+  - FP8 cuBLASLt runs here through the TN layout (ISSUE-001).
 - Real activation-calibration files (`docs/imagewam_calibration.md`)
   live outside the repository, under
   `/home/user1/workspace/jingwu/artifacts/calibration/`.
