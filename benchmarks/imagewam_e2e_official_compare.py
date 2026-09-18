@@ -35,6 +35,8 @@ import pandas as pd
 import torch
 from PIL import Image
 
+from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state
+
 sys.path.insert(0, os.environ["FLUX2_SRC"] + "/src")
 sys.path.insert(0, os.environ["FLUX2_SRC"])
 
@@ -228,6 +230,7 @@ def main():
     print(f"all finite: {bool(df['finite'].all())}; masks equal: {bool(df['mask_eq'].all())}")
 
     # Steady-state latency (contaminated by co-tenant GPU load on this box; indicative only).
+    report_jetson_clock_state()
     obs = {"view1": torch.from_numpy(view1), "view2": torch.from_numpy(view2), "proprio": s["state"]}
     for _ in range(5):
         fe.infer(obs)
