@@ -47,7 +47,7 @@ IDENTITY_DIM_KEYS = (
     "num_layers_double", "num_layers_single", "action_hidden_dim", "action_attn_width",
     "action_mlp_hidden", "num_action", "action_dim", "action_num_layers_double",
     "action_num_layers_single", "num_denoise_steps", "shift", "num_train_timesteps",
-    "proprio_dim", "ref_h", "ref_w", "merge_qkv_mlp",
+    "proprio_dim", "ref_h", "ref_w", "merge_qkv_mlp", "merge_linear2",
 )
 
 

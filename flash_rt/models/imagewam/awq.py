@@ -29,7 +29,12 @@ A. AdaLN-fed GEMMs, `x = LN(h) * (1 + scale) + shift` (the
    stream share one modulation, so each AWQ layer gets its own folded
    pair, computed once per (layer, modulation) and cached
    (`AwqScaledLinear.folded_modulation`): graph warmup fills the cache
-   before capture, so replay only reads it.
+   before capture, so replay only reads it. When the AdaLN is fused into
+   the preceding gated residual (`dims["fuse_res_norm"]`), that kernel
+   reads FP32 modulation vectors and rounds them to fp16 itself; the
+   folded pair is handed to it in FP32
+   (`AwqScaledLinear.folded_modulation_fp32`), and its in-kernel rounding
+   gives the same fp16 constants as the unfused fold.
 B. Down projections, `x = silu(g) * u` with `u` a column block of the
    preceding merged GEMM (`mlp0 = [gate | up]`,
    `linear1 = [q | k | v | gate | up]`):
@@ -38,7 +43,10 @@ B. Down projections, `x = silu(g) * u` with `u` a column block of the
    that weight is quantized (Pi0.5 folds its down-projection `inv_s`
    into the up rows the same way). Sites: backbone double
    `{txt,img}_mlp2`, single `mlp_down`; ActionDiT double `mlp2`, single
-   `mlp_down`.
+   `mlp_down`. With the merged single-stream `linear2`
+   (`dims["merge_linear2"]`, input `[attn_out | silu(g) * u]`), only the
+   MLP channels are scaled: `s` is computed over them, and the
+   attention-output channels keep `s = 1`.
 
 No exact fold point: `proj` / `attn_out_proj` (input = attention output;
 V is shared by both backbone streams and by the ActionDiT's joint
@@ -63,12 +71,14 @@ _ADALN_SLOTS = {
     ("action_dit", "double"): ("qkv.weight", "mlp0.weight"),
     ("action_dit", "single"): ("linear1.weight",),
 }
-# Fold B: down-projection slot -> preceding merged gate/up slot.
+# Fold B: down-projection slot -> preceding merged gate/up slot. The
+# merged single-stream `linear2` (input `[attn_out | mlp_act]`) is scaled
+# on its MLP channels only (`_linear2_mlp_offset`).
 _DOWN_SLOTS = {
     ("backbone", "double"): {"txt_mlp2.weight": "txt_mlp0.weight", "img_mlp2.weight": "img_mlp0.weight"},
-    ("backbone", "single"): {"mlp_down.weight": "linear1.weight"},
+    ("backbone", "single"): {"mlp_down.weight": "linear1.weight", "linear2.weight": "linear1.weight"},
     ("action_dit", "double"): {"mlp2.weight": "mlp0.weight"},
-    ("action_dit", "single"): {"mlp_down.weight": "linear1.weight"},
+    ("action_dit", "single"): {"mlp_down.weight": "linear1.weight", "linear2.weight": "linear1.weight"},
 }
 
 
@@ -85,11 +95,20 @@ def fold_inv_scale_into_modulation(shift: torch.Tensor, scale: torch.Tensor,
     fp32 `(dim,)`. Returns contiguous fp16 `(dim,)` `(shift', scale')`
     with `1 + scale' = (1 + scale) * inv_s`, `shift' = shift * inv_s`,
     computed in fp32 and rounded once to fp16."""
+    shift_f, scale_f = fold_inv_scale_into_modulation_fp32(shift, scale, inv_s)
+    return shift_f.to(torch.float16).contiguous(), scale_f.to(torch.float16).contiguous()
+
+
+def fold_inv_scale_into_modulation_fp32(shift: torch.Tensor, scale: torch.Tensor,
+                                        inv_s: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """`fold_inv_scale_into_modulation` before the fp16 rounding:
+    contiguous fp32 `(dim,)` `(shift', scale')`, for kernels that read the
+    FP32 modulation and round it themselves."""
     sc = scale.reshape(-1).float()
     sh = shift.reshape(-1).float()
-    scale_f = (1.0 + sc) * inv_s - 1.0
-    shift_f = sh * inv_s
-    return shift_f.to(torch.float16).contiguous(), scale_f.to(torch.float16).contiguous()
+    scale_f = ((1.0 + sc) * inv_s - 1.0).contiguous()
+    shift_f = (sh * inv_s).contiguous()
+    return shift_f, scale_f
 
 
 class AwqScaledLinear(ABC):
@@ -100,7 +119,7 @@ class AwqScaledLinear(ABC):
     no caller action). Subclasses call `super().__init__()`."""
 
     def __init__(self) -> None:
-        self._awq_fold_cache: dict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] = {}
+        self._awq_fold_cache: dict[tuple[int, int, str], tuple[torch.Tensor, torch.Tensor]] = {}
 
     @property
     @abstractmethod
@@ -112,13 +131,24 @@ class AwqScaledLinear(ABC):
         """Fold A for one modulation pair, computed on first use and then
         returned from a cache keyed by the pair's storage (the frontend
         owns the modulation tensors for its lifetime)."""
+        return self._cached_fold(shift, scale, "fp16")
+
+    def folded_modulation_fp32(self, shift: torch.Tensor,
+                               scale: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Same as `folded_modulation`, in FP32 (for the fused gated
+        residual + AdaLN kernel, which rounds to fp16 itself)."""
+        return self._cached_fold(shift, scale, "fp32")
+
+    def _cached_fold(self, shift: torch.Tensor, scale: torch.Tensor,
+                     dtype: str) -> tuple[torch.Tensor, torch.Tensor]:
         inv_s = self.awq_inv_s
         if inv_s is None:
             raise RuntimeError("folded_modulation() on a weight without an AWQ input scale")
-        key = (shift.data_ptr(), scale.data_ptr())
+        key = (shift.data_ptr(), scale.data_ptr(), dtype)
         hit = self._awq_fold_cache.get(key)
         if hit is None:
-            hit = self._awq_fold_cache[key] = fold_inv_scale_into_modulation(shift, scale, inv_s)
+            fold = fold_inv_scale_into_modulation if dtype == "fp16" else fold_inv_scale_into_modulation_fp32
+            hit = self._awq_fold_cache[key] = fold(shift, scale, inv_s)
         return hit
 
 
@@ -152,6 +182,11 @@ def plan_awq(keys: list[tuple], channel_amax: dict[tuple, torch.Tensor], dims: d
         ("action_dit", "double"): dims["action_mlp_hidden"],
         ("action_dit", "single"): 3 * dims["action_attn_width"] + dims["action_mlp_hidden"],
     }
+    # First MLP channel of the merged single-stream linear2 input.
+    linear2_mlp_offset = {
+        ("backbone", "single"): dims["hidden"],
+        ("action_dit", "single"): dims["action_attn_width"],
+    }
     keyset = set(keys)
     plans: dict[tuple, AwqWeightPlan] = {}
     for key in keys:
@@ -168,8 +203,14 @@ def plan_awq(keys: list[tuple], channel_amax: dict[tuple, torch.Tensor], dims: d
             prev = (model, stream, layer, prev_slot)
             if prev not in keyset:
                 raise ValueError(f"{key}: preceding gate/up weight {prev} missing")
-            s_dn = awq_scale(channel_amax[key], alpha)
-            plans[key] = AwqWeightPlan(input_scale=s_dn, fold_input=False, up_inv_scale=None, up_offset=0)
+            if slot == "linear2.weight":
+                off = linear2_mlp_offset[(model, stream)]
+                s_dn = awq_scale(channel_amax[key][off:], alpha)
+                s_in = torch.cat([torch.ones(off, dtype=s_dn.dtype, device=s_dn.device), s_dn])
+            else:
+                s_dn = awq_scale(channel_amax[key], alpha)
+                s_in = s_dn
+            plans[key] = AwqWeightPlan(input_scale=s_in, fold_input=False, up_inv_scale=None, up_offset=0)
             p = plans.get(prev) or AwqWeightPlan(input_scale=None, fold_input=False,
                                                  up_inv_scale=None, up_offset=0)
             p.up_inv_scale = 1.0 / s_dn
