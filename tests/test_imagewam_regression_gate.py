@@ -1,0 +1,235 @@
+"""CPU tests for the ImageWAM regression gate: policy, config files, fixture IO.
+
+The gate runner itself (``tests/gate_imagewam_libero.py``) needs a GPU
+and a generated fixture; everything it decides with is tested here on
+synthetic inputs and on the committed config files.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from flash_rt.core.regression_gate import (
+    CHECK_FAIL,
+    CHECK_PASS,
+    CHECK_UNGATED,
+    RESULT_SCHEMA_VERSION,
+    VERDICT_BLOCKED,
+    VERDICT_FAIL,
+    VERDICT_PASS,
+    VERDICT_SKIPPED,
+    CosineSummary,
+    DeviceLatencyPolicy,
+    FidelityGate,
+    FidelityMeasurement,
+    FidelityThresholds,
+    FidelityThresholdTable,
+    GateCheck,
+    GateReport,
+    LatencyBaseline,
+    LatencyGate,
+    LatencyPolicyTable,
+    LatencySummary,
+)
+from flash_rt.datasets.imagewam_gate_fixture import (
+    FIXTURE_FILE,
+    FixtureManifest,
+    GateFixtureStore,
+    ImageWAMGateFixture,
+)
+
+CONFIG_DIR = Path(__file__).resolve().parent / "fixtures" / "imagewam_gate"
+THRESHOLDS = FidelityThresholds(
+    vs_official_median_min=0.997, vs_official_min_min=0.993,
+    vs_fp16_reference_median_min=0.999, vs_fp16_reference_min_min=0.995,
+    mae_vs_gt_ratio_max=1.02, requires_calibration=False, note="")
+
+
+def _measurement(**overrides: object) -> FidelityMeasurement:
+    values = dict(
+        vs_official=CosineSummary(median=0.9984, minimum=0.9957, mean=0.998, count=40),
+        vs_fp16_reference=CosineSummary(median=1.0, minimum=0.9999, mean=1.0, count=40),
+        mae_vs_gt_mean=0.1836, reference_mae_vs_gt_mean=0.1836, all_finite=True)
+    values.update(overrides)
+    return FidelityMeasurement(**values)
+
+
+def _by_name(checks: list[GateCheck]) -> dict[str, GateCheck]:
+    return {c.name: c for c in checks}
+
+
+# ── policy ──────────────────────────────────────────────────────────────
+
+
+def test_cosine_summary():
+    summary = CosineSummary.from_values([0.99, 0.999, 0.995])
+    assert (summary.median, summary.minimum, summary.count) == (0.995, 0.99, 3)
+    with pytest.raises(ValueError):
+        CosineSummary.from_values([])
+
+
+def test_fidelity_gate_passes_the_h100_fp16_baseline():
+    checks = FidelityGate(THRESHOLDS).evaluate(_measurement())
+    assert [c.status for c in checks] == [CHECK_PASS] * 6
+
+
+@pytest.mark.parametrize("override, failing", [
+    ({"vs_official": CosineSummary(0.996, 0.995, 0.996, 40)}, "vs_official_median"),
+    ({"vs_official": CosineSummary(0.998, 0.99, 0.998, 40)}, "vs_official_min"),
+    ({"vs_fp16_reference": CosineSummary(0.9985, 0.998, 0.998, 40)}, "vs_fp16_reference_median"),
+    ({"vs_fp16_reference": CosineSummary(0.9999, 0.99, 0.999, 40)}, "vs_fp16_reference_min"),
+    ({"mae_vs_gt_mean": 0.1836 * 1.03}, "mae_vs_gt_mean"),
+    ({"all_finite": False}, "outputs_finite"),
+])
+def test_fidelity_gate_fails_each_bound(override, failing):
+    checks = _by_name(FidelityGate(THRESHOLDS).evaluate(_measurement(**override)))
+    assert checks[failing].status == CHECK_FAIL
+    assert [name for name, c in checks.items() if c.status == CHECK_FAIL] == [failing]
+
+
+def test_latency_summary_keeps_run_order():
+    samples = [float(v) for group in range(10) for v in (group, group + 2)]
+    summary = LatencySummary.from_samples(samples)
+    assert summary.group_medians_ms == tuple(float(g + 1) for g in range(10))
+    assert summary.iters == 20 and summary.min_ms == 0.0 and summary.max_ms == 11.0
+    with pytest.raises(ValueError, match="at least 10"):
+        LatencySummary.from_samples([1.0] * 9)
+
+
+def test_latency_gate_rule_is_strict_less_than_limit():
+    policy = DeviceLatencyPolicy("thor", True, "target",
+                                 {"nvfp4": LatencyBaseline(p50_ms=200.0, margin=0.05, source="test")})
+    gate = LatencyGate(policy)
+    assert gate.evaluate("nvfp4", LatencySummary.from_samples([209.9] * 10)).status == CHECK_PASS
+    at_limit = gate.evaluate("nvfp4", LatencySummary.from_samples([210.0] * 10))
+    assert at_limit.status == CHECK_FAIL and at_limit.limit == pytest.approx(210.0)
+    missing = gate.evaluate("fp16", LatencySummary.from_samples([1.0] * 10))
+    assert missing.status == CHECK_UNGATED and "no baseline" in missing.detail
+
+
+def test_latency_gate_ungated_device_still_records_p50():
+    check = LatencyGate(DeviceLatencyPolicy("h100", False, "shared GPU")).evaluate(
+        "fp16", LatencySummary.from_samples([500.0] * 10))
+    assert check.status == CHECK_UNGATED and check.value == 500.0 and "shared GPU" in check.detail
+
+
+def test_report_verdicts_and_exit_codes():
+    passing = GateReport.evaluated("fp16", "h100", [GateCheck("a", CHECK_PASS, 1.0, 1.0, ""),
+                                                   GateCheck("b", CHECK_UNGATED, 2.0, None, "")], {})
+    failing = GateReport.evaluated("fp16", "h100", [GateCheck("a", CHECK_FAIL, 0.0, 1.0, "")], {})
+    skipped = GateReport.not_run("fp8_static", "h100", VERDICT_SKIPPED, "no calibration file", {})
+    blocked = GateReport.not_run("fp8_static", "h100", VERDICT_BLOCKED, "missing keyword", {})
+    assert [(r.verdict, r.exit_code) for r in (passing, failing, skipped, blocked)] == [
+        (VERDICT_PASS, 0), (VERDICT_FAIL, 1), (VERDICT_SKIPPED, 0), (VERDICT_BLOCKED, 1)]
+    record = json.loads(json.dumps(failing.to_dict()))
+    assert record["schema_version"] == RESULT_SCHEMA_VERSION
+    assert record["passed"] is False and record["reason"] == "failed: a"
+    with pytest.raises(ValueError):
+        GateReport.not_run("fp16", "h100", VERDICT_PASS, "", {})
+
+
+# ── committed config files ──────────────────────────────────────────────
+
+
+def test_committed_latency_baselines():
+    table = LatencyPolicyTable.load(CONFIG_DIR / "latency_baselines.json")
+    thor = table.resolve("NVIDIA Thor", (11, 0))
+    assert thor.gated and thor.baselines["nvfp4"].p50_ms == 231.6
+    assert thor.baselines["nvfp4"].limit_ms == pytest.approx(231.6 * 1.05)
+    h100 = table.resolve("NVIDIA H100 NVL", (9, 0))
+    assert h100.device == "h100" and not h100.gated
+    unknown = table.resolve("NVIDIA GeForce RTX 4090", (8, 9))
+    assert not unknown.gated and unknown.device.startswith("unknown")
+
+
+def test_committed_fidelity_thresholds():
+    table = FidelityThresholdTable.load(CONFIG_DIR / "fidelity_thresholds.json")
+    assert set(table.precisions) == {"fp16", "nvfp4", "fp8_static"}
+    assert table.for_precision("fp8_static").requires_calibration is True
+    assert table.for_precision("nvfp4").requires_calibration is False
+    assert table.for_precision("fp8") is None
+    fp16 = table.for_precision("fp16")
+    # The documented H100 fp16 end-to-end baseline must pass its own gate.
+    checks = FidelityGate(fp16).evaluate(_measurement())
+    assert all(c.status == CHECK_PASS for c in checks)
+
+
+def test_committed_fixture_manifests_are_well_formed():
+    manifests = sorted(CONFIG_DIR.glob("*.manifest.json"))
+    for path in manifests:
+        manifest = FixtureManifest.read(path)
+        assert set(manifest.arrays) == set(ImageWAMGateFixture.array_names()), path
+        assert FIXTURE_FILE in manifest.files
+        assert manifest.name == path.name.removesuffix(".manifest.json")
+
+
+# ── fixture IO ──────────────────────────────────────────────────────────
+
+
+def _tiny_fixture(n: int = 3, seeds: int = 2, horizon: int = 4, tasks: int = 2) -> ImageWAMGateFixture:
+    rng = np.random.default_rng(0)
+    chunk = (n, seeds, horizon, 7)
+    gt = rng.standard_normal((n, horizon, 7)).astype(np.float32)
+    gt[-1, -1] = np.nan
+    return ImageWAMGateFixture(
+        view1=rng.integers(0, 256, (n, 8, 8, 3), dtype=np.uint8),
+        view2=rng.integers(0, 256, (n, 8, 8, 3), dtype=np.uint8),
+        state=rng.standard_normal((n, 8)).astype(np.float32),
+        task_index=np.arange(n, dtype=np.int64) % tasks,
+        episode=np.arange(n, dtype=np.int64), frame=np.zeros(n, dtype=np.int64),
+        gt_actions=gt, gt_len=np.array([horizon] * (n - 1) + [horizon - 1], dtype=np.int64),
+        prompts=np.array([f"task {i}" for i in range(tasks)]),
+        context_bf16_bits=rng.integers(0, 2**16, (tasks, 5, 6), dtype=np.uint16),
+        context_mask=np.ones((tasks, 5), dtype=bool),
+        seeds=np.arange(seeds, dtype=np.int64),
+        noise=rng.standard_normal(chunk).astype(np.float32),
+        official_actions=rng.standard_normal(chunk).astype(np.float32),
+        fp16_reference_actions=rng.standard_normal(chunk).astype(np.float32))
+
+
+def test_fixture_round_trip(tmp_path):
+    fixture = _tiny_fixture()
+    store = GateFixtureStore(tmp_path)
+    manifest = store.save(fixture, "tiny_v1", {"suite": "synthetic"})
+    reread = FixtureManifest.read(tmp_path / "manifest.json")
+    assert reread == manifest
+    loaded = store.load(reread)
+    for name, array in fixture.arrays().items():
+        np.testing.assert_array_equal(getattr(loaded, name), array)
+    assert loaded.prompts.tolist() == ["task 0", "task 1"]
+
+
+def test_fixture_file_tamper_is_rejected(tmp_path):
+    store = GateFixtureStore(tmp_path)
+    manifest = store.save(_tiny_fixture(), "tiny_v1", {})
+    raw = bytearray(store.fixture_path.read_bytes())
+    raw[len(raw) // 2] ^= 0xFF
+    store.fixture_path.write_bytes(bytes(raw))
+    with pytest.raises(ValueError, match="does not match manifest"):
+        store.load(manifest)
+
+
+def test_fixture_array_mismatch_is_rejected(tmp_path):
+    store = GateFixtureStore(tmp_path)
+    manifest = store.save(_tiny_fixture(), "tiny_v1", {})
+    other = GateFixtureStore(tmp_path / "other").save(
+        _tiny_fixture(n=3, seeds=2), "tiny_v1", {})
+    doctored = FixtureManifest(
+        name=manifest.name, format_version=manifest.format_version, files=manifest.files,
+        arrays=dict(manifest.arrays, noise=other.arrays["official_actions"]), metadata={})
+    with pytest.raises(ValueError, match="noise"):
+        store.load(doctored)
+
+
+def test_fixture_validation_catches_inconsistent_shapes():
+    fixture = _tiny_fixture()
+    fixture.noise = fixture.noise[:, :1]
+    with pytest.raises(ValueError, match="noise"):
+        fixture.validate()
+    fixture = _tiny_fixture()
+    fixture.task_index = fixture.task_index + 5
+    with pytest.raises(ValueError, match="task_index"):
+        fixture.validate()
