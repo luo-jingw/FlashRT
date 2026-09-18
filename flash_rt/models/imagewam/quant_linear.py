@@ -46,6 +46,7 @@ import torch
 
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.models.imagewam.awq import AwqScaledLinear
+from flash_rt.models.imagewam.nvfp4_sim import NVFP4_BLOCK, fake_quant_nvfp4
 
 DEV = "cuda"
 FP16 = torch.float16
@@ -657,3 +658,36 @@ class Nvfp4SwiGluMlp:
         self._combine(self._gate_buf.packed.data_ptr(), self._gate_buf.sfa.data_ptr(),
                       self._up_buf.packed.data_ptr(), self._up_buf.sfa.data_ptr(),
                       out.data_ptr(), m, self.mlp_hidden, stream)
+
+
+class SimNvfp4Linear(AwqScaledLinear):
+    """`Nvfp4Linear`'s numerics on any GPU (`precision="nvfp4_sim"`):
+    `out[M,N] = fq(x)[M,K] @ fq(W)[K,N]` with `fq = nvfp4_sim.fake_quant_nvfp4`
+    along K for both operands (the weight as `W^T`, `(N,K)`, the layout
+    `Nvfp4Linear` quantizes), fp32 accumulation (`GemmRunner.fp16_nn`),
+    fp16 output. The quantizer is bit-exact to the real one, so this
+    differs from the hardware GEMM only in accumulation order. Keeps its
+    own fake-quantized weight copy; the source weight may be freed.
+    `awq_inv_s`: as for `Nvfp4Linear`. An accuracy tool, not a fast path."""
+
+    def __init__(self, gemm, weight_fp16_ptr: int, n: int, k: int, *,
+                 awq_inv_s: torch.Tensor | None = None):
+        super().__init__()
+        if k % NVFP4_BLOCK:
+            raise ValueError(f"NVFP4 requires K divisible by 16, got K={k}")
+        self.gemm = gemm
+        self.n, self.k = int(n), int(k)
+        w_kn = _wrap_fp16(weight_fp16_ptr, self.k, self.n)
+        self._w_fq = fake_quant_nvfp4(w_kn.t().contiguous()).t().contiguous()  # (K,N)
+        self._awq_inv_s = awq_inv_s
+        self._x_fq = None
+
+    @property
+    def awq_inv_s(self) -> torch.Tensor | None:
+        return self._awq_inv_s
+
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
+        # The torch ops run on torch's current stream, which is `stream`
+        # on every frontend path (eager run, warmup and capture).
+        self._x_fq = fake_quant_nvfp4(_wrap_fp16(x_ptr, m, self.k))
+        self.gemm.fp16_nn(self._x_fq.data_ptr(), self._w_fq.data_ptr(), out_ptr, m, self.n, self.k, stream)

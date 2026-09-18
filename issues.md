@@ -176,48 +176,6 @@ divergent layer.
 
 Status: open
 
-Area: `ImageWAMTorchFrontendThor.set_prompt(context=..., context_mask=...)` (`flash_rt/frontends/torch/imagewam_thor.py`)
-
-## Observation
-
-`set_prompt` caches on `(prompt_text, context is not None)`. Two calls
-with different precomputed contexts both produce the key
-`(None, True)`, so the second call returns before staging its context.
-The frontend keeps running with the first prompt's text context.
-
-## Impact
-
-Any caller that switches tasks by passing precomputed Qwen3 contexts
-gets the wrong conditioning for every task after the first, with no
-error. The live-encoding path (`set_prompt(prompt_text)`) keys on the
-text and is not affected. `benchmarks/imagewam_e2e_official_compare.py`
-works around it by setting `fe._current_prompt = None` before each
-`set_prompt(context=...)`.
-
-## Evidence
-
-- `imagewam_thor.py`: `cache_key = (prompt_text, context is not None)`;
-  `if cache_key == self._current_prompt: return`.
-- The workaround line in `imagewam_e2e_official_compare.py`
-  (`fe._current_prompt = None`).
-
-## Hypotheses
-
-The cache was written for the text path, where the text identifies the
-context, and the context path was added later without a content key.
-
-## Next Experiment
-
-Skip the early return when `context` is given (restaging a context is
-one device copy), remove the harness workaround, and rerun the
-end-to-end comparison: numbers must not change.
-
-## Resolution
-
-# ISSUE-041
-
-Status: open
-
 Area: `flash_rt.core.calibration.stratified_sample_indices` (house calibration-frame sampler)
 
 ## Observation

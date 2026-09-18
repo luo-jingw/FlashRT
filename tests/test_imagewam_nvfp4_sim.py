@@ -19,8 +19,8 @@ import pytest
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
-from flash_rt.models.imagewam.nvfp4_sim import SimNvfp4Linear, dequantize_nvfp4, quantize_nvfp4
-from flash_rt.models.imagewam.quant_linear import Fp16Linear
+from flash_rt.models.imagewam.nvfp4_sim import dequantize_nvfp4, quantize_nvfp4
+from flash_rt.models.imagewam.quant_linear import Fp16Linear, SimNvfp4Linear
 
 DEV = "cuda"
 FP16 = torch.float16

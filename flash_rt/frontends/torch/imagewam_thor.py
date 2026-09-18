@@ -68,13 +68,13 @@ from flash_rt.models.imagewam.quant_linear import (
     Fp8Linear,
     Fp16Linear,
     Nvfp4Linear,
+    SimNvfp4Linear,
     StaticFp8Linear,
 )
-from flash_rt.models.imagewam.nvfp4_sim import SimNvfp4Linear
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 
 _PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass", "nvfp4_sim")
-# `nvfp4_sim`: NVFP4 numerics emulated with fp16 GEMMs (nvfp4_sim.py,
+# `nvfp4_sim`: NVFP4 numerics emulated with fp16 GEMMs (SimNvfp4Linear,
 # bit-exact quantizer), for accuracy work on GPUs without Blackwell FP4.
 # Not a fast path.
 _NVFP4_PRECISIONS = ("nvfp4", "nvfp4_sim")

@@ -22,14 +22,13 @@ bits, magnitude in [2^-10, 2688]) is exactly representable in fp16, so
 fp32 accumulation over fake-quantized operands reproduces the NVFP4
 block-scaled GEMM up to the accumulation order.
 
-`SimNvfp4Linear` has `Nvfp4Linear`'s call interface and runs anywhere
-(`precision="nvfp4_sim"`); it is an accuracy tool, not a fast path.
+`quant_linear.SimNvfp4Linear` wraps this as a GEMM with
+`Nvfp4Linear`'s call interface (`precision="nvfp4_sim"`); it is an
+accuracy tool, not a fast path.
 """
 from __future__ import annotations
 
 import torch
-
-from flash_rt.models.imagewam.awq import AwqScaledLinear
 
 NVFP4_BLOCK = 16
 E2M1_MAX = 6.0
@@ -78,40 +77,3 @@ def dequantize_nvfp4(codes: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
 def fake_quant_nvfp4(x: torch.Tensor) -> torch.Tensor:
     """fp16 -> the fp16 values an NVFP4 GEMM actually multiplies."""
     return dequantize_nvfp4(*quantize_nvfp4(x))
-
-
-def _view_fp16(ptr: int, m: int, k: int) -> torch.Tensor:
-    interface = {"data": (int(ptr), False), "shape": (int(m), int(k)),
-                 "typestr": "<f2", "version": 3}
-    owner = type("_SimFp16View", (), {"__cuda_array_interface__": interface})()
-    return torch.as_tensor(owner, device="cuda")
-
-
-class SimNvfp4Linear(AwqScaledLinear):
-    """`out[M,N] = fq(x)[M,K] @ fq(W)[K,N]` with `fq = fake_quant_nvfp4`
-    along K for both operands (the weight as `W^T`, `(N,K)`, the layout
-    `Nvfp4Linear` quantizes), fp32 accumulation (`GemmRunner.fp16_nn`),
-    fp16 output. `awq_inv_s`: see `AwqScaledLinear`; the weight passed in
-    must already carry the AWQ scale."""
-
-    def __init__(self, gemm, weight_fp16_ptr: int, n: int, k: int, *,
-                 awq_inv_s: torch.Tensor | None = None):
-        super().__init__()
-        if k % NVFP4_BLOCK:
-            raise ValueError(f"NVFP4 requires K divisible by 16, got K={k}")
-        self.gemm = gemm
-        self.n, self.k = int(n), int(k)
-        w_kn = _view_fp16(weight_fp16_ptr, self.k, self.n)
-        self._w_fq = fake_quant_nvfp4(w_kn.t().contiguous()).t().contiguous()  # (K,N)
-        self._awq_inv_s = awq_inv_s
-        self._x_fq = None
-
-    @property
-    def awq_inv_s(self) -> torch.Tensor | None:
-        return self._awq_inv_s
-
-    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
-        # The torch ops run on torch's current stream, which is `stream`
-        # on every frontend path (eager run, warmup and capture).
-        self._x_fq = fake_quant_nvfp4(_view_fp16(x_ptr, m, self.k))
-        self.gemm.fp16_nn(self._x_fq.data_ptr(), self._w_fq.data_ptr(), out_ptr, m, self.n, self.k, stream)

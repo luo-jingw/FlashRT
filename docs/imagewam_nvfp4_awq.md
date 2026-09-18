@@ -18,7 +18,7 @@ with `quantize_fp4_dynamic_sfa_fp16` (`csrc/quantize/quantize_fp4_sfa.cu`):
 random, weight-like and adversarial inputs (subnormal and zero scales,
 saturation, threshold ties) — `tests/test_imagewam_nvfp4_sim.py`, which
 uses `flash_rt_fp4`'s own quantizer on a Blackwell build. Dequantized
-values are exact in fp16, so `SimNvfp4Linear` (fake-quantized operands,
+values are exact in fp16, so `quant_linear.SimNvfp4Linear` (fake-quantized operands,
 fp16 GEMM with fp32 accumulation) differs from the hardware GEMM only in
 accumulation order: on `test_imagewam_quant_linear.py`'s NVFP4 case it
 gives cosine 0.989133 against `Fp16Linear`, the value the real
