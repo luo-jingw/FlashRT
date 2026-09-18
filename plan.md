@@ -6695,30 +6695,45 @@ W0 addendum: names frozen while executing W6-W12, each one a plan edit:
   structure entries, and against `from_checkpoint()` when a checkpoint
   is configured.
 - `ImageWAMTorchFrontendThor.from_config(resolved: ResolvedConfig, *,
-  ckpt_path=None, ae_model_path=None, flux2_src=None,
-  qwen3_model_spec=None, dataset_stats_path=None, vae_resize="area")`.
-  A classmethod that splits `ResolvedConfig` into the constructor's
-  arguments: dims (through `dims_override=resolved.frontend_dims()`) and
-  every option in `resolved.options`. It constructs the same object the
-  equivalent constructor call builds, bit for bit.
+  workload: ImageWAMWorkload | None = None, **kwargs)`. A classmethod
+  that splits `ResolvedConfig` into the constructor's arguments through
+  `frontend_kwargs_from_config(resolved, **kwargs)`: dims (through
+  `dims_override=resolved.frontend_dims()`) and every option in
+  `resolved.options`; `**kwargs` are the path arguments the resolver does
+  not see (`ckpt_path`, `ae_model_path`, `flux2_src`,
+  `qwen3_model_spec`, `dataset_stats_path`, `vae_resize`). It constructs
+  the same object the equivalent constructor call builds, and records what
+  it was built from: `workload`, and the resolved configuration readable
+  back as the `resolved_config` property. Both are `None` for a frontend
+  the constructor built from hand-passed dims.
+- `frontend_kwargs_from_config(resolved, *, ckpt_path=None, ...) -> dict`
+  (module level in `imagewam_thor.py`): the one place that maps a resolved
+  configuration onto constructor arguments, so a CPU-only test pins the
+  mapping without building a frontend.
 - `load_imagewam(ckpt_path, workload, *, structure=None, profile="default",
   precision=None, calibration_path=None, ae_model_path=None,
   flux2_src=None, qwen3_model_spec=None, dataset_stats_path=None,
-  consumer="infer", allow_placeholder_calibration=False, **expert)` in
+  consumer="infer", allow_placeholder_calibration=False,
+  vae_resize="area", **expert)` in
   `imagewam_thor.py`, the deployment entry. `structure=None` reads
-  `ImageWAMStructure.from_checkpoint(ckpt_path)`. It calls
+  `ImageWAMStructure.from_checkpoint(ckpt_path)`; a `structure` is
+  required when `ckpt_path` is `None` (random-weight run). It calls
   `resolve_config(...)` and `from_config(...)`, so every illegal
-  combination raises the resolver's `ConfigError`. `**expert` carries the
-  expert tier (`EXPERT_KEYS`) only; the tier-1 arguments above are named.
-- Runtime identity: `runtime_surface()`, `pipeline_resources()` and
-  `export_model_runtime()` describe the workload explicitly, as
-  `workload.<field>` entries (`num_views`, `image_h`, `image_w`,
-  `text_max_len`, `action_horizon`, `action_dim`, `proprio_dim`,
-  `num_steps`, `shift`) beside the existing `dims.<key>` entries. The
-  entries are additive and descriptive: no stored calibration file is
-  invalidated by them, and `calibration_file.IDENTITY_DIM_KEYS` keeps its
-  current key set (a new key there would refuse every file recorded before
-  it, which is an owner decision, not part of W10).
+  combination raises the resolver's `ConfigError` before anything is
+  allocated. `**expert` carries the expert tier (`EXPERT_KEYS`) only; the
+  tier-1 arguments above are named.
+- Runtime identity: `runtime_surface` `setup_identity` describes the
+  workload explicitly, as `workload.<field>` entries beside the existing
+  `dims.<key>` entries. The field list is
+  `runtime_surface.WORKLOAD_IDENTITY_FIELDS` (`num_views`, `image_h`,
+  `image_w`, `text_max_len`, `action_horizon`, `action_dim`,
+  `proprio_dim`, `num_steps`, `shift`) and
+  `runtime_surface.workload_identity(workload)` renders the pairs, so the
+  ABI identity, the native path and the tests read one list. The entries
+  are additive and descriptive: no stored calibration file is invalidated
+  by them, and `calibration_file.IDENTITY_DIM_KEYS` keeps its current key
+  set (a new key there would refuse every file recorded before it, which is
+  an owner decision, not part of W10).
 
 State transitions: `Workload` + `Structure` -> `resolve_config` ->
 `ResolvedConfig` (immutable) -> frontend construction. No state is
@@ -6893,7 +6908,7 @@ Phase Status: completed
 - Observation: CPU-only, no GPU needed; run locally.
 
 ### Phase W6: frontend builds dims from `ResolvedConfig`
-Phase Status: active
+Phase Status: completed
 - Goal: `from_config` constructs the frontend from resolved dims and
   options; the constructor signature and behaviour with `dims_override`
   stay.
@@ -6903,7 +6918,7 @@ Phase Status: active
   `test_imagewam_thor_real_wiring.py` plus a new equality check).
 
 ### Phase W7: frontend uses `Precision` and the resolver
-Phase Status: pending
+Phase Status: completed
 - Goal: delete the precision tuples and scattered checks the resolver now
   owns; `_wrap_linear` reads `Precision` properties.
 - Modified files: `flash_rt/frontends/torch/imagewam_thor.py`.
@@ -6911,7 +6926,7 @@ Phase Status: pending
   results (`EXPECTED_ROUTING` still holds).
 
 ### Phase W8: replace hand-copied dims
-Phase Status: pending
+Phase Status: completed
 - Goal: the 20 literal copies import the workload/`libero_dims`; toy dims
   stay toy and are labelled.
 - Modified files: the list in Code Mapping.
@@ -6920,7 +6935,7 @@ Phase Status: pending
   `--help`/collect step works.
 
 ### Phase W9: derive and demote flags
-Phase Status: pending
+Phase Status: completed
 - Goal: `vae_graph_input` derived from the workload; `use_fa4_mot` folded
   into the FA4 tier of a profile; tuner, AWQ tuning and fusion flags
   remain constructor-only.
@@ -6930,7 +6945,7 @@ Phase Status: pending
   `effective_config` shows them.
 
 ### Phase W10: ABI and native identity carry the workload
-Phase Status: pending
+Phase Status: completed
 - Goal: `identity` (ABI) and the calibration file identity include the
   workload fields, so a runtime and a calibration file for a different
   workload are rejected by name.
@@ -6942,7 +6957,7 @@ Phase Status: pending
   calibration file is refused with the differing field named.
 
 ### Phase W11: public entry and constructor split
-Phase Status: pending
+Phase Status: completed
 - Goal: `load_imagewam(ckpt_path, workload, profile=..., precision=...,
   calibration_path=...)` is the deployment entry; expert switches go
   through `**expert` into `resolve_config`, not through positional
@@ -6953,7 +6968,7 @@ Phase Status: pending
   its frontend through `load_imagewam`.
 
 ### Phase W12: Thor validation on the new entry
-Phase Status: pending
+Phase Status: active
 - Goal: the recorded numbers reproduce through the new path, and the
   target workload (THOR_CHECKLIST D) runs as a `Workload`.
 - Modified files: `scripts/imagewam_thor_matrix.sh`,
@@ -6985,6 +7000,54 @@ Phase Status: pending
   `imagewam_thor.py` (bounded cache).
 - Observation: ISSUE-080 conditions re-checked one by one.
 
+## Execution record
+
+Observed on the development machine that ran W1-W11 (WSL2, `torch.cuda.is_available()`
+is `False`, `nvidia-smi` reports the GPU blocked by the operating system).
+Every observation below is therefore a CPU-side contract check; nothing that
+needs a CUDA device has been run, and no latency or accuracy number is
+claimed here.
+
+| Phase | Observation | Result |
+|---|---|---|
+| W0 | this section reviewed, names frozen | completed; the addendum above holds the names added while executing |
+| W1, W2, W3, W5 | earlier session | committed before this record; `tests/test_imagewam_workload.py`, `tests/test_imagewam_structure.py`, `tests/test_imagewam_precision_table.py` |
+| W2 (addendum) | `ImageWAMStructure.libero()` against the real checkpoint | `from_checkpoint(/home/ljw/projects/pi0.5/models/imagewam_flux2_4b_libero/model.pt) == ImageWAMStructure.libero()`, `missing/extra` none; the checkpoint exists on this machine, so this is a real read, not a skip |
+| W4 | one legal and one illegal case per rule id | `tests/test_imagewam_config_resolver.py` |
+| W6 | `frontend_kwargs_from_config` maps every option onto the constructor keyword the constructor declares; `from_config` passes exactly that mapping | `tests/test_imagewam_frontend_from_config.py` (the frontend itself is not constructed: it allocates CUDA). The bit-identical fp16/nvfp4 comparison of `from_config` against the old constructor is part of the W12 Thor run |
+| W7 | the frontend's four precision tuples are comprehensions over `Precision`, `_wrap_linear` takes its fallback from `alignment_fallback`, no precision literal survives in it | `tests/test_imagewam_precision_table.py` (values pinned literally, delegation checked by `ast` over the frontend source); `tests/test_imagewam_thor_precision_routing.py` `EXPECTED_ROUTING` unchanged |
+| W8 | no served-dims literal outside `libero_dims.py` and its tests | `grep -rnE "x0\s*=\s*513"` over `benchmarks/`, `tests/`, `flash_rt/` returns docstring prose only; benchmark modules import and their argparse `--help` runs (three of them need `pandas`, absent from this machine's `.venv`) |
+| W9 | `vae_graph_input` and `use_fa4_mot` come from the resolved options | `tests/test_imagewam_frontend_from_config.py` |
+| W10 | `workload_identity()` renders the nine `workload.<field>` pairs; `runtime_surface()` adds them for a frontend built from a resolved configuration | `tests/test_imagewam_public_entry.py`; the identity on a real exported runtime is the W12 Thor item |
+| W11 | `load_imagewam` signature, `ConfigError` before construction, structure read only when given | `tests/test_imagewam_public_entry.py` |
+| W12 | not run | see `THOR_CHECKLIST.md` sections C1-C3 |
+
+The CPU test set used for every phase above, green at the last commit of
+this work (242 passed, 3 skipped; the skips are the CUDA guards):
+
+```
+.venv/bin/python -m pytest tests/test_imagewam_workload.py tests/test_imagewam_structure.py \
+  tests/test_imagewam_config_resolver.py tests/test_imagewam_precision_table.py \
+  tests/test_imagewam_thor_precision_routing.py tests/test_imagewam_text_trim_consumer_guards.py \
+  tests/test_imagewam_frontend_from_config.py tests/test_imagewam_public_entry.py -q
+```
+
+`pytest tests/test_imagewam_*.py --collect-only -q` collects 542 without
+errors; the five directory-wide collection errors are pre-existing and
+outside ImageWAM (`flash_rt.flash_rt_fp4`, `_flashrt_exec`, `ml_dtypes` are
+not built or installed on this machine).
+
+Not done, and why:
+
+- W12 and T1-T5 are Thor runs; the Thor is a separate shared machine.
+  `THOR_CHECKLIST.md` carries the commands, each item's 判据 and where its
+  conclusion goes, so one pass covers the configuration consolidation and
+  the items that were already pending.
+- S1-S3 are untouched: S1 needs the fixture data regenerated on a GPU (the
+  generator's own `fp16` reference), S2 and S3 change the runtime surface
+  and the capture cache, whose only observation is a captured graph. Their
+  design is recorded in `issues.md` ISSUE-080 conditions 4, 5 and 6.
+
 ## Decisions pending (owner)
 
 - Profile contents (T4): whether `fast` = `text_trim` + FA4 (bb+mot) +
@@ -6993,3 +7056,14 @@ Phase Status: pending
   S2 (rule R5 says no).
 - Whether `libero_dims.py` stays as a module or is removed once the
   workload test pins the equality.
+- Whether the calibration file's identity gains the workload fields.
+  `calibration_file.IDENTITY_DIM_KEYS` already carries every dims entry a
+  workload changes (`x0`, `a0`, `num_action`, `action_dim`,
+  `num_denoise_steps`, `shift`, `proprio_dim`, `ref_h`, `ref_w`), so a file
+  recorded for another workload is already refused with the differing field
+  named. Naming the workload as `workload.<field>` there instead would
+  refuse every file recorded before the change, so it needs a format
+  version and a migration rule for the files on Thor.
+- The target-workload table in `THOR_CHECKLIST.md` section D: `action_dim`,
+  `shift` and the padded `text_max_len` are deployment facts, not derivable
+  from the checkpoint; the remaining rows come from the owner.
