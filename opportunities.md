@@ -3691,3 +3691,76 @@ regression); INT8 failed exactly at the already-documented, expected
 K=9216 shape (`txt_mlp2`, rc=131079) -- the same real Ada limitation
 this entry already tracks, reproducing precisely, confirming the
 rewrite introduced no new bug there either.
+
+## Real Thor result: consolidated benchmarks, and a real production bug found+fixed
+
+Ran the consolidated benchmarks (above) on real Thor. Note these are
+random-weight/graph-capture speed tools, NOT the real-checkpoint
+`infer()` path -- not directly comparable to OPT-014's own 236.9ms
+(no VAE, no proprio, random weights).
+
+**Real bug found**: `imagewam_thor_graph_bench.py` run as-is hit 3 of
+6 precisions `SKIP`ping -- `fp8`/`fp8_static`/`fp8_static_cutlass` all
+crash on the real `action_encoder` (K=7) shape (cuBLASLt returns
+status 15/`CUBLAS_STATUS_NOT_SUPPORTED`; CUTLASS returns
+`can_implement=-1`) -- the exact same K=7/N=7 misalignment class
+`fp16_cutlass` (OPT-013) and `nvfp4` (Stage 3 checklist) already hit
+and got a `_wrap_linear` fallback for, except NOBODY added the same
+fallback for the FP8 family. **This is a real, live production gap**:
+selecting `precision="fp8"`/`"fp8_static"`/`"fp8_static_cutlass"` in
+`imagewam_thor.py` today would crash `set_prompt()`'s graph capture
+exactly like the pre-fix `fp16_cutlass`/`nvfp4` cases did. Notably
+different from those two: FP8 fails on **cuBLASLt too**, not just
+CUTLASS -- `fp16_cutlass`/`nvfp4`'s own fallback exists because
+cuBLASLt tolerated the misaligned shape and only their CUTLASS-
+specific path didn't; FP8 needs the fallback on every backend for this
+precision family. **Fixed**: added the same `n%8!=0 or k%8!=0 ->
+Fp16Linear` fallback to all three FP8 branches in `_wrap_linear`
+(`imagewam_thor.py`) -- centralized there, so it covers both
+`_load_real_weights` and `_alloc_random_weights` (`_rnd_linear` already
+routes through `_wrap_linear`) automatically. `_calibrate_fp8()`
+already skips non-`StaticFp8Linear` objects via `isinstance`, so the
+fallback needs no other special-casing. NOT yet regression-tested
+locally (local GPU testing paused this round) -- needs the same
+sanity check the `fp16_cutlass`/`nvfp4` fixes got (construct with each
+precision, confirm graph capture completes) before being trusted.
+
+**Real Thor speed, `imagewam_thor_graph_bench.py`, x0=513/a0=905/
+num_action=64, no VAE/proprio, all 6 precisions (after the fix above)**:
+
+| precision | P50 (ms) |
+|---|---:|
+| fp16 | 286.3 |
+| fp16_cutlass | 280.8 |
+| fp8 | 254.2 |
+| fp8_static | 243.2 |
+| fp8_static_cutlass | 221.4 |
+| **nvfp4** | **212.0** |
+
+`nvfp4` remains fastest, consistent with every other measurement this
+session. Since this tool has no VAE/proprio, its own absolute numbers
+aren't comparable to OPT-014's real-`infer()` figures, but the
+RELATIVE ordering across precisions matches.
+
+**Real Thor speed, rewritten `imagewam_thor_int4_bench.py`/
+`_int8_bench.py`** (real AdaLN/gated-residual/fused-QKV/fused-linear1,
+real dims):
+
+| | INT4 | INT8 |
+|---|---:|---:|
+| prefill (VAE stub + 25L) | 1253.6 ms | 138.7 ms |
+| one denoise step (25L) | 55.4 ms | 14.1 ms |
+| prefill + 10-step | 1807.6 ms | 279.3 ms |
+
+Both numbers are higher than the pre-rewrite stale scripts' own
+(expected -- more real work per layer now, not a regression, see the
+consolidation entry above). **INT8's real news**: Ada's K=9216 crash
+does NOT reproduce on Thor -- the full pipeline (including VAE)
+completes cleanly there, confirming that limitation really is
+Ada-specific, not a property of the kernel family, exactly as this
+entry's own real-Thor INT8 finding already established. Still not a
+speed win vs. `fp16`/`nvfp4` in this same tool, and INT4 remains
+dramatically slower on Thor (same ISA-mismatch root cause already
+confirmed). **OPT-007 stays closed** -- this round only aligned the
+measurement tools with reality, it does not reopen the INT8/INT4-on-
+Thor question.

@@ -496,6 +496,16 @@ class ImageWAMTorchFrontendThor:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return CutlassFp16Linear(w.data_ptr(), n, k)
         if self._precision == "fp8":
+            # Real Thor finding: FP8 (both cuBLASLt's own heuristic
+            # search, status 15/CUBLAS_STATUS_NOT_SUPPORTED, AND CUTLASS's
+            # can_implement) rejects action_encoder (K=7)/head.linear
+            # (N=7) -- unlike fp16_cutlass/nvfp4 below, where cuBLASLt
+            # itself tolerated the misaligned shape and only the
+            # CUTLASS-specific path needed a fallback, FP8 needs it on
+            # EVERY backend for this precision family. Same 8-alignment
+            # threshold as fp16_cutlass.
+            if n % 8 != 0 or k % 8 != 0:
+                return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return Fp8Linear(w.data_ptr(), n, k)
         if self._precision == "nvfp4":
             # Real Thor finding (opportunities.md, Stage 3 checklist):
@@ -511,8 +521,16 @@ class ImageWAMTorchFrontendThor:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return Nvfp4Linear(w.data_ptr(), n, k)
         if self._precision == "fp8_static":
+            # Same K=7/N=7 FP8 alignment gap as the "fp8" branch above --
+            # _calibrate_fp8() already skips non-StaticFp8Linear objects
+            # (isinstance check), so this fallback needs no other
+            # special-casing.
+            if n % 8 != 0 or k % 8 != 0:
+                return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=False)
         if self._precision == "fp8_static_cutlass":
+            if n % 8 != 0 or k % 8 != 0:
+                return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=True)
         raise ValueError(f"unknown precision {self._precision!r}")  # pragma: no cover -- validated in __init__
 
