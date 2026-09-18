@@ -3357,7 +3357,7 @@ fixed buffer holds).
 
 ### Phase 1 — profile `ae.encode` at 224x448
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: per-op time breakdown and op list at the real input (H100,
 indicative), reproducible on Thor with the same script.
@@ -3366,7 +3366,7 @@ Observation method: torch profiler table, kernel count per encode.
 
 ### Phase 2 — standalone CUDA graph of the torch encode
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `ImageWAMVaeStage` with fixed buffers; `run()` captured into a
 graph; tokens bit-identical to `encode_to_tokens`; eager vs graph A/B.
@@ -3377,7 +3377,7 @@ alternating eager and graph in one process.
 
 ### Phase 3 — VAE folded into the main graph
 
-Phase Status: pending
+Phase Status: active
 
 Goal: `vae_mode="graph"`: one replay per `infer()`; tokens and actions
 bit-identical to the eager path with the same noise.

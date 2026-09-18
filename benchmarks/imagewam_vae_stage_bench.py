@@ -9,6 +9,13 @@ Sections (`--section`, default `all`):
   preprocess  served torch `_prep_view` + cat vs the fused
               `imagewam_vae_preprocess_bf16` kernel, for raw 512x512 and
               pre-resized 224x224 views, CPU and GPU uint8 inputs.
+  encode      whole VAE stage (views -> tokens in a fixed img_raw):
+              legacy torch path, kernel preprocessing, the fixed-address
+              `ImageWAMVaeStage` eager, and the same stage replayed as a
+              standalone CUDA graph. Token bit-equality is printed.
+
+Each A/B also prints, per variant, the kernels per call, the summed GPU
+kernel time (torch profiler) and the host enqueue time per call.
 
 Timing: variants are called round-robin in one process. Each sample is
 wall-clock around one call with `torch.cuda.synchronize()` on both
@@ -32,6 +39,7 @@ from PIL import Image
 
 from flash_rt.models.imagewam.vae_encoder import _prep_view, encode_to_tokens, load_real_ae
 from flash_rt.models.imagewam.vae_preprocess import VaePreprocessor
+from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeEncoder, VaeStageSpec
 
 DEV = "cuda"
 BF16 = torch.bfloat16
@@ -174,9 +182,101 @@ def section_preprocess(ae: torch.nn.Module, v1: np.ndarray, v2: np.ndarray, iter
                     max(iters // 4, 10))
 
 
+def capture_graph(fn: Callable[[], object]) -> torch.cuda.CUDAGraph:
+    s = torch.cuda.Stream()
+    s.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(s):
+        for _ in range(2):
+            fn()
+    torch.cuda.current_stream().wait_stream(s)
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        fn()
+    torch.cuda.synchronize()
+    return g
+
+
+def _tok_stats(t: torch.Tensor) -> str:
+    f = t.float()
+    return f"mean={f.mean().item():.4f} std={f.std().item():.4f} absmax={f.abs().max().item():.4f}"
+
+
+def _cmp(a: torch.Tensor, b: torch.Tensor) -> str:
+    x, y = a.float().flatten(), b.float().flatten()
+    cos = (x @ y / (x.norm() * y.norm() + 1e-12)).item()
+    return (f"bit-identical={torch.equal(a, b)} cosine={cos:.8f} max_abs={(x - y).abs().max().item():.3e} "
+            f"rel_l2={((x - y).norm() / (y.norm() + 1e-12)).item():.3e}")
+
+
+def build_stage_variants(ae: torch.nn.Module, encoders: dict[str, VaeEncoder], views_cpu: list[torch.Tensor],
+                         pre: VaePreprocessor) -> dict[str, Callable[[], object]]:
+    """Legacy/eager/graph variants of the whole VAE stage, each writing
+    its own `(392,128)` img_raw. Tokens of each variant are compared
+    against the legacy torch path and printed."""
+    in_h, in_w = int(views_cpu[0].shape[0]), int(views_cpu[0].shape[1])
+    spec = VaeStageSpec(num_views=len(views_cpu), in_h=in_h, in_w=in_w)
+    ref_raw = torch.zeros(spec.img_len, 128, dtype=BF16, device=DEV)
+
+    def legacy() -> None:
+        ref_raw.copy_(encode_to_tokens(ae, *views_cpu)[0])
+
+    def kernel_pre() -> None:
+        ref_raw.copy_(encode_to_tokens(ae, *views_cpu, preprocessor=pre)[0])
+
+    variants: dict[str, Callable[[], object]] = {
+        "legacy: encode_to_tokens, torch preprocess": legacy,
+        "encode_to_tokens, kernel preprocess": kernel_pre,
+    }
+    with torch.no_grad():
+        legacy()
+        torch.cuda.synchronize()
+        ref = ref_raw.clone()
+        print(f"  reference tokens {tuple(ref.shape)}: {_tok_stats(ref)}  (real Thor: mean=-0.02 std=0.97 absmax=4.91)")
+        for enc_name, enc in encoders.items():
+            raw = torch.zeros_like(ref_raw)
+            stage = ImageWAMVaeStage(enc, pre, spec, raw)
+            stage.stage(views_cpu)
+            stage.run()
+            torch.cuda.synchronize()
+            print(f"  stage[{enc_name}] eager vs legacy: {_cmp(raw, ref)}  {_tok_stats(raw)}")
+            raw.zero_()
+            graph = capture_graph(stage.run)
+            stage.stage(views_cpu)
+            graph.replay()
+            torch.cuda.synchronize()
+            print(f"  stage[{enc_name}] graph vs legacy: {_cmp(raw, ref)}")
+
+            def eager(stage: ImageWAMVaeStage = stage) -> None:
+                stage.stage(views_cpu)
+                stage.run()
+
+            def replay(stage: ImageWAMVaeStage = stage, graph: torch.cuda.CUDAGraph = graph) -> None:
+                stage.stage(views_cpu)
+                graph.replay()
+
+            variants[f"stage[{enc_name}] eager"] = eager
+            variants[f"stage[{enc_name}] CUDA graph"] = replay
+    return variants
+
+
+def section_encode(ae: torch.nn.Module, v1: np.ndarray, v2: np.ndarray, iters: int) -> None:
+    pre = VaePreprocessor(resize="area")
+    encoders: dict[str, VaeEncoder] = {"torch": ae}
+    for label, views in {
+        "raw 512x512 CPU": [torch.from_numpy(v1), torch.from_numpy(v2)],
+        "pre-resized 224x224 CPU": [torch.from_numpy(center_crop_resize(v1, 224, 224)),
+                                    torch.from_numpy(center_crop_resize(v2, 224, 224))],
+    }.items():
+        print(f"\n=== encode stage, {label} ===")
+        variants = build_stage_variants(ae, encoders, views, pre)
+        with torch.no_grad():
+            ab_time(variants, iters)
+            report_gpu(variants)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--section", default="all", choices=["all", "profile", "preprocess"])
+    ap.add_argument("--section", default="all", choices=["all", "profile", "preprocess", "encode"])
     ap.add_argument("--iters", type=int, default=200)
     args = ap.parse_args()
     print(f"torch {torch.__version__}, device {torch.cuda.get_device_name()}")
@@ -187,6 +287,8 @@ def main() -> None:
         section_profile(ae, v1, v2)
     if args.section in ("all", "preprocess"):
         section_preprocess(ae, v1, v2, args.iters)
+    if args.section in ("all", "encode"):
+        section_encode(ae, v1, v2, max(args.iters // 2, 20))
 
 
 if __name__ == "__main__":
