@@ -1172,3 +1172,67 @@ Conditions for making `text_trim=True` the served default, all of them:
 Then the owner decides the default.
 
 ## Resolution
+
+# ISSUE-081
+
+Status: open
+
+Area: `ImageWAMTorchFrontendThor.runtime_surface().view_shape`
+(`flash_rt/frontends/torch/imagewam_thor.py`), consumed by
+`flash_rt/models/imagewam/runtime_export.py` (`decode_image_views`,
+the declared frame shape and the exported verb list)
+
+## Observation
+
+`runtime_surface()` reports
+
+```python
+view_shape=((2, 224, 224) if self._vae_stage is None else
+            (self._vae_stage.spec.num_views, self._vae_stage.spec.in_h, self._vae_stage.spec.in_w))
+```
+
+so a frontend built with the VAE outside the CUDA graph (`vae_encoder="torch"`
+or `"native"` with `vae_graph_input=None`, the `default` profile) declares
+`(2, 224, 224)` whatever workload it was resolved for. `vae_graph_input`
+carries the workload's own `(num_views, image_h, image_w)` when the VAE is in
+the graph, so the hard-coded value is reached only on the outside-the-graph
+path.
+
+## Impact
+
+`view_shape` is not descriptive: `decode_image_views` unpacks the ABI's image
+payload with it, and `_input_shapes`/the exported verb list declare
+`(*view_shape, 3)` uint8 frames. A deployment whose workload differs from
+LIBERO's (a different camera count, or a per-view size other than 224x224)
+therefore exports an ABI that decodes the wrong number of bytes per frame and
+declares the wrong input shape, while `infer()` itself would take the views it
+is handed. This is the deployment described by `THOR_CHECKLIST.md` section D,
+whose workload fields are still to be entered.
+
+## Evidence
+
+- `flash_rt/frontends/torch/imagewam_thor.py`, `runtime_surface()`.
+- `flash_rt/models/imagewam/runtime_export.py:100` (`decode_image_views(payload,
+  view_shape)`), `:164` (`frames = decode_image_views(payload,
+  self._surface.view_shape)`), `:196` (`frame_shape = (*surface.view_shape, 3)`),
+  `:235` (`view_names(surface.view_shape[0])`).
+- `ImageWAMWorkload.vae_graph_input()` returns the workload's
+  `(num_views, image_h, image_w)` and is the only other source of the same
+  geometry; `resolve_config` sets it only when the profile/override puts the
+  VAE in the graph.
+
+## Hypotheses
+
+The constant predates the workload object (it was the LIBERO shape of the
+frontend's own `set_prompt`/staging path) and was never revisited when
+`view_shape` became the ABI's frame geometry.
+
+## Next Experiment
+
+Carry the geometry from the workload: a frontend built through
+`from_config`/`load_imagewam` reports `workload.vae_graph_input()` as
+`view_shape` on both paths (equal to the VAE stage's spec when the stage
+exists), and a frontend built by the constructor with hand-passed dims keeps
+today's value. Then check, on a target workload (section D), that the exported
+runtime's `image_views` verb list and its declared frame shape follow the
+workload, and that a LIBERO export is unchanged.

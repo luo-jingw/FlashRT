@@ -118,6 +118,31 @@ this fork covers Jetson AGX Thor (sm_110).
   once `flash_rt_kernels` itself is built once. Clean up scratch build
   logs and any redundant build directories promptly; disk itself has
   headroom (729GB free) but is not a reason to be careless about it.
+- CPU-only work on this WSL2 machine (confirmed 2026-09-18): the GPU is
+  not reachable from a session here — `nvidia-smi` reports "Failed to
+  initialize NVML: GPU access blocked by the operating system" and
+  `torch.cuda.is_available()` is `False`. Pure-Python work, the
+  configuration resolver, the workload/structure derivation and the
+  frontend's construction path can be developed and tested here; anything
+  that constructs a frontend (it allocates CUDA tensors), captures a graph
+  or measures latency cannot.
+  The CPU-only test set for that work (green at
+  `d374b70`: 242 passed, 3 skipped; the skips are the CUDA guards):
+  ```
+  .venv/bin/python -m pytest tests/test_imagewam_workload.py tests/test_imagewam_structure.py \
+    tests/test_imagewam_config_resolver.py tests/test_imagewam_precision_table.py \
+    tests/test_imagewam_thor_precision_routing.py tests/test_imagewam_text_trim_consumer_guards.py \
+    tests/test_imagewam_frontend_from_config.py tests/test_imagewam_public_entry.py -q
+  ```
+  `pytest tests/test_imagewam_*.py --collect-only -q` collects 542 without
+  errors; the rest of the ImageWAM test modules need a CUDA device and fail
+  here regardless of the change under test.
+- `pandas` is not installed in `FlashRT/.venv`, so
+  `benchmarks/imagewam_e2e_official_compare.py`,
+  `imagewam_e0m3_accuracy_study.py` and
+  `imagewam_e0m3_hadamard_thor_check.py` (and anything importing
+  `benchmarks/_imagewam_libero_frames.py`) can be byte-compiled here but
+  not imported or run. On Thor the bundle's environment has it.
 - **Precision-testing division of labor (user's explicit standing
   instruction, given this machine's limited memory/VRAM)**: this local
   machine (Ada sm_89) does INT4/INT8 (SM80 CUTLASS) inference speed

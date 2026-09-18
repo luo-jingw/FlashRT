@@ -5579,3 +5579,50 @@ gain.
   bounds 0.999 / 0.995, while vs official it is 0.99998 / 0.99992. A
   trimmed default needs a regenerated fixture (ISSUE-080).
 - Owner decision: serve `text_trim=True` by default (ISSUE-080).
+
+# OPT-031: derive the remaining per-benchmark shape tables from the workload
+
+Status: identified, not started
+
+Area: `benchmarks/imagewam_fp8_layout_bench.py`,
+`imagewam_thor_int4_bench.py`, `imagewam_thor_int8_bench.py`,
+`imagewam_thor_bench.py`, `imagewam_thor_fp16_bench.py`,
+`imagewam_thor_fp16_autotuned_bench.py`, `imagewam_thor_fp4_bench.py`,
+`imagewam_thor_fp8_bench.py`, `imagewam_gemm_precision_compare.py`,
+`imagewam_int4_hadamard_padding_probe.py`,
+`imagewam_real_checkpoint_validation.py`,
+`imagewam_attention_share_bench.py`, `imagewam_thor_small_m_tile_sweep.py`
+
+## Observation
+
+The `dims` dictionaries of the served LIBERO workload are now one mapping
+(`libero_dims.LIBERO_REAL_DIMS`, derived from `ImageWAMWorkload.libero()` and
+`ImageWAMStructure.libero()`). Several benchmarks still state the same served
+widths a second time, not as a `dims` dict but inside their own kernel-shape
+tables: `("txt_qkv": (513, 9216, 3072))` in the FP8 layout bench, `X0, A0 =
+513, 513 + VAE_NUM_TOKENS` in the INT4/INT8 benches, per-GEMM `(M, N, K)`
+rows in the per-layer benches, and `SiteShape("backbone", 905, 905)` /
+`ActionShape("double qkv", 9216, 1024, 5)` in the attention-share and tile
+sweep tables.
+
+## Mechanism
+
+Those tables describe one layer's or one GEMM's shape, which is a composition
+of dims entries (`3 * hidden + 2 * mlp_hidden`, `x0`, `x0 + ref_h * ref_w`,
+`num_action`), so they can be built from the same two objects the resolver
+uses instead of restating the numbers. `tests/test_imagewam_quant_linear.py`
+does this for its own `(M, N, K)` table.
+
+## Value
+
+A change to the workload (the target deployment's camera count or per-view
+size) or to a structure constant then reaches every benchmark by
+construction, and a sweep cannot silently measure a shape the model no longer
+has. The cost is per-file, mechanical, and needs no GPU: the resulting table
+is asserted equal to the present literals.
+
+## Precondition
+
+The sweep tables must stay readable as measurement records (what shape was
+measured); the change is the derivation, not the removal of the numbers from
+the prose.

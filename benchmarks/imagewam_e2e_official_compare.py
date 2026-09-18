@@ -88,7 +88,6 @@ from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state
 from flash_rt.models.imagewam.config_resolver import format_effective_config
 from flash_rt.models.imagewam.libero_dims import (
     LIBERO_HORIZON as HORIZON,
-    LIBERO_REAL_DIMS as REAL_DIMS,
     LIBERO_SHIFT as SHIFT,
     LIBERO_STEPS as STEPS,
 )
