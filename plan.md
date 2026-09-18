@@ -3037,3 +3037,280 @@ at closure" / "structured multi-variable investigation" -- each of the
 section is only an index; do not treat any item here as approved
 until it gets its own `# Plan: <item>` section with `Plan Status:
 approved`.
+
+# Plan: ActionDiT small-M CUTLASS tile selection (roadmap item 1)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+Every ActionDiT weight GEMM runs at `M = num_action = 64`. The tile
+variant for the two CUTLASS-backed quantized precisions is chosen by
+an `(N, K)`-only heuristic that was tuned for other shapes:
+
+- `nvfp4` (shipped default): `Nvfp4Linear` calls
+  `flash_rt.executors.fp4_utils.fp4_gemm` without a variant, so
+  `pick_variant(N, K)` applies. That table was calibrated for Pi0.5's
+  encoder at `M = 968`.
+- `fp8_static_cutlass`: `StaticFp8Linear(use_cutlass=True)` uses
+  `_pick_fp8_cutlass_variant(N, K)`, which picks `wide` when
+  `N >= 4K` and `sq` otherwise. It is a provisional guess ported
+  from backbone shapes.
+
+Inventory at the real ActionDiT shapes (`M = 64`,
+`action_hidden_dim = 1024`, `action_attn_width = 3072`,
+`action_mlp_hidden = 4096`, `action_dim = 7`, 5 double and 20 single
+layers):
+
+| site | N | K | calls per step | `nvfp4` | `fp8_static_cutlass` | `fp16_cutlass` |
+|---|---:|---:|---:|---|---|---|
+| double `qkv` | 9216 | 1024 | 5 | v6 `128x256x128` c1x1x1 | `wide` `256x128x128` c2x2x1 | `wide` |
+| double `proj` | 1024 | 3072 | 5 | v6 | `sq` `256x256x128` c2x2x1 | `sq` |
+| double `mlp0` (merged gate/up) | 8192 | 1024 | 5 | v6 | `wide` | SwiGLU pair `k64_silu` + `k64_mul_aux` `256x256x64` c2x2x1 at N=4096 |
+| double `mlp2` | 1024 | 4096 | 5 | v6 | `sq` | `sq` |
+| single `linear1` (qkv + gate/up) | 17408 | 1024 | 20 | v8 `128x256x256` c1x1x1 | `wide` | not merged: `qkv` `wide` + SwiGLU pair at N=4096 |
+| single `attn_out_proj` | 1024 | 3072 | 20 | v6 | `sq` | `sq` |
+| single `mlp_down` | 1024 | 4096 | 20 | v6 | `sq` | `sq` |
+| `action_encoder` | 1024 | 7 | 1 | cuBLASLt `Fp16Linear` (alignment fallback) | same | same |
+| `head.linear` | 7 | 1024 | 1 | cuBLASLt `Fp16Linear` (alignment fallback) | same | same |
+
+At `M = 64` one output tile row covers the whole M extent, so the CTA
+count equals the number of N tiles. On Thor's 20 SMs, the `N = 1024`
+GEMMs launch 4 CTAs under v6 (N tile 256), and 4 useful CTA pairs
+under FP8 `sq` with a 2x2 cluster. Those GEMMs are weight-bandwidth
+bound (arithmetic intensity 2M = 128 FLOP per weight element), so a
+launch that occupies 4 of 20 SMs cannot reach DRAM bandwidth. There
+are 50 such calls per denoise step and 500 per `infer()`. FP8 CUTLASS
+has no tile narrower than 128 in N and no 1-SM (cluster 1x1x1) tile at
+all. On Thor it measured 1.44-1.68x slower than cuBLASLt at this M
+(opportunities.md OPT-014, result 3).
+
+Pi0.5 runs its decoder (`M = 10`) on the narrow-N v10 tile
+(`128x64x256`, cluster 1x1x1) for all four projections
+(`docs/pi05_thor_decoder_fp4_e2e.md`, "Decoder v10 Tiles"). v10 is
+already instantiated in `cutlass_fp4_gemm_variants.cu`, but ImageWAM
+never selects it.
+
+### Problem
+
+No ActionDiT GEMM tile choice is measured at `M = 64`. The existing
+choices are extrapolated from other shapes, and FP8 CUTLASS has no
+small-M tile to choose.
+
+### Measurable goal
+
+- A per-shape tile choice for the ActionDiT GEMMs, made by a one-time
+  measurement at construction on the device the frontend runs on,
+  cached per `(family, M, N, K)`. The candidate set includes the
+  current heuristic pick, and a candidate must reproduce the current
+  pick's output before it can be selected.
+- FP8 small-M 1-SM tiles, with the Pi0.5 v10 tile `128x64x256` as the
+  template.
+- Selection logic unit-tested with the kernels stubbed.
+- A Thor script that sweeps every candidate at every real ActionDiT
+  shape, reports cosine against fp16 and the per-shape winner, and
+  runs an `infer()` A/B of old vs new selection on `nvfp4` and
+  `fp8_static_cutlass`.
+- The shipped default selection stays unchanged (opt-in flag) until
+  Thor confirms correctness and speed.
+
+## Structure
+
+- NEW `flash_rt/models/imagewam/gemm_variant_tuner.py`: owns the
+  selection policy (candidate filtering, correctness gate, timing
+  comparison, hysteresis against the incumbent) and the per-frontend
+  result cache. Defines the `VariantTunableGemm` and `VariantTimer`
+  protocols and the result dataclasses. No CUDA code.
+- NEW `flash_rt/models/imagewam/gemm_variant_timer.py`: owns the
+  device timing mechanism (`CudaGraphVariantTimer`: CUDA-graph
+  capture of a launch batch, replay timed with CUDA events).
+- `flash_rt/models/imagewam/quant_linear.py`: `Nvfp4Linear` and
+  `StaticFp8Linear(use_cutlass=True)` implement `VariantTunableGemm`.
+  Each linear owns its own current variant. The default variant equals
+  today's heuristic pick, so `__call__` is unchanged until a variant is
+  set.
+- `csrc/gemm/gemm_types_sm100.h`, `csrc/gemm/cutlass_sm100.cu`,
+  `csrc/bindings.cpp`: four new FP8 1-SM tiles (cluster 1x1x1):
+  `t128x64x256` (v10 template), `t128x64x128`, `t128x128x128`,
+  `t128x256x128`.
+- `flash_rt/frontends/torch/imagewam_thor.py`: owns the decision to
+  tune (`gemm_variant_autotune: bool = False`), the grouping of
+  ActionDiT linears by shape, and the tuner instance and its results
+  (`gemm_variant_results`).
+- NEW `benchmarks/imagewam_thor_small_m_tile_sweep.py`: Thor sweep
+  and `infer()` A/B.
+- NEW `tests/test_imagewam_gemm_variant_tuner.py`: stubbed selection
+  tests (CPU) and a real-timer test (any CUDA GPU).
+
+State ownership:
+
+| state | owner |
+|---|---|
+| current tile variant of one linear | that `Nvfp4Linear` / `StaticFp8Linear` instance |
+| tuning results cache `(family, M, N, K) -> result` | the `GemmVariantTuner` instance owned by the frontend |
+| whether tuning runs | frontend constructor argument |
+
+## Interface
+
+```python
+# flash_rt/models/imagewam/gemm_variant_tuner.py
+@dataclass(frozen=True)
+class GemmShape:
+    m: int
+    n: int
+    k: int
+
+@dataclass(frozen=True)
+class VariantMeasurement:
+    variant: str
+    us_per_gemm: float | None      # None: not timed (rejected)
+    cosine_vs_default: float | None
+    status: str                     # "ok" | "launch_failed rc=.." | "mismatch" | "nonfinite"
+
+@dataclass(frozen=True)
+class VariantTuneResult:
+    family: str
+    shape: GemmShape
+    members: int
+    default_variant: str
+    chosen_variant: str
+    measurements: tuple[VariantMeasurement, ...]
+
+class VariantTunableGemm(Protocol):
+    family: str
+    n: int
+    k: int
+    default_variant: str
+    variant: str
+    def candidate_variants(self) -> tuple[str, ...]: ...
+    def set_variant(self, variant: str) -> None: ...
+    def prepare_tuning_input(self, x_ptr: int, m: int, stream: int) -> None: ...
+    def launch_variant(self, variant: str, out_ptr: int, m: int, stream: int) -> int: ...
+
+class VariantTimer(Protocol):
+    def us_per_launch(self, launch_batch: Callable[[int], None], launches_per_batch: int) -> float: ...
+
+class GemmVariantTuner:
+    def __init__(self, timer: VariantTimer, *, device: str = "cuda",
+                 min_gain: float = 0.02, cosine_floor: float = 0.9999): ...
+    def tune(self, members: Sequence[VariantTunableGemm], m: int) -> VariantTuneResult: ...
+    def results(self) -> tuple[VariantTuneResult, ...]: ...
+
+# flash_rt/models/imagewam/gemm_variant_timer.py
+class CudaGraphVariantTimer:
+    def __init__(self, *, reps: int = 4, samples: int = 15, warmup: int = 3): ...
+    def us_per_launch(self, launch_batch: Callable[[int], None], launches_per_batch: int) -> float: ...
+
+# flash_rt/frontends/torch/imagewam_thor.py
+class ImageWAMTorchFrontendThor:
+    def __init__(..., gemm_variant_autotune: bool = False, ...): ...
+    gemm_variant_results: tuple[VariantTuneResult, ...]
+```
+
+Selection rule, per group of linears sharing `(family, M, N, K)`:
+
+1. Stage the same random input into every member.
+2. For every candidate, launch it once per member eagerly. Record
+   `launch_failed` for a nonzero return code, and `nonfinite` or
+   `mismatch` when its output against the default variant's output on
+   the same member is non-finite or below `cosine_floor`.
+3. Time each surviving candidate as one launch per member, round
+   robin, so each launch reads a different layer's weight and the
+   timing does not run from a warm L2. The batch is captured in one
+   CUDA graph so launch overhead is excluded.
+4. Choose the fastest candidate. Keep the default unless the winner is
+   faster by more than `min_gain` (2%).
+5. Apply the choice to every member and cache it.
+
+## Flow
+
+```
+ImageWAMTorchFrontendThor.__init__(gemm_variant_autotune=True, precision in {nvfp4, fp8_static_cutlass})
+  -> _load_real_weights / _alloc_random_weights      (linears built on default variants)
+  -> _tune_action_dit_gemm_variants(d)
+       group self._weights[("action_dit", ...)] implementing VariantTunableGemm by (family, n, k)
+       for each group: self._gemm_tuner.tune(members, m=d["num_action"])
+         -> member.prepare_tuning_input / launch_variant       (eager checks)
+         -> CudaGraphVariantTimer.us_per_launch                (graph-timed batches)
+         -> member.set_variant(chosen)
+       self.gemm_variant_results = self._gemm_tuner.results()
+  -> set_prompt(): _calibrate_fp8 (unchanged), _capture_graph (captures chosen variants)
+```
+
+Tuning never calls `__call__`, so `StaticFp8Linear`'s
+calibrate-before-call contract is unaffected.
+
+## Code Mapping
+
+| item | file |
+|---|---|
+| `GemmShape`, `VariantMeasurement`, `VariantTuneResult`, `VariantTunableGemm`, `VariantTimer`, `GemmVariantTuner` | `flash_rt/models/imagewam/gemm_variant_tuner.py` |
+| `CudaGraphVariantTimer` | `flash_rt/models/imagewam/gemm_variant_timer.py` |
+| protocol implementation | `flash_rt/models/imagewam/quant_linear.py` |
+| FP8 1-SM tiles | `csrc/gemm/gemm_types_sm100.h`, `csrc/gemm/cutlass_sm100.cu`, `csrc/bindings.cpp` |
+| flag, grouping, tuner ownership | `flash_rt/frontends/torch/imagewam_thor.py` |
+| Thor sweep + A/B | `benchmarks/imagewam_thor_small_m_tile_sweep.py` |
+| tests | `tests/test_imagewam_gemm_variant_tuner.py` |
+
+## Implementation Phases
+
+### Phase 1: tuner and timer
+
+Phase Status: pending
+
+- Goal: selection policy and device timer, independent of any kernel.
+- Files: `gemm_variant_tuner.py`, `gemm_variant_timer.py`,
+  `tests/test_imagewam_gemm_variant_tuner.py`.
+- Observation: stubbed tests cover argmin choice, hysteresis, launch
+  failure, mismatch rejection, nonfinite rejection, default failing,
+  every candidate failing, the cache, and group application. On H100,
+  a real-timer test tunes two real sm_90 kernels, and its printed
+  per-launch times are compared with a direct CUDA-event measurement.
+
+### Phase 2: FP8 1-SM small-M tiles
+
+Phase Status: pending
+
+- Goal: `cutlass_fp8_t128x64x256`, `_t128x64x128`, `_t128x128x128`,
+  `_t128x256x128` exported under `ENABLE_SM100_CUTLASS`.
+- Files: `csrc/gemm/gemm_types_sm100.h`, `csrc/gemm/cutlass_sm100.cu`,
+  `csrc/bindings.cpp`.
+- Observation: `sm110_check.sh` passes, and the sm_90 build is
+  unaffected. Correctness and speed are Thor checklist items.
+
+### Phase 3: quant_linear protocol implementation
+
+Phase Status: pending
+
+- Goal: `Nvfp4Linear` and `StaticFp8Linear(use_cutlass=True)` expose
+  `family`, `default_variant`, `variant`, `candidate_variants()`,
+  `set_variant()`, `prepare_tuning_input()`, and `launch_variant()`.
+  Default behavior stays unchanged.
+- Files: `flash_rt/models/imagewam/quant_linear.py`.
+- Observation: the regression suite is unchanged. Construction on
+  H100 still raises the same `RuntimeError`.
+
+### Phase 4: frontend wiring
+
+Phase Status: pending
+
+- Goal: `gemm_variant_autotune` flag, grouping ActionDiT linears by
+  shape, and `gemm_variant_results`.
+- Files: `flash_rt/frontends/torch/imagewam_thor.py`, tests.
+- Observation: a routing test with stubbed linear classes confirms
+  that only ActionDiT groups are tuned, with `m = num_action`, one
+  tune per distinct shape, and the chosen variant applied to every
+  member. With the flag off, nothing changes. The fp16 path and the
+  regression suite are unchanged.
+
+### Phase 5: Thor sweep and A/B script, handoff
+
+Phase Status: pending
+
+- Goal: `benchmarks/imagewam_thor_small_m_tile_sweep.py`, plus
+  results and Thor checklist in `opportunities.md` OPT-018.
+- Observation: the script's non-Thor paths (argument parsing, shape
+  table, cuBLASLt fp16 reference timing) run on H100 and print SKIP
+  for families this build lacks.
