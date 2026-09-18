@@ -2113,6 +2113,13 @@ endif()
 
 
 # ──────────────────────────────────────────────────────────────────────
+#  ImageWAM native runtime (libflashrt_imagewam_native.so, opt-in target,
+#  not built by default). See cpp/models/imagewam/imagewam_native.cmake.
+# ──────────────────────────────────────────────────────────────────────
+include(${CMAKE_CURRENT_SOURCE_DIR}/cpp/models/imagewam/imagewam_native.cmake)
+
+
+# ──────────────────────────────────────────────────────────────────────
 #  LingBot-VLA model-specific kernels (fused AdaRMSNorm / SwiGLU tail / QKV+RoPE).
 #  Compiled INTO flash_rt_kernels (NOT a separate .so) — same pattern as the
 #  qwen36 model kernels in csrc/kernels/. lingbot_-prefixed symbols + bindings

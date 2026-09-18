@@ -93,6 +93,10 @@ producer verbs are filled with unsupported stubs returning `-3`):
 
 Status codes follow the common runtime convention: `0` ok, `-1` invalid, `-2` not found,
 `-3` unsupported, `-4` shape mismatch, `-5` insufficient storage, `-6` backend.
+In a Python producer (`build_model_runtime`), an exception raised by a verb
+callable returns `-1` with its message as `last_error`;
+`flash_rt.runtime.export.VerbStatusError(status, message)` returns `status`
+instead.
 
 **Hot contract** (SWAP writes and both hot verbs): never recapture, never
 allocate, never rebind graph pointers — only buffer contents change.

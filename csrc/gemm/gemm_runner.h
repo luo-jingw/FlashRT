@@ -203,6 +203,16 @@ public:
                               int num_algos = 16);
 #endif
 
+    // ── Algorithm hand-off (setup only) ──
+    // Read the cuBLASLt algorithm cached for one bf16_nn / fp16_nn shape, or
+    // install one, so a second runner in the same process launches exactly
+    // the algorithm this one selected (e.g. by autotune). `kind`: 0 = bf16_nn,
+    // 1 = fp16_nn. `algo` points at kAlgoBytes bytes (a cublasLtMatmulAlgo_t).
+    // get_cached_algo returns false when the shape has no cached entry.
+    static constexpr int kAlgoBytes = static_cast<int>(sizeof(cublasLtMatmulAlgo_t));
+    bool get_cached_algo(int kind, int M, int N, int K, void* algo) const;
+    void set_cached_algo(int kind, int M, int N, int K, const void* algo);
+
 private:
     cublasLtHandle_t handle_;
     void* workspace_;

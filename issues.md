@@ -912,3 +912,125 @@ Cap each episode at `frames_per_ep` picks, rebuild the ImageWAM file,
 and compare per-site amax and the `fp8_static` fidelity numbers.
 
 ## Resolution
+
+# ISSUE-070
+
+Status: open
+
+Area: `exec/tests/test_exec.py` (execution-contract toy tests)
+
+## Observation
+
+On H100 (torch 2.14.0+cu126, `exec/build` built from this tree),
+`test_capture_replay`, `test_multistream_event` and `test_buffer_copy`
+fail their value checks (`capture/replay did not run the captured
+memset`, and the two equivalents); `test_bind_handoff` and
+`test_lru_eviction` pass.
+
+## Impact
+
+The toy suite reports failures that are not failures of the exec layer.
+Adoption and replay of real graphs are unaffected: the ImageWAM model
+runtime (OPT-028) replays through `frt_graph_replay` bit-identically to
+torch replay.
+
+## Evidence
+
+- `frt_ctx_create()` makes stream id 0 with `cudaStreamNonBlocking`
+  (`exec/src/context.cpp`, `exec/backend/cuda/cuda_backend.cpp`).
+- The tests zero the target tensor with torch on torch's current stream,
+  replay on exec stream 0, then `torch.cuda.synchronize()`. A
+  non-blocking stream does not order against the legacy default stream,
+  so the zero can land after the replay.
+
+## Hypotheses
+
+A host-side race in the tests, not a capture or replay defect.
+
+## Next Experiment
+
+Insert `torch.cuda.synchronize()` after each `zero_()` in the three
+tests and re-run; all five should pass.
+
+## Resolution
+
+# ISSUE-071
+
+Status: resolved
+
+Area: `ImageWAMTorchFrontendThor._graph` replay, final backbone residual
+(`backbone_hidden` after the last single-stream block)
+
+## Observation
+
+On H100 (fp16, small random dims), a scratch parity script that ran the
+Python pipeline eagerly (`pipeline_thor._single_stream_layer`,
+`_double_stream_layer`, `imagewam_prefill`, `imagewam_denoise_loop`) and
+the native pipeline eagerly, then replayed the Python graph once from a
+restored input state, saw that replay's final `backbone_hidden` differ
+from every other run by `max_abs` 0.0049 and 0.0035 in 2 of 7 script
+runs. In the same replays the K/V caches, `Q_O` and `action_latent` were
+bit-identical, and every later replay matched the eager result exactly.
+
+## Impact
+
+None on actions: after the last backbone layer, the residual is not read
+by the denoise loop (it reads only the K/V caches). Bit-exact parity
+checks that included `backbone_hidden` after a Python-graph replay failed
+intermittently, so the native-pipeline test had dropped that buffer from
+its native-graph vs Python-graph comparison.
+
+## Evidence
+
+- Targeted reproductions did not trigger it: 500 consecutive replays
+  (0 mismatches); first replay after eager Python denoise, eager native
+  denoise, or both (30 trials each, 0 mismatches).
+- The difference is confined to the last block's gated residual update,
+  i.e. to its `attn_out_proj` / `mlp_down` GEMMs, its `_add_inplace`, or
+  its in-graph gate tensor (`_fuse_mod_group` output in the graph's
+  private memory pool).
+
+## Hypotheses
+
+1. Memory in the graph's private pool that backs the last block's
+   in-graph gate tensor was modified between capture and that replay.
+2. A timing-dependent kernel choice or workspace effect in one of the
+   last block's GEMMs under a co-tenant load.
+
+## Next Experiment
+
+Replay with the per-layer gate tensors hoisted out of the graph (the
+native pipeline's precomputed modulation) and count mismatches over many
+first replays after mixed eager work; if they disappear, hypothesis 1
+holds.
+
+## Resolution
+
+Resolved 2026-09-18: a race in the test harness, not in the Python graph.
+
+- Root cause: the snapshot that followed the Python-graph replay queued
+  its `clone()` copies on the torch stream and returned without waiting
+  for them. The next call, `NativeRuntime::capture()`, ran its eager
+  warm-up on the native stream, which is created non-blocking and so is
+  not ordered after the torch stream. The warm-up's first GEMM
+  (`txt_in`, rows `[0, x0)` of `backbone_hidden`) could overwrite those
+  rows before the copy read them. With small random weights the final
+  residual is within a few bf16 ulps of the `txt_in` output, which is why
+  the differences were small and confined to the text rows.
+- Reproduction: with `backbone_hidden` back in
+  `test_native_graph`'s comparison, the test failed in 15 of 24 runs on
+  H100 (GPU shared with another process), with differences only in rows
+  `[0, x0)`. With a second Python replay added, only the snapshot taken
+  directly before `capture()` differed. A replica with no native work
+  right after the snapshot never failed.
+- Fix: `frt_imagewam_native_run` and `frt_imagewam_native_capture` now
+  wait for all prior device work (`cudaDeviceSynchronize`) before they
+  write the frontend's buffers, and the test's snapshot waits for its
+  copies. Either change alone removed the failure: 0 of 16 runs failed
+  (8 processes, both layer structures). With both
+  changes, the native runtime and pipeline tests, including the
+  restored comparison, passed in 10 of 10 runs.
+- Consistent with independent evidence that the Python graph is
+  deterministic: over 100 fresh-process runs of first versus later
+  replays and eager runs, across scenarios and the base commit, showed 0
+  mismatches, with one digest per structure across processes.
