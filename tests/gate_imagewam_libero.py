@@ -14,6 +14,19 @@ and checks:
   policy in ``tests/fixtures/imagewam_gate/latency_baselines.json``
   (``p50 < baseline * (1 + margin)``; ungated on the shared H100).
 
+Fidelity is measured with the fixture's fixed N(0,1) initial noise, the
+noise the official sampler draws for each seed, passed through
+``infer(obs, action_noise=...)``. It is not the served default draw,
+``0.01 * N(0,1)`` (issues.md ISSUE-002). With the served draw, fp16 on
+fixture v1 measures vs-official median 0.99683 and min 0.98591 over the
+40 runs, below this gate's fp16 bounds (0.997 / 0.993); with the fixed
+N(0,1) noise it measures 0.99836 / 0.99554. The latency loop does use
+the served default draw.
+
+The latency check records the Jetson clock state but does not refuse
+unlocked clocks; whether it should is an open owner decision
+(issues.md ISSUE-061).
+
 The official model and Qwen3 are not loaded: the fixture carries the
 official Qwen3 context. Gate policy: ``flash_rt/core/regression_gate.py``;
 fixture format: ``flash_rt/datasets/imagewam_gate_fixture.py``; fixture

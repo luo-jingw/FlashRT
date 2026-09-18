@@ -227,4 +227,9 @@ once after `sudo nvpmodel -m 0 && sudo jetson_clocks`. Re-seed the
 baseline from the locked-clock run and record its clock state in the
 baseline's `source` field.
 
+Owner decision: the latency check records the clock state in every
+result but does not refuse unlocked clocks, unlike Pi0.5's
+`machine_state()`, which raises. Whether an unlocked Thor run should
+turn the latency verdict into `blocked` is open.
+
 ## Resolution

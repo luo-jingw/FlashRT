@@ -3975,6 +3975,14 @@ file the verdict is `skipped` (exit 0); with a file but no such
 constructor keyword it is `blocked` (exit 1). It is never gated on the
 `N(0, 0.1)` placeholder calibration.
 
+Noise: fidelity is measured with the fixture's fixed N(0,1) initial
+noise, the official sampler's per-seed draw, passed through
+`infer(obs, action_noise=...)`. It is not the served default draw,
+`0.01 * N(0,1)` (ISSUE-002); the latency loop does use the served draw.
+
+Clock policy: the latency check records the clock state in every result
+but does not refuse unlocked clocks; ISSUE-061 holds that decision.
+
 ## Measured (H100, shared GPU)
 
 Fixture generation, FlashRT fp16 against official (normalized space):
@@ -3987,6 +3995,19 @@ Fixture generation, FlashRT fp16 against official (normalized space):
 | official MAE vs GT, seed 0 / seed 1 | | | 0.18538 / 0.18584 |
 
 Peak GPU memory: official phase 17.4 GiB, FlashRT fp16 phase 9.6 GiB.
+
+Initial noise and fidelity, fp16 on fixture v1, 40 runs, cosine against
+official in normalized space:
+
+| initial noise | median | min | mean |
+|---|---:|---:|---:|
+| fixed N(0,1), the official sampler's (what the gate uses) | 0.99836 | 0.99554 | 0.99798 |
+| 0.01 x the same noise | 0.99683 | 0.98613 | 0.99602 |
+| served default draw, 0.01 x N(0,1) on the device | 0.99683 | 0.98591 | 0.99598 |
+
+The served sampler falls below the fp16 bounds (median 0.997, min
+0.993). Resolving ISSUE-002 (dropping the 0.01 factor) would bring the
+served path to the gated configuration.
 
 Gate runs:
 

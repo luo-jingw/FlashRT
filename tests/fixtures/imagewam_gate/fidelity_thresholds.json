@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "space": "Cosine per (observation, seed) over the (64, 7) action chunk in normalized action space (dataset_stats.json min/max to [-1, 1]); MAE against ground truth in real action units over the valid ground-truth rows. References: official ImageWAM bf16 and FlashRT fp16, both stored in the fixture, same initial noise.",
+  "space": "Cosine per (observation, seed) over the (64, 7) action chunk in normalized action space (dataset_stats.json min/max to [-1, 1]); MAE against ground truth in real action units over the valid ground-truth rows. References: official ImageWAM bf16 and FlashRT fp16, both stored in the fixture. Every run starts from the fixture's fixed N(0,1) initial noise (the official sampler's per-seed draw), not the served 0.01 * N(0,1) draw (issues.md ISSUE-002).",
   "precisions": {
     "fp16": {
       "vs_official_median_min": 0.997,
