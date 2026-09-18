@@ -184,6 +184,13 @@ this fork covers Jetson AGX Thor (sm_110).
 - The real-checkpoint tests read `CKPT_PATH`, `AE_MODEL_PATH`, and
   `IMAGEWAM_SRC`. When these are unset, they fall back to the original
   `/home/ljw/...` paths.
+- The block-scaled 4-bit quantizers (NVFP4 and E0M3, not the tcgen05
+  GEMMs) use no Blackwell instructions and run on H100 when compiled for
+  sm_90a. `tools/check_blockscaled_quantizers_sm90.py` builds them with
+  the `fp4_kernels_obj` flags and compares their bytes with
+  `flash_rt/models/imagewam/blockscaled_ref.py`; 4-bit accuracy work can
+  be simulated here with that reference
+  (`benchmarks/imagewam_e0m3_accuracy_study.py`).
 
 ## Credentials
 
