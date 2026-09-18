@@ -3922,3 +3922,76 @@ Thor, `nvfp4`: pending (Thor checklist).
 
 Thor gate at `nvfp4` reports every parity row `array_equal=True`. The
 export is additive and opt-in; `infer()` behavior is unchanged.
+
+# OPT-029: ImageWAM native C++ overlay (`io="native"`)
+
+Status: implemented and verified bit-exact on H100 (fp16, small dims and
+real checkpoint); NVFP4 wiring compiles and links for sm_110; Thor
+`nvfp4` parity and speed pending on the Thor checklist.
+
+Area: deployment engineering, roadmap item 14 (`plan.md` "Plan: Native
+C++ overlay, `io="native"`"); interface record
+`docs/imagewam_native_cpp.md`.
+
+## Observation
+
+After OPT-028 every ImageWAM tick through the ABI still entered Python
+(GIL-acquiring trampolines for proprio, actions and `step`), and the
+graph was recorded from Python, carrying per-replay torch kernels for
+the AdaLN modulation casts and gate expansions.
+
+## Opportunity
+
+`libflashrt_imagewam_native.so`: C verbs (proprio, actions, step) over a
+declaration the Python producer builds, and a C++ `NativePipeline` that
+records prefill + denoise against the existing `csrc` kernels from a
+borrowed resource table, with the frontend's autotuned cuBLASLt
+algorithms handed off (`GemmRunner.get/set_cached_algo`, additive) and
+the modulation precomputed once. VAE and Qwen3 stay in Python.
+
+## Expected Mechanism
+
+Same kernels, same algorithms, same inputs: bit-exact to the Python
+pipeline, with fewer graph nodes (no in-graph modulation casts/copies)
+and no Python in the tick.
+
+## Required Evidence
+
+H100 (shared GPU), fp16:
+
+| check | result |
+|---|---|
+| backbone double-stream block 0, native vs Python (small dims) | every state buffer `array_equal` |
+| backbone single-stream block 0 | `array_equal` |
+| full prefill (backbone_hidden, all K/V) | `array_equal` |
+| full denoise loop (action_latent, action K/V rows) | `array_equal` |
+| native graph vs Python eager / Python graph | `array_equal` |
+| `io="native"` tick on the native graph vs `infer()` | `array_equal` |
+| Python frames entered by `set_input(proprio)` + `step` | io=native 0, io=python 57 |
+| schema records at real dims: Python declaration, C++, golden | identical (7 records) |
+| real checkpoint: actions / actions_raw / native proprio token / native vs Python graph action latent and K cache | all `array_equal`, `max_abs = 0` |
+| GEMM shapes handed off (real dims) | 20 of 20 |
+| graph nodes (real dims) | native 5732, Python 7112 |
+| exported symbols of the library (sm_90 and sm_110) | 18, all `frt_imagewam_native_*` |
+
+Latency, H100 shared with a co-tenant at 100% utilization, indicative
+only, real checkpoint, fp16, alternating A/B, 50 iterations each:
+
+| path | P10 | P50 | P90 |
+|---|---:|---:|---:|
+| `io="python"` tick (SWAP tokens, proprio, noise, step, actions) | 104.33 ms | 107.10 ms | 110.22 ms |
+| `io="native"` tick, native graph | 102.26 ms | 103.16 ms | 104.28 ms |
+| Python graph replay only (CUDA events) | 95.86 ms | 101.94 ms | 102.40 ms |
+| native graph replay only (CUDA events) | 100.58 ms | 100.97 ms | 101.56 ms |
+
+Thor, `nvfp4`: pending (Thor checklist items 2-4). The replay-only A/B
+there is the number that says whether the 1380 removed nodes matter on
+Thor.
+
+## Promotion Condition
+
+Thor reports every parity row `array_equal` at `nvfp4`, and the
+replay-only A/B shows the native graph at or below the Python graph.
+Remaining native work beyond this entry: VAE encoding in the graph
+(roadmap item 5, then an `images` STAGED native port), proprio projection
+inside the graph, and a native checkpoint loader (`native_v2`).

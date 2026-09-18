@@ -3244,7 +3244,7 @@ Observation: the H100 gate output quoted in OPT-028; Thor result pending.
 
 # Plan: Native C++ overlay, `io="native"` (roadmap item 14)
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -3458,7 +3458,7 @@ graph (H100, same process).
 
 ### Phase 4 — nvfp4 wiring and Thor handoff
 
-Phase Status: active
+Phase Status: completed
 
 Goal: NVFP4 linear descriptors (packed weight, SFB, activation scratch,
 CUTLASS variant) recorded natively with the `flash_rt_fp4` kernels;
