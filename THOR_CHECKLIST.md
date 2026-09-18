@@ -98,7 +98,7 @@ OUT=$OUT/C_profile SUITE=libero_goal   PRECS=nvfp4 PROFILES="default fast" bash 
 OUT=$OUT/C_profile SUITE=libero_10     PRECS=nvfp4 PROFILES="default fast" bash scripts/imagewam_thor_matrix.sh
 ```
 
-`PROFILES` 模式一行是一个具名 profile（`default`、`fast`），行名即 profile 名，行在表和 CSV 里的列与开关行相同；不加 `PROFILES` 时仍按 `ROWS` 的开关行跑，行名与含义不变（`default vae vae_trim vae_trim_fa4bb stack stack_no_vae stack_no_trim`）。两种模式的 per-row 日志同名（`matrix_<suite>_<prec>_<row>.log`），跑进同一个 `OUT` 会互相覆盖。
+`PROFILES` 模式一行是一个具名 profile（`default`、`fast`），表与 CSV 里的行名是 `profile_<name>`，日志是 `matrix_<suite>_<prec>_profile_<name>.log`，与开关行的同名日志不冲突；表格文件名也带 mode 与 profile 名。不加 `PROFILES` 时仍按 `ROWS` 的开关行跑，行名与含义不变（`default vae vae_trim vae_trim_fa4bb stack stack_no_vae stack_no_trim`）。profile 行只导出 `PROFILE`，不导出开关变量，所以 `fast` 一行跑的是 profile 自己的内容（等于 `stack` 那一组），不是 profile 再叠脚本的默认值。
 
 行有效性：`rc=0`，`FA4 bb` / `FA4 mot` 与该行的定义一致，`FA4 fallback` 为 `None`。不满足的行作废重跑。
 
@@ -125,7 +125,7 @@ SUITE=libero_spatial PRECS=nvfp4 ROWS="default stack" bash scripts/imagewam_thor
 新入口下 profile 是部署记录的一部分：比较脚本打印的 `effective_config` 行必须与 `config_resolver.format_effective_config` 为同一 resolved 配置产出的字符串完全相同。解析器不知道运行时才定的 `use_fa4`（`default` profile 打印 `auto`）与 `fa4_fallback_reason`，比较时把 frontend 的 `fe.use_fa4` / `fe.use_fa4_mot` / `fe.fa4_fallback_reason` 传进去。环境变量用 C 节 profile 行那一轮的环境（`CKPT_PATH`、`FLUX2_*`、`QWEN3_MODEL_SPEC`、`PYTHONPATH`、`BUNDLE`、`OUT`）。
 
 ```
-grep '^effective_config' $OUT/C_profile/matrix_libero_spatial_nvfp4_default.log | tail -1 > $OUT/C2_default_script.txt
+grep '^effective_config' $OUT/C_profile/matrix_libero_spatial_nvfp4_profile_default.log | tail -1 > $OUT/C2_default_script.txt
 PROFILE=default python - > $OUT/C2_default_resolver.txt <<'PY'
 import os
 from flash_rt.frontends.torch.imagewam_thor import load_imagewam
@@ -149,7 +149,7 @@ PY
 diff -u $OUT/C2_default_resolver.txt $OUT/C2_default_script.txt
 ```
 
-判据：`diff` 退出码 0；`fast` 行同样比较（`PROFILE=fast`，日志换成 `matrix_libero_spatial_nvfp4_fast.log`，输出文件换名）。
+判据：`diff` 退出码 0；`fast` 行同样比较（`PROFILE=fast`，日志换成 `matrix_libero_spatial_nvfp4_profile_fast.log`，输出文件换名）。
 去向：一致则并入 W12 的相位状态；不一致则写 `issues.md`，`diff` 打出的差异就是缺口。
 
 ### C3 runtime identity 带 `workload.<field>`（W10）
