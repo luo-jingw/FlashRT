@@ -2,64 +2,85 @@
 path, which `SimNvfp4Linear` runs) against the real NVFP4 quantizer, bit
 for bit, and `SimNvfp4Linear` in the served pipeline.
 
-Reference kernel: `quantize_fp4_dynamic_fp16` (`csrc/quantize/
-quantize_fp4_dynamic.cu`), the linear-scale-layout twin of the
-`quantize_fp4_sfa.cu` quantizer `Nvfp4Linear` runs (same device helpers
-and arithmetic; only the scale byte's address differs). It comes from
-`flash_rt.flash_rt_fp4` on a Blackwell/Thor build; elsewhere this test
-JIT-compiles that same `.cu` file for the local GPU (pure CUDA-core code,
-no Blackwell instruction), so the simulator is checked against the real
-device code on any GPU with nvcc available.
+Reference kernel: `quantize_fp4_dynamic_sfa_fp16`
+(`csrc/quantize/quantize_fp4_sfa.cu`), the quantizer `Nvfp4Linear` runs
+for its weights (SFB layout) and activations (SFA layout). It comes from
+`flash_rt.flash_rt_fp4` on a Blackwell/Thor build. Elsewhere this test
+compiles the unmodified source for the local GPU with the production
+flags of the `fp4_kernels_obj` target (`-O3 --use_fast_math
+--expt-relaxed-constexpr`, `CMakeLists.txt`), together with the C shim
+`tools/blockscaled_quantizers_shim.cu` and the sources it links, as
+`tools/check_blockscaled_quantizers_sm90.py` does; the quantizer is
+CUDA-core code with no Blackwell instruction. Packed codes and the
+tile-interleaved scale bytes are compared with
+`blockscaled_ref.pack_codes` / `pack_scales`.
 
 Also checks `SimNvfp4Linear` against the Thor-measured `Nvfp4Linear`
 cosine on `test_imagewam_quant_linear.py`'s own small case.
 """
+import ctypes
+import hashlib
 import os
+import subprocess
 import tempfile
 
 import pytest
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
-from flash_rt.models.imagewam.blockscaled_ref import dequantize_blocks, pack_codes, quantize_blocks
+from flash_rt.models.imagewam.blockscaled_ref import (
+    dequantize_blocks,
+    pack_codes,
+    pack_scales,
+    quantize_blocks,
+    sf_size_bytes,
+)
 from flash_rt.models.imagewam.quant_linear import Fp16Linear, SimNvfp4Linear
 
 DEV = "cuda"
 FP16 = torch.float16
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The shim and the sources it links (tools/check_blockscaled_quantizers_sm90.py).
+_SHIM_SOURCES = ("csrc/quantize/quantize_e0m3_sfa.cu", "csrc/quantize/quantize_fp4_sfa.cu",
+                 "csrc/fused_fp4/pi05_e0m3_act.cu", "tools/blockscaled_quantizers_shim.cu")
+# fp4_kernels_obj's CUDA compile options (CMakeLists.txt) and its define.
+_PRODUCTION_FLAGS = ("-O3", "--use_fast_math", "--expt-relaxed-constexpr",
+                     "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1")
 
-_BINDING = r"""
-#include <torch/extension.h>
-#include "quantize_fp4_dynamic.cuh"
-int quantize(int64_t src, int64_t packed, int64_t scales, int n, int d) {
-  return flash_rt::fp4::quantize_fp4_dynamic_fp16(
-      reinterpret_cast<const void*>(src), reinterpret_cast<void*>(packed),
-      reinterpret_cast<void*>(scales), n, d, 0);
-}
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("quantize_fp4_dynamic_fp16", &quantize); }
-"""
+
+def _build_shim() -> str:
+    """nvcc-build the shim for the local GPU; cached by source contents."""
+    major, minor = torch.cuda.get_device_capability()
+    arch = f"{major}{minor}" + ("a" if major >= 9 else "")
+    cutlass = os.path.join(_REPO, "third_party", "cutlass")
+    h = hashlib.sha256(" ".join(_PRODUCTION_FLAGS + (arch,)).encode())
+    for src in _SHIM_SOURCES + ("csrc/quantize/quantize_fp4_sfa.cuh",):
+        with open(os.path.join(_REPO, src), "rb") as f:
+            h.update(f.read())
+    lib = os.path.join(tempfile.gettempdir(), f"imagewam_nvfp4_sfa_ref_{h.hexdigest()[:16]}.so")
+    if not os.path.exists(lib):
+        cmd = [os.environ.get("NVCC", "nvcc"), "-std=c++17", *_PRODUCTION_FLAGS,
+               f"-gencode=arch=compute_{arch},code=sm_{arch}", "-Xcompiler", "-fPIC", "-shared",
+               f"-I{_REPO}/csrc", f"-I{cutlass}/include", f"-I{cutlass}/tools/util/include",
+               *[os.path.join(_REPO, s) for s in _SHIM_SOURCES], "-o", lib + ".tmp"]
+        subprocess.run(cmd, check=True, capture_output=True)
+        os.replace(lib + ".tmp", lib)
+    return lib
 
 
 def _real_quantizer():
-    """Returns `fn(src_ptr, packed_ptr, scales_ptr, N, D) -> rc` and its origin."""
+    """Returns `fn(src_ptr, packed_ptr, sf_ptr, N, D, is_sfb) -> rc` and its origin."""
     try:
         import flash_rt.flash_rt_fp4 as fp4
-        return (lambda s, p, c, n, d: fp4.quantize_fp4_dynamic_fp16(s, p, c, n, d, 0)), "flash_rt_fp4"
+        return ((lambda s, p, f, n, d, sfb: fp4.quantize_fp4_dynamic_sfa_fp16(s, p, f, n, d, sfb, 0)),
+                "flash_rt_fp4")
     except ImportError:
         pass
-    from torch.utils.cpp_extension import load
+    shim = ctypes.CDLL(_build_shim())
+    shim.shim_nvfp4.argtypes = [ctypes.c_uint64] * 3 + [ctypes.c_int] * 3
     major, minor = torch.cuda.get_device_capability()
-    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", f"{major}.{minor}")
-    build_dir = os.path.join(tempfile.gettempdir(), f"imagewam_nvfp4_quant_ref_sm{major}{minor}")
-    os.makedirs(build_dir, exist_ok=True)
-    binding = os.path.join(build_dir, "binding.cpp")
-    with open(binding, "w") as f:
-        f.write(_BINDING)
-    mod = load(name=f"imagewam_nvfp4_quant_ref_sm{major}{minor}",
-               sources=[binding, os.path.join(_REPO, "csrc/quantize/quantize_fp4_dynamic.cu")],
-               extra_include_paths=[os.path.join(_REPO, "csrc/quantize")],
-               build_directory=build_dir, verbose=False)
-    return mod.quantize_fp4_dynamic_fp16, f"JIT-compiled quantize_fp4_dynamic.cu (sm_{major}{minor})"
+    return ((lambda s, p, f, n, d, sfb: shim.shim_nvfp4(s, p, f, n, d, int(sfb))),
+            f"quantize_fp4_sfa.cu built for sm_{major}{minor} with -O3 --use_fast_math")
 
 
 def _adversarial_input(rows: int, k: int) -> torch.Tensor:
@@ -82,7 +103,7 @@ def _adversarial_input(rows: int, k: int) -> torch.Tensor:
 def test_sim_quantizer_bit_exact_vs_real_kernel():
     try:
         quant, origin = _real_quantizer()
-    except Exception as e:  # no nvcc / no ninja
+    except Exception as e:  # no nvcc / no CUTLASS checkout
         pytest.skip(f"no real NVFP4 quantizer available: {e}")
     torch.manual_seed(0)
     cases = [("adversarial", _adversarial_input(256, 3072))]
@@ -91,21 +112,20 @@ def test_sim_quantizer_bit_exact_vs_real_kernel():
     for name, x in cases:
         x = x.to(DEV).contiguous()
         n, d = x.shape
-        packed = torch.zeros(n, d // 2, dtype=torch.uint8, device=DEV)
-        scales = torch.zeros(n, d // 16, dtype=torch.uint8, device=DEV)
-        assert quant(x.data_ptr(), packed.data_ptr(), scales.data_ptr(), n, d) == 0
-        torch.cuda.synchronize()
         q = quantize_blocks(x, "e2m1")
-        codes, sc = q.codes, q.scales
-        sim_packed = pack_codes(codes)
-        sim_scales = q.scale_bytes
-        code_mismatch = (sim_packed != packed).sum().item()
-        scale_mismatch = (sim_scales != scales).sum().item()
-        sub = (sc.float() < 2 ** -6).float().mean().item()
-        print(f"[{origin}] {name}: {n}x{d}, packed-byte mismatches={code_mismatch}, "
-              f"scale mismatches={scale_mismatch}, subnormal-or-zero block scales={sub:.1%}")
-        assert code_mismatch == 0 and scale_mismatch == 0
-        # dequantized values (E2M1 value x E4M3 scale) are exact in fp16
+        for layout, is_sfb in (("SFA (activation)", False), ("SFB (weight)", True)):
+            packed = torch.zeros(n, d // 2, dtype=torch.uint8, device=DEV)
+            sf = torch.zeros(sf_size_bytes(n, d), dtype=torch.uint8, device=DEV)
+            assert quant(x.data_ptr(), packed.data_ptr(), sf.data_ptr(), n, d, is_sfb) == 0
+            torch.cuda.synchronize()
+            code_mismatch = (pack_codes(q.codes) != packed).sum().item()
+            scale_mismatch = (pack_scales(q.scale_bytes) != sf).sum().item()
+            print(f"[{origin}] {name} {layout}: {n}x{d}, packed-byte mismatches={code_mismatch}, "
+                  f"scale-byte mismatches={scale_mismatch}")
+            assert code_mismatch == 0 and scale_mismatch == 0
+        sub = (q.scales < 2 ** -6).float().mean().item()
+        print(f"  subnormal-or-zero block scales: {sub:.1%}")
+        # dequantized values (E2M1 value x UE4M3 scale) are exact in fp16
         val32 = dequantize_blocks(q)
         assert torch.equal(val32.half().float(), val32)
 

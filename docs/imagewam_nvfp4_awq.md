@@ -8,17 +8,20 @@ with `quantize_fp4_dynamic_sfa_fp16` (`csrc/quantize/quantize_fp4_sfa.cu`):
 - blocks of 16 elements along K;
 - block scale `__nv_fp8_e4m3(max(amax / 6, 1e-12))`: E4M3,
   round-to-nearest-even, saturating at 448, subnormal below 2^-6; no
-  per-tensor global scale (`fp4_gemm` runs with `alpha = 1`);
+  per-tensor global scale (`fp4_gemm` runs with `alpha = 1`). The
+  production build (`--use_fast_math`) computes `amax / 6` as a
+  multiplication by the fp32 reciprocal of 6;
 - elements E2M1 of `x / scale` with thresholds 0.25, 0.75, 1.25, 1.75,
   2.5, 3.5, 5.0 (`<=`, ties to the smaller magnitude).
 
 `blockscaled_ref.quantize_blocks(x, "e2m1")` (the E2M1 path of the
-shared block-scaled reference) reproduces this bit for bit: 0 packed-byte and
-0 scale-byte mismatches against the real device code
-(`quantize_fp4_dynamic.cu`, same helpers, JIT-compiled for sm_90) on
-random, weight-like and adversarial inputs (subnormal and zero scales,
-saturation, threshold ties) — `tests/test_imagewam_nvfp4_sim.py`, which
-uses `flash_rt_fp4`'s own quantizer on a Blackwell build. Dequantized
+shared block-scaled reference) reproduces this bit for bit: 0
+packed-byte and 0 scale-byte mismatches, in both the SFA and the SFB
+tile layout, against `quantize_fp4_sfa.cu` compiled for sm_90 with the
+production flags (`-O3 --use_fast_math`) on random, weight-like and
+adversarial inputs (subnormal and zero scales, saturation, threshold
+ties) — `tests/test_imagewam_nvfp4_sim.py`, which uses `flash_rt_fp4`'s
+own quantizer on a Blackwell build. Dequantized
 values are exact in fp16, so `quant_linear.SimNvfp4Linear` (fake-quantized operands,
 fp16 GEMM with fp32 accumulation) differs from the hardware GEMM only in
 accumulation order: on `test_imagewam_quant_linear.py`'s NVFP4 case it
