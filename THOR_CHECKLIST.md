@@ -33,12 +33,16 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 ## A. 先确认数据可信
 
 ### A1 pytest 失败是级联还是真问题
+上一轮 `01_pytest.log` 只留下失败标题，没有第一处失败的报错文本，这次要把它留下来。本机（无 GPU）已排除一个原因：路由契约测试的 stub 缺 `_nvfp4_variant_index`，已修，且它在合并跑时不触发，解释不了 Thor 的 96 failed / 51 errors。
 ```
 python -m pytest tests/test_imagewam_*.py tests/test_jetson_clock_state.py -x -q -rs 2>&1 | tee $OUT/A1_first_failure.log
+python -m pytest tests/test_imagewam_fa4_dispatch.py -x -q 2>&1 | tee $OUT/A1_fa4_dispatch.log
+python -m pytest tests/test_imagewam_fa4_dispatch.py -k capture_sync tests/test_imagewam_frontend.py -q 2>&1 | tee $OUT/A1_cascade.log
 python -m pytest tests/test_imagewam_residual_norm_fusion.py -q 2>&1 | tee $OUT/A1_isolated.log
 TRIM_PRECISION=nvfp4 TRIM_FA4=on python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s -k capture_failure 2>&1 | tee $OUT/A1_fa4_recover.log
 ```
-判据：单独跑能过 → 级联，污染源是第一个失败的测试（很可能是 FA4 捕获失败的恢复路径）；单独跑也失败 → Thor 上捕获路径的真实问题。
+假设（未证实）：`test_imagewam_fa4_dispatch.py` 的 `capture_sync` 模式在捕获中调用 `torch.cuda.synchronize()`，使捕获状态失效，其后的 module 级 fixture 构造失败，表现为大量 `ERROR at setup`。
+判据：`A1_fa4_dispatch.log` 里该文件单独跑就失败 → 真问题（第 292 行 `set_prompt("fallback")`）；单独过、`A1_cascade.log` 里后续测试失败 → 级联，污染源是 `capture_sync`；其余单独跑能过 → 只是文件顺序问题。
 去向：`issues.md`。
 
 ### A2 fp16 叠满 273.8 ms 是否合理
