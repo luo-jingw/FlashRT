@@ -14,6 +14,22 @@ from typing import Protocol
 import numpy as np
 import torch
 
+# The workload fields a captured graph depends on, as runtime-identity keys
+# (`workload.<field>`). `num_views`, `image_h` and `image_w` name the image
+# geometry, `text_max_len` with the proprio row gives `x0`, `action_horizon`
+# the action block, `action_dim` the head width, `proprio_dim` whether a
+# proprio row exists, and `num_steps` with `shift` the denoise schedule.
+# `ImageWAMWorkload` owns the values; this tuple only names them.
+WORKLOAD_IDENTITY_FIELDS = ("num_views", "image_h", "image_w", "text_max_len", "action_horizon",
+                            "action_dim", "proprio_dim", "num_steps", "shift")
+
+
+def workload_identity(workload) -> tuple[tuple[str, str], ...]:
+    """`(("workload.<field>", <value>), ...)` for every
+    `WORKLOAD_IDENTITY_FIELDS` entry of `workload` (`ImageWAMWorkload`)."""
+    return tuple((f"workload.{name}", str(getattr(workload, name)))
+                 for name in WORKLOAD_IDENTITY_FIELDS)
+
 
 @dataclass(frozen=True)
 class ImageWAMRuntimeSurface:
@@ -31,6 +47,11 @@ class ImageWAMRuntimeSurface:
       entry, the normalized action chunk after replay (in place).
     - `setup_identity`: ordered `(key, value)` pairs describing the setup
       (precision, dimensions, flags) that the captured graph depends on.
+      `dims.<key>` carries the resolved dims the frontend built its buffers
+      from; a frontend constructed from a resolved configuration also
+      carries `workload.<field>` (`WORKLOAD_IDENTITY_FIELDS`), so a runtime
+      and a calibration file are checked against the workload that was
+      served and not only against the dims it produced.
     - `proprio_row`: the context row the proprio token goes to for the
       current prompt (`None` without proprio); changes with the prompt.
     - `proprio_weight` / `proprio_bias`: the real `proprio_encoder`,

@@ -65,6 +65,7 @@ import torch
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor import fa4_backend
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
+from flash_rt.models.imagewam.config_resolver import ResolvedConfig
 from flash_rt.models.imagewam.gemm_variant_timer import CudaGraphVariantTimer
 from flash_rt.models.imagewam.gemm_variant_tuner import GemmVariantTuner, VariantTuneResult
 from flash_rt.models.imagewam.pipeline_resources import (
@@ -104,7 +105,8 @@ from flash_rt.models.imagewam.quant_linear import (
 )
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 from flash_rt.models.imagewam.text_context import pack_trimmed_context, trimmed_sequence_dims
-from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSurface
+from flash_rt.models.imagewam.precision import Precision
+from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSurface, workload_identity
 from flash_rt.models.imagewam.vae_preprocess import RESIZE_MODES, VaePreprocessor
 from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeStageSpec
 
@@ -112,22 +114,28 @@ if TYPE_CHECKING:
     # Type-only: `runtime.export` loads the built runtime module on import,
     # and the frontend works without it.
     from flash_rt.models.imagewam.native_runtime import ImageWAMNativeRuntime
+    from flash_rt.models.imagewam.structure import ImageWAMStructure
+    from flash_rt.models.imagewam.workload import ImageWAMWorkload
     from flash_rt.runtime.export import ModelRuntime
 
-_PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass", "e0m3_hadamard",
-               "nvfp4_sim")
+# The four precision sets below are VIEWS of `precision.py`'s
+# `Precision` / `PROPERTIES` table (plan W7): which precision needs
+# calibration, takes `awq_inv_s`, or has a switchable CUTLASS tile is
+# stated there once, and the module-level names stay because other
+# modules and tests import them.
+_PRECISIONS = tuple(p.value for p in Precision)
 # `nvfp4_sim`: NVFP4 numerics emulated with fp16 GEMMs (SimNvfp4Linear,
 # bit-exact quantizer), for accuracy work on GPUs without Blackwell FP4.
 # Not a fast path.
-_NVFP4_PRECISIONS = ("nvfp4", "nvfp4_sim")
+_NVFP4_PRECISIONS = tuple(p.value for p in Precision if p.supports_awq)
 # OPT-004 step 6 (plan.md): the two `StaticFp8Linear` variants need a
 # one-time calibration call in set_prompt() before graph capture (see
 # _calibrate_fp8 below) -- everything else needs no such step.
-_STATIC_FP8_PRECISIONS = ("fp8_static", "fp8_static_cutlass")
+_STATIC_FP8_PRECISIONS = tuple(p.value for p in Precision if p.needs_calibration)
 # Precisions whose GEMMs run a switchable CUTLASS tile (roadmap item 1,
 # plan.md "Plan: ActionDiT small-M CUTLASS tile selection"): the only ones
 # `gemm_variant_autotune=True` applies to.
-_VARIANT_TUNED_PRECISIONS = ("nvfp4", "fp8_static_cutlass")
+_VARIANT_TUNED_PRECISIONS = tuple(p.value for p in Precision if p.supports_tile_autotune)
 # FA4 at the "backbone" site stays opt-in until Thor confirms it at the served
 # shapes, inside the captured graph, end to end (opportunities.md OPT-019).
 # `use_fa4=None` resolves to False unless this environment variable is "1"
@@ -172,6 +180,62 @@ _DEFAULT_DIMS = dict(
     action_num_layers_double=2, action_num_layers_single=3,
     dt=0.5, num_denoise_steps=2,
 )
+
+
+def frontend_kwargs_from_config(resolved: ResolvedConfig, *, ckpt_path: str | None = None,
+                               ae_model_path: str | None = None, flux2_src: str | None = None,
+                               qwen3_model_spec: str | None = None,
+                               dataset_stats_path: str | None = None,
+                               vae_resize: str = "area") -> dict:
+    """The `ImageWAMTorchFrontendThor.__init__` keyword arguments for
+    `resolved`, as one dict.
+
+    This is the ONE place that maps a resolved configuration onto the
+    constructor's arguments: `dims_override=resolved.frontend_dims()`
+    (the resolver's `dims` plus the two merge flags a `dims_override`
+    carries) and one entry per field of `resolved.options`
+    (`ImageWAMOptions`), each under the constructor's own keyword name --
+    `precision` as the plain string `str(resolved.options.precision)`.
+    Because the mapping lives here, a CPU-only test pins it against the
+    constructor without building a frontend.
+
+    `vae_graph_input` and `use_fa4_mot` are the resolver's own derived
+    values (`ImageWAMWorkload.vae_graph_input()` through the profile's
+    `vae_graph`, and the profile's FA4-mot tier); nothing is re-derived
+    and no switch is added that the constructor does not already have.
+
+    The arguments the resolver never sees -- the checkpoint and encoder
+    paths (`ckpt_path`, `ae_model_path`, `flux2_src`,
+    `qwen3_model_spec`, `dataset_stats_path`) and `vae_resize` -- are
+    passed through here, so the caller is
+    `cls(**frontend_kwargs_from_config(resolved, ckpt_path=...))`
+    (`ImageWAMTorchFrontendThor.from_config`).
+
+    A `ResolvedConfig` holds plain data: this allocates nothing, loads
+    no checkpoint and touches no CUDA device.
+    """
+    options = resolved.options
+    return {
+        "dims_override": resolved.frontend_dims(),
+        "precision": str(options.precision),
+        "text_trim": options.text_trim,
+        "use_fa4": options.use_fa4,
+        "use_fa4_mot": options.use_fa4_mot,
+        "vae_encoder": options.vae_encoder,
+        "vae_graph_input": options.vae_graph_input,
+        "nvfp4_awq": options.nvfp4_awq,
+        "calibration_path": options.calibration_path,
+        "awq_alpha": options.awq_alpha,
+        "awq_scope": options.awq_scope,
+        "gemm_variant_autotune": options.gemm_variant_autotune,
+        "gemm_runner": options.gemm_runner,
+        "ckpt_path": ckpt_path,
+        "ae_model_path": ae_model_path,
+        "flux2_src": flux2_src,
+        "qwen3_model_spec": qwen3_model_spec,
+        "dataset_stats_path": dataset_stats_path,
+        "vae_resize": vae_resize,
+    }
 
 
 @dataclass(frozen=True)
@@ -303,7 +367,7 @@ class ImageWAMTorchFrontendThor:
         # would need a stride-aware weight-loading path this class
         # doesn't have -- not attempted, `fp16_cutlass` keeps the old
         # split unchanged). `linear2` is governed by `merge_linear2` below.
-        self.dims["merge_qkv_mlp"] = precision != "fp16_cutlass"
+        self.dims["merge_qkv_mlp"] = Precision(precision).merge_qkv_mlp
         # Roadmap item 4 (plan.md "single-stream linear2 merge"): run the
         # single-stream blocks' real `linear2` (attn_out_proj+mlp_down)
         # as ONE GEMM over `[attn_out | mlp_act]`, like the official
@@ -562,6 +626,35 @@ class ImageWAMTorchFrontendThor:
         # set_prompt() (depends on that prompt's own real token count),
         # reused by every infer() call until the next set_prompt().
         self._proprio_row = None
+        # The workload this frontend serves, when it was built from a
+        # resolved configuration (`from_config` / `load_imagewam`); `None`
+        # for a caller that passed dims by hand, which has no workload to
+        # name. The runtime identity reports it as `workload.<field>`
+        # (`runtime_surface.workload_identity`); nothing else reads it.
+        self._workload: ImageWAMWorkload | None = None
+
+    @classmethod
+    def from_config(cls, resolved: ResolvedConfig, *, workload: ImageWAMWorkload | None = None,
+                    **kwargs) -> ImageWAMTorchFrontendThor:
+        """Build the frontend for a resolved configuration.
+
+        `dims_override` and every optimisation switch come from
+        `frontend_kwargs_from_config(resolved)` (that function is the
+        mapping, and holds the argument list); `**kwargs` are the path
+        arguments the resolver does not see (`ckpt_path`,
+        `ae_model_path`, `flux2_src`, `qwen3_model_spec`,
+        `dataset_stats_path`, `vae_resize`). The constructor itself is
+        unchanged: an existing caller that passes `dims_override=` and the
+        old arguments builds exactly the same object.
+
+        `workload`: the workload `resolved` was resolved for. It is recorded
+        on the frontend (`runtime_surface()` reports it as the
+        `workload.<field>` identity entries) and is not re-derived from
+        `dims`.
+        """
+        fe = cls(**frontend_kwargs_from_config(resolved, **kwargs))
+        fe._workload = workload
+        return fe
 
     @staticmethod
     def _resolve_use_fa4(use_fa4: bool | None) -> bool:
@@ -745,7 +838,7 @@ class ImageWAMTorchFrontendThor:
         back to the plain path for the actual shipped default; the class
         and its `silu_glu_two_fp4_to_fp16` kernel stay in the codebase,
         documented, not wired to any precision string."""
-        if self._precision != "fp16_cutlass":
+        if not Precision(self._precision).fused_swiglu_mlp:
             return self._rnd_linear(n, k)
         mlp_hidden = n // 2
         w = self._own(torch.randn(k, n, dtype=FP16, device=DEV) * 0.02)
@@ -759,12 +852,22 @@ class ImageWAMTorchFrontendThor:
         `torch.randn`. `w` must already be `self._own`'d by the caller
         (except for `SimNvfp4Linear`, which keeps its own copy).
         `awq_inv_s`: the AWQ input scale `w` already carries (NVFP4
-        precisions only, `awq.py`)."""
-        if awq_inv_s is not None and self._precision not in _NVFP4_PRECISIONS:
+        precisions only, `awq.py`).
+
+        Which precision falls back to the plain fp16 linear, and at which
+        alignment, is `precision.py`'s table:
+        `Precision(self._precision).alignment_fallback(n, k)` is True when
+        the native GEMM of this precision cannot take the shape (both `n`
+        and `k` must be multiples of the tier's alignment); the per-class
+        notes below say why each tier has that width.
+        """
+        prec = Precision(self._precision)
+        if awq_inv_s is not None and not prec.supports_awq:
             raise ValueError(f"awq_inv_s given for precision={self._precision!r}")
-        if self._precision == "fp16":
+        fallback = prec.alignment_fallback(n, k)
+        if prec is Precision.FP16:
             return Fp16Linear(self._gemm, w.data_ptr(), n, k)
-        if self._precision == "fp16_cutlass":
+        if prec is Precision.FP16_CUTLASS:
             # Real Thor finding, opportunities.md OPT-013: CUTLASS FP16
             # requires N/K divisible by 8 (`can_implement` fails
             # otherwise, confirmed on real hardware) -- action_dim=7
@@ -779,10 +882,10 @@ class ImageWAMTorchFrontendThor:
             # that entry), so this fallback is about not crashing on
             # an already-not-recommended option, not about chasing
             # speed for these two tiny GEMMs.
-            if n % 8 != 0 or k % 8 != 0:
+            if fallback:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return CutlassFp16Linear(w.data_ptr(), n, k)
-        if self._precision == "fp8":
+        if prec is Precision.FP8:
             # Real Thor finding: FP8 (both cuBLASLt's own heuristic
             # search, status 15/CUBLAS_STATUS_NOT_SUPPORTED, AND CUTLASS's
             # can_implement) rejects action_encoder (K=7)/head.linear
@@ -791,10 +894,10 @@ class ImageWAMTorchFrontendThor:
             # CUTLASS-specific path needed a fallback, FP8 needs it on
             # EVERY backend for this precision family. Same 8-alignment
             # threshold as fp16_cutlass.
-            if n % 8 != 0 or k % 8 != 0:
+            if fallback:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return Fp8Linear(w.data_ptr(), n, k)
-        if self._precision == "nvfp4":
+        if prec is Precision.NVFP4:
             # Real Thor finding (opportunities.md, Stage 3 checklist):
             # NVFP4 requires K divisible by 16 (`Nvfp4Linear`'s own
             # constructor check), and the real underlying CUTLASS
@@ -804,35 +907,35 @@ class ImageWAMTorchFrontendThor:
             # tiny, FLOPs-negligible GEMMs rather than crashing
             # set_prompt()'s graph capture; every other real weight in
             # the model is a multiple of 16 already.
-            if n % 16 != 0 or k % 16 != 0:
+            if fallback:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return Nvfp4Linear(w.data_ptr(), n, k, awq_inv_s=awq_inv_s)
-        if self._precision == "e0m3_hadamard":
+        if prec is Precision.E0M3_HADAMARD:
             # opportunities.md OPT-024: E0M3 weights and activations with a
             # per-16 Hadamard rotation on both. Same block-scaled operand
             # layout as nvfp4, so the same K%16/N%16 requirement and the
             # same fallback for action_encoder (K=7) and head.linear (N=7).
             # The merged single-stream linear1 is one ordinary (K, N)
             # weight here; the rotation runs along K only.
-            if n % 16 != 0 or k % 16 != 0:
+            if fallback:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return E0m3HadamardLinear(w.data_ptr(), n, k)
-        if self._precision == "nvfp4_sim":
+        if prec is Precision.NVFP4_SIM:
             # Same K=7/N=7 fallback as "nvfp4" above, so both precisions
             # quantize exactly the same set of GEMMs.
-            if n % 16 != 0 or k % 16 != 0:
+            if fallback:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return SimNvfp4Linear(self._gemm, w.data_ptr(), n, k, awq_inv_s=awq_inv_s)
-        if self._precision == "fp8_static":
+        if prec is Precision.FP8_STATIC:
             # Same K=7/N=7 FP8 alignment gap as the "fp8" branch above --
             # _calibrate_fp8() already skips non-StaticFp8Linear objects
             # (isinstance check), so this fallback needs no other
             # special-casing.
-            if n % 8 != 0 or k % 8 != 0:
+            if fallback:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=False)
-        if self._precision == "fp8_static_cutlass":
-            if n % 8 != 0 or k % 8 != 0:
+        if prec is Precision.FP8_STATIC_CUTLASS:
+            if fallback:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=True)
         raise ValueError(f"unknown precision {self._precision!r}")  # pragma: no cover -- validated in __init__
@@ -1035,7 +1138,7 @@ class ImageWAMTorchFrontendThor:
                 n, k = t.shape[1], t.shape[0]
                 tg = self._own(t.to(DEV, dtype=BF16).contiguous())
                 value = Bf16OutLinear(self._gemm, tg.data_ptr(), n, k)
-            elif self._precision == "fp16_cutlass" and slot in (
+            elif Precision(self._precision).fused_swiglu_mlp and slot in (
                     "txt_mlp0.weight", "img_mlp0.weight", "mlp0.weight", "mlp_in.weight"):
                 # opportunities.md OPT-013: fused SwiGLU gate/up (see
                 # CutlassFp16SwiGluMlp's own docstring) -- `t` is the
@@ -1472,7 +1575,7 @@ class ImageWAMTorchFrontendThor:
             self._calibrate_fp8(self.dims)
             self._fp8_calibrated = True
         if self._owns_gemm:
-            self._autotune_gemm(dims, fp16_nn_shapes=self._precision == "fp16")
+            self._autotune_gemm(dims, fp16_nn_shapes=Precision(self._precision).fp16_nn_backbone_gemm)
         self._capture_graph_or_fall_back()
         return TextLengthCapture(dims=dims, rope_table=rope_table, graph=self._graph)
 
@@ -1799,6 +1902,10 @@ class ImageWAMTorchFrontendThor:
         if self._nvfp4_awq:
             setup.extend((("awq_alpha", str(self._awq_alpha)), ("awq_scope", self._awq_scope)))
         setup.extend(self._vae_setup)
+        if self._workload is not None:
+            # The workload the graph was built for, beside the dims it
+            # produced (`runtime_surface.workload_identity`).
+            setup.extend(workload_identity(self._workload))
         setup.extend((f"dims.{k}", str(d[k])) for k in sorted(d))
         return ImageWAMRuntimeSurface(
             graph_exec=int(self._graph.raw_cuda_graph_exec()),
@@ -1960,3 +2067,55 @@ class ImageWAMTorchFrontendThor:
         `ValueError`)."""
         from flash_rt.models.imagewam.runtime_export import export_model_runtime
         return export_model_runtime(self, identity=identity, io=io, native=native)
+
+
+def load_imagewam(ckpt_path: str | None, workload: ImageWAMWorkload, *,
+                  structure: ImageWAMStructure | None = None, profile: str = "default",
+                  precision: str | Precision | None = None,
+                  calibration_path: str | None = None, ae_model_path: str | None = None,
+                  flux2_src: str | None = None, qwen3_model_spec: str | None = None,
+                  dataset_stats_path: str | None = None, consumer: str = "infer",
+                  allow_placeholder_calibration: bool = False,
+                  vae_resize: str = "area",
+                  **expert) -> ImageWAMTorchFrontendThor:
+    """The deployment entry: resolve the configuration, then build the frontend.
+
+    `workload` says what is served (`ImageWAMWorkload`); `ckpt_path` is the
+    checkpoint the structure (and, with `ckpt_path`, the weights) come from.
+    `structure=None` reads `ImageWAMStructure.from_checkpoint(ckpt_path)`, so
+    the widths are the checkpoint's own; passing `structure` is for a caller
+    that already read it, and it is required when `ckpt_path` is `None`
+    (random-weight dry runs).
+
+    `profile` names the option set (`config_resolver.PROFILES`); `precision`
+    overrides the profile's; `calibration_path` is the static-FP8 / AWQ
+    statistics file; `consumer` is what the configuration will be used for
+    (`"infer"`, `"abi"`, `"native"`), which is what makes the ABI and native
+    refusals (`text_trim`, AWQ, FA4, the VAE stage) apply.
+    `allow_placeholder_calibration` accepts the N(0, 0.1) placeholder scales
+    for a static-FP8 precision without a calibration file; the default
+    refuses it (rule R1).
+
+    Every legality decision is `resolve_config`'s: an illegal combination
+    raises its `ConfigError` (message `<rule id>: ...`) before the frontend
+    is constructed, so nothing is allocated for a configuration that cannot
+    run. `**expert` carries the expert tier (`config_resolver.EXPERT_KEYS`).
+    """
+    from flash_rt.models.imagewam.config_resolver import resolve_config
+    from flash_rt.models.imagewam.structure import ImageWAMStructure
+
+    if structure is None:
+        if ckpt_path is None:
+            raise ValueError(
+                "load_imagewam needs ckpt_path (the structure is read from the checkpoint) or an "
+                "explicit structure= for a random-weight run")
+        structure = ImageWAMStructure.from_checkpoint(ckpt_path)
+    resolved = resolve_config(workload, structure, profile=profile, precision=precision,
+                              calibration_path=calibration_path, ae_model_path=ae_model_path,
+                              consumer=consumer,
+                              allow_placeholder_calibration=allow_placeholder_calibration,
+                              **expert)
+    return ImageWAMTorchFrontendThor.from_config(
+        resolved, workload=workload, ckpt_path=ckpt_path, ae_model_path=ae_model_path,
+        flux2_src=flux2_src, qwen3_model_spec=qwen3_model_spec,
+        dataset_stats_path=dataset_stats_path, vae_resize=vae_resize)
