@@ -48,6 +48,8 @@ sums to a fixed 128, so every default/override dims dict below keeps
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import torch
 
@@ -90,6 +92,7 @@ DEV = "cuda"
 FP16 = torch.float16
 BF16 = torch.bfloat16
 F32 = torch.float32
+_LOG = logging.getLogger(__name__)
 
 _DEFAULT_DIMS = dict(
     hidden=256, HD=128, NH=2, mlp_hidden=384, joint_attention_dim=64,
@@ -115,6 +118,7 @@ class ImageWAMTorchFrontendThor:
                  ae_model_path: str | None = None, flux2_src: str | None = None,
                  qwen3_model_spec: str | None = None,
                  dataset_stats_path: str | None = None,
+                 calibration_path: str | None = None,
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
@@ -189,6 +193,21 @@ class ImageWAMTorchFrontendThor:
                 "ckpt_path given without ref_h/ref_w in dims_override -- the real "
                 "image RoPE grid (14x28 for the real confirmed 224x448 input) must "
                 "be passed explicitly for real-checkpoint accuracy")
+
+        # Real activation calibration (calibration_file.py): loaded and
+        # identity-checked here, before the multi-GB checkpoint load, and
+        # applied by _calibrate_fp8() before graph capture.
+        self._calibration = None
+        if calibration_path is not None:
+            if precision not in _STATIC_FP8_PRECISIONS:
+                raise ValueError(f"calibration_path is used by {_STATIC_FP8_PRECISIONS}, "
+                                 f"not precision={precision!r}")
+            if ckpt_path is None:
+                raise ValueError("calibration_path requires ckpt_path (a calibration file is "
+                                 "tied to one real checkpoint)")
+            from flash_rt.models.imagewam.calibration_file import load_calibration
+            self._calibration = load_calibration(calibration_path)
+            self._calibration.validate_for(checkpoint_path=ckpt_path, dims=d)
 
         self._ctx = fvk.FvkContext()
         self._gemm = fvk.GemmRunner()
@@ -534,68 +553,63 @@ class ImageWAMTorchFrontendThor:
             return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=True)
         raise ValueError(f"unknown precision {self._precision!r}")  # pragma: no cover -- validated in __init__
 
-    # OPT-004 step 6 follow-up (2026-09-15, real Thor measurement against
-    # the real FLUX.2-dev VAE on real LIBERO-fastwam frames): calibrating
-    # img_in's own activation scale against N(0, 0.1) noise (the
-    # blanket default below) is not just "a rough approximation" -- it
-    # is actively WRONG and measurably harmful. Real VAE-encoded image
-    # tokens have mean=-0.02, std=0.97 (holdout, `libero_spatial_no_noops_lerobot`,
-    # 224x448 input) -- an order of magnitude wider than this noise
-    # placeholder. cosine vs. the FP16 reference: 0.902 (N(0,0.1)
-    # calibration) vs. 0.99946 (real-token calibration). This is
-    # img_in's OWN entry-point distribution specifically, not a general
-    # fix for every downstream weight's own calibration input (see
-    # `_calibrate_fp8`'s own docstring for why those remain unvalidated
-    # placeholders) -- narrowly scoped to the one slot real ground
-    # truth now exists for.
-    _REAL_CALIB_STATS = {
-        "img_in.weight": (-0.02, 0.97),  # (mean, std), real VAE tokens, see above
-    }
-
     def _calibrate_fp8(self, d: dict) -> None:
-        """OPT-004 step 6 (plan.md): freeze every `StaticFp8Linear`
-        weight's activation scale ONCE, here, before `_capture_graph()`
-        -- a captured CUDA Graph replays identical kernel launches
-        forever, so the scale must already be fixed by the time capture
-        starts (see `StaticFp8Linear`'s own docstring for the ordering
-        contract this calls into). No-op for every other precision.
+        """Freeze every `StaticFp8Linear` activation scale ONCE, here,
+        before `_capture_graph()` -- a captured CUDA Graph replays
+        identical kernel launches forever, so the scale must already be
+        fixed by the time capture starts (see `StaticFp8Linear`'s own
+        docstring for the ordering contract this calls into). No-op for
+        every other precision.
 
-        Deliberately NOT a full forward pass through
-        `imagewam_prefill`/`imagewam_denoise_loop` threaded with a
-        "calibration mode" flag (`pipeline_real.py`'s own real
-        activations don't exist yet at this random-weight dry-run
-        stage anyway, see `plan.md`'s own "deliberately not in scope"
-        note) -- each `StaticFp8Linear` is calibrated in isolation
-        against a disposable random activation of the SAME shape
-        (m, k) its real call site actually uses (`m` from the site
-        family -- backbone rows use `d["a0"]`, action_dit rows use
-        `d["num_action"]`, matching `_autotune_gemm`'s own per-shape
-        convention in this same file). Default scale=0.1 to match this
-        project's own established "realistic activation magnitude"
-        convention (`test_imagewam_prefill.py`'s own `backbone_hidden`
-        scale, not the 0.02 weight-init scale) -- **KNOWN WRONG for
-        `img_in.weight` specifically, see `_REAL_CALIB_STATS` above**,
-        overridden there with the real measured (mean,std); every OTHER
-        slot still uses the unvalidated 0.1-scale placeholder, likely
-        similarly wrong but with no real ground truth yet to correct it
-        against (would need a real forward pass propagating actual
-        intermediate activations, not attempted here -- see
-        `opportunities.md`'s own "Real multi-sample calibration" entry).
+        With `calibration_path=` (the normal case): each site's scale is
+        the real calibration file's `amax / 448`
+        (`calibration_file.py`, built by
+        `benchmarks/imagewam_build_calibration.py` from real LIBERO
+        observations through the real fp16 pipeline). Every
+        `StaticFp8Linear` must have a site in the file.
+
+        Without it: a PLACEHOLDER. Each `StaticFp8Linear` is calibrated
+        on `N(0, 0.1)` noise of its site's shape (`m` = `a0` for backbone
+        sites, `num_action` for ActionDiT sites), which does not match
+        real activations: on Thor it collapsed `backbone_hidden` cosine
+        vs `fp16` to ~0.46 (`opportunities.md` OPT-014). Logged as a
+        warning.
         """
         if self._precision not in _STATIC_FP8_PRECISIONS:
             return
+        if self._calibration is not None:
+            from flash_rt.models.imagewam.activation_recorder import site_name
+            missing = []
+            for key, lin in self._weights.items():
+                if not isinstance(lin, StaticFp8Linear):
+                    continue
+                site = self._calibration.sites.get(site_name(key))
+                if site is None or site.channel_amax.shape[0] != lin.k:
+                    missing.append(site_name(key))
+                    continue
+                lin.set_activation_scale(site.fp8_act_scale())
+            if missing:
+                raise ValueError(f"calibration file has no (or a wrong-width) site for "
+                                 f"{len(missing)} StaticFp8Linear weights, e.g. {missing[:3]}")
+            torch.cuda.synchronize()
+            return
+        _LOG.warning(
+            "ImageWAM precision=%r: NO calibration file given -- every FP8 activation "
+            "scale is a PLACEHOLDER measured on N(0, 0.1) noise, not real data "
+            "(on Thor this collapsed backbone_hidden cosine vs fp16 to ~0.46, "
+            "opportunities.md OPT-014). Build a real file with "
+            "benchmarks/imagewam_build_calibration.py and pass calibration_path=.",
+            self._precision)
         a0, num_action = d["a0"], d["num_action"]
         scratch_by_shape: dict[tuple, torch.Tensor] = {}
         for key, lin in self._weights.items():
             if not isinstance(lin, StaticFp8Linear):
                 continue
             m = a0 if key[0] == "backbone" else num_action
-            slot = key[-1]
-            mean, std = self._REAL_CALIB_STATS.get(slot, (0.0, 0.1))
-            shape = (m, lin.k, mean, std)
+            shape = (m, lin.k)
             x = scratch_by_shape.get(shape)
             if x is None:
-                x = torch.randn(m, lin.k, dtype=FP16, device=DEV) * std + mean
+                x = torch.randn(m, lin.k, dtype=FP16, device=DEV) * 0.1
                 scratch_by_shape[shape] = x
             lin.calibrate(x.data_ptr(), m, 0)
         torch.cuda.synchronize()
@@ -1030,6 +1044,31 @@ class ImageWAMTorchFrontendThor:
         """
         if self._graph is None:
             raise RuntimeError("call set_prompt() before infer()")
+        self.stage_inputs(observation)
+        self._graph.replay()
+        torch.cuda.synchronize()
+        actions = self._action_latent.detach()
+        if self._action_norm is not None:
+            actions = self._action_norm.backward(actions)
+        return {"actions": actions.cpu().numpy()}
+
+    @property
+    def weights(self) -> dict:
+        """The weight dict `pipeline_thor.py` dispatches through (keys
+        `(model, stream, layer, slot)`, values linear-op objects or raw
+        pointers). Read-only use: `run_eager()` takes a wrapped copy."""
+        return self._weights
+
+    def stage_inputs(self, observation: dict, noise: torch.Tensor | None = None) -> None:
+        """Write one observation into the persistent input buffers -- the
+        pre-replay half of `infer()`: `img_raw` (real VAE when available,
+        else random), the proprio row of `context`, and the initial action
+        latent.
+
+        `noise`: `(num_action, action_dim)` initial action latent. `None`
+        keeps `infer()`'s own behavior (`0.01 * N(0,1)`, `issues.md`
+        ISSUE-002); the calibration builder and the end-to-end checks pass
+        the official sampler's unscaled `N(0,1)` noise."""
         if self._ae is not None and "view1" in observation:
             from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
             tokens = encode_to_tokens(self._ae, observation["view1"], observation.get("view2"))
@@ -1049,11 +1088,28 @@ class ImageWAMTorchFrontendThor:
             proprio_tok = torch.nn.functional.linear(
                 proprio_t.to(dtype=BF16), self._proprio_w, self._proprio_b)
             self._context[self._proprio_row].copy_(proprio_tok[0])
-        self._action_latent.normal_()
-        self._action_latent.mul_(0.01)
-        self._graph.replay()
-        torch.cuda.synchronize()
-        actions = self._action_latent.detach()
-        if self._action_norm is not None:
-            actions = self._action_norm.backward(actions)
-        return {"actions": actions.cpu().numpy()}
+        if noise is None:
+            self._action_latent.normal_()
+            self._action_latent.mul_(0.01)
+        else:
+            self._action_latent.copy_(noise)
+
+    def run_eager(self, weights: dict | None = None) -> None:
+        """Prefill + the full denoise loop on the staged buffers, eagerly
+        (no CUDA Graph), on the current stream -- same kernels, same
+        buffers, same order as the captured graph. `weights` (default:
+        this frontend's own) must have the same keys; the calibration
+        builder passes recording wrappers around the real weights
+        (`activation_recorder.py`), which a graph replay would bypass.
+        `set_prompt()` must have run (it stages the text context)."""
+        if self._current_prompt is None:
+            raise RuntimeError("call set_prompt() before run_eager()")
+        w = self._weights if weights is None else weights
+        stream = torch.cuda.current_stream().cuda_stream
+        imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, w, self.dims, stream=stream,
+                         attn=self._attn, mod_txt=self._mod_txt, mod_img=self._mod_img,
+                         mod_single=self._mod_single, rope_table=self._rope_table.data_ptr())
+        imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, w, self.dims, stream=stream,
+                              attn=self._attn, action_mods=self._action_mods, head_mods=self._head_mods,
+                              action_rope_table=self._action_rope_table.data_ptr(),
+                              deltas=self._deltas)
