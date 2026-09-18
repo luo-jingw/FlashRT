@@ -5415,8 +5415,9 @@ fold is exact.
 
 ## Structure
 
-- `flash_rt/models/imagewam/nvfp4_sim.py` (new): NVFP4 quantizer
-  emulation. Owner of simulated NVFP4 numerics.
+- `flash_rt/models/imagewam/blockscaled_ref.py` (roadmap item 9's
+  block-scaled reference, E2M1 path): NVFP4 quantizer emulation. Owner
+  of simulated NVFP4 numerics.
 - `flash_rt/models/imagewam/awq.py` (new): AWQ scale math, the
   `AwqScaledLinear` ABC (weights that need their input divided by `s`),
   the fold-A modulation math, and the per-weight AWQ plan (fold A rows,
@@ -5440,10 +5441,9 @@ fold is exact.
 ## Interface
 
 ```python
-# nvfp4_sim.py
-def quantize_nvfp4(x_fp16) -> (codes_uint8, scales_e4m3)
-def dequantize_nvfp4(codes, scales) -> fp16
-def fake_quant_nvfp4(x_fp16) -> fp16
+# blockscaled_ref.py (E2M1 path)
+def quantize_blocks(x, "e2m1") -> BlockQuantized   # codes, UE4M3 scale bytes
+def fake_quantize(x, "e2m1") -> float32            # exact in fp16
 
 # quant_linear.py
 class SimNvfp4Linear(AwqScaledLinear): __init__(gemm, weight_ptr, n, k, *, awq_inv_s=None)
@@ -5476,7 +5476,7 @@ ImageWAMTorchFrontendThor(precision="nvfp4" | "nvfp4_sim", calibration_path=...,
 
 | Module / interface / state | File |
 |---|---|
-| Simulated NVFP4 quantizer | `flash_rt/models/imagewam/nvfp4_sim.py` |
+| Simulated NVFP4 quantizer | `flash_rt/models/imagewam/blockscaled_ref.py` |
 | `SimNvfp4Linear` | `flash_rt/models/imagewam/quant_linear.py` |
 | AWQ scales, plan, fold math | `flash_rt/models/imagewam/awq.py` |
 | `Nvfp4Linear.awq_inv_s` | `flash_rt/models/imagewam/quant_linear.py` |
@@ -5493,7 +5493,7 @@ ImageWAMTorchFrontendThor(precision="nvfp4" | "nvfp4_sim", calibration_path=...,
 Phase Status: completed
 
 - Goal: bit-exact emulation of the real quantizer; `SimNvfp4Linear`.
-- Files: `nvfp4_sim.py`, `quant_linear.py`, `tests/test_imagewam_nvfp4_sim.py`.
+- Files: `blockscaled_ref.py` (E2M1 path), `quant_linear.py`, `tests/test_imagewam_nvfp4_sim.py`.
 - Observation: packed-code and scale-byte mismatches vs the real kernel
   (JIT-built `quantize_fp4_dynamic.cu` on sm_90, `flash_rt_fp4` on
   Thor); `SimNvfp4Linear` cosine vs the Thor-measured `Nvfp4Linear`

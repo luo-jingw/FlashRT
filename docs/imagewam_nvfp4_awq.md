@@ -1,6 +1,6 @@
 # ImageWAM NVFP4: simulator and AWQ
 
-## NVFP4 numerics (`flash_rt/models/imagewam/nvfp4_sim.py`)
+## NVFP4 numerics (`flash_rt/models/imagewam/blockscaled_ref.py`)
 
 `Nvfp4Linear` quantizes weights (offline) and activations (per call)
 with `quantize_fp4_dynamic_sfa_fp16` (`csrc/quantize/quantize_fp4_sfa.cu`):
@@ -12,7 +12,8 @@ with `quantize_fp4_dynamic_sfa_fp16` (`csrc/quantize/quantize_fp4_sfa.cu`):
 - elements E2M1 of `x / scale` with thresholds 0.25, 0.75, 1.25, 1.75,
   2.5, 3.5, 5.0 (`<=`, ties to the smaller magnitude).
 
-`nvfp4_sim.quantize_nvfp4` reproduces this bit for bit: 0 packed-byte and
+`blockscaled_ref.quantize_blocks(x, "e2m1")` (the E2M1 path of the
+shared block-scaled reference) reproduces this bit for bit: 0 packed-byte and
 0 scale-byte mismatches against the real device code
 (`quantize_fp4_dynamic.cu`, same helpers, JIT-compiled for sm_90) on
 random, weight-like and adversarial inputs (subnormal and zero scales,

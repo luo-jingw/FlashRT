@@ -1,4 +1,6 @@
-"""`nvfp4_sim.py` against the real NVFP4 quantizer, bit for bit.
+"""`precision="nvfp4_sim"`: its quantizer (`blockscaled_ref`'s E2M1
+path, which `SimNvfp4Linear` runs) against the real NVFP4 quantizer, bit
+for bit, and `SimNvfp4Linear` in the served pipeline.
 
 Reference kernel: `quantize_fp4_dynamic_fp16` (`csrc/quantize/
 quantize_fp4_dynamic.cu`), the linear-scale-layout twin of the
@@ -19,7 +21,7 @@ import pytest
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
-from flash_rt.models.imagewam.nvfp4_sim import dequantize_nvfp4, quantize_nvfp4
+from flash_rt.models.imagewam.blockscaled_ref import dequantize_blocks, pack_codes, quantize_blocks
 from flash_rt.models.imagewam.quant_linear import Fp16Linear, SimNvfp4Linear
 
 DEV = "cuda"
@@ -93,9 +95,10 @@ def test_sim_quantizer_bit_exact_vs_real_kernel():
         scales = torch.zeros(n, d // 16, dtype=torch.uint8, device=DEV)
         assert quant(x.data_ptr(), packed.data_ptr(), scales.data_ptr(), n, d) == 0
         torch.cuda.synchronize()
-        codes, sc = quantize_nvfp4(x)
-        sim_packed = (codes[:, 0::2] | (codes[:, 1::2] << 4)).to(torch.uint8)
-        sim_scales = sc.view(torch.uint8)
+        q = quantize_blocks(x, "e2m1")
+        codes, sc = q.codes, q.scales
+        sim_packed = pack_codes(codes)
+        sim_scales = q.scale_bytes
         code_mismatch = (sim_packed != packed).sum().item()
         scale_mismatch = (sim_scales != scales).sum().item()
         sub = (sc.float() < 2 ** -6).float().mean().item()
@@ -103,10 +106,8 @@ def test_sim_quantizer_bit_exact_vs_real_kernel():
               f"scale mismatches={scale_mismatch}, subnormal-or-zero block scales={sub:.1%}")
         assert code_mismatch == 0 and scale_mismatch == 0
         # dequantized values (E2M1 value x E4M3 scale) are exact in fp16
-        mag = torch.tensor([0, .5, 1, 1.5, 2, 3, 4, 6], device=DEV)[(codes & 7).long()]
-        val32 = (mag.reshape(n, d // 16, 16) * sc.float().unsqueeze(-1)).reshape(n, d)
+        val32 = dequantize_blocks(q)
         assert torch.equal(val32.half().float(), val32)
-        assert torch.equal(dequantize_nvfp4(codes, sc).abs().float(), val32)
 
 
 def test_sim_linear_reproduces_thor_nvfp4_cosine():

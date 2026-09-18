@@ -6,7 +6,8 @@ harness's libero_spatial evaluation frames; the calibration file comes
 from other suites). At every NVFP4-eligible GEMM (N and K divisible by
 16) a probe takes the real fp16 input `x` and compares, against the fp32
 reference `x @ W`, the NVFP4 GEMM each variant would compute
-(`nvfp4_sim.fake_quant_nvfp4` on both operands along K, fp32 matmul):
+(`blockscaled_ref.fake_quantize(., "e2m1")` on both operands along K,
+fp32 matmul):
 
   nvfp4            the shipped quantizer
   awq a=<alpha>    x / s and W * s, s = awq_scale(channel_amax, alpha)
@@ -42,7 +43,7 @@ from flash_rt.models.imagewam.awq import awq_scale
 from flash_rt.models.imagewam.calibration_file import load_calibration
 from flash_rt.models.imagewam.libero_dims import LIBERO_HORIZON, LIBERO_REAL_DIMS
 from flash_rt.models.imagewam.libero_frames import evaluation_frames, load_frame
-from flash_rt.models.imagewam.nvfp4_sim import E2M1_MAX, E4M3_MAX, fake_quant_nvfp4, quantize_nvfp4
+from flash_rt.models.imagewam.blockscaled_ref import E2M1_MAX, UE4M3_MAX, fake_quantize, quantize_blocks
 from flash_rt.models.imagewam.quant_linear import Fp16Linear
 
 DEV = "cuda"
@@ -62,7 +63,7 @@ def _view(ptr: int, m: int, k: int) -> torch.Tensor:
 
 
 def pow2_weight_exponent(w: torch.Tensor) -> int:
-    return int(math.floor(math.log2(E2M1_MAX * E4M3_MAX / w.float().abs().max().item())))
+    return int(math.floor(math.log2(E2M1_MAX * UE4M3_MAX / w.float().abs().max().item())))
 
 
 class Variant:
@@ -91,7 +92,7 @@ class _Probe:
             e = pow2_weight_exponent(w16)
             w16 = (w16.float() * 2.0 ** e).to(torch.float16)
             post = 2.0 ** -e
-        return fake_quant_nvfp4(w16.t().contiguous()).float(), post  # (N, K)
+        return fake_quantize(w16.t().contiguous(), "e2m1"), post  # (N, K)
 
     def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
         self.inner(x_ptr, out_ptr, m, stream)
@@ -101,7 +102,7 @@ class _Probe:
         for v in self.variants:
             xs = x if v.alpha is None else (x.float() / self.s[v.alpha]).to(torch.float16)
             w_fq, post = self._weight_fq(v)
-            y = (fake_quant_nvfp4(xs).float() @ w_fq.t()) * post
+            y = (fake_quantize(xs, "e2m1") @ w_fq.t()) * post
             d = self.acc.setdefault((self.name, v.name), [0.0, 0.0])
             d[0] += (y - y_ref).pow(2).sum().item()
             d[1] += ref2
@@ -132,8 +133,9 @@ def main() -> None:
             ch = torch.from_numpy(cal.sites[name].channel_amax).to(DEV)
             weights[key] = _Probe(lin, name, ch, variants, acc)
             w_nk = _view(lin.weight_ptr, lin.k, lin.n).t().contiguous()
-            _, sc = quantize_nvfp4(w_nk)
-            _, sc_g = quantize_nvfp4((w_nk.float() * 2.0 ** pow2_weight_exponent(w_nk)).to(torch.float16))
+            sc = quantize_blocks(w_nk, "e2m1").scales
+            sc_g = quantize_blocks((w_nk.float() * 2.0 ** pow2_weight_exponent(w_nk)).to(torch.float16),
+                                   "e2m1").scales
             subnormal[name] = [(sc.float() < 2 ** -6).float().mean().item(),
                                (sc_g.float() < 2 ** -6).float().mean().item()]
     refs = evaluation_frames(os.environ["DATA_ROOT"], n_tasks=N_TASKS, frames=FRAMES)
