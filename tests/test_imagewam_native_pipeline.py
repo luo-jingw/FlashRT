@@ -332,3 +332,12 @@ def test_native_handle_keeps_the_frontend_alive():
     del native
     gc.collect()
     assert alive() is None, "closing the native handle must release the frontend"
+
+
+def test_pipeline_resources_refuses_awq(h, monkeypatch):
+    """The native pipeline has no AWQ input-scale fold (pipeline_thor.py
+    folds it into the AdaLN operands), so an AWQ frontend is refused."""
+    monkeypatch.setattr(h.fe, "_nvfp4_awq", True)
+    with pytest.raises(ValueError, match="AWQ") as exc:
+        h.fe.pipeline_resources()
+    print(f"pipeline_resources() with nvfp4_awq: {exc.value}")

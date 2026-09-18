@@ -42,8 +42,10 @@ AdaLN modulation and RoPE precompute, VAE image encoding, Qwen3 prompt
 encoding, and building the declaration. The VAE runs outside the native
 graph: `io="native"` and the native pipeline refuse a frontend built with
 `vae_graph_input`, and the host supplies VAE tokens through
-`image_tokens`. FA4 (`use_fa4` / `use_fa4_mot`) is not available to the
-native pipeline, which uses the cuBLAS-decomposed per-head attention
+`image_tokens`. The native pipeline also refuses `nvfp4_awq` (it has no
+AWQ input-scale fold) and precisions whose weights it has no linear
+descriptor for (`nvfp4_sim`, `fp8*`, `e0m3_hadamard`). FA4 (`use_fa4` /
+`use_fa4_mot`) is not available to the native pipeline, which uses the cuBLAS-decomposed per-head attention
 (`attention_qkv_fp16_perhead`). Supported precisions: `fp16` and `nvfp4`
 (the merged single-stream `linear1` path), with either layer structure:
 the served one (single-stream `linear2` as one GEMM, each gated residual

@@ -80,7 +80,7 @@ def test_port_schema(frontend, runtime):
     assert p["actions_raw"].buffer == p["noise"].buffer, "noise and actions_raw share the in-place window"
     ident = mr.identity
     for record in ("model=imagewam", "precision=fp16", "io=python", "action_denormalized=True",
-                   "proprio_dim=8", "has_vae=False"):
+                   "proprio_dim=8", "has_vae=False", "calibration=none", "nvfp4_awq=False"):
         assert record in ident, (record, ident)
 
 

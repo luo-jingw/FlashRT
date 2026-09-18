@@ -79,7 +79,9 @@ the graph and the frontend's `vae_graph_input` with the VAE inside it.
 - Buffers: `img_raw` (input), `context` (input, state), `action_latent`
   (input, output), and `views_u8` (input) with the VAE inside the graph.
 - Identity: `model=imagewam`, the frontend class, `precision`, the
-  resolved `use_fa4` / `use_fa4_mot`, `vae_resize`, `vae_encoder`,
+  resolved `use_fa4` / `use_fa4_mot`, `calibration` (first 16 hex chars
+  of the calibration file's SHA-256, or `none`), `nvfp4_awq` (with
+  `awq_alpha` / `awq_scope` when on), `vae_resize`, `vae_encoder`,
   `vae_graph_input`, every `dims` entry, `io`, `graph_producer`, `views`,
   `vae_in_graph`, `has_vae`, `has_text_encoder`, `proprio_dim`,
   `action_denormalized`, then caller pairs (production callers pass a

@@ -48,6 +48,7 @@ sums to a fixed 128, so every default/override dims dict below keeps
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import warnings
@@ -340,6 +341,9 @@ class ImageWAMTorchFrontendThor:
                 raise ValueError("nvfp4_awq needs calibration_path (per-channel activation "
                                  "statistics) and ckpt_path")
         self._calibration = None
+        # First 16 hex chars of the calibration file's SHA-256, for the
+        # runtime identity ("none" without a file).
+        self._calibration_digest = "none"
         if calibration_path is not None:
             if precision not in _STATIC_FP8_PRECISIONS and not nvfp4_awq:
                 raise ValueError(f"calibration_path is used by {_STATIC_FP8_PRECISIONS} and by "
@@ -350,6 +354,8 @@ class ImageWAMTorchFrontendThor:
             from flash_rt.models.imagewam.calibration_file import load_calibration
             self._calibration = load_calibration(calibration_path)
             self._calibration.validate_for(checkpoint_path=ckpt_path, dims=d)
+            with open(calibration_path, "rb") as f:
+                self._calibration_digest = hashlib.sha256(f.read()).hexdigest()[:16]
 
         self._ctx = fvk.FvkContext()
         # `gemm_runner`: an already-autotuned `fvk.GemmRunner` from another
@@ -1521,7 +1527,10 @@ class ImageWAMTorchFrontendThor:
             raise RuntimeError("call set_prompt() before runtime_surface()")
         d = self.dims
         setup = [("pipeline", type(self).__name__), ("precision", self._precision),
-                 ("use_fa4", str(self.use_fa4)), ("use_fa4_mot", str(self.use_fa4_mot))]
+                 ("use_fa4", str(self.use_fa4)), ("use_fa4_mot", str(self.use_fa4_mot)),
+                 ("calibration", self._calibration_digest), ("nvfp4_awq", str(self._nvfp4_awq))]
+        if self._nvfp4_awq:
+            setup.extend((("awq_alpha", str(self._awq_alpha)), ("awq_scope", self._awq_scope)))
         setup.extend(self._vae_setup)
         setup.extend((f"dims.{k}", str(d[k])) for k in sorted(d))
         return ImageWAMRuntimeSurface(
@@ -1570,6 +1579,8 @@ class ImageWAMTorchFrontendThor:
         if self._vae_stage is not None:
             raise ValueError("the native pipeline has no VAE stage; construct with vae_graph_input=None "
                              "(the VAE then runs outside the graph and feeds image_tokens)")
+        if self._nvfp4_awq:
+            raise ValueError("the native pipeline has no AWQ input-scale fold; construct with nvfp4_awq=False")
         d = self.dims
         if not d.get("merge_qkv_mlp"):
             raise ValueError("the native pipeline records the merged single-stream linear1 only "
