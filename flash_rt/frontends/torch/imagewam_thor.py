@@ -1116,3 +1116,10 @@ class ImageWAMTorchFrontendThor:
             action_denormalized=self._action_norm is not None,
             setup_identity=tuple(setup),
         )
+
+    def export_model_runtime(self, *, identity: dict | None = None, io: str = "python"):
+        """Package the captured graph as an `frt_model_runtime_v1`. See
+        `flash_rt.models.imagewam.runtime_export.export_model_runtime`.
+        Needs the exec/ and runtime/ native modules (built separately)."""
+        from flash_rt.models.imagewam.runtime_export import export_model_runtime
+        return export_model_runtime(self, identity=identity, io=io)

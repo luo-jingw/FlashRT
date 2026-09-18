@@ -3157,9 +3157,12 @@ Port schema, `io="python"` (declaration order is the port index):
   `set_prompt(prompt_text)`.
 - Stage plan: one GRAPH stage `infer` (prefill + 10-step denoise).
 - Region: `rollout_boundary` = the `action_latent` window.
-- Status codes: `-4` for a payload whose size or frame geometry does not
-  match the declared shape, `-2` for an unknown port, `-3` for SWAP ports
-  passed to `set_input`/`get_output`.
+- Status codes: `-2` for an unknown port index, `-3` for `set_input` on a
+  SWAP port, `-5` (with `written` = needed bytes) for a short
+  `get_output` buffer. A malformed payload (size, frame geometry, pixel
+  format) and `get_output` on a SWAP port return `-1` with the reason in
+  `last_error`: the Python trampoline reports every raised exception as
+  `-1`.
 
 ## Flow
 
@@ -3208,7 +3211,7 @@ Observation: `pytest tests/test_imagewam_*.py` count unchanged (68/6).
 
 ### Phase 2 — export module and unit test
 
-Phase Status: active
+Phase Status: completed
 
 Goal: `export_model_runtime(io="python")` with the port schema above;
 unit test at small random dims checks the schema, identity sensitivity,
@@ -3222,7 +3225,7 @@ Observation: the new test's printed `max_abs` and `array_equal`.
 
 ### Phase 3 — real-checkpoint gate on H100
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `tests/gate_imagewam_model_runtime_export.py` with the real
 checkpoint, VAE, Qwen3 and stats at fp16: images STAGED, proprio STAGED,
@@ -3233,7 +3236,7 @@ OPT-028.
 
 ### Phase 4 — Thor handoff and docs
 
-Phase Status: pending
+Phase Status: active
 
 Goal: `docs/imagewam_model_runtime.md` records the verified interface;
 the Thor checklist runs the gate at `nvfp4`.
