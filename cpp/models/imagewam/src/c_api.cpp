@@ -124,6 +124,18 @@ void frt_imagewam_native_release(void* h) {
     if (handle->refs.fetch_sub(1, std::memory_order_acq_rel) == 1) delete handle;
 }
 
+void frt_imagewam_native_declaration_retain(void* h) {
+    if (!h) return;
+    frt_imagewam_native_retain(h);
+    static_cast<frt_imagewam_native*>(h)->runtime->declaration_retained();
+}
+
+void frt_imagewam_native_declaration_release(void* h) {
+    if (!h) return;
+    static_cast<frt_imagewam_native*>(h)->runtime->declaration_released();
+    frt_imagewam_native_release(h);
+}
+
 const char* frt_imagewam_native_last_error(const frt_imagewam_native* h) {
     if (!h) return g_create_error.c_str();
     return h->runtime->last_error();

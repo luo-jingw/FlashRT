@@ -5,7 +5,8 @@ dataset stats). Covers the schema (Python declaration records == C++
 records), the native verbs over
 the Python-captured graph (every buffer a tick writes NaN-filled first;
 the tick must fail when the consumer skips the proprio verb or `step`), a
-tick that enters no Python frame, and the status codes. Skips when exec/, runtime/ or the native library is not
+tick that enters no Python frame, the status codes, and setup calls
+refused while the model runtime is live. Skips when exec/, runtime/ or the native library is not
 built (docs/imagewam_native_cpp.md).
 """
 import json
@@ -232,3 +233,18 @@ def test_bind_rejects_the_python_face(frontend, native_runtime):
         print(f"bind_declaration(io=python face): {exc.value}")
     finally:
         python_face.release()
+
+
+def test_setup_refused_while_exported(frontend, native_runtime):
+    """The live model runtime adopted the current graph exec: replacing the
+    graph or the pipeline under it is refused."""
+    native, _, _ = native_runtime
+    graph_exec = frontend.runtime_surface().graph_exec
+    for what, call in (("use_graph", lambda: native.use_graph(graph_exec)),
+                       ("set_pipeline", lambda: native.set_pipeline(frontend)),
+                       ("capture", native.capture)):
+        with pytest.raises(ImageWAMNativeError) as exc:
+            call()
+        print(f"{what} while exported: {exc.value}")
+        assert exc.value.status == -1 and "release it first" in str(exc.value)
+    assert native.graph_producer == "python" and native.graph_exec == graph_exec

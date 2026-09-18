@@ -70,7 +70,8 @@ class ImageWAMNativeRuntime:
     @property
     def graph_producer(self) -> str:
         """Who recorded the graph `step` replays: "python" after `use_graph`,
-        "native" after `capture`."""
+        "native" after `capture`, "" while there is none (before either, or
+        after `set_pipeline` replaced the pipeline a captured graph came from)."""
         return self._graph_producer
 
     def use_graph(self, graph_exec: int) -> None:
@@ -84,7 +85,11 @@ class ImageWAMNativeRuntime:
         handoff = build_pipeline_config(source.pipeline_resources())
         self._check("set_pipeline", self.library.lib.frt_imagewam_native_set_pipeline(
             self.handle, ctypes.byref(handoff.config)))
+        # The library destroyed any graph captured from the previous
+        # pipeline, so the previous handoff's resources can go.
         self._pipeline_handoff = handoff
+        if self._graph_producer == "native":
+            self._graph_producer = ""
         count = ctypes.c_uint64(0)
         self.library.lib.frt_imagewam_native_gemm_shapes(self.handle, None, 0, ctypes.byref(count))
         shapes = (ImageWAMGemmShape * int(count.value))()
@@ -139,11 +144,13 @@ class ImageWAMNativeRuntime:
 
     @property
     def retain_fn(self) -> int:
-        return self.library.function_address("frt_imagewam_native_retain")
+        """Owner retain for a model runtime over this handle's verbs: while
+        one is live, use_graph / set_pipeline / capture are refused."""
+        return self.library.function_address("frt_imagewam_native_declaration_retain")
 
     @property
     def release_fn(self) -> int:
-        return self.library.function_address("frt_imagewam_native_release")
+        return self.library.function_address("frt_imagewam_native_declaration_release")
 
     def close(self) -> None:
         """Drop this owner's reference (the model runtime keeps its own)."""

@@ -16,6 +16,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -53,6 +54,13 @@ public:
     int capture();
     uint64_t graph_nodes() const { return graph_nodes_; }
 
+    // Model runtimes built over this handle's verbs (owner callbacks of
+    // frt_model_runtime_override_verbs). While one is live, the graph it
+    // adopted and the pipeline behind it cannot be replaced: set_pipeline,
+    // capture and use_graph fail.
+    void declaration_retained() { declarations_.fetch_add(1, std::memory_order_acq_rel); }
+    void declaration_released() { declarations_.fetch_sub(1, std::memory_order_acq_rel); }
+
     int set_input(uint32_t port, const void* data, uint64_t bytes, int stream);
     int get_output(uint32_t port, void* out, uint64_t capacity, uint64_t* written, int stream);
     int step();
@@ -60,6 +68,8 @@ public:
 private:
     NativeRuntime() = default;
     int fail(int status, const std::string& message);
+    int refuse_while_exported(const char* what);
+    void drop_owned_graph();
     int check_stream(int stream);
     int stage_proprio(const void* data, uint64_t bytes);
     int read_actions(void* out, uint64_t capacity, uint64_t* written);
@@ -85,6 +95,7 @@ private:
     std::vector<float> proprio_normalized_;
     std::vector<uint16_t> proprio_bf16_;
 
+    std::atomic<int> declarations_{0};
     bool bound_ = false;
     int export_stream_id_ = -1;
     std::vector<int> port_role_;               // declaration port index -> NativePort (int)

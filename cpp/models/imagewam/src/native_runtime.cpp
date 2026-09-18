@@ -122,19 +122,31 @@ int NativeRuntime::fail(int status, const std::string& message) {
     return status;
 }
 
+int NativeRuntime::refuse_while_exported(const char* what) {
+    if (declarations_.load(std::memory_order_acquire) == 0) return kOk;
+    return fail(kInvalid, std::string(what) +
+                              ": a model runtime exported over this handle is live; release it first");
+}
+
+void NativeRuntime::drop_owned_graph() {
+    if (!owned_graph_) return;
+    cudaStreamSynchronize(stream_);
+    if (graph_ == owned_graph_) graph_ = nullptr;
+    cudaGraphExecDestroy(owned_graph_);
+    owned_graph_ = nullptr;
+    graph_nodes_ = 0;
+}
+
 int NativeRuntime::use_graph(cudaGraphExec_t graph_exec) {
+    if (int rc = refuse_while_exported("use_graph")) return rc;
     if (!graph_exec) return fail(kInvalid, "use_graph: null graph exec");
-    if (owned_graph_) {
-        cudaStreamSynchronize(stream_);
-        cudaGraphExecDestroy(owned_graph_);
-        owned_graph_ = nullptr;
-        graph_nodes_ = 0;
-    }
+    drop_owned_graph();
     graph_ = graph_exec;
     return kOk;
 }
 
 int NativeRuntime::set_pipeline(const frt_imagewam_pipeline_config& config) {
+    if (int rc = refuse_while_exported("set_pipeline")) return rc;
     if (config.action_latent != action_latent_ || config.img_raw != img_raw_ ||
         config.context != context_) {
         return fail(kInvalid, "set_pipeline: IO windows differ from the runtime's");
@@ -150,6 +162,10 @@ int NativeRuntime::set_pipeline(const frt_imagewam_pipeline_config& config) {
     std::string error;
     std::unique_ptr<NativePipeline> pipeline = NativePipeline::create(config, &error);
     if (!pipeline) return fail(kInvalid, "set_pipeline: " + error);
+    // A graph captured from the current pipeline records its GEMM handles,
+    // workspace and resource pointers: drop it before the pipeline goes.
+    // `step` then fails until the next capture.
+    drop_owned_graph();
     pipeline_ = std::move(pipeline);
     return kOk;
 }
@@ -210,6 +226,7 @@ int NativeRuntime::run(uint32_t segment, int32_t index) {
 }
 
 int NativeRuntime::capture() {
+    if (int rc = refuse_while_exported("capture")) return rc;
     if (!pipeline_) return fail(kInvalid, "capture: set_pipeline first");
     // Warm-up: lazy cuBLAS/cuBLASLt initialisation must not happen under capture.
     int rc = run(FRT_IMAGEWAM_SEGMENT_FULL, 0);

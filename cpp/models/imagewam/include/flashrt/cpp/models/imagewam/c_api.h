@@ -77,10 +77,16 @@ FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_create(
     const frt_imagewam_io_config* config, frt_imagewam_native** out);
 
 /* Reference counting; `h` is an frt_imagewam_native*. Thread-safe. The
- * handle is destroyed when the count reaches zero. Their addresses are the
- * owner callbacks for frt_model_runtime_override_verbs. */
+ * handle is destroyed when the count reaches zero. */
 FLASHRT_IMAGEWAM_C_API void frt_imagewam_native_retain(void* h);
 FLASHRT_IMAGEWAM_C_API void frt_imagewam_native_release(void* h);
+
+/* The owner callbacks for frt_model_runtime_override_verbs: a reference,
+ * plus a count of live model runtimes over this handle. While the count is
+ * non-zero, use_graph, set_pipeline and capture fail with -1 (the model
+ * runtime adopted the current graph exec). */
+FLASHRT_IMAGEWAM_C_API void frt_imagewam_native_declaration_retain(void* h);
+FLASHRT_IMAGEWAM_C_API void frt_imagewam_native_declaration_release(void* h);
 
 FLASHRT_IMAGEWAM_C_API const char* frt_imagewam_native_last_error(
     const frt_imagewam_native* h);
@@ -90,7 +96,7 @@ FLASHRT_IMAGEWAM_C_API void* frt_imagewam_native_stream(frt_imagewam_native* h);
 
 /* Replay `graph_exec` (a cudaGraphExec_t captured by the setup producer
  * over the borrowed windows) on the native stream in `step`. The exec is
- * borrowed. */
+ * borrowed. Destroys a graph this handle captured. */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_use_graph(
     frt_imagewam_native* h, void* graph_exec);
 
@@ -228,7 +234,10 @@ typedef struct frt_imagewam_pipeline_config {
 } frt_imagewam_pipeline_config;
 
 /* Install the pipeline (copies the tables, creates the pipeline's own
- * GemmRunner and cuBLAS handle). Setup only. */
+ * GemmRunner and cuBLAS handle). Setup only. Replacing a pipeline destroys
+ * the graph captured from it (after synchronizing the native stream):
+ * `step` fails until the next `capture`, and the resources the old table
+ * pointed to may be freed once this returns. */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_set_pipeline(
     frt_imagewam_native* h, const frt_imagewam_pipeline_config* config);
 
@@ -266,7 +275,8 @@ FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_run(
     frt_imagewam_native* h, uint32_t segment, int32_t index);
 
 /* Warm up once eagerly, then capture prefill + denoise on the native stream
- * into a graph the handle owns; `step` replays it from then on. */
+ * into a graph the handle owns (replacing a previous one); `step` replays
+ * it from then on. */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_capture(frt_imagewam_native* h);
 
 /* Number of kernel nodes in the captured graph (0 before capture). */

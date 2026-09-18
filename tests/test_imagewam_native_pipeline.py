@@ -13,11 +13,14 @@ and through the `io="native"` model runtime against `infer()`, with every
 buffer the tick writes NaN-filled first. Native pipelines built from a
 mutated resource table (no backbone block, last single-stream block or
 denoise step dropped, one block fed another block's weight) must fail that
-tick. Runs the served layer structure (merged single-stream `linear2`,
+tick. A second `set_pipeline` drops the graph captured from the first.
+Runs the served layer structure (merged single-stream `linear2`,
 gated residual fused with the next AdaLN) and the split/unfused one.
 Skips when exec/, runtime/ or the native library is not built.
 """
+import gc
 import os
+import weakref
 
 import numpy as np
 import pytest
@@ -30,7 +33,7 @@ import flash_rt.flash_rt_kernels as fvk  # noqa: E402
 from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor  # noqa: E402
 from flash_rt.models.imagewam import native_library as nl  # noqa: E402
 from flash_rt.models.imagewam import pipeline_thor  # noqa: E402
-from flash_rt.models.imagewam.native_runtime import ImageWAMNativeRuntime  # noqa: E402
+from flash_rt.models.imagewam.native_runtime import ImageWAMNativeError, ImageWAMNativeRuntime  # noqa: E402
 from _helpers.imagewam_abi_checks import (  # noqa: E402
     PIPELINE_MUTATIONS, MutatedPipelineSource, bits, poison_tick_state)
 from _helpers.model_runtime_consumer import ModelRuntimeConsumer, exec_library_path  # noqa: E402
@@ -253,3 +256,37 @@ def test_pipeline_mutant_fails_the_tick(h, mutation):
     differing = _differing(out, ref)
     print(f"native pipeline mutant {mutation}: differing={differing}")
     assert differing, f"mutant {mutation} passed the tick"
+
+
+def test_set_pipeline_drops_the_captured_graph(h):
+    """The captured graph records the pipeline's GEMM handles and resource
+    pointers: replacing the pipeline destroys it, so the old resources can
+    be freed and nothing can replay the graph over them. Refused while a
+    model runtime over the handle is live."""
+    fe = h.fe
+    native = ImageWAMNativeRuntime.create(fe.runtime_surface(), LIBRARY)
+    try:
+        native.set_pipeline(fe)
+        native.capture()
+        rt = fe.export_model_runtime(io="native", native=native)
+        with pytest.raises(ImageWAMNativeError) as exc:
+            native.set_pipeline(fe)
+        print(f"set_pipeline while exported: {exc.value}")
+        assert native.graph_exec and native.graph_producer == "native"
+        rt.release()
+
+        first = weakref.ref(native._pipeline_handoff)
+        native.set_pipeline(fe)
+        gc.collect()
+        print(f"after a second set_pipeline: graph_exec={native.graph_exec} graph_nodes={native.graph_nodes} "
+              f"graph_producer={native.graph_producer!r} first pipeline's resources released={first() is None}")
+        assert native.graph_exec == 0 and native.graph_nodes == 0 and native.graph_producer == ""
+        assert first() is None
+        with pytest.raises(ValueError):
+            fe.export_model_runtime(io="native", native=native)
+
+        native.capture()
+        ref, tokens, noise, proprio = _infer_reference(fe)
+        assert _differing(_poisoned_native_tick(fe, native, tokens, noise, proprio), ref) == []
+    finally:
+        native.close()
