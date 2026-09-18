@@ -5028,6 +5028,7 @@ def rotate_k_blocks(x: torch.Tensor, block: int) -> torch.Tensor     # last dim,
 def fwht16_butterfly(x: torch.Tensor) -> torch.Tensor                # kernel's butterfly order
 def quantize_blocks(x: torch.Tensor, fmt: str, scale_rule: str) -> BlockQuantized
 def dequantize_blocks(q: BlockQuantized) -> torch.Tensor
+def prepare_e0m3_hadamard_weight(w_nk: torch.Tensor) -> tuple[torch.Tensor, float]  # fp16 (N,K), alpha
 def pack_codes(codes: torch.Tensor) -> torch.Tensor                  # [R,K] -> [R,K/2] uint8
 def sf_offsets(rows: int, k: int) -> torch.Tensor                    # [rows, K/16] byte offsets
 def sf_size_bytes(rows: int, k: int) -> int
@@ -5047,11 +5048,16 @@ class E0m3HadamardLinear:
 ```
 
 State transitions of `E0m3HadamardLinear`: construction reads the
-`(K,N)` fp16 weight once, transposes to `(N,K)`, rotates every 16-wide
-K block by `H16/4`, quantizes to E0M3 + SFB, and keeps only the packed
-result. Each call quantizes the activation with the H16 rotation into
-its own scratch (allocated on the first call, grown if `m` grows) and
-runs `cutlass_fp4_gemm_e0m3w(a_format=0)`.
+`(K,N)` fp16 weight once, transposes to `(N,K)`, and prepares it with
+`prepare_e0m3_hadamard_weight` (every 16-wide K block rotated by the
+orthonormal `H16/4` butterfly in fp32, the whole tensor multiplied by a
+power of two `2^e` that keeps the largest block scale at most 448,
+rounded to fp16). It quantizes that to E0M3 + SFB, stores
+`alpha = 2^-e`, picks the tile with `pick_variant(N, K)`, and keeps only
+the packed result. Each call quantizes the activation with the H16
+rotation into its own scratch (allocated on the first call, grown if `m`
+grows) and runs `cutlass_fp4_gemm_e0m3w_variant(variant, a_format=0)`
+with that `alpha`.
 
 ## Flow
 
@@ -5157,6 +5163,10 @@ Phase Status: completed
   (`cutlass_fp4_gemm_e0m3w_variant`) so the tier runs the same tiles as
   `nvfp4`. No new rotation kernel: rotations larger than 16 were not
   more accurate, and the existing in-register H16 quantizer is used.
+- On the integration tree the single-stream `linear2` is merged
+  (OPT-016). The merged E0M3 `linear2` weights dequantize bit-identically
+  to the split halves; the whole-pipeline decision holds (merged
+  `e0m3_hadamard` 2.97e-4 vs `nvfp4` 6.71e-4, OPT-024 Result 2b).
 - Thor verification (kernel tests, whole pipeline, latency) is listed
   in OPT-024 "Open" and runs through
   `tests/test_imagewam_e0m3_hadamard.py` and
