@@ -3037,3 +3037,373 @@ at closure" / "structured multi-variable investigation" -- each of the
 section is only an index; do not treat any item here as approved
 until it gets its own `# Plan: <item>` section with `Plan Status:
 approved`.
+
+# Plan: VAE image preprocessing kernel with normalization LUT (roadmap item 2)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+`vae_encoder._prep_view` preprocesses each camera view with plain
+PyTorch: `uint8 -> float32` (on the source device, so a CPU input is
+converted on the CPU and copied to the GPU as float32, 4x the bytes),
+`F.interpolate(mode="area")` to 224x224 when the view is not already
+that size, `x * 2.0 / 255.0 - 1.0` as three elementwise kernels, a
+BF16 cast, and finally `torch.cat` of the two views. That is about a
+dozen launches plus float32 temporaries per `infer()`, and it runs
+outside the CUDA graph.
+
+Two arithmetic facts of the served path, measured on H100 with torch
+2.14 against the torch kernels themselves:
+
+- `F.interpolate(mode="area")` (channels-last-strided input, the
+  layout `_prep_view` produces) equals `sum / kh / kw` in float32,
+  two correctly rounded divisions, where `sum` is the exact integer
+  window sum and `kh`/`kw` are the adaptive-pool window extents.
+- `x / 255.0` with a Python scalar is computed as `x * (1.0f/255.0f)`
+  (torch multiplies by the float32 reciprocal of a CPU scalar
+  divisor), not as a true division.
+
+Pi0.5 already ships a 256-entry FP16 normalization table
+(`pi05_thor.py` `_infer_uint8_to_fp16`, used by
+`csrc/kernels/patch_embed.cu::patch_im2col_uint8_kernel`) that is
+bit-identical to its per-frame arithmetic.
+
+The official LIBERO eval (`eval_libero_single._center_crop_resize`)
+resizes with PIL `BILINEAR` plus a center crop, and training resizes
+with `torchvision.transforms.Resize([224,224])` (bilinear, antialias).
+The served path uses area averaging. This semantic difference is
+tracked separately (`issues.md` ISSUE-030) and is not changed by
+default.
+
+### Problem
+
+The served preprocessing is many small launches plus CPU-side float
+conversion, and it cannot read from a fixed-address uint8 buffer
+inside a CUDA graph.
+
+### Measurable goal
+
+One CUDA kernel per view: `(H,W,3)` uint8 in, `(1,3,224,nv*224)` BF16
+NCHW out (the VAE's input dtype and layout, concatenated in place).
+
+- `resize="area"`: bit-exact to `_prep_view` for every input size,
+  including the no-resize case, which reads a 256-entry BF16 table.
+- `resize="pil_bilinear"`: bit-exact to the official
+  `_center_crop_resize` (PIL `BILINEAR`, fixed-point 22-bit
+  coefficients, horizontal pass then vertical pass with uint8
+  rounding in between), followed by the same 256-entry table.
+- Observations: bit-exactness counts at real 512x512 LIBERO frames and
+  synthetic sizes, launch count, and preprocessing latency A/B.
+
+## Structure
+
+- NEW `csrc/kernels/imagewam_vae_preprocess.cu/.cuh`: the kernel.
+  Stateless. One thread per output pixel, all three channels.
+- `csrc/bindings.cpp`: `imagewam_vae_preprocess_bf16` binding
+  (pointer interface, same convention as `patch_im2col_uint8`).
+- NEW `flash_rt/models/imagewam/vae_preprocess.py`: `VaePreprocessor`
+  OWNS the device-resident normalization table and the per-input-size
+  PIL coefficient tables (`PilResizePlan`), and launches the kernel.
+- `flash_rt/models/imagewam/vae_encoder.py`: `encode_to_tokens` gains
+  an optional `preprocessor`; given one, the kernel replaces
+  `_prep_view`. `_prep_view` stays as the reference implementation.
+- `flash_rt/frontends/torch/imagewam_thor.py`: OWNS one
+  `VaePreprocessor` when the real VAE is loaded, and passes it to
+  `encode_to_tokens`. New constructor flag `vae_resize` (`"area"`
+  default, `"pil_bilinear"` opt-in).
+
+## Interface
+
+```python
+# flash_rt/models/imagewam/vae_preprocess.py
+RESIZE_MODES = ("area", "pil_bilinear")
+
+@dataclass(frozen=True)
+class PilResizePlan:          # device tables for one (in_h, in_w) -> (out_h, out_w)
+    h_bounds: torch.Tensor | None   # (resized_w, 2) int32, None if no horizontal pass
+    h_coeffs: torch.Tensor | None   # (resized_w, h_ksize) int32
+    v_bounds: torch.Tensor | None
+    v_coeffs: torch.Tensor | None
+    h_ksize: int; v_ksize: int
+    crop_left: int; crop_top: int   # center-crop offsets into the resized image
+
+class VaePreprocessor:
+    def __init__(self, *, resize: str = "area", out_hw: tuple[int, int] = (224, 224),
+                 device: str = "cuda") -> None
+    def prepare(self, in_h: int, in_w: int) -> None       # builds tables; idempotent
+    def run(self, views: Sequence[torch.Tensor], out: torch.Tensor, stream: int) -> None
+        # views: (H,W,3) uint8 CUDA, contiguous; out: (1,3,oh,len(views)*ow) BF16 CUDA
+```
+
+```cpp
+// csrc/kernels/imagewam_vae_preprocess.cuh
+int imagewam_vae_preprocess_bf16(
+    const uint8_t* view, const __nv_bfloat16* lut, __nv_bfloat16* out,
+    int in_h, int in_w, int out_h, int out_w, int out_total_w, int col_offset,
+    int mode,                       // 0 identity, 1 area, 2 pil_bilinear
+    const int* h_bounds, const int* h_coeffs, int h_ksize, int crop_left,
+    const int* v_bounds, const int* v_coeffs, int v_ksize, int crop_top,
+    float inv255, cudaStream_t stream);
+```
+
+## Flow
+
+1. Frontend construction with `ae_model_path`: builds
+   `VaePreprocessor(resize=vae_resize)`; the table is computed once on
+   the GPU with the same torch expression `_prep_view` uses, so it is
+   bit-identical by construction.
+2. `infer()` eager VAE path: `encode_to_tokens(ae, v1, v2,
+   preprocessor=...)` moves each view to the GPU as uint8, launches
+   one kernel per view into one `(1,3,224,448)` BF16 buffer, then
+   runs `ae.encode` unchanged.
+
+## Code Mapping
+
+| module / state | file | task |
+|---|---|---|
+| kernel | `csrc/kernels/imagewam_vae_preprocess.cu/.cuh`, `CMakeLists.txt` | phase 1 |
+| binding | `csrc/bindings.cpp` | phase 1 |
+| table + PIL plan owner | `flash_rt/models/imagewam/vae_preprocess.py` | phase 1 |
+| kernel test | `tests/test_imagewam_vae_preprocess.py` | phase 1 |
+| served eager path | `vae_encoder.py`, `imagewam_thor.py` | phase 2 |
+| latency A/B | `benchmarks/imagewam_vae_stage_bench.py` | phase 2 |
+| mismatch measurement | `benchmarks/imagewam_e2e_official_compare.py` (`RAW_VIEWS`, `VAE_RESIZE`), `issues.md` ISSUE-030 | phase 3 |
+| record | `opportunities.md` OPT-020 | phase 3 |
+
+## Implementation Phases
+
+### Phase 1 — kernel, binding, table owner, bit-exact test
+
+Phase Status: pending
+
+Goal: the kernel reproduces `_prep_view` (area and no-resize) and PIL
+`BILINEAR` + center crop bit-exactly.
+Modified files: new `imagewam_vae_preprocess.cu/.cuh`,
+`CMakeLists.txt`, `bindings.cpp`, new `vae_preprocess.py`, new
+`tests/test_imagewam_vae_preprocess.py`.
+Observation method: mismatch counts and max-abs against `_prep_view`
+and against PIL on real 512x512 LIBERO frames, random 512/256/224
+inputs, and a non-square input; sm_90 build plus sm_110 compile check.
+
+### Phase 2 — served eager path uses the kernel
+
+Phase Status: pending
+
+Goal: `infer()` preprocesses through the kernel by default (same
+bits), `vae_resize="pil_bilinear"` available as an opt-in.
+Modified files: `vae_encoder.py`, `imagewam_thor.py`, new
+`benchmarks/imagewam_vae_stage_bench.py`.
+Observation method: token bit-equality against the legacy path,
+preprocessing latency A/B in one process (CPU and GPU uint8 inputs),
+regression suite.
+
+### Phase 3 — preprocessing mismatch measurement and record
+
+Phase Status: pending
+
+Goal: measure the action effect of area vs PIL bilinear on raw
+512x512 frames against the official model; record ISSUE-030 and
+OPT-020 with a recommendation.
+Modified files: `benchmarks/imagewam_e2e_official_compare.py`,
+`issues.md`, `opportunities.md`.
+Observation method: end-to-end compare with raw frames, served
+`area` and opt-in `pil_bilinear`, next to the pre-resized baseline.
+
+# Plan: VAE encode in-graph capture and native NHWC GroupNorm+SiLU (roadmap item 5)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+`infer()` runs the real FLUX.2 `AutoEncoder.encode` in plain PyTorch
+BF16 outside the CUDA graph: 21.5 ms of the 231.6 ms `nvfp4` P50 on
+Thor (opportunities.md OPT-012). A first H100 profile at the real
+224x448 input (indicative; shared GPU) shows about 297 kernels per
+encode and this GPU-time split (8.5 ms per encode in the profiled run):
+
+| op family | share |
+|---|---:|
+| cuDNN NCHW<->NHWC layout transforms around every conv | ~35% |
+| GroupNorm (`RowwiseMoments` launches only N*G=32 blocks) | ~29% |
+| conv math kernels | ~11% |
+| residual adds, sigmoid, mul, pad, copies | ~20% |
+
+Converting the stock module to `channels_last` removes the transforms
+but makes torch's GroupNorm slower (strided kernels), so no speedup.
+
+### Problem
+
+The VAE encode is outside the graph, launch-heavy, and spends most of
+its GPU time on layout transforms and a poorly parallelized GroupNorm,
+not on convolution math.
+
+### Measurable goal
+
+Stop at verified points, in order:
+
+1. Per-op profile of `ae.encode` at 224x448 (H100, indicative).
+2. The existing torch encode captured into a CUDA graph with static
+   input and output buffers; tokens bit-identical to eager; gain
+   measured.
+3. The VAE stage folded into the frontend's main graph so `infer()`
+   does one replay; tokens bit-identical, end-to-end compare unchanged.
+4. Native encoder: NHWC (`channels_last`) convolutions plus a FlashRT
+   NHWC GroupNorm(+SiLU) kernel; each kernel checked against torch,
+   tokens near-exact (cosine, max-abs, mean/std/absmax vs the real
+   Thor values -0.02/0.97/4.91), end-to-end compare within baseline
+   noise.
+
+## Structure
+
+- NEW `flash_rt/models/imagewam/vae_stage.py`: `ImageWAMVaeStage`
+  OWNS the fixed-address stage state: the uint8 view buffer
+  `(nv,H,W,3)`, the preprocessed BF16 image `(1,3,224,nv*224)`, and the
+  encoder object. It writes tokens into a caller-owned `img_raw`
+  (owned by the frontend, unchanged). `run()` is capture-safe.
+- NEW `csrc/kernels/imagewam_vae_groupnorm.cu/.cuh` + binding:
+  NHWC BF16 GroupNorm with optional fused SiLU (Welford partial stats,
+  per-channel fused scale/shift finalize, vectorized apply).
+- NEW `flash_rt/models/imagewam/vae_native_encoder.py`:
+  `NativeFlux2Encoder` OWNS channels_last copies of the AE encoder
+  weights and implements `encode(x)` with the same op order as
+  `flux2.autoencoder.AutoEncoder.encode`, calling the GroupNorm kernel.
+- `flash_rt/frontends/torch/imagewam_thor.py`: OWNS the stage when
+  `vae_mode` is a graph mode; `_capture_graph` records `stage.run()`
+  before prefill; `infer()` stages views, proprio, and noise, then
+  replays once.
+- NEW `benchmarks/imagewam_vae_stage_bench.py`: profile and A/B of
+  every VAE variant in one process (also the Thor handoff tool).
+
+## Interface
+
+```python
+# flash_rt/models/imagewam/vae_stage.py
+class VaeEncoder(Protocol):
+    def encode(self, x: torch.Tensor) -> torch.Tensor: ...   # (1,3,H,W) BF16 -> (1,128,h,w) BF16
+
+@dataclass(frozen=True)
+class VaeStageSpec:
+    num_views: int
+    in_h: int
+    in_w: int
+    out_hw: tuple[int, int] = (224, 224)
+
+class ImageWAMVaeStage:
+    def __init__(self, encoder: VaeEncoder, preprocessor: VaePreprocessor,
+                 spec: VaeStageSpec, img_raw: torch.Tensor) -> None
+    views_u8: torch.Tensor      # (nv,H,W,3) uint8 CUDA, fixed address
+    image: torch.Tensor         # (1,3,oh,nv*ow) BF16 CUDA, fixed address
+    def stage(self, views: Sequence[torch.Tensor]) -> None   # validates shapes, copies in
+    def run(self) -> None       # current stream: preprocess -> encode -> img_raw
+
+# flash_rt/models/imagewam/vae_native_encoder.py
+class NativeFlux2Encoder:       # satisfies VaeEncoder
+    def __init__(self, ae: torch.nn.Module) -> None
+    def encode(self, x: torch.Tensor) -> torch.Tensor
+
+# flash_rt/frontends/torch/imagewam_thor.py
+_VAE_MODES = ("eager", "graph", "graph_native")
+ImageWAMTorchFrontendThor(..., vae_mode: str = "eager",
+                          vae_graph_input: tuple[int, int, int] | None = None,  # (nv, H, W)
+                          vae_resize: str = "area")
+```
+
+```cpp
+// csrc/kernels/imagewam_vae_groupnorm.cuh
+size_t imagewam_groupnorm_nhwc_workspace_bytes(int N, int HW, int C, int G);
+int imagewam_groupnorm_nhwc_bf16(const __nv_bfloat16* x, const __nv_bfloat16* gamma,
+    const __nv_bfloat16* beta, __nv_bfloat16* y, float* workspace,
+    int N, int HW, int C, int G, float eps, int apply_silu, cudaStream_t stream);
+```
+
+State transitions: `vae_mode="eager"` is the current behavior.
+`"graph"`/`"graph_native"` require `ae_model_path` and
+`vae_graph_input`; `infer()` then requires views of exactly that
+shape (`ValueError` otherwise, since the graph encodes whatever the
+fixed buffer holds).
+
+## Flow
+
+1. Construction (graph modes): load the AE; build the encoder (`ae`
+   or `NativeFlux2Encoder(ae)`); build `ImageWAMVaeStage` over
+   `self._img_raw`; `VaePreprocessor.prepare(H, W)`.
+2. `set_prompt()` -> `_capture_graph()`: warm-up and capture record
+   `stage.run()`, then `imagewam_prefill`, then
+   `imagewam_denoise_loop`, all on the capture stream.
+3. `infer(obs)`: `stage.stage([view1, view2])` (H2D uint8 copy into
+   the fixed buffer); proprio token into its context row; action noise
+   into `action_latent`; one `graph.replay()`.
+
+## Code Mapping
+
+| module / state | file | phase |
+|---|---|---|
+| profile + A/B tool | `benchmarks/imagewam_vae_stage_bench.py` | 1, 2, 4 |
+| stage (fixed buffers) | `flash_rt/models/imagewam/vae_stage.py` | 2 |
+| stage test | `tests/test_imagewam_vae_stage.py` | 2, 3, 4 |
+| frontend flag + capture | `flash_rt/frontends/torch/imagewam_thor.py` | 3 |
+| e2e option | `benchmarks/imagewam_e2e_official_compare.py` (`VAE_MODE`) | 3 |
+| GroupNorm kernel | `csrc/kernels/imagewam_vae_groupnorm.cu/.cuh`, `csrc/bindings.cpp`, `CMakeLists.txt` | 4 |
+| GroupNorm test | `tests/test_imagewam_vae_groupnorm.py` | 4 |
+| native encoder | `flash_rt/models/imagewam/vae_native_encoder.py` | 4 |
+| record | `opportunities.md` OPT-021 | 5 |
+
+## Implementation Phases
+
+### Phase 1 — profile `ae.encode` at 224x448
+
+Phase Status: pending
+
+Goal: per-op time breakdown and op list at the real input (H100,
+indicative), reproducible on Thor with the same script.
+Modified files: new `benchmarks/imagewam_vae_stage_bench.py`.
+Observation method: torch profiler table, kernel count per encode.
+
+### Phase 2 — standalone CUDA graph of the torch encode
+
+Phase Status: pending
+
+Goal: `ImageWAMVaeStage` with fixed buffers; `run()` captured into a
+graph; tokens bit-identical to `encode_to_tokens`; eager vs graph A/B.
+Modified files: new `vae_stage.py`, new `tests/test_imagewam_vae_stage.py`,
+bench script.
+Observation method: `torch.equal` on tokens, CUDA-event P10/P50/P90
+alternating eager and graph in one process.
+
+### Phase 3 — VAE folded into the main graph
+
+Phase Status: pending
+
+Goal: `vae_mode="graph"`: one replay per `infer()`; tokens and actions
+bit-identical to the eager path with the same noise.
+Modified files: `imagewam_thor.py`, `imagewam_e2e_official_compare.py`,
+`tests/test_imagewam_vae_stage.py`.
+Observation method: `img_raw` and action equality eager vs graph on a
+real-dims frontend; regression suite; quick end-to-end compare.
+
+### Phase 4 — native NHWC GroupNorm+SiLU encoder
+
+Phase Status: pending
+
+Goal: `vae_mode="graph_native"`: channels_last convolutions plus the
+FlashRT GroupNorm(+SiLU) kernel.
+Modified files: new `imagewam_vae_groupnorm.cu/.cuh`, `bindings.cpp`,
+`CMakeLists.txt`, new `vae_native_encoder.py`, new
+`tests/test_imagewam_vae_groupnorm.py`, `imagewam_thor.py`, bench.
+Observation method: kernel vs `F.group_norm`(+`x*sigmoid(x)`) at every
+real encoder shape (cosine, max-abs, rel_l2, mismatch fraction);
+tokens vs torch encode (cosine, max-abs, stats); A/B latency; full
+end-to-end compare; sm_110 compile check.
+
+### Phase 5 — close-out
+
+Phase Status: pending
+
+Goal: record measured results and the Thor checklist.
+Modified files: `opportunities.md` (OPT-021), `plan.md`.
+Observation method: every number recorded is labeled H100 or Thor.
