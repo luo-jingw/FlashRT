@@ -53,6 +53,8 @@ import torch
 
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
+from flash_rt.models.imagewam.gemm_variant_timer import CudaGraphVariantTimer
+from flash_rt.models.imagewam.gemm_variant_tuner import GemmVariantTuner, VariantTuneResult
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
 from flash_rt.models.imagewam.pipeline_real import (
     compute_action_head_modulation,
@@ -75,6 +77,10 @@ _PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static
 # one-time calibration call in set_prompt() before graph capture (see
 # _calibrate_fp8 below) -- everything else needs no such step.
 _STATIC_FP8_PRECISIONS = ("fp8_static", "fp8_static_cutlass")
+# Precisions whose GEMMs run a switchable CUTLASS tile (roadmap item 1,
+# plan.md "Plan: ActionDiT small-M CUTLASS tile selection"): the only ones
+# `gemm_variant_autotune=True` applies to.
+_VARIANT_TUNED_PRECISIONS = ("nvfp4", "fp8_static_cutlass")
 # Stage 3 default precision decision (opportunities.md, real Thor
 # checklist against real checkpoint weights + real open-loop LIBERO
 # data): nvfp4 is the fastest AND closest to fp16/GT (actions
@@ -115,10 +121,20 @@ class ImageWAMTorchFrontendThor:
                  ae_model_path: str | None = None, flux2_src: str | None = None,
                  qwen3_model_spec: str | None = None,
                  dataset_stats_path: str | None = None,
+                 gemm_variant_autotune: bool = False,
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
             raise ValueError(f"precision={precision!r} -- must be one of {_PRECISIONS}")
+        # Roadmap item 1: measure the CUTLASS tile per ActionDiT GEMM shape
+        # (M = num_action) at construction instead of using the (N, K)
+        # heuristic. Opt-in until Thor confirms it (opportunities.md OPT-018).
+        if gemm_variant_autotune and precision not in _VARIANT_TUNED_PRECISIONS:
+            raise ValueError(
+                f"gemm_variant_autotune=True applies to {_VARIANT_TUNED_PRECISIONS}, "
+                f"got precision={precision!r}")
+        self._gemm_tuner: GemmVariantTuner | None = None
+        self.gemm_variant_results: tuple[VariantTuneResult, ...] = ()
         # Real VAE + text-context wiring plan: independent of ckpt_path
         # (OPT-001) -- one loads real transformer weights, this loads a
         # real image encoder. Loaded here (once), used inside infer().
@@ -209,6 +225,8 @@ class ImageWAMTorchFrontendThor:
             del sd
         else:
             self._weights = self._alloc_random_weights(d)
+        if gemm_variant_autotune:
+            self._tune_action_dit_gemm_variants(d)
 
         # Real closed-loop robot-state conditioning (opportunities.md,
         # found 2026-09-15 scoping real closed-loop testing): a plain
@@ -533,6 +551,31 @@ class ImageWAMTorchFrontendThor:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
             return StaticFp8Linear(w.data_ptr(), n, k, use_cutlass=True)
         raise ValueError(f"unknown precision {self._precision!r}")  # pragma: no cover -- validated in __init__
+
+    @staticmethod
+    def _is_variant_tunable(lin: object) -> bool:
+        return isinstance(lin, Nvfp4Linear) or (isinstance(lin, StaticFp8Linear) and lin.use_cutlass)
+
+    def _tune_action_dit_gemm_variants(self, d: dict) -> None:
+        """Roadmap item 1 (plan.md "Plan: ActionDiT small-M CUTLASS tile
+        selection"): group every ActionDiT linear with a switchable
+        CUTLASS tile by `(family, N, K)` and let one `GemmVariantTuner`
+        measure and apply a tile per group at `M = num_action` (see
+        `gemm_variant_tuner.py` for the rule). Runs before `set_prompt()`,
+        so the captured graph uses the chosen tiles. Backbone GEMMs are
+        not tuned. Results land in `self.gemm_variant_results`."""
+        groups: dict[tuple[str, int, int], list] = {}
+        seen: set[int] = set()
+        for key, lin in self._weights.items():
+            if key[0] != "action_dit" or not self._is_variant_tunable(lin) or id(lin) in seen:
+                continue
+            seen.add(id(lin))
+            groups.setdefault((lin.family, lin.n, lin.k), []).append(lin)
+        tuner = GemmVariantTuner(CudaGraphVariantTimer())
+        for members in groups.values():
+            tuner.tune(members, d["num_action"])
+        self._gemm_tuner = tuner
+        self.gemm_variant_results = tuner.results()
 
     # OPT-004 step 6 follow-up (2026-09-15, real Thor measurement against
     # the real FLUX.2-dev VAE on real LIBERO-fastwam frames): calibrating

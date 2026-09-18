@@ -3271,7 +3271,7 @@ Phase Status: completed
 
 ### Phase 2: FP8 1-SM small-M tiles
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: `cutlass_fp8_t128x64x256`, `_t128x64x128`, `_t128x128x128`,
   `_t128x256x128` exported under `ENABLE_SM100_CUTLASS`.
@@ -3282,7 +3282,7 @@ Phase Status: active
 
 ### Phase 3: quant_linear protocol implementation
 
-Phase Status: pending
+Phase Status: completed
 
 - Goal: `Nvfp4Linear` and `StaticFp8Linear(use_cutlass=True)` expose
   `family`, `default_variant`, `variant`, `candidate_variants()`,
@@ -3294,7 +3294,7 @@ Phase Status: pending
 
 ### Phase 4: frontend wiring
 
-Phase Status: pending
+Phase Status: completed
 
 - Goal: `gemm_variant_autotune` flag, grouping ActionDiT linears by
   shape, and `gemm_variant_results`.
@@ -3307,7 +3307,7 @@ Phase Status: pending
 
 ### Phase 5: Thor sweep and A/B script, handoff
 
-Phase Status: pending
+Phase Status: active
 
 - Goal: `benchmarks/imagewam_thor_small_m_tile_sweep.py`, plus
   results and Thor checklist in `opportunities.md` OPT-018.
