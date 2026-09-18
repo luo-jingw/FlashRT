@@ -179,20 +179,19 @@ def test_native_encoder_tokens_near_exact(ae):
         assert torch.equal(img_raw, eager)
 
 
-@pytest.mark.parametrize("vae_mode", ["graph", "graph_native"])
-def test_frontend_vae_in_graph_matches_eager_reference(vae_mode):
-    """VAE inside the main graph: one replay writes img_raw exactly as
-    the same encoder does eagerly (`encode_to_tokens` for "graph", the
-    frontend's own `NativeFlux2Encoder` for "graph_native"), and the
-    actions equal an eager run of the same frontend's prefill + denoise
-    fed with those tokens and the same noise."""
+@pytest.mark.parametrize("vae_encoder", ["torch", "native"])
+def test_frontend_vae_in_graph_matches_eager_reference(vae_encoder):
+    """VAE inside the main graph (`vae_graph_input`): one replay writes
+    img_raw exactly as `encode_to_tokens` with the same encoder does
+    eagerly, and the actions equal an eager run of the same frontend's
+    prefill + denoise fed with those tokens and the same noise."""
     from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
     from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
 
     torch.manual_seed(0)
     fe = ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16",
                                    ae_model_path=_AE_PATH, flux2_src=_FLUX2_SRC,
-                                   vae_mode=vae_mode, vae_graph_input=(2, 512, 512))
+                                   vae_encoder=vae_encoder, vae_graph_input=(2, 512, 512))
     fe.set_prompt()
     frames = [torch.from_numpy(f) for f in _frames(4)]
     for v1, v2 in ((frames[0], frames[2]), (frames[1], frames[3])):
@@ -200,14 +199,8 @@ def test_frontend_vae_in_graph_matches_eager_reference(vae_mode):
         actions = torch.from_numpy(fe.infer({"view1": v1, "view2": v2})["actions"])
         graph_tokens = fe._img_raw.clone()
         with torch.no_grad():
-            if vae_mode == "graph":
-                ref_tokens = encode_to_tokens(fe._ae, v1, v2, preprocessor=fe._vae_pre)[0]
-            else:
-                fe._vae_stage.stage([v1, v2])
-                fe._vae_stage.run()
-                torch.cuda.synchronize()
-                ref_tokens = fe._img_raw.clone()
-        _cmp(f"frontend {vae_mode} img_raw vs the same encoder run eagerly", graph_tokens, ref_tokens)
+            ref_tokens = encode_to_tokens(fe._ae, v1, v2, preprocessor=fe._vae_pre, encoder=fe._vae_encoder)[0]
+        _cmp(f"frontend graph[{vae_encoder}] img_raw vs encode_to_tokens (same encoder)", graph_tokens, ref_tokens)
         assert torch.equal(graph_tokens, ref_tokens)
 
         fe._img_raw.copy_(ref_tokens)
@@ -216,23 +209,37 @@ def test_frontend_vae_in_graph_matches_eager_reference(vae_mode):
         fe._action_latent.mul_(0.01)
         _eager_pipeline(fe)
         ref_actions = fe._action_latent.detach().cpu()
-        _cmp(f"frontend {vae_mode} actions vs eager reference", actions, ref_actions)
+        _cmp(f"frontend graph[{vae_encoder}] actions vs eager reference", actions, ref_actions)
         assert torch.isfinite(actions).all()
         assert torch.equal(actions, ref_actions)
 
 
-def test_frontend_vae_mode_validation():
+def test_frontend_eager_native_matches_encode_to_tokens():
+    """`vae_encoder="native"` outside the graph: img_raw equals
+    `encode_to_tokens` with the native encoder."""
+    from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
+    from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
+    fe = ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", ae_model_path=_AE_PATH,
+                                   flux2_src=_FLUX2_SRC, vae_encoder="native")
+    fe.set_prompt()
+    frames = [torch.from_numpy(f) for f in _frames(4)]
+    fe.infer({"view1": frames[0], "view2": frames[2]})
+    with torch.no_grad():
+        ref = encode_to_tokens(fe._ae, frames[0], frames[2], preprocessor=fe._vae_pre, encoder=fe._vae_encoder)[0]
+    _cmp("frontend eager[native] img_raw vs encode_to_tokens (native)", fe._img_raw, ref)
+    assert torch.equal(fe._img_raw, ref)
+
+
+def test_frontend_vae_flag_validation():
     from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
     with pytest.raises(ValueError):
-        ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", vae_mode="graph",
-                                  vae_graph_input=(2, 512, 512))
+        ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", vae_graph_input=(2, 512, 512))
     with pytest.raises(ValueError):
-        ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", ae_model_path=_AE_PATH,
-                                  flux2_src=_FLUX2_SRC, vae_mode="graph")
+        ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", vae_encoder="bogus")
     with pytest.raises(ValueError):
-        ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", vae_mode="bogus")
+        ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", vae_resize="bogus")
     fe = ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", ae_model_path=_AE_PATH,
-                                   flux2_src=_FLUX2_SRC, vae_mode="graph", vae_graph_input=(2, 224, 224))
+                                   flux2_src=_FLUX2_SRC, vae_graph_input=(2, 224, 224))
     fe.set_prompt()
     with pytest.raises(ValueError):
         fe.infer({})

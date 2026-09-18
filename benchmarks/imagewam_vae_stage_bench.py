@@ -15,9 +15,23 @@ Sections (`--section`, default `all`):
               graph, each with the torch encoder and with
               `NativeFlux2Encoder` (NHWC + FlashRT GroupNorm). Token
               equality / cosine against the legacy path is printed.
+  infer       whole `ImageWAMTorchFrontendThor.infer()` at the real dims
+              (x0=513 with proprio, a0=905, 64 actions, 10 steps), one
+              frontend per `--vae-variants` entry (`<placement>-<encoder>`,
+              placement eager|graph, encoder torch|native), called
+              round-robin.
+              `--precision` selects the GEMM precision (Thor: nvfp4).
+              Uses the real checkpoint when CKPT_PATH is set (and its
+              dataset_stats.json), random weights otherwise; latency does
+              not depend on the weight values.
 
-Each A/B also prints, per variant, the kernels per call, the summed GPU
-kernel time (torch profiler) and the host enqueue time per call.
+Each A/B in `preprocess`/`encode` also prints, per variant, the kernels
+per call, the summed GPU kernel time (torch profiler) and the host
+enqueue time per call.
+
+`--raw-views` feeds the raw 512x512 dataset frames (the frontend resizes
+them); otherwise the views are pre-resized to 224x224 with the official
+PIL center-crop resize, as the end-to-end harness does.
 
 Timing: variants are called round-robin in one process. Each sample is
 wall-clock around one call with `torch.cuda.synchronize()` on both
@@ -292,15 +306,60 @@ def section_encode(ae: torch.nn.Module, v1: np.ndarray, v2: np.ndarray, iters: i
             report_gpu(variants)
 
 
+_REAL_DIMS = dict(
+    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
+    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
+    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
+    num_action=64, total=969,
+    action_num_layers_double=5, action_num_layers_single=20,
+    dt=1.0 / 10, num_denoise_steps=10,
+    ref_h=14, ref_w=28, proprio_dim=8, shift=5.0, num_train_timesteps=1000,
+)
+
+
+def section_infer(v1: np.ndarray, v2: np.ndarray, iters: int, precision: str, variants: list[str],
+                  raw_views: bool) -> None:
+    from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
+    if not raw_views:
+        v1, v2 = center_crop_resize(v1, 224, 224), center_crop_resize(v2, 224, 224)
+    views = (torch.from_numpy(np.ascontiguousarray(v1)), torch.from_numpy(np.ascontiguousarray(v2)))
+    ckpt = os.environ.get("CKPT_PATH")
+    stats = os.path.join(os.path.dirname(ckpt), "dataset_stats.json") if ckpt else None
+    print(f"\n=== infer(): precision={precision} views={tuple(views[0].shape)} "
+          f"weights={'real ' + ckpt if ckpt else 'random'} ===")
+    frontends = {}
+    for variant in variants:
+        placement, encoder = variant.split("-")
+        if placement not in ("eager", "graph"):
+            raise ValueError(f"variant {variant!r}: placement must be eager or graph")
+        graph_input = (2,) + tuple(views[0].shape[:2]) if placement == "graph" else None
+        fe = ImageWAMTorchFrontendThor(
+            precision=precision, dims_override=dict(_REAL_DIMS), ckpt_path=ckpt,
+            ae_model_path=_ae_path(), flux2_src=_flux2_src(), dataset_stats_path=stats,
+            vae_encoder=encoder, vae_graph_input=graph_input)
+        fe.set_prompt()
+        frontends[variant] = fe
+        print(f"  constructed {variant}; GPU memory allocated {torch.cuda.memory_allocated() / 2**30:.1f} GiB")
+    obs = {"view1": views[0], "view2": views[1], "proprio": np.zeros(8, dtype=np.float32)}
+    ab_time({f"infer() VAE {v}": (lambda fe=fe: fe.infer(obs)) for v, fe in frontends.items()}, iters)
+    print(f"  peak GPU memory {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--section", default="all", choices=["all", "profile", "preprocess", "encode"])
+    ap.add_argument("--section", default="all", choices=["all", "profile", "preprocess", "encode", "infer"])
     ap.add_argument("--iters", type=int, default=200)
+    ap.add_argument("--precision", default="nvfp4")
+    ap.add_argument("--vae-variants", default="eager-torch,eager-native,graph-torch,graph-native")
+    ap.add_argument("--raw-views", action="store_true")
     args = ap.parse_args()
     print(f"torch {torch.__version__}, device {torch.cuda.get_device_name()}")
-    ae = load_real_ae(_ae_path(), _flux2_src())
     v1, v2, src = load_views()
     print(f"views: {src} {v1.shape} + {v2.shape}")
+    if args.section == "infer":
+        section_infer(v1, v2, args.iters, args.precision, args.vae_variants.split(","), args.raw_views)
+        return
+    ae = load_real_ae(_ae_path(), _flux2_src())
     if args.section in ("all", "profile"):
         section_profile(ae, v1, v2)
     if args.section in ("all", "preprocess"):

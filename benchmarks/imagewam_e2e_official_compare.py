@@ -19,7 +19,9 @@ Optional env: SUITE (libero_spatial), N_TASKS (10), FRAMES ("0,40"),
 PRECISION (fp16), SEEDS ("0,1").
 
 VAE options (roadmap items 2 and 5, plan.md):
-  VAE_MODE    eager (default) | graph | graph_native -- frontend vae_mode.
+  VAE_ENCODER torch (default) | native -- frontend vae_encoder.
+  VAE_GRAPH   0 (default): VAE outside the CUDA graph. 1: inside it
+              (frontend vae_graph_input = (2, H, W) of the FlashRT views).
   VAE_RESIZE  area (default) | pil_bilinear -- frontend vae_resize.
   RAW_VIEWS   0 (default): FlashRT gets the same PIL-resized 224x224 views
               as the official side. 1: FlashRT gets the raw 512x512
@@ -55,7 +57,8 @@ FRAMES = [int(x) for x in os.environ.get("FRAMES", "0,40").split(",")]
 PRECISION = os.environ.get("PRECISION", "fp16")
 SEEDS = [int(x) for x in os.environ.get("SEEDS", "0,1").split(",")]
 HORIZON, STEPS, SHIFT = 64, 10, 5.0
-VAE_MODE = os.environ.get("VAE_MODE", "eager")
+VAE_ENCODER = os.environ.get("VAE_ENCODER", "torch")
+VAE_GRAPH = os.environ.get("VAE_GRAPH", "0") == "1"
 VAE_RESIZE = os.environ.get("VAE_RESIZE", "area")
 RAW_VIEWS = os.environ.get("RAW_VIEWS", "0") == "1"
 
@@ -144,7 +147,8 @@ def flashrt_infer_with_noise(fe, v1, v2, state, noise):
         fe._vae_stage.stage([torch.from_numpy(v1), torch.from_numpy(v2)])
     else:
         from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
-        tokens = encode_to_tokens(fe._ae, torch.from_numpy(v1), torch.from_numpy(v2), preprocessor=fe._vae_pre)
+        tokens = encode_to_tokens(fe._ae, torch.from_numpy(v1), torch.from_numpy(v2), preprocessor=fe._vae_pre,
+                                  encoder=fe._vae_encoder)
         fe._img_raw.copy_(tokens[0].to(dtype=BF16))
     p = fe._state_norm.forward(torch.as_tensor(state, device=DEV).reshape(1, -1))
     tok = torch.nn.functional.linear(p.to(BF16), fe._proprio_w, fe._proprio_b)
@@ -159,7 +163,8 @@ def flashrt_infer_with_noise(fe, v1, v2, state, noise):
 def main():
     samples = load_samples()
     print(f"samples: {len(samples)} ({SUITE}, frames {FRAMES})", flush=True)
-    print(f"VAE_MODE={VAE_MODE} VAE_RESIZE={VAE_RESIZE} RAW_VIEWS={int(RAW_VIEWS)}", flush=True)
+    print(f"VAE_ENCODER={VAE_ENCODER} VAE_GRAPH={int(VAE_GRAPH)} VAE_RESIZE={VAE_RESIZE} "
+          f"RAW_VIEWS={int(RAW_VIEWS)}", flush=True)
 
     t = time.time()
     off = build_official()
@@ -171,8 +176,8 @@ def main():
         precision=PRECISION, dims_override=dict(REAL_DIMS), ckpt_path=CKPT,
         ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
         qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"], dataset_stats_path=STATS,
-        vae_mode=VAE_MODE, vae_resize=VAE_RESIZE,
-        vae_graph_input=None if VAE_MODE == "eager" else (2,) + tuple(samples[0]["v1"].shape[:2] if RAW_VIEWS else (224, 224)))
+        vae_encoder=VAE_ENCODER, vae_resize=VAE_RESIZE,
+        vae_graph_input=(2,) + tuple(samples[0]["v1"].shape[:2] if RAW_VIEWS else (224, 224)) if VAE_GRAPH else None)
     print(f"flashrt ({PRECISION}) constructed in {time.time() - t:.1f}s", flush=True)
 
     rows, cur_task = [], None

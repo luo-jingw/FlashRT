@@ -39,6 +39,7 @@ import sys
 import torch
 
 from flash_rt.models.imagewam.vae_preprocess import VaePreprocessor
+from flash_rt.models.imagewam.vae_stage import VaeEncoder
 
 DEV = "cuda"
 FP16 = torch.float16
@@ -101,7 +102,8 @@ def _prep_view(view: torch.Tensor, out_hw: tuple[int, int], device: str, dtype: 
 @torch.no_grad()
 def encode_to_tokens(ae, view1: torch.Tensor, view2: torch.Tensor | None = None,
                       *, out_hw: tuple[int, int] = (224, 224),
-                      preprocessor: VaePreprocessor | None = None) -> torch.Tensor:
+                      preprocessor: VaePreprocessor | None = None,
+                      encoder: VaeEncoder | None = None) -> torch.Tensor:
     """Real image -> real `(1, img_len, HD)` **BF16** CUDA tokens, ready
     to copy into `img_raw` directly. BF16 here isn't about THIS
     tensor's own range -- real VAE tokens are small (absmax~4.7-4.9,
@@ -127,6 +129,10 @@ def encode_to_tokens(ae, view1: torch.Tensor, view2: torch.Tensor | None = None,
     `resize="area"` the result is bit-identical to the `_prep_view`
     path (tests/test_imagewam_vae_preprocess.py); `_prep_view` remains
     the reference implementation.
+
+    `encoder`: the object whose `encode` runs (default `ae` itself), e.g.
+    `vae_native_encoder.NativeFlux2Encoder(ae)`; `ae` still sets the
+    device and dtype.
     """
     device = next(ae.parameters()).device
     dtype = next(ae.parameters()).dtype
@@ -147,6 +153,6 @@ def encode_to_tokens(ae, view1: torch.Tensor, view2: torch.Tensor | None = None,
         else:
             x = x1
 
-    z = ae.encode(x)  # (1, HD, latent_h, latent_w) -- real 2x2 patch-merge + BatchNorm baked in
+    z = (ae if encoder is None else encoder).encode(x)  # (1, HD, latent_h, latent_w), 2x2 patch-merge + BatchNorm
     tokens = z.permute(0, 2, 3, 1).reshape(z.shape[0], -1, z.shape[1])  # (1, img_len, HD)
     return tokens.to(dtype=BF16)

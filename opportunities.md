@@ -3850,3 +3850,68 @@ dramatically slower on Thor (same ISA-mismatch root cause already
 confirmed). **OPT-007 stays closed** -- this round only aligned the
 measurement tools with reality, it does not reopen the INT8/INT4-on-
 Thor question.
+
+# OPT-020: VAE input preprocessing kernel with a 256-entry normalization table (roadmap item 2)
+
+Status: implemented and served by default (bit-identical); Thor
+latency pending (Thor checklist in `plan.md`'s item-2 plan section)
+
+Area: `flash_rt/models/imagewam/vae_preprocess.py`,
+`csrc/kernels/imagewam_vae_preprocess.cu`, used by
+`vae_encoder.encode_to_tokens(..., preprocessor=)` and
+`vae_stage.ImageWAMVaeStage`
+
+## Mechanism
+
+One `imagewam_vae_preprocess_bf16` launch per camera view reads the
+`(H,W,3)` uint8 view and writes its column block of the `(1,3,224,448)`
+BF16 VAE input. It replaces `_prep_view` (uint8 -> float32 on the source
+device, `F.interpolate(mode="area")`, three elementwise normalize ops,
+BF16 cast) and `torch.cat`.
+
+- No resize (view already 224x224): a 256-entry BF16 table built on the
+  GPU with the same torch expression as `_prep_view`, Pi0.5's
+  `_infer_uint8_to_fp16` technique.
+- `resize="area"` (served default): reproduces torch's arithmetic, which
+  was measured on H100: area pooling is `sum / kh / kw` (two rounded
+  float32 divisions over exact integer window sums), and `x / 255.0` is
+  `x * (1.0f/255.0f)`. Explicit `_rn` intrinsics keep it exact under
+  `--use_fast_math`.
+- `resize="pil_bilinear"` (opt-in, frontend `vae_resize`): Pillow's
+  `Resample.c` fixed-point bilinear (22-bit coefficients built on the
+  host in double precision, horizontal then vertical pass with uint8
+  rounding between them) plus the official center crop, then the table.
+
+## Result (H100, shared GPU, indicative)
+
+Bit-exactness, `tests/test_imagewam_vae_preprocess.py`: 0 differing
+BF16 elements against `_prep_view` (area) and against the official
+`_center_crop_resize` + served normalization (pil_bilinear), for real
+512x512 LIBERO frames and random 512x512, 256x256, 224x224, 480x640 and
+100x150 inputs. Tokens from `encode_to_tokens` are bit-identical with
+and without the kernel. End to end (`imagewam_e2e_official_compare.py`,
+fp16, 10 tasks x frames {0,60}, seeds {0,1}): `fr_vs_off` median
+0.99840 / min 0.99567, mean `mae_fr_vs_gt` 0.18359, identical to the
+baseline.
+
+Latency, `benchmarks/imagewam_vae_stage_bench.py --section preprocess`
+(two views, alternating in one process):
+
+| input | torch path kernels / GPU time | kernel path kernels / GPU time | host enqueue torch -> kernel |
+|---|---|---|---|
+| raw 512x512, CPU uint8 | 15 / 0.702 ms | 4 / 0.054 ms | 22.2 -> 2.5 ms |
+| raw 512x512, GPU uint8 | 15 / 0.455 ms | 2 / 0.009 ms | 0.31 -> 0.05 ms |
+| 224x224, CPU uint8 | 11 / 0.102 ms | 4 / 0.016 ms | 20.4 -> 2.3 ms |
+
+The CPU-input rows are dominated by the torch path converting uint8 to
+float32 on the host (`.to(device, float32)` of a CPU tensor) and then
+copying 4x the bytes; the kernel path copies uint8 only. The host
+numbers on this box are inflated by CPU contention from the co-tenant
+job and by GPU time-slicing (a synchronized call has a ~2.4 ms floor
+here), so only the direction is meaningful locally. `encode_to_tokens`
+wall P50 with CPU inputs: 36-42 ms -> 12.4 ms.
+
+## Open
+
+Thor latency of the preprocessing step and of `infer()` (checklist).
+The served-vs-official resize difference is ISSUE-030.

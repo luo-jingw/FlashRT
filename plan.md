@@ -3272,10 +3272,14 @@ Stop at verified points, in order:
   `NativeFlux2Encoder` OWNS channels_last copies of the AE encoder
   weights and implements `encode(x)` with the same op order as
   `flux2.autoencoder.AutoEncoder.encode`, calling the GroupNorm kernel.
-- `flash_rt/frontends/torch/imagewam_thor.py`: OWNS the stage when
-  `vae_mode` is a graph mode; `_capture_graph` records `stage.run()`
-  before prefill; `infer()` stages views, proprio, and noise, then
-  replays once.
+- NEW `csrc/kernels/imagewam_vae_residual.cu/.cuh` + binding: the
+  ResnetBlock tail (conv2 bias, optional nin_shortcut bias, residual
+  add) in one NHWC BF16 pass with torch's rounding points.
+- `flash_rt/frontends/torch/imagewam_thor.py`: OWNS the encoder object
+  (`vae_encoder`: torch module or `NativeFlux2Encoder`) and, when
+  `vae_graph_input` is given, the stage; `_capture_graph` records
+  `stage.run()` before prefill; `infer()` stages views, proprio, and
+  noise, then replays once.
 - NEW `benchmarks/imagewam_vae_stage_bench.py`: profile and A/B of
   every VAE variant in one process (also the Thor handoff tool).
 
@@ -3306,32 +3310,44 @@ class NativeFlux2Encoder:       # satisfies VaeEncoder
     def __init__(self, ae: torch.nn.Module) -> None
     def encode(self, x: torch.Tensor) -> torch.Tensor
 
+# flash_rt/models/imagewam/vae_encoder.py
+def encode_to_tokens(ae, view1, view2=None, *, out_hw=(224, 224),
+                     preprocessor: VaePreprocessor | None = None,
+                     encoder: VaeEncoder | None = None) -> torch.Tensor
+
 # flash_rt/frontends/torch/imagewam_thor.py
-_VAE_MODES = ("eager", "graph", "graph_native")
-ImageWAMTorchFrontendThor(..., vae_mode: str = "eager",
+_VAE_ENCODERS = ("torch", "native")
+ImageWAMTorchFrontendThor(..., vae_encoder: str = "torch",
                           vae_graph_input: tuple[int, int, int] | None = None,  # (nv, H, W)
                           vae_resize: str = "area")
 ```
 
 ```cpp
-// csrc/kernels/imagewam_vae_groupnorm.cuh
+// csrc/kernels/imagewam_vae_groupnorm.cuh -- bias: optional conv bias folded into the reads
 size_t imagewam_groupnorm_nhwc_workspace_bytes(int N, int HW, int C, int G);
-int imagewam_groupnorm_nhwc_bf16(const __nv_bfloat16* x, const __nv_bfloat16* gamma,
-    const __nv_bfloat16* beta, __nv_bfloat16* y, float* workspace,
+int imagewam_groupnorm_nhwc_bf16(const __nv_bfloat16* x, const __nv_bfloat16* bias,
+    const __nv_bfloat16* gamma, const __nv_bfloat16* beta, __nv_bfloat16* y,
+    void* workspace, size_t workspace_bytes,
     int N, int HW, int C, int G, float eps, int apply_silu, cudaStream_t stream);
+
+// csrc/kernels/imagewam_vae_residual.cuh
+int imagewam_bias_residual_nhwc_bf16(const __nv_bfloat16* h, const __nv_bfloat16* h_bias,
+    const __nv_bfloat16* res, const __nv_bfloat16* res_bias, __nv_bfloat16* y,
+    long long rows, int C, cudaStream_t stream);
 ```
 
-State transitions: `vae_mode="eager"` is the current behavior.
-`"graph"`/`"graph_native"` require `ae_model_path` and
-`vae_graph_input`; `infer()` then requires views of exactly that
+State transitions: the defaults (`vae_encoder="torch"`,
+`vae_graph_input=None`) are the current behavior. `vae_graph_input`
+requires `ae_model_path`; `infer()` then requires views of exactly that
 shape (`ValueError` otherwise, since the graph encodes whatever the
-fixed buffer holds).
+fixed buffer holds). `vae_encoder` applies in both placements.
 
 ## Flow
 
-1. Construction (graph modes): load the AE; build the encoder (`ae`
-   or `NativeFlux2Encoder(ae)`); build `ImageWAMVaeStage` over
-   `self._img_raw`; `VaePreprocessor.prepare(H, W)`.
+1. Construction: load the AE; build the encoder (`ae` or
+   `NativeFlux2Encoder(ae)`); with `vae_graph_input`, build
+   `ImageWAMVaeStage` over `self._img_raw` (which calls
+   `VaePreprocessor.prepare(H, W)`).
 2. `set_prompt()` -> `_capture_graph()`: warm-up and capture record
    `stage.run()`, then `imagewam_prefill`, then
    `imagewam_denoise_loop`, all on the capture stream.
@@ -3347,8 +3363,9 @@ fixed buffer holds).
 | stage (fixed buffers) | `flash_rt/models/imagewam/vae_stage.py` | 2 |
 | stage test | `tests/test_imagewam_vae_stage.py` | 2, 3, 4 |
 | frontend flag + capture | `flash_rt/frontends/torch/imagewam_thor.py` | 3 |
-| e2e option | `benchmarks/imagewam_e2e_official_compare.py` (`VAE_MODE`) | 3 |
+| e2e option | `benchmarks/imagewam_e2e_official_compare.py` (`VAE_ENCODER`, `VAE_GRAPH`) | 3, 4 |
 | GroupNorm kernel | `csrc/kernels/imagewam_vae_groupnorm.cu/.cuh`, `csrc/bindings.cpp`, `CMakeLists.txt` | 4 |
+| bias + residual kernel | `csrc/kernels/imagewam_vae_residual.cu/.cuh`, `csrc/bindings.cpp`, `CMakeLists.txt` | 4 |
 | GroupNorm test | `tests/test_imagewam_vae_groupnorm.py` | 4 |
 | native encoder | `flash_rt/models/imagewam/vae_native_encoder.py` | 4 |
 | record | `opportunities.md` OPT-021 | 5 |
@@ -3379,8 +3396,8 @@ alternating eager and graph in one process.
 
 Phase Status: active
 
-Goal: `vae_mode="graph"`: one replay per `infer()`; tokens and actions
-bit-identical to the eager path with the same noise.
+Goal: `vae_graph_input=(nv, H, W)`: one replay per `infer()`; tokens
+and actions bit-identical to the eager path with the same noise.
 Modified files: `imagewam_thor.py`, `imagewam_e2e_official_compare.py`,
 `tests/test_imagewam_vae_stage.py`.
 Observation method: `img_raw` and action equality eager vs graph on a
@@ -3390,11 +3407,13 @@ real-dims frontend; regression suite; quick end-to-end compare.
 
 Phase Status: pending
 
-Goal: `vae_mode="graph_native"`: channels_last convolutions plus the
-FlashRT GroupNorm(+SiLU) kernel.
-Modified files: new `imagewam_vae_groupnorm.cu/.cuh`, `bindings.cpp`,
-`CMakeLists.txt`, new `vae_native_encoder.py`, new
-`tests/test_imagewam_vae_groupnorm.py`, `imagewam_thor.py`, bench.
+Goal: `vae_encoder="native"`: channels_last convolutions plus the
+FlashRT GroupNorm(+SiLU) and bias+residual kernels, in either
+placement.
+Modified files: new `imagewam_vae_groupnorm.cu/.cuh`, new
+`imagewam_vae_residual.cu/.cuh`, `bindings.cpp`, `CMakeLists.txt`, new
+`vae_native_encoder.py`, new `tests/test_imagewam_vae_groupnorm.py`,
+`vae_encoder.py`, `imagewam_thor.py`, bench.
 Observation method: kernel vs `F.group_norm`(+`x*sigmoid(x)`) at every
 real encoder shape (cosine, max-abs, rel_l2, mismatch fraction);
 tokens vs torch encode (cosine, max-abs, stats); A/B latency; full
