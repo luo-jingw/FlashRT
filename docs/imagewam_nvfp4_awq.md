@@ -48,14 +48,24 @@ must be `x / s`. Two exact folds produce `x / s` without a kernel:
   and stored in fp16. Modulations are shared by all layers of a stream,
   so each layer caches its own folded pair per modulation
   (`AwqScaledLinear.folded_modulation`); the cache fills during graph
-  warmup and replay only reads it.
+  warmup and replay only reads it. With the gated residual fused into
+  the following AdaLN (`dims["fuse_res_norm"]`, the default), that
+  kernel reads the modulation as FP32 and rounds it to fp16 itself;
+  `pipeline_thor._awq_target` hands it the folded pair in FP32
+  (`folded_modulation_fp32`) for the GEMM that consumes its output (the
+  next layer's `qkv` / `linear1`, or the same layer's `mlp0`), so the
+  fused and unfused paths produce the same AdaLN output.
 - Fold B, down projections (backbone double `{txt,img}_mlp2`, single
-  `mlp_down`; ActionDiT double `mlp2`, single `mlp_down`): the input is
+  `linear2`; ActionDiT double `mlp2`, single `linear2`): the input is
   `silu(gate) * up`, so the preceding weight's `up` columns are
-  multiplied by `1/s` before that weight is quantized.
-- `proj` / `attn_out_proj` have no exact fold point (V is shared by both
-  backbone streams and the ActionDiT's joint attention) and stay
-  unscaled.
+  multiplied by `1/s` before that weight is quantized. The merged
+  single-stream `linear2` (`dims["merge_linear2"]`) reads
+  `[attn_out | silu(gate) * up]`: `s` is computed over, and applied to,
+  its MLP channels only; the attention-output channels keep `s = 1`.
+  With the split path the same fold applies to `mlp_down`.
+- `proj` and the attention-output channels of `linear2` (or
+  `attn_out_proj`) have no exact fold point (V is shared by both backbone
+  streams and the ActionDiT's joint attention) and stay unscaled.
 
 Fold precision (`tests/test_imagewam_awq.py`, `seq = 905`, `dim = 3072`,
 BF16 residual, near-cancelling `1 + scale` included):
@@ -68,9 +78,11 @@ BF16 residual, near-cancelling `1 + scale` included):
 | fold B vs `(silu(g) * u) / s` | 2.24e-4 | 5.2e-3 |
 
 At toy dims the full pipeline with every AWQ weight transformed and the
-fold hook active, but no quantization, reproduces the untransformed
-pipeline (cosine 1.0000000, `action_latent` rel_l2 4.8e-5), and launches
-the same number of kernels per forward (413 = 413).
+fold hooks active, but no quantization, reproduces the untransformed
+pipeline: cosine 1.0000000 and `action_latent` rel_l2 3.3e-5 with the
+fused residual+AdaLN and merged `linear2` (the same with the fusion off),
+4.8e-5 with the split `linear2`. It launches the same number of kernels
+per forward as the plain pipeline (285 = 285 fused).
 
 Frontend: `ImageWAMTorchFrontendThor(precision="nvfp4" | "nvfp4_sim",
 ckpt_path=..., calibration_path=..., nvfp4_awq=True, awq_alpha=0.5,
@@ -94,20 +106,28 @@ Largest per-group gains at alpha 0.5 (median rel_l2): backbone
 0.0642, ActionDiT single `mlp_down` 0.0611 -> 0.0453; backbone single
 `mlp_down` 0.1118 -> 0.1124 is the one group that does not improve.
 
+The per-layer study ran on the split single-stream path
+(`attn_out_proj` + `mlp_down`) before the `linear2` merge.
+
 Whole pipeline (`benchmarks/imagewam_precision_fidelity.py`,
-`nvfp4_sim` vs `fp16`, 20 held-out frames, median (min) cosine):
+`nvfp4_sim` vs `fp16`, 20 held-out frames, median (min) cosine; served
+structure with merged `linear2` and the fused residual+AdaLN):
 
 | | backbone_hidden | action_hidden | action_latent | actions | MAE / fp16 |
 |---|---:|---:|---:|---:|---:|
-| no AWQ | 0.99819 (0.99762) | 0.99964 | 0.99937 (0.99911) | 0.99931 (0.99848) | 1.010 |
-| AWQ 0.5, fold A only | 0.99807 (0.99768) | 0.99976 | 0.99964 (0.99958) | 0.99966 (0.99925) | 1.004 |
-| AWQ 0.5, folds A + B | 0.99956 (0.99916) | 0.99979 | 0.99973 (0.99944) | 0.99965 (0.99882) | 1.000 |
+| no AWQ | 0.99820 (0.99762) | 0.99964 | 0.99938 (0.99917) | 0.99933 (0.99862) | 1.009 |
+| AWQ 0.5, fold A only | 0.99807 (0.99768) | 0.99976 | 0.99967 (0.99950) | 0.99966 (0.99910) | 1.004 |
+| AWQ 0.5, folds A + B | 0.99956 (0.99915) | 0.99978 | 0.99973 (0.99952) | 0.99971 (0.99904) | 1.000 |
+
+The same comparison before the `linear2` merge and the residual+AdaLN
+fusion gave the same values to within 1e-4.
 
 Fold B carries the backbone gain (`txt_mlp2`'s outlier channels); fold A
 carries most of the ActionDiT gain.
 
 Against official ImageWAM (`imagewam_e2e_official_compare.py`,
-`N_TASKS=10 FRAMES=0,60 SEEDS=0,1`):
+`N_TASKS=10 FRAMES=0,60 SEEDS=0,1`; measured before the `linear2`
+merge):
 
 | FlashRT path | fr_vs_off median | min | mean MAE vs GT |
 |---|---:|---:|---:|

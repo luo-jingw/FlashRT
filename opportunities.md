@@ -4834,6 +4834,19 @@ fixture v1, 40 runs) passes `fp8_static` with the N = 64 file on H100:
 vs official median 0.99834 / min 0.99540, vs its `fp16` reference median
 0.999968 / min 0.999943, MAE 0.18373 against the reference's 0.18364.
 
+## Re-validated after the `linear2` merge, residual+AdaLN fusion and VAE stage
+
+On the merged tree (roadmap items 1-6 in), the calibration file is
+rebuilt with the merged frontend (142 sites: `linear2` replaces
+`attn_out_proj` + `mlp_down`; a split-path file is refused by identity):
+
+| check (H100) | result |
+|---|---|
+| fidelity vs fp16, 20 frames | backbone_hidden 0.99994 (min 0.99984), actions 0.99997 (min 0.99994), MAE ratio 1.000 |
+| e2e vs official, 20 frames x 2 seeds | fp8_static median 0.99837 / min 0.99571 / MAE 0.18370; fp16 0.99840 / 0.99566 / 0.18359 |
+| regression gate, fixture v1 | pass: vs official 0.99830 / 0.99553, vs fp16 reference 0.999969, MAE 0.18373 vs 0.18364 |
+| `run_eager()` vs graph replay (real checkpoint) | bit-exact, with the VAE outside the graph and with `vae_graph_input` (the stage runs in `run_eager()`) |
+
 ## Thor check
 
 Checklist item in the stream's final report: `fp8_static` and
@@ -4876,8 +4889,15 @@ Per-layer: alpha 0.5 is best for both fold classes (0.25-1.0 swept);
 fold A sites 0.0742 -> 0.0610 rel_l2, fold B sites 0.0788 -> 0.0679;
 sites without a fold point would gain ~1% at most.
 
+After the `linear2` merge and the residual+AdaLN fusion (fold A reaches
+the fused kernel as an FP32 pair, fold B covers the MLP channels of the
+merged `linear2`), the same comparison gives `nvfp4_sim` 0.99820 /
+0.99938 / 0.99933 / MAE 1.009 and with AWQ 0.99956 / 0.99973 / 0.99971
+/ MAE 1.000 (backbone_hidden / action_latent / actions median).
+
 Speed: AWQ changes weight values and the AdaLN constants only. At toy
-dims the AWQ pipeline launches the same kernels per forward (413 = 413);
+dims the AWQ pipeline launches the same kernels per forward (413 = 413
+unfused, 285 = 285 fused);
 at real dims one `nvfp4_sim` graph replay recorded 61112 GPU kernel
 events without AWQ and 61107 with it. Thor `infer()` P50 should not
 move; that and the real-hardware cosines are the Thor check.

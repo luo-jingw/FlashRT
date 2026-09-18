@@ -32,9 +32,9 @@ Environment: `CKPT_PATH` (with `dataset_stats.json` beside it),
    noise `N(0,1)` (`torch.Generator("cpu").manual_seed(i)`, bf16-rounded),
    then `run_eager()` (prefill + denoise without a CUDA Graph,
    bit-exact to graph replay).
-3. Recording (`activation_recorder.py`): every fp16 GEMM input (182
-   sites at the real dims; `txt_in`/`img_in` are BF16 and never
-   quantized) gives absmax, the 99 / 99.9 / 99.99th percentiles of |x|,
+3. Recording (`activation_recorder.py`): every fp16 GEMM input (142
+   sites at the real dims with the merged single-stream `linear1` and
+   `linear2`; `txt_in`/`img_in` are BF16 and never quantized) gives absmax, the 99 / 99.9 / 99.99th percentiles of |x|,
    and per-input-channel absmax. Calls within one sample are reduced by
    max, so ActionDiT sites cover all 10 denoise steps
    (`docs/calibration.md` §4.2).
@@ -43,7 +43,10 @@ Environment: `CKPT_PATH` (with `dataset_stats.json` beside it),
    sample axis). The static FP8 scale is `amax / 448` in float32, floored
    at 1e-12, the same arithmetic as `compute_scale_kernel`.
 
-On the H100 dev machine the N = 64 build records at 2.6-3.0 s per sample.
+On the H100 dev machine the N = 64 build records at 2.3-3.0 s per sample.
+The site set follows the frontend's GEMM structure (`merge_qkv_mlp`,
+`merge_linear2` are part of the file's identity), so a file must be built
+with the same structure it is served with.
 
 ## File
 
@@ -83,9 +86,9 @@ Per-site amax, median (min-max) over the layers of each group:
 | backbone double `img_qkv` | 14.8 (6.8-24.4) | 0.48 |
 | backbone double `img_mlp2` | 41.6 (29.2-102) | 0.17 |
 | backbone single `linear1` | 36.4 (34.8-38.5) | 0.12 |
-| backbone single `mlp_down` | 33.2 (14.8-89.7) | 0.13 |
+| backbone single `linear2` | 33.2 (14.8-90.2) | 0.12 |
 | ActionDiT single `linear1` | 18.3 (13.2-22.9) | 0.92 |
-| ActionDiT single `mlp_down` | 13.1 (4.8-135) | 0.56 |
+| ActionDiT single `linear2` | 13.1 (4.8-135) | 0.57 |
 
 The placeholder's `N(0, 0.1)` noise has an absmax near 0.5 at these
 sizes, so its scales clip real activations by 1-4 orders of magnitude.
@@ -96,25 +99,28 @@ within a few percent (`txt_mlp2` max 7051 vs 7067, `linear1` median
 ## Measured accuracy (H100, real checkpoint)
 
 `fp8_static` against `fp16`, 20 held-out `libero_spatial` frames
-(`imagewam_precision_fidelity.py`, official-sampler noise):
+(`imagewam_precision_fidelity.py`, official-sampler noise; the real-file
+row on the served structure with merged `linear2` and the fused
+residual+AdaLN, the placeholder row before those merges):
 
 | calibration | backbone_hidden | action_hidden | action_latent | actions | MAE / fp16 MAE |
 |---|---|---|---|---|---:|
 | placeholder `N(0, 0.1)` | 0.456 (0.425-) | 0.687 | 0.872 (0.671-) | 0.901 (0.735-) | 1.697 |
-| real file, N = 64 | 0.99994 (0.99984-) | 0.99995 | 0.99997 (0.99995-) | 0.99997 (0.99989-) | 1.000 |
+| real file, N = 64 | 0.99994 (0.99984-) | 0.99995 | 0.99997 (0.99996-) | 0.99997 (0.99994-) | 1.000 |
 
 Cells are median (min-) cosine. Against official ImageWAM
 (`imagewam_e2e_official_compare.py`, `N_TASKS=10 FRAMES=0,60 SEEDS=0,1`):
 
 | path | fr_vs_off median | min | mean MAE vs GT |
 |---|---:|---:|---:|
-| `fp16` | 0.99840 | 0.99567 | 0.18359 |
-| `fp8_static`, placeholder | 0.87576 | 0.66887 | 0.30207 |
-| `fp8_static`, real file | 0.99844 | 0.99559 | 0.18372 |
+| `fp16` | 0.99840 | 0.99566 | 0.18359 |
+| `fp8_static`, placeholder (before the merges) | 0.87576 | 0.66887 | 0.30207 |
+| `fp8_static`, real file | 0.99837 | 0.99571 | 0.18370 |
 
-The result does not depend on the calibration set's size or suite mix:
-N = 8 (3/3/2 frames per suite) and a second N = 64 set (31/27/6) give
+The result does not depend on the calibration set's size or suite mix
+(measured before the merges): N = 8 (3/3/2 frames per suite) and a second N = 64 set (31/27/6) give
 the same `backbone_hidden` (0.99993-0.99994 median) and `actions`
 (0.99997 median) cosines and MAE ratio (1.000-1.001).
 `tests/gate_imagewam_libero.py --precision fp8_static --fp8-calibration
-<file>` passes on H100 (vs official median 0.99834, min 0.99540).
+<file>` passes on H100 (vs official median 0.99830, min 0.99553; vs its
+`fp16` reference median 0.999969; MAE 0.18373 against 0.18364).

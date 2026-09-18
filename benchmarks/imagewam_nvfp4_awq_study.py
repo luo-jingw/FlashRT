@@ -53,7 +53,7 @@ FRAMES = tuple(int(x) for x in os.environ.get("FRAMES", "0,60").split(","))
 ALPHAS = tuple(float(x) for x in os.environ.get("ALPHAS", "0.25,0.5,0.75,1.0").split(","))
 FOLD_A = {"txt_qkv.weight", "img_qkv.weight", "txt_mlp0.weight", "img_mlp0.weight",
           "linear1.weight", "qkv.weight", "mlp0.weight"}
-FOLD_B = {"txt_mlp2.weight", "img_mlp2.weight", "mlp_down.weight", "mlp2.weight"}
+FOLD_B = {"txt_mlp2.weight", "img_mlp2.weight", "mlp_down.weight", "mlp2.weight", "linear2.weight"}
 
 
 def _view(ptr: int, m: int, k: int) -> torch.Tensor:
