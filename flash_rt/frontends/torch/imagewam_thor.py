@@ -1656,7 +1656,9 @@ class ImageWAMTorchFrontendThor:
         this frontend's own) must have the same keys; the calibration
         builder passes recording wrappers around the real weights
         (`activation_recorder.py`), which a graph replay would bypass.
-        `set_prompt()` must have run (it stages the text context)."""
+        `set_prompt()` must have run (it stages the text context). Runs
+        the active prompt's dims and RoPE table (`active_dims`: the
+        trimmed length with `text_trim=True`), as the active graph does."""
         if self._current_prompt is None:
             raise RuntimeError("call set_prompt() before run_eager()")
         w = self._weights if weights is None else weights
@@ -1666,10 +1668,11 @@ class ImageWAMTorchFrontendThor:
             # stage_inputs() only filled the stage's uint8 view buffer;
             # run the stage here, as the graph would, to fill img_raw.
             self._vae_stage.run()
-        imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, w, self.dims, stream=stream,
+        dims = self._active_dims
+        imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, w, dims, stream=stream,
                          attn=self._attn, mod_txt=self._mod_txt, mod_img=self._mod_img,
                          mod_single=self._mod_single, rope_table=self._rope_table.data_ptr())
-        imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, w, self.dims, stream=stream,
+        imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, w, dims, stream=stream,
                               attn=self._attn, action_mods=self._action_mods, head_mods=self._head_mods,
                               action_rope_table=self._action_rope_table.data_ptr(),
                               deltas=self._deltas)

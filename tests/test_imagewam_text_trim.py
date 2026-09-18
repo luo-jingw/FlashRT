@@ -617,3 +617,26 @@ def test_precapture_text_lengths_keeps_the_active_prompt():
     assert torch.equal(out, _run(_frontend(text_trim=True, gemm_runner=fe._gemm), ctx, 9))
     with pytest.raises(ValueError, match="text_trim"):
         _frontend(text_trim=False).precapture_text_lengths([3])
+
+
+@needs_gpu
+def test_run_eager_equals_the_replay_at_each_trimmed_length():
+    """`run_eager()` (the calibration recorder's forward) runs the active
+    length's dims and RoPE table, bit-identical to the active graph."""
+    ctx = _context()
+    fe = _frontend(text_trim=True)
+    for n in (5, 12, 5):
+        fe.set_prompt(context=ctx, context_mask=_mask(n))
+        torch.manual_seed(7)
+        fe.stage_inputs({"proprio": PROPRIO_VALUE}, noise=_NOISE)
+        img_raw = fe._img_raw.clone()
+        fe._graph.replay()
+        torch.cuda.synchronize()
+        replay = fe._action_latent.clone()
+        fe.stage_inputs({"proprio": PROPRIO_VALUE}, noise=_NOISE)
+        fe._img_raw.copy_(img_raw)  # stage_inputs draws new placeholder image tokens without a VAE
+        fe.run_eager()
+        torch.cuda.synchronize()
+        eager = fe._action_latent.clone()
+        print(f"\n  x0={fe.active_dims['x0']}: " + _fmt("run_eager vs graph replay", eager, replay))
+        assert torch.equal(eager, replay)
