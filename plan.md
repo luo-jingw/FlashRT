@@ -5043,9 +5043,9 @@ def pack_trimmed_context(text_ctx: torch.Tensor, text_mask: torch.Tensor, *,
     # proprio slot (positions would differ from official).
 
 def trimmed_sequence_dims(max_dims: dict, x0: int) -> dict
-    # copy of max_dims with x0, a0 = x0 + (a0_max - x0_max), total = a0 + num_action;
-    # returns max_dims itself when x0 == max_dims["x0"]; ValueError when x0 is
-    # outside [1, max_dims["x0"]].
+    # copy of max_dims with x0, and a0/total reduced by the same x0_max - x0
+    # rows; returns max_dims itself when x0 == max_dims["x0"]; ValueError when
+    # x0 is outside [1, max_dims["x0"]].
 
 # flash_rt/frontends/torch/imagewam_thor.py
 @dataclass(frozen=True)
@@ -5128,7 +5128,7 @@ packing, and text-id code.
 
 ### Phase 2 — ISSUE-060: `set_prompt(context=...)` applies every context
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: no early return for a given context; the three workarounds
 removed; the gate's `fp16` result on fixture v1 unchanged.
@@ -5140,7 +5140,7 @@ Observation method: test: second context of the same length changes
 
 ### Phase 3 — `text_trim` in the frontend
 
-Phase Status: pending
+Phase Status: active
 
 Goal: the Interface above.
 Modified files: new `text_context.py`, `imagewam_thor.py`,
