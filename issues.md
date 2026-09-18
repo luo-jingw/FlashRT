@@ -248,3 +248,47 @@ Then A/B the fp16 `infer()` on Thor, or on H100 as an indicative
 check, with the same-process alternating method.
 
 ## Resolution
+
+# ISSUE-022
+
+Status: open
+
+Area: `ImageWAMTorchFrontendThor.__init__` dims validation
+(`flash_rt/frontends/torch/imagewam_thor.py`)
+
+## Observation
+
+The constructor accepts a `dims_override` in which `total != a0 +
+num_action`. The K/V caches, `Q_O`, and `logits` are sized from
+`total`, while the `mot` site writes action Q/K/V rows
+`[a0, a0 + num_action)` and reads `kv_seq = total`. With
+`dims_override=dict(num_action=16)` on the default dims (`a0 = 8`,
+`total = 12`), construction, graph capture, and `infer()` all complete
+without an error, even though the action rows lie past the end of
+those buffers.
+
+## Impact
+
+A caller that changes `num_action` without changing `total` gets
+out-of-bounds reads and writes and finite-looking output instead of an
+error. The real dims (`a0 = 905`, `num_action = 64`, `total = 969`)
+are consistent, so the served path is unaffected.
+
+## Evidence
+
+`tests/test_imagewam_gemm_variant_routing.py` first ran with
+`dims_override=dict(num_action=16)`, and every test passed. The same
+tests with `total=24` also pass.
+
+## Hypotheses
+
+The existing checks, `action_attn_width == hidden`, `HD == 128`, and
+`ref_h * ref_w == a0 - x0`, never included the joint-sequence length.
+
+## Next Experiment
+
+Raise `ValueError` in `__init__` when `total != a0 + num_action`, then
+run the regression suite. No current test or benchmark passes
+inconsistent dims.
+
+## Resolution
