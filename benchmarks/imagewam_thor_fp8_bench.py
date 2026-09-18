@@ -1,5 +1,11 @@
 #!/usr/bin/env python
-"""ImageWAM FP8 full-scale steady-state speed benchmark.
+"""DEPRECATED (2026-09-17): see imagewam_thor_fp16_bench.py's own
+deprecation note -- same stale per-layer approximation (no AdaLN
+modulation, no gated residual, no real merged SiLU-GLU MLP, stale
+768-token image shape), kept only for historical reference. Use
+imagewam_thor_graph_bench.py instead.
+
+ImageWAM FP8 full-scale steady-state speed benchmark.
 
 Companion to imagewam_thor_fp16_bench.py / imagewam_thor_fp4_bench.py --
 same dims, same structure, same methodology, directly comparable.

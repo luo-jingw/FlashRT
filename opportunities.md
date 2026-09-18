@@ -3638,3 +3638,56 @@ now looks MORE promising than this entry originally estimated (it also
 removes GEMM launches from the same 200-call-per-`infer()` denoise
 loop), while its backbone-side benefit should be expected to stay
 small, matching this measurement's own pattern.
+
+## Benchmark-script consolidation (2026-09-17)
+
+All 5 standalone per-precision speed benchmarks
+(`imagewam_thor_{fp16,fp8,fp4,int8,int4}_bench.py`) turned out to be
+equally stale -- a generic transformer-block skeleton (plain
+`rms_norm_fp16`, `gelu_inplace_fp16` on a single-width MLP buffer,
+plain `residual_add_fp16`) with none of this session's real fusions
+(AdaLN modulation, gated residual, real merged SiLU-GLU MLP) or even
+the pre-existing real fused QKV, plus a stale 768-token image-shape
+placeholder.
+
+`fp16`/`fp8`/`nvfp4` already have a real, correct, up-to-date
+implementation reachable through the real `ImageWAMTorchFrontendThor`
+frontend (used directly for every real Thor measurement this whole
+session) -- rewriting standalone copies of the same math would be
+pure duplication. **Deprecated** (docstring notice added, not
+deleted, kept for historical reference; internal logic untouched):
+`imagewam_thor_fp16_bench.py`/`_fp8_bench.py`/`_fp4_bench.py`.
+**`imagewam_thor_graph_bench.py`** (already used the real frontend)
+is now the canonical replacement: real current dims (`x0=513, a0=905,
+num_action=64`), loops over every string in `imagewam_thor._PRECISIONS`,
+prints `SKIP` for any precision this build doesn't support (e.g. every
+Blackwell-only precision on this dev machine) instead of crashing the
+whole run.
+
+INT8/INT4 (SM80 CUTLASS) have NO real dispatch path in
+`imagewam_thor.py` at all (never wired in, closed for Thor on speed
+grounds per this entry regardless) -- their standalone benchmarks were
+**rewritten** (not deprecated) to match `pipeline_thor.py`'s current
+real per-layer math exactly: real AdaLN modulation, real fused QKV,
+real fused `linear1` for single-stream blocks (today's own op-fusion
+audit finding 1), real merged SiLU-GLU MLP, real gated residual, real
+`txt_in`-once-per-forward, and real dims. Also found and fixed, beyond
+the rewrite's own original scope: both scripts were constructing
+`ImageWAMAttnBackend` WITHOUT `use_perhead_kv=True, use_real_mot_mask=True`
+and allocating K/V caches at the old broadcast `HD` width instead of
+real per-head `HIDDEN` width -- a second, independent staleness
+predating OPT-002, unrelated to the AdaLN/gated-residual gap. Verified
+by direct code review (structural diff between the two rewritten files
+confirms identical restructuring, differing only in the expected
+INT4/INT8-specific kernel details) and local syntax compilation. Also
+run end to end once, locally, before local GPU testing was paused for
+this round: INT4 completed with finite outputs (`prefill`
+P50=111.8ms, `one denoise step` P50=7.6ms -- both HIGHER than the
+pre-rewrite stale version's own numbers, expected, since the real
+AdaLN/gated-residual/fused-QKV/fused-linear1 op sequence is
+structurally more work per layer than the old generic-skeleton
+approximation it replaced, an apples-to-oranges comparison, not a
+regression); INT8 failed exactly at the already-documented, expected
+K=9216 shape (`txt_mlp2`, rc=131079) -- the same real Ada limitation
+this entry already tracks, reproducing precisely, confirming the
+rewrite introduced no new bug there either.

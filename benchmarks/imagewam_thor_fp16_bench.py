@@ -1,5 +1,18 @@
 #!/usr/bin/env python
-"""ImageWAM FP16 full-scale steady-state speed benchmark (baseline).
+"""DEPRECATED (2026-09-17): this hand-rolled per-layer approximation
+predates AdaLN modulation, gated residual, and the real merged
+SiLU-GLU MLP structure (`pipeline_thor.py` has all three; this script
+never modeled ANY of them -- plain `rms_norm_fp16` + `gelu_inplace_fp16`
++ `residual_add_fp16`, a generic transformer-block skeleton, not
+FLUX.2/ImageWAM's real one), and uses a stale placeholder image-token
+shape (768, not the real confirmed 392). Kept only for historical
+reference -- do NOT use this for new speed comparisons. Use
+`imagewam_thor_graph_bench.py` instead (the real
+`ImageWAMTorchFrontendThor`, looped over every real precision, real
+current dims -- by construction can't drift out of sync with
+`pipeline_thor.py`'s real math the way this file did).
+
+ImageWAM FP16 full-scale steady-state speed benchmark (baseline).
 
 Companion to imagewam_thor_fp4_bench.py / imagewam_thor_fp8_bench.py --
 same dims, same 25-layer backbone + 25-layer ActionDiT structure, same

@@ -1,5 +1,11 @@
 #!/usr/bin/env python
-"""ImageWAM FP4 (NVFP4) full-scale Thor steady-state speed benchmark.
+"""DEPRECATED (2026-09-17): see imagewam_thor_fp16_bench.py's own
+deprecation note -- same stale per-layer approximation (no AdaLN
+modulation, no gated residual, no real merged SiLU-GLU MLP, stale
+768-token image shape), kept only for historical reference. Use
+imagewam_thor_graph_bench.py instead (precision="nvfp4").
+
+ImageWAM FP4 (NVFP4) full-scale Thor steady-state speed benchmark.
 
 UNTESTED ON REAL HARDWARE. Written by reading flash_rt.executors.fp4_utils
 (the documented "Pi0.5 FP4 frontend, Phase 4.3" NVFP4 wrapper) and the real
