@@ -187,10 +187,14 @@ def test_options_are_frozen():
 # -- dims ----------------------------------------------------------------------
 
 
-def test_libero_dims_equal_libero_real_dims_plus_action_dim():
+def test_libero_dims_equal_libero_real_dims():
+    """`LIBERO_REAL_DIMS` is the resolver's own mapping for the LIBERO
+    workload and structure (`libero_dims.py`), so the two are the same key
+    set with the same values; nothing is added on either side."""
     r = resolve()
-    assert r.dims == dict(LIBERO_REAL_DIMS, action_dim=7)
-    assert set(r.dims) - set(LIBERO_REAL_DIMS) == {"action_dim"}
+    assert r.dims == LIBERO_REAL_DIMS
+    assert set(r.dims) == set(LIBERO_REAL_DIMS)
+    assert r.dims["action_dim"] == 7
     assert r.dims["dt"] == LIBERO_REAL_DIMS["dt"] and r.dims["shift"] == LIBERO_REAL_DIMS["shift"]
 
 
@@ -202,8 +206,8 @@ def test_every_frontend_dims_key_is_resolved_or_frontend_filled():
     frontend_filled = {"merge_qkv_mlp", "merge_linear2", "fuse_res_norm"}
     missing = consumed - set(resolve().dims) - frontend_filled
     assert not missing, f"frontend reads dims keys the resolver does not produce: {sorted(missing)}"
-    # and the LIBERO literal lacks exactly one key the frontend needs
-    assert (consumed - frontend_filled) - set(LIBERO_REAL_DIMS) == {"action_dim"}
+    # and the canonical LIBERO dims carry every one of those keys
+    assert (consumed - frontend_filled) - set(LIBERO_REAL_DIMS) == set()
 
 
 def test_frontend_dims_adds_merge_flags():
