@@ -5994,3 +5994,381 @@ Modified files: `c_api.h`, `native_pipeline.{h,cpp}`,
 `runtime_export.py`, `imagewam_thor.py`, tests.
 Observation: step-by-step parity for both layer structures; the real
 checkpoint gates on the merged tree.
+
+# Plan: text-context trimming to the prompt's valid length (issues.md ISSUE-020)
+
+Plan Status: completed
+
+## Problem
+
+### Current
+
+The served frontend runs every attention call over all `x0 = 513`
+context rows: 512 Qwen3 tokens tokenized with `padding="max_length"`
+plus the proprio row. LIBERO prompts have 16-31 valid tokens, so about
+490 rows are padding. Official `_build_mot_attention_mask_flux2` masks
+the padded text keys for every query at both calls (backbone prefill and
+the action site): `mask[:, :, t0:r0] &= text_valid`. FlashRT attends to
+them. Over 60 LIBERO frames (issues.md ISSUE-020), FlashRT fp16 vs
+official has median action cosine 0.99809 and min 0.92997; against
+official with the mask removed it is median 0.999979.
+
+Under the official mask the padded rows are inert: their keys are
+masked for every query, and nothing reads their outputs except through
+those masked keys. Official packs valid tokens by rank, puts the proprio
+token at row `n_valid`, and uses text positions `0..L-1` over the whole
+context, so rows `[0, n_valid]` get positions `0..n_valid` whatever the
+padded length is. A sequence built from only those rows (`x0 = n_valid
++ 1`, `a0 = x0 + 392`, `total = a0 + 64`) therefore computes the same
+math as the official masked sequence. A one-off check (4 libero_goal
+frames, including the 0.930 one) measured 0.999976-0.999989 against
+official masked.
+
+`set_prompt(context=...)` also ignores a second, different context
+(issues.md ISSUE-060): its cache key `(None, True)` carries no content
+identity, and three scripts reset `_current_prompt` to work around it.
+Per-length graph switching depends on `set_prompt` acting on every new
+context.
+
+### Problem
+
+The frontend fixes `x0/a0/total` at construction and captures one
+graph at that size, so it cannot serve a sequence sized to the prompt.
+
+### Measurable goal
+
+- `text_trim=True` (constructor flag, default `False`): the frontend
+  runs each prompt at `x0 = n_valid + 1` (proprio) with one set of
+  buffers allocated at the maximum dims and one CUDA graph per distinct
+  text length, captured on first use and cached.
+- H100 fp16 end to end (`imagewam_e2e_official_compare.py`,
+  `N_TASKS=10 FRAMES=0,60`): `fr_vs_off` on `libero_spatial`,
+  `libero_goal`, `libero_10` at about 0.99998 median, per-suite
+  median/min reported before and after.
+- `text_trim=False` bit-identical to the current frontend.
+- `set_prompt` with a different context (same or different length)
+  applies it; switching lengths and back gives the same actions as a
+  frontend that only ever saw that prompt.
+- Measured: capture time and device memory per new length; H100 A/B of
+  trimmed vs full-length replay and `infer()` (indicative).
+- Thor handoff: `nvfp4` compare off/on on the 3 suites, `infer()` P50
+  A/B, capture time per length, FA4 on/off with trimming.
+
+## Structure
+
+Audit of everything that depends on `x0/a0/total`:
+
+| item | where | behavior at a trimmed length | change |
+|---|---|---|---|
+| activation buffers (`context`, `backbone_hidden`, scratch, `Q_O`, K/V cache, `logits`, `fa4_out`) | `_alloc_buffers`, `__init__` | allocated at the max dims; a trimmed graph uses a row prefix; the per-layer K/V stride stays the max-size stride | none |
+| layer math | `pipeline_thor.py` | every slice, `m`, `q_seq`, `kv_seq`, `x0/a0` argument comes from the `dims` dict passed in | none; the frontend passes the active dims |
+| backbone RoPE table | `rope.build_backbone_rope_table(x0, ref_h, ref_w)` | text rows get positions `0..x0-1`, image positions do not depend on `x0`: the table built for `n_valid+1` equals official's rows `[0, n_valid]` plus its image rows | one table per length, built at capture |
+| action RoPE table | `build_action_rope_table(num_action)` | independent of text length | none |
+| attention spec | `make_imagewam_attention_spec(max_prefix_seq=a0, max_total_seq=total)` | upper bounds; `run()` takes the per-call lengths | none (built at max) |
+| backbone attention, odd `kv_seq` | `attention_qkv_fp16_perhead` | pads `S_kv` to even with a `-inf` column internally; the served dims already run odd lengths (905, 969); the even-only guard applies only to the non-per-head kernel, which the served frontend never selects | none; tested at both parities |
+| `mot` site | `attn.run("mot", x0=, a0=, kv_seq=total)` | Q rows at the active `a0`; `0 < x0 <= a0 <= kv_seq` holds | none |
+| FA4 slots | `fa4_out` `(total_max, hidden)`, bounds-checked per call | smaller `q_seq` fits | none |
+| proprio row | `_proprio_row = n_valid` | same row as untrimmed | none |
+| GEMM autotune | `_autotune_gemm`: `GemmRunner` caches one algorithm per `(op, M, N, K)`; an untuned shape gets cuBLASLt's heuristic top-1 on first call | txt GEMMs run at `M = x0`, single-stream at `M = a0` | tune the shapes a new length adds, once, when the frontend owns its `GemmRunner`: `bf16_nn` `txt_in` at every precision, `fp16_nn` shapes only at `precision="fp16"` (the only precision whose backbone weight GEMMs use `fp16_nn`) |
+| lazily sized GEMM scratch | `Nvfp4Linear`, `Fp8Linear`, `StaticFp8Linear`, `CutlassFp16SwiGluMlp`, `Nvfp4SwiGluMlp`, `E0m3HadamardLinear` reallocate their activation scratch when called with a larger `m` | a later, longer length would free a buffer an earlier graph still points at | one eager prefill at the max dims before the first trimmed capture sizes every scratch at its max `m` |
+| ActionDiT tile tuner | `_tune_action_dit_gemm_variants` | `M = num_action`, unchanged | none |
+| static FP8 calibration | `_calibrate_fp8` at `m = a0_max` | placeholder scales are shape-independent | none |
+| VAE in-graph stage | `ImageWAMVaeStage.run()` recorded in each graph | writes `img_raw` (length-independent); its torch temporaries (about 206 MiB) live in the capturing graph's pool | one capture stream and one graph pool shared by every capture of the frontend (measured in Phase 5: 218 MiB per extra length with private pools, 12 MiB shared) |
+| `action_noise` | `(num_action, action_dim)` | independent | none |
+
+Modules and state ownership:
+
+- NEW `flash_rt/models/imagewam/text_context.py` (pure functions, no
+  frontend state):
+  - `pack_trimmed_context`: valid text rows packed by rank plus the
+    proprio slot, the official `_append_proprio_to_context` order,
+    padding dropped;
+  - `trimmed_sequence_dims`: the active `x0/a0/total` for a text length
+    from the max dims.
+- `flash_rt/frontends/torch/imagewam_thor.py`,
+  `ImageWAMTorchFrontendThor` owns:
+  - `self.dims`: the max dims (buffer sizes), unchanged meaning;
+  - `self._text_trim`: the flag, fixed at construction;
+  - `self._captures: dict[int, TextLengthCapture]`: one record per
+    captured text length, created on first use, dropped all at once
+    only by the FA4 fallback;
+  - the active capture: `self._active_dims`, `self._rope_table`,
+    `self._graph` (the existing attributes, pointing at the active
+    record's values), set only by `_activate_text_length`;
+  - `self._tuned_gemm_shapes`: the `(dtype, M, N, K)` shapes autotuned
+    on this frontend's own `GemmRunner`;
+  - `self._graph_stream`, `self._graph_pool`: the capture stream and
+    CUDA-graph memory pool every capture uses, created at the first
+    capture;
+  - `self._scratch_reserved`: whether the max-dims eager prefill ran;
+  - `self._current_prompt`: cache key of the live-Qwen3 and random
+    paths only.
+- `pipeline_thor.py`, `attn_backend.py`: unchanged; they already read
+  every length from `dims` and the per-call arguments.
+
+## Interface
+
+```python
+# flash_rt/models/imagewam/text_context.py
+@dataclass(frozen=True)
+class PackedTextContext:
+    rows: torch.Tensor      # (n_valid + proprio_slots, D) BF16, proprio row zero
+    n_valid: int
+    proprio_row: int | None # n_valid when a proprio slot is packed
+
+def pack_trimmed_context(text_ctx: torch.Tensor, text_mask: torch.Tensor, *,
+                         proprio_slot: bool) -> PackedTextContext
+    # valid rows in rank order; proprio slot right after them.
+    # Raises ValueError: n_valid == 0; a non-prefix mask without a
+    # proprio slot (positions would differ from official).
+
+def trimmed_sequence_dims(max_dims: dict, x0: int) -> dict
+    # copy of max_dims with x0, and a0/total reduced by the same x0_max - x0
+    # rows; returns max_dims itself when x0 == max_dims["x0"]; ValueError when
+    # x0 is outside [1, max_dims["x0"]].
+
+# flash_rt/frontends/torch/imagewam_thor.py
+@dataclass(frozen=True)
+class TextLengthCapture:
+    dims: dict                  # active dims of this graph
+    rope_table: torch.Tensor    # (a0, 128) FP16
+    graph: torch.cuda.CUDAGraph
+
+ImageWAMTorchFrontendThor(..., text_trim: bool = False)
+    .active_dims -> dict              # copy of the dims the active graph runs
+    .captured_text_lengths -> tuple[int, ...]   # x0 of every cached graph
+    .set_prompt(prompt_text=None, *, context=None, context_mask=None) -> None
+```
+
+State transitions:
+
+- `set_prompt(context=..., context_mask=...)` always writes the new
+  context (no cache-key early return; ISSUE-060). The live-Qwen3 path
+  keeps its prompt-text key; the random path keeps `(None, False)`.
+- `text_trim=False`: the active length is always `dims["x0"]`; the
+  first `set_prompt` calibrates and captures, later calls only rewrite
+  the context. Same kernels, shapes and buffers as before.
+- `text_trim=True`: a context with a mask (explicit or from Qwen3)
+  selects `x0 = n_valid + 1` (proprio) or `n_valid`; the random path
+  uses `dims["x0"]`. A cached length is re-activated without capture;
+  a new length is autotuned (owned `GemmRunner`, `fp16_nn`/`bf16_nn`
+  shapes it adds), then captured. Before the first trimmed capture
+  the frontend runs one eager prefill at the max dims.
+- FA4 failure during a capture: the existing fallback rebuilds the
+  attention backend without FA4, drops every cached capture, and
+  recaptures the requested length.
+
+## Flow
+
+1. `__init__`: buffers, weights, max-dims RoPE table, attention
+   backend as today; `_autotune_gemm(dims)` records the tuned shapes.
+2. `set_prompt(context, mask)`:
+   - `text_trim=False`: `_set_context_with_optional_proprio` (today's
+     code), active length `dims["x0"]`;
+   - `text_trim=True`: `pack_trimmed_context` -> rows copied into
+     `self._context[:x0]`, the rest zeroed, `_proprio_row = n_valid`;
+   - `_activate_text_length(x0)`: cached -> set `_active_dims`,
+     `_rope_table`, `_graph`; new -> `trimmed_sequence_dims`,
+     `build_backbone_rope_table(x0)`, (first capture) `_calibrate_fp8`
+     and, when trimming, the max-dims eager prefill, then
+     `_autotune_gemm(active dims)`, `_capture_graph_or_fall_back()`,
+     and a new `TextLengthCapture` in `_captures`.
+3. `_capture_graph()`: on the frontend's capture stream, (first
+   trimmed capture only) the max-dims eager prefill, then warmup and
+   capture into the shared graph pool of VAE stage (if any),
+   `imagewam_prefill` and `imagewam_denoise_loop` with
+   `self._active_dims` and `self._rope_table`.
+4. `infer()`: unchanged; replays `self._graph` (the active length).
+
+## Code Mapping
+
+| module / interface / state | file | phase |
+|---|---|---|
+| ISSUE-060 cache fix | `flash_rt/frontends/torch/imagewam_thor.py` (`set_prompt`) | 2 |
+| workaround removal | `benchmarks/imagewam_e2e_official_compare.py`, `benchmarks/imagewam_gate_fixture_generate.py`, `tests/gate_imagewam_libero.py` | 2 |
+| `PackedTextContext`, `pack_trimmed_context`, `trimmed_sequence_dims` | new `flash_rt/models/imagewam/text_context.py` | 3 |
+| `text_trim`, `TextLengthCapture`, `_captures`, `_activate_text_length`, per-length autotune, max-M reservation, `active_dims`, `captured_text_lengths` | `flash_rt/frontends/torch/imagewam_thor.py` | 3 |
+| unit, kernel-shape, switching, FA4 stand-in tests | new `tests/test_imagewam_text_trim.py` | 2, 3, 4 |
+| e2e option `TEXT_TRIM` | `benchmarks/imagewam_e2e_official_compare.py` | 5 |
+| capture cost, memory, A/B speed tool (also the Thor tool) | new `benchmarks/imagewam_text_trim_bench.py` | 5 |
+| records | `opportunities.md` OPT-030, `issues.md` ISSUE-020 / ISSUE-060, this plan | 6 |
+| failed-capture rollback, FA4-fallback ordering, collector off during capture, `run_eager` at the active dims, `precapture_text_lengths` | `flash_rt/frontends/torch/imagewam_thor.py` | 7 |
+| multi-length safety check at any precision (the Thor tool) | new `tests/test_imagewam_text_trim_graph_safety.py` | 7 |
+| `text_trim` in the calibration identity (format version 2, version 1 read as untrimmed) | `flash_rt/models/imagewam/calibration_file.py`, `benchmarks/imagewam_build_calibration.py` (`--text-trim`), `tests/test_imagewam_calibration_file.py` | 7 |
+| fidelity vs fp16 with trimming | `benchmarks/imagewam_precision_fidelity.py` (`SUITE`, `TEXT_TRIM`) | 7 |
+| `runtime_surface()` / `pipeline_resources()` / `export_model_runtime()` refuse `text_trim` | `flash_rt/frontends/torch/imagewam_thor.py`, new `tests/test_imagewam_text_trim_consumer_guards.py` | 7 |
+
+## Implementation Phases
+
+### Phase 1 — audit
+
+Phase Status: completed
+
+Goal: the Structure table: every `x0/a0/total` dependency located and
+classified, with the decision for each.
+Modified files: `plan.md`.
+Observation method: source reading (`imagewam_thor.py`,
+`pipeline_thor.py`, `attn_backend.py`, `quant_linear.py`,
+`fp4_utils.py`, `gemm_runner.cu`, `attention_cublas.cu`, `rope.py`)
+and the official `imagewam.py` / `flux2_video_expert.py` mask, proprio
+packing, and text-id code.
+
+### Phase 2 — ISSUE-060: `set_prompt(context=...)` applies every context
+
+Phase Status: completed
+
+Goal: no early return for a given context; the three workarounds
+removed; the gate's `fp16` result on fixture v1 unchanged.
+Modified files: `imagewam_thor.py`, the three scripts,
+`tests/test_imagewam_text_trim.py`.
+Observation method: test: second context of the same length changes
+`_context` and actions, equal to a fresh frontend; `tests/gate_imagewam_libero.py
+--precision fp16` before/after (`vs_official` median/min, MAE).
+
+### Phase 3 — `text_trim` in the frontend
+
+Phase Status: completed
+
+Goal: the Interface above.
+Modified files: new `text_context.py`, `imagewam_thor.py`,
+`tests/test_imagewam_text_trim.py`.
+Observation method: small-dims tests: trimmed vs untrimmed with a
+masked reference attention (cosine, max-abs); prompt switching and
+back (bit-equal to fresh frontends); scratch allocated once at max
+`m`; per-head attention at trimmed real shapes, both parities, vs a
+PyTorch reference; FA4 stand-in at trimmed shapes; `text_trim=False`
+bit-identical to the previous frontend file on the same inputs.
+
+### Phase 4 — H100 end to end and regression
+
+Phase Status: completed
+
+Goal: per-suite `fr_vs_off` before/after on 3 suites; `text_trim=False`
+bit-identical at real dims; regression suite count.
+Modified files: `imagewam_e2e_official_compare.py` (`TEXT_TRIM`).
+Observation method: `SUITE=... N_TASKS=10 FRAMES=0,60 SEEDS=0,1`
+summaries; a same-process real-dims default-off comparison against the
+previous frontend file; `pytest tests/test_imagewam_*.py
+tests/test_jetson_clock_state.py -q`.
+
+### Phase 5 — cost and speed
+
+Phase Status: completed
+
+Goal: capture time and device memory per new length (with and without
+the VAE in the graph); H100 A/B of trimmed vs full-length replay and
+`infer()`; the Thor tool. One capture stream and graph pool for all
+lengths, after the per-graph private pools measured 218 MiB per length
+with the VAE in the graph.
+Modified files: new `benchmarks/imagewam_text_trim_bench.py`,
+`imagewam_thor.py` (shared capture stream and pool),
+`tests/test_imagewam_text_trim.py`.
+Observation method: wall time of `set_prompt` for a new vs a cached
+length, `torch.cuda.mem_get_info` / `memory_reserved` deltas per
+capture; CUDA events P10/P50/P90, alternating, same process.
+
+### Phase 6 — Thor compile check, records, Thor checklist
+
+Phase Status: completed
+
+Goal: `sm110_check.sh` passes; OPT-030, ISSUE-020, ISSUE-060 updated;
+Thor checklist written.
+Modified files: `opportunities.md`, `issues.md`, `plan.md`.
+Observation method: `sm110_check.sh` exit code; every number labeled
+H100 or Thor.
+
+### Phase 7 — failure paths, calibration under trimming, multi-length safety check
+
+Phase Status: completed
+
+Goal:
+- a capture that raises leaves no graph active and keeps the cached
+  captures; the FA4 fallback frees old graphs only after the
+  replacement exists;
+- no cyclic garbage collection inside a capture;
+- `run_eager()` at the active dims;
+- `text_trim` in the calibration-file identity, a trimmed calibration
+  file, and `fp8_static` + trimming validated end to end;
+- a committed multi-length safety check that runs at any precision
+  (fp8 and fp8_static locally, nvfp4 / e0m3 / FA4 on Thor);
+- the runtime surface, the native pipeline resources and the runtime
+  export refuse a trimmed frontend (they describe one graph at the max
+  dims).
+Modified files: see Code Mapping (phase 7).
+Observation method: tests with a capture that raises, an FA4 stand-in
+that fails, the collector's state during capture, `run_eager` vs replay
+(bit-exact); the safety check's comparison against fresh single-length
+frontends, pointer census and poisoning; e2e compare and
+`imagewam_precision_fidelity.py` on libero_goal for `fp8_static`.
+
+## Thor Check
+
+Environment as for the other ImageWAM Thor checks (`CKPT_PATH`,
+`FLUX2_SRC`, `FLUX2_MODEL_PATH`, `FLUX2_AE_MODEL_PATH` / `AE_MODEL_PATH`,
+`QWEN3_MODEL_SPEC`, `DATA_ROOT`, ImageWAM `src/` on `PYTHONPATH`),
+`flash_rt_kernels` and `flash_rt_fp4` built for sm_110. Lock clocks
+first (`sudo nvpmodel -m 0 && sudo jetson_clocks`) and report the
+`[jetson-clock-state]` line of each run.
+
+1. `python -m pytest tests/test_imagewam_text_trim.py -q -s`. Expected:
+   all pass; with an FA4 runtime the `fa4_real` and `FA4 (real)` cases
+   run instead of skipping. Report the pass/skip counts, every
+   `fa4_real x0=...` line (expected cosine > 0.9999 at both sites) and
+   the `FA4 (real) vs cuBLAS chain` lines (cosine > 0.9999).
+2. `nvfp4` end to end, untrimmed vs trimmed, three suites:
+   ```
+   for s in libero_spatial libero_goal libero_10; do for t in 0 1; do
+     PRECISION=nvfp4 SUITE=$s N_TASKS=10 FRAMES=0,60 SEEDS=0,1 TEXT_TRIM=$t \
+       python benchmarks/imagewam_e2e_official_compare.py > e2e_nvfp4_${s}_trim$t.log 2>&1
+   done; done
+   ```
+   Expected: on every suite `fr_vs_off` median and min with
+   `TEXT_TRIM=1` at or above `TEXT_TRIM=0`, the largest gain on
+   libero_goal (fp16 on H100: min 0.92997 -> 0.99971);
+   `mae_fr_vs_gt` closer to `mae_off_vs_gt`. Report the six SUMMARY
+   blocks and the per-frame `x0` range of the trimmed runs.
+3. Capture cost, memory and `infer()` A/B, `nvfp4`, FA4 off:
+   `python benchmarks/imagewam_text_trim_bench.py --precision nvfp4
+   --section all --use-fa4 off --iters 20 --rounds 5`. Expected:
+   `ab_ratio_trimmed_over_full` below 1 for replay and `infer` (fp16 on
+   H100: 0.70 / 0.71); `new_length` seconds per length (the first one
+   includes the max-dims prefill); `cached_length` about 10 ms; memory
+   per extra length about the graph alone (H100: 12 MiB). Report every
+   `__TEXT_TRIM_BENCH__` line.
+4. FA4 on, with trimming: `FLASHRT_THOR_FA4=1 python
+   benchmarks/imagewam_text_trim_bench.py --precision nvfp4 --section
+   all --use-fa4 auto --use-fa4-mot on --iters 20 --rounds 5`.
+   Expected: `construct` shows `use_fa4: true, use_fa4_mot: true`;
+   `done` shows `fa4_fallback_reason: null`. Compare `ab` and
+   `new_length` with step 3. Then `FLASHRT_THOR_FA4=1 PRECISION=nvfp4
+   SUITE=libero_goal N_TASKS=10 FRAMES=0,60 TEXT_TRIM=1 python
+   benchmarks/imagewam_e2e_official_compare.py` (FA4 at the backbone
+   site): expected `fr_vs_off` within about 1e-3 of step 2's trimmed
+   libero_goal run. Report both.
+5. VAE inside the graph with trimming: `python
+   benchmarks/imagewam_text_trim_bench.py --precision nvfp4 --section
+   capture --vae-graph --use-fa4 off --lengths 16,20,24,28,31`.
+   Expected: the first `new_length` holds the shared VAE pool (H100:
+   +298 MiB), later lengths about the graph alone. Report the lines
+   (`process_used_mib` is null where NVML has no per-process memory;
+   then report `torch_reserved_mib` and `device_free_drop_mib`).
+
+6. Multi-length graph and buffer safety at the served precision, FA4 off
+   and on:
+   ```
+   TRIM_PRECISION=nvfp4 python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s
+   TRIM_PRECISION=nvfp4 TRIM_FA4=on python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s
+   TRIM_PRECISION=nvfp4 TRIM_DIMS=real python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s
+   TRIM_PRECISION=e0m3_hadamard python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s
+   ```
+   Expected: every test passes (none skipped except the VAE test without
+   the AE); every `after switching vs fresh single-length frontend` line
+   `equal=True`; `weight-op tensors: N; moved ... 0; added ... 0` with
+   N > 0 (the NVFP4 / E0M3 scratch and packed weights); `poison bytes
+   overwritten by replays: 0`; `fa4_fallback_reason=None` with FA4 on.
+   Report the printed lines. With a trimmed calibration file on Thor,
+   also `TRIM_PRECISION=fp8_static_cutlass TRIM_DIMS=real
+   TRIM_WEIGHTS=real TRIM_CALIBRATION=<file>`.
+
+Decision for the owner after steps 2-4 and 6: serve `text_trim=True` by
+default (issues.md ISSUE-080 lists the conditions).

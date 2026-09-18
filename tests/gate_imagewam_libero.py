@@ -212,9 +212,6 @@ def run_fidelity(fe: ImageWAMTorchFrontendThor, fixture: ImageWAMGateFixture,
     for i in range(fixture.num_observations):
         task = int(fixture.task_index[i])
         if task != current_task:
-            # set_prompt(context=...) caches on (None, True) and would keep the
-            # previous context; reset the cache key (issues.md ISSUE-060).
-            fe._current_prompt = None
             ctx, mask = context_tensors(fixture, task)
             fe.set_prompt(context=ctx, context_mask=mask)
             current_task = task

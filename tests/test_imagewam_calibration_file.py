@@ -105,7 +105,7 @@ def test_build_save_load_round_trip_and_identity():
         with open(ckpt, "wb") as f:
             f.write(os.urandom(100_000))
         cal = build_calibration(samples, percentile=99.9, checkpoint_path=ckpt, dims=dims,
-                                frames=[("libero_goal", 3, 10)], noise="test")
+                                frames=[("libero_goal", 3, 10)], noise="test", text_trim=False)
         for name in names_k:
             per = [np.array([s.sites[name].absmax], dtype=np.float32) for s in samples]
             assert cal.sites[name].amax == float(accumulate_amax(per, percentile=99.9)[0])
@@ -124,14 +124,16 @@ def test_build_save_load_round_trip_and_identity():
             assert np.array_equal(a.channel_amax, b.channel_amax)
             assert np.array_equal(a.sample_absmax, b.sample_absmax)
             assert np.array_equal(a.abs_percentiles, b.abs_percentiles)
-        back.validate_for(checkpoint_path=ckpt, dims=dims)
+        back.validate_for(checkpoint_path=ckpt, dims=dims, text_trim=False)
         with pytest.raises(ValueError, match="dims differ"):
-            back.validate_for(checkpoint_path=ckpt, dims=dict(dims, x0=4))
+            back.validate_for(checkpoint_path=ckpt, dims=dict(dims, x0=4), text_trim=False)
+        with pytest.raises(ValueError, match="text_trim"):
+            back.validate_for(checkpoint_path=ckpt, dims=dims, text_trim=True)
         other = os.path.join(tmp, "other.pt")
         with open(other, "wb") as f:
             f.write(os.urandom(100_000))
         with pytest.raises(ValueError, match="checkpoint"):
-            back.validate_for(checkpoint_path=other, dims=dims)
+            back.validate_for(checkpoint_path=other, dims=dims, text_trim=False)
         print(f"round trip OK: {len(back.sites)} sites, {os.path.getsize(path)} bytes")
 
 
@@ -155,3 +157,45 @@ def test_static_fp8_set_activation_scale_equals_calibrate():
     assert torch.equal(oa, ob)
     with pytest.raises(RuntimeError, match="after __call__"):
         b.set_activation_scale(1.0)
+
+
+def test_text_trim_identity_and_version_1_files():
+    """Version 2 records `text_trim`; a version-1 file (no such entry,
+    recorded untrimmed) loads as `text_trim=False`; either way the
+    frontend's setting must match."""
+    import json
+
+    from safetensors import safe_open
+    from safetensors.torch import save_file
+
+    rng = np.random.default_rng(1)
+    samples = _fake_samples({"backbone.single.0.linear1.weight": 32}, 3, rng)
+    dims = dict(hidden=256, x0=3, a0=8, num_action=4, merge_qkv_mlp=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        ckpt = os.path.join(tmp, "model.pt")
+        with open(ckpt, "wb") as f:
+            f.write(os.urandom(100_000))
+        trimmed = build_calibration(samples, percentile=99.9, checkpoint_path=ckpt, dims=dims,
+                                    frames=[("libero_goal", 3, 10)], noise="test", text_trim=True)
+        path = os.path.join(tmp, "trimmed.safetensors")
+        save_calibration(trimmed, path)
+        back = load_calibration(path)
+        assert back.version == 2 and back.text_trim is True
+        back.validate_for(checkpoint_path=ckpt, dims=dims, text_trim=True)
+        with pytest.raises(ValueError, match="text_trim"):
+            back.validate_for(checkpoint_path=ckpt, dims=dims, text_trim=False)
+
+        # A version-1 file: the same content, the version-1 metadata (no text_trim entry).
+        with safe_open(path, framework="pt") as f:
+            meta = json.loads(f.metadata()["imagewam_calibration"])
+            tensors = {k: f.get_tensor(k) for k in f.keys()}
+        meta["version"] = 1
+        del meta["text_trim"]
+        v1_path = os.path.join(tmp, "v1.safetensors")
+        save_file(tensors, v1_path, metadata={"imagewam_calibration": json.dumps(meta)})
+        v1 = load_calibration(v1_path)
+        assert v1.version == 1 and v1.text_trim is False
+        v1.validate_for(checkpoint_path=ckpt, dims=dims, text_trim=False)
+        with pytest.raises(ValueError, match="text_trim"):
+            v1.validate_for(checkpoint_path=ckpt, dims=dims, text_trim=True)
+        print("version 2 records text_trim; version 1 loads as text_trim=False; mismatches refused")

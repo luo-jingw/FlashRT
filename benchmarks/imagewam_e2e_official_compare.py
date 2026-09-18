@@ -37,6 +37,12 @@ VAE options (roadmap items 2 and 5, plan.md):
               frame is first PIL-downscaled (BILINEAR) to SxS for BOTH
               sides, a stand-in for a simulator rendering at SxS (the
               official eval renders at 256x256).
+
+Text context option (issues.md ISSUE-020):
+  TEXT_TRIM   0 (default): FlashRT attends to all 512 padded text rows.
+              1: frontend text_trim=True, the sequence holds only the
+              valid tokens and the proprio row (one graph per length);
+              the per-frame `x0` column is the context length used.
 """
 from __future__ import annotations
 
@@ -76,6 +82,7 @@ VAE_GRAPH = os.environ.get("VAE_GRAPH", "0") == "1"
 VAE_RESIZE = os.environ.get("VAE_RESIZE", "area")
 RAW_VIEWS = os.environ.get("RAW_VIEWS", "0") == "1"
 RAW_SIZE = int(os.environ.get("RAW_SIZE", "0"))
+TEXT_TRIM = os.environ.get("TEXT_TRIM", "0") == "1"
 
 REAL_DIMS = dict(
     hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
@@ -182,7 +189,7 @@ def main():
     samples = load_samples()
     print(f"samples: {len(samples)} ({SUITE}, frames {FRAMES})", flush=True)
     print(f"VAE_ENCODER={VAE_ENCODER} VAE_GRAPH={int(VAE_GRAPH)} VAE_RESIZE={VAE_RESIZE} "
-          f"RAW_VIEWS={int(RAW_VIEWS)} RAW_SIZE={RAW_SIZE}", flush=True)
+          f"RAW_VIEWS={int(RAW_VIEWS)} RAW_SIZE={RAW_SIZE} TEXT_TRIM={int(TEXT_TRIM)}", flush=True)
 
     t = time.time()
     off = build_official()
@@ -195,7 +202,7 @@ def main():
         ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
         qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"], dataset_stats_path=STATS,
         calibration_path=CALIBRATION, **AWQ_KW,
-        vae_encoder=VAE_ENCODER, vae_resize=VAE_RESIZE,
+        vae_encoder=VAE_ENCODER, vae_resize=VAE_RESIZE, text_trim=TEXT_TRIM,
         vae_graph_input=(2,) + tuple(samples[0]["v1"].shape[:2] if RAW_VIEWS else (224, 224)) if VAE_GRAPH else None)
     print(f"flashrt ({PRECISION}, calibration={CALIBRATION}, awq={AWQ_KW}) constructed in "
           f"{time.time() - t:.1f}s", flush=True)
@@ -211,7 +218,6 @@ def main():
             n = int(mask[0].sum())
             ctx_cos = cos(fr_ctx[0][:n], ctx[0][:n])
             mask_eq = bool((fr_mask[0].bool().cpu() == mask[0].bool().cpu()).all())
-            fe._current_prompt = None
             fe.set_prompt(context=ctx[0], context_mask=mask[0])
             cur_task = s["task"]
 
@@ -240,7 +246,7 @@ def main():
         gt = torch.from_numpy(s["gt"])
         n_gt = min(len(gt), HORIZON)
         row = dict(
-            ep=s["ep"], frame=s["frame"], task=s["task"][:48],
+            ep=s["ep"], frame=s["frame"], task=s["task"][:48], x0=fe.active_dims["x0"],
             ctx_cos=ctx_cos, mask_eq=mask_eq,
             fr_vs_off=cos(f0, o0),
             fr_vs_off_seed1=cos(outs[SEEDS[-1]][1], outs[SEEDS[-1]][0]),

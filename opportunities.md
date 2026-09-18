@@ -5365,3 +5365,212 @@ replay-only A/B shows the native graph not slower than the Python graph.
 Remaining native work beyond this entry: VAE encoding in the graph
 (roadmap item 5, then an `images` STAGED native port), proprio projection
 inside the graph, and a native checkpoint loader (`native_v2`).
+
+# OPT-030: text context trimmed to the prompt's valid length (issues.md ISSUE-020)
+
+Status: implemented behind `ImageWAMTorchFrontendThor(text_trim=True)`
+(default `False`), verified on H100 at `fp16`, `fp8` and `fp8_static`;
+`nvfp4`, `e0m3_hadamard`, FA4 and Thor latency pending (Thor check in `plan.md`, "Plan: text-context
+trimming to the prompt's valid length"; issues.md ISSUE-080).
+
+Area: `flash_rt/models/imagewam/text_context.py`,
+`flash_rt/frontends/torch/imagewam_thor.py`,
+`benchmarks/imagewam_text_trim_bench.py`,
+`benchmarks/imagewam_e2e_official_compare.py` (`TEXT_TRIM`),
+`tests/test_imagewam_text_trim.py`
+
+## Mechanism
+
+- Official ImageWAM masks the padded text keys for every query at both
+  attention calls. With proprio packing the valid tokens sit at rows
+  `[0, n_valid)`, the proprio token at row `n_valid`, and text RoPE
+  positions are the row indices, so a sequence of only those rows
+  computes the official masked math without a mask.
+- `set_prompt` packs the valid rows by rank plus the proprio slot
+  (`pack_trimmed_context`, checked against official
+  `_append_proprio_to_context`, prefix and non-prefix masks) into
+  `context[:x0]`, `x0 = n_valid + 1`.
+- Buffers stay allocated at the max dims (`x0 = 513`, `a0 = 905`,
+  `total = 969`). Each distinct `x0` gets a `TextLengthCapture`: its
+  dims (`a0`, `total` shifted by the same rows), its backbone RoPE table
+  (text positions `0..x0-1`, image positions unchanged), and a CUDA
+  graph captured on first use. A cached length re-activates without
+  capture.
+- A new length autotunes the cuBLASLt shapes it adds: `bf16_nn`
+  `txt_in` at `M = x0` for every precision, and the `fp16_nn` text and
+  single-stream shapes (`M = x0`, `M = a0`) for `precision="fp16"`
+  only. Untuned shapes would run cuBLASLt's heuristic top-1.
+- Before the first trimmed capture, one eager prefill at the max dims
+  runs. `Nvfp4Linear`, `Fp8Linear`, `StaticFp8Linear`,
+  `CutlassFp16SwiGluMlp`, `Nvfp4SwiGluMlp` and `E0m3HadamardLinear`
+  grow their activation scratch on a larger `m`, which would free a
+  buffer an earlier graph still reads; after the max-dims pass every
+  backbone op has its largest `m`.
+- All captures share one capture stream and one CUDA-graph memory pool.
+  `infer()` replays one graph at a time and no value that outlives a
+  replay lives in the pool.
+- Unchanged: `pipeline_thor.py` and `attn_backend.py` already take
+  every length from `dims` and the per-call arguments. The served
+  per-head attention pads an odd `kv_seq` internally (the untrimmed
+  dims already run odd lengths, 905 and 969); the even-`kv_seq` guard
+  belongs to the non-per-head kernel, which the frontend never selects.
+  FA4 output staging (`fa4_out`) is sized at the max dims.
+- The FA4 fallback drops every cached graph once the cuBLAS recapture
+  has succeeded, so all graphs use the same attention; until then the
+  old graphs and their RoPE tables stay alive.
+- A capture that raises leaves no graph active (`infer()` refuses until
+  a `set_prompt` succeeds) and clears the prompt cache key: `set_prompt`
+  has already written the new context, which no captured graph matches.
+  Cached captures of other lengths stay valid.
+- Python's cyclic garbage collector is run once before each capture and
+  kept off during it. `torch.cuda.graph` no longer collects before a
+  capture, and destroying a CUDA graph held by a dead reference cycle
+  while a stream captures invalidates the capture; with `text_trim` new
+  lengths are captured while the process serves.
+- `run_eager()` (the calibration recorder's forward) runs the active
+  length's dims and RoPE table, bit-identical to the active graph.
+- `precapture_text_lengths(x0s)` captures known lengths ahead of their
+  first `set_prompt` without changing the active prompt.
+
+## Result (H100, shared GPU)
+
+Numerics, `imagewam_e2e_official_compare.py`, fp16 vs official bf16,
+10 tasks x frames {0, 60} per suite, seeds {0, 1}, `fr_vs_off`:
+
+| suite | valid tokens | untrimmed median / min / mean | trimmed median / min / mean |
+|---|---|---:|---:|
+| libero_spatial | 26-31 | 0.99840 / 0.99566 / 0.99804 | 0.99998 / 0.99993 / 0.99997 |
+| libero_goal | 16-21 | 0.99680 / 0.92997 / 0.99176 | 0.99998 / 0.99971 / 0.99996 |
+| libero_10 | 20-31 | 0.99860 / 0.96654 / 0.99647 | 0.99998 / 0.99654 / 0.99979 |
+| all 60 frames | | 0.99809 / 0.92997 / 0.99542 | 0.99998 / 0.99654 / 0.99991 |
+
+Mean `mae_fr_vs_gt` (official in parentheses): libero_spatial 0.18359
+-> 0.18555 (0.18538), libero_goal 0.16201 -> 0.15958 (0.15941),
+libero_10 0.13044 -> 0.13144 (0.13139). The trimmed minimum,
+libero_10 ep 0 frame 60 (0.99654 at seed 0, 0.99986 at seed 1), is the
+frame where official's own seed 0 vs seed 1 cosine is 0.77926.
+`served_vs_off` and `fr_noise001_vs_off` use the served `0.01 * N(0,1)`
+initial noise (ISSUE-002) and are dominated by that sampler difference.
+At seed 1 the trimmed libero_goal minimum is ep 114 frame 60 (0.99487 to
+0.99510 over four runs), the frame where official's own seed 0 vs seed 1
+cosine is 0.93157.
+Repeat runs of libero_goal with the final code (VAE outside and inside
+the graph): median 0.99998, min 0.99966 and 0.99970, mean MAE 0.15957;
+per-frame values move by up to 5e-5 between processes because each
+process autotunes its own cuBLASLt picks for the new fp16 shapes.
+
+Other checks:
+
+| check | result |
+|---|---|
+| small dims, random weights: trimmed vs untrimmed with the padded keys masked, same fp32 PyTorch attention | bit-identical actions (n_valid 5 and 8) |
+| same, trimmed with the served cuBLAS per-head attention | cosine 1.0000000, rel_l2 3.6e-5 to 5.9e-5 |
+| same, untrimmed unmasked (the old rule) | rel_l2 1.2e-3 to 1.3e-3 |
+| served per-head attention at trimmed real shapes (`x0` 20, 21, 32, 33; backbone `a0` 412-425, `mot` `total` 476-489) vs fp32 PyTorch | cosine 0.9999999, rel_l2 5.4e-4 at both parities |
+| FA4 dispatch at those shapes, fp32 stand-in for the kernel | cosine 1.0000000 |
+| switching lengths 6 -> 10 -> 17 -> 6 | the cached graph replays, bit-identical to the first run; each length bit-identical to a fresh frontend |
+| VAE stage inside every length's graph (shared pool), switching lengths | bit-identical to the VAE outside the graph |
+| `text_trim=False` vs the previous frontend file, same process, small and real dims | bit-identical actions (context, random prompt, explicit and served noise) |
+| fp16 gate, fixture v1 | 40 per-sample results identical before and after |
+| multi-length safety check (`tests/test_imagewam_text_trim_graph_safety.py`), lengths A, longer, shorter, A, max, ...: fp16 small and real dims; fp8 small and real dims; fp8_static small (placeholder scales) and real dims with real weights and the trimmed calibration file; each with the VAE outside and inside the graph | every length bit-identical to a fresh single-length frontend; weight-op tensors never reallocated after the first capture (144 at small dims, 560 at real dims for fp8/fp8_static); replays unchanged and no write into 0xFF-poisoned free memory (graph pool and 1152 MiB of the regular cache) |
+| same check without the max-dims prefill (control, growing-scratch stand-in ops) | 14 of 38 (small) and 60 of 142 (real) scratch tensors reallocated |
+| a capture that raises on a new length | no graph active, `infer()` refuses; the cached length replays its own result; the retried length equals a fresh frontend |
+| FA4 fallback (stand-in FA4 failing) | old graphs alive through the recapture, dropped after it; a second failure leaves no graph |
+| `run_eager()` vs replay at two lengths and back | bit-identical (before the fix: cosine 0.9999982, max-abs 4.8e-3) |
+
+Speed, `benchmarks/imagewam_text_trim_bench.py --precision fp16`, real
+dims, random weights, trimmed `x0 = 21` vs full `x0 = 513` in one
+frontend, 100 alternating samples each:
+
+| | trimmed P10 / P50 / P90 | full P10 / P50 / P90 | P50 ratio |
+|---|---:|---:|---:|
+| graph replay (CUDA events) | 32.4 / 32.5 / 33.1 ms | 45.8 / 46.3 / 47.6 ms | 0.701 |
+| `infer()` (wall, synchronized) | 32.9 / 33.0 / 33.5 ms | 46.1 / 46.5 / 48.6 ms | 0.711 |
+
+With the VAE stage in the graph the same A/B was contaminated by the
+co-tenant (bimodal samples); its P10 ratio is 0.72 for both replay and
+`infer()`.
+
+Capture cost and memory per length (15 LIBERO lengths, `x0` 17-32):
+
+| | VAE outside the graph | VAE inside the graph |
+|---|---:|---:|
+| first length: `set_prompt` wall / process memory | 1.17 s / +84 MiB | 1.50 s / +298 MiB (206 MiB of it the shared pool) |
+| each later new length: wall median (range) | 0.78 s (0.61-1.97) | 0.76 s (0.62-1.83) |
+| each later new length: process memory (NVML) | +12 MiB (10-16) | +12 MiB (12-16) |
+| cached length: `set_prompt` wall | 12 ms (8-36) | 12 ms (1-16) |
+
+The fp16 autotune of a new length's shapes is 0.3-0.6 s of the capture
+cost; the eager warmup and capture are 0.27-0.35 s. Before the shared
+pool, each length with the VAE in the graph added 218 MiB.
+
+## Constraints on consumers of a trimmed frontend
+
+With `text_trim=True` the sequence length changes with the prompt.
+`frontend.dims` holds the buffer sizes (the maximum); the dims the active
+graph runs are `frontend.active_dims`.
+
+`runtime_surface()`, `pipeline_resources()` and `export_model_runtime()`
+describe one graph at `frontend.dims` and raise `ValueError` for a
+trimmed frontend. Per-length support there needs all of:
+
+- the active dims everywhere a length appears: `context_rows` is
+  `active_dims["x0"]`, the image rows start at it, the backbone RoPE
+  table (`_rope_table`) has `active_dims["a0"]` rows, the action rows
+  start at `active_dims["a0"]`;
+- `text_trim` and the active `x0` in the setup identity;
+- after the prompt verb (`set_prompt`), re-adopting the graph: a new
+  length activates, and may capture, another graph (`_graph`); the
+  capture stream (`_graph_stream`) is the same for every length;
+- for the native pipeline, one native graph per length, recorded from
+  that length's dims and RoPE table, or the same trimmed packing
+  (`text_context.pack_trimmed_context`) in native code.
+
+Activation statistics for a trimmed frontend are recorded at the active
+dims (`run_eager()` runs them). The untrimmed forward's text and
+single-stream GEMM inputs include about 490 padded context rows that a
+trimmed frontend never computes. The calibration file records
+`text_trim` (format version 2) and a frontend refuses a file recorded
+with the other setting; version-1 files were recorded untrimmed and load
+as `text_trim=False`.
+
+Trimmed calibration file (`benchmarks/imagewam_build_calibration.py
+--n 64 --text-trim`, the same 64 frames as the untrimmed N=64 file, H100):
+per-site static FP8 scale, trimmed over untrimmed, 0.85x-1.50x (median
+per site group 0.98x-1.32x; largest spread at ActionDiT `proj`, backbone
+`linear2` and the image-stream `mlp2`). `fp8_static` on libero_goal (10
+tasks x frames {0, 60}, seeds {0, 1}; one of the ten evaluation episodes,
+ep 0, also contributes calibration frames):
+
+| | vs official median / min | mean MAE (official 0.15941) |
+|---|---:|---:|
+| `fp8_static`, untrimmed, untrimmed file | 0.99678 / 0.92891 | 0.16214 |
+| `fp8_static`, trimmed, trimmed file | 0.99995 / 0.99927 | 0.15968 |
+| `fp16`, trimmed (reference) | 0.99998 / 0.99966 | 0.15957 |
+
+Trimmed `fp8_static` vs trimmed `fp16`
+(`benchmarks/imagewam_precision_fidelity.py`, `TEXT_TRIM=1
+SUITE=libero_goal`): actions cosine median 0.99998 / min 0.99981,
+backbone residual 0.99994 / 0.99989, MAE ratio 1.000. The untrimmed file
+forced onto the trimmed frontend (identity check bypassed) measures the
+same (actions 0.99998 / 0.99992): the identity rule keeps the statistics
+consistent with the served path; on these frames it is not an accuracy
+gain.
+
+## Open
+
+- Thor: `nvfp4` end-to-end compare off/on, `infer()` P50 A/B, capture
+  time per new length, FA4 on/off, VAE-in-graph memory, and the
+  multi-length safety check at `nvfp4`, `e0m3_hadamard` and with FA4
+  (plan.md Thor check, steps 2-6).
+- `fp8`/`fp8_static` run on H100 since the TN FP8 path (issues.md
+  ISSUE-001) and are verified with trimming above;
+  `fp8_static_cutlass` runs on Thor only.
+- The per-length graph cache is unbounded (up to 512 lengths).
+  `precapture_text_lengths` captures known lengths at startup; a bound
+  on the cache does not exist yet.
+- Gate fixture v1 holds an untrimmed fp16 reference: trimmed fp16
+  measures 0.99837 / 0.99579 (median / min) against it, under the fp16
+  bounds 0.999 / 0.995, while vs official it is 0.99998 / 0.99992. A
+  trimmed default needs a regenerated fixture (ISSUE-080).
+- Owner decision: serve `text_trim=True` by default (ISSUE-080).

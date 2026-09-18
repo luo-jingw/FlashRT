@@ -196,9 +196,6 @@ def main() -> int:
     for i, s in enumerate(samples):
         t = prompts.index(s["task"])
         if t != current_task:
-            # set_prompt(context=...) caches on (None, True) and would skip a
-            # new context; reset the cache key (issues.md ISSUE-060).
-            fe._current_prompt = None
             fe.set_prompt(context=contexts[t], context_mask=masks[t])
             current_task = t
         obs = {"view1": torch.from_numpy(view1[i]), "view2": torch.from_numpy(view2[i]), "proprio": state[i]}

@@ -26,10 +26,12 @@ checkpoint, cosine=0.9999+) rather than re-deriving weight extraction
 here -- tracked as still-open in `opportunities.md` OPT-002.
 
 `context_mask` (declared as an input shape in `_imagewam_thor_spec.py`)
-is accepted by `set_prompt` but never read by anything --
-`pipeline_thor.py`'s double-stream blocks treat every context row as
-valid, no padding mask. Not modeled, consistent with everything else
-already deferred to real-checkpoint work.
+places the proprio row, and with `text_trim=True` it also sets the
+sequence length: official ImageWAM masks the padded text keys for every
+query, and the trimmed sequence (valid tokens + proprio row only)
+computes that same math with no mask (`text_context.py`,
+issues.md ISSUE-020). With `text_trim=False` every context row is
+attended to, padding included.
 
 AdaLN modulation and RoPE tables are precomputed ONCE here (backbone's
 own conditioning timestep is fixed, ActionDiT's varies per denoise
@@ -48,10 +50,13 @@ sums to a fixed 128, so every default/override dims dict below keeps
 """
 from __future__ import annotations
 
+import gc
 import hashlib
 import logging
 import os
 import warnings
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Mapping
 
 import numpy as np
@@ -98,6 +103,7 @@ from flash_rt.models.imagewam.quant_linear import (
     StaticFp8Linear,
 )
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
+from flash_rt.models.imagewam.text_context import pack_trimmed_context, trimmed_sequence_dims
 from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSurface
 from flash_rt.models.imagewam.vae_preprocess import RESIZE_MODES, VaePreprocessor
 from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeStageSpec
@@ -168,6 +174,21 @@ _DEFAULT_DIMS = dict(
 )
 
 
+@dataclass(frozen=True)
+class TextLengthCapture:
+    """One captured forward at one text-context length (`text_trim`).
+
+    `dims`: the frontend's dims with this length's `x0/a0/total` (the
+    frontend's own `dims` object for the max length); `rope_table`:
+    `(a0, 128)` FP16 backbone RoPE for these rows; `graph`: the captured
+    VAE stage (if any) + prefill + denoise loop over the frontend's
+    max-size buffers.
+    """
+    dims: dict
+    rope_table: torch.Tensor
+    graph: torch.cuda.CUDAGraph
+
+
 class ImageWAMTorchFrontendThor:
     """Thor frontend for ImageWAM's real-math (random-weight) dry run.
 
@@ -189,10 +210,16 @@ class ImageWAMTorchFrontendThor:
                  vae_resize: str = "area",
                  vae_encoder: str = "torch",
                  vae_graph_input: tuple[int, int, int] | None = None,
+                 text_trim: bool = False,
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
             raise ValueError(f"precision={precision!r} -- must be one of {_PRECISIONS}")
+        # issues.md ISSUE-020: run each prompt at its valid text length
+        # (`x0 = n_valid + 1` with proprio) instead of the padded
+        # `dims["x0"]`, one CUDA graph per distinct length over the same
+        # max-size buffers. Opt-in until Thor confirms it (OPT-030).
+        self._text_trim = bool(text_trim)
         # Roadmap item 1: measure the CUTLASS tile per ActionDiT GEMM shape
         # (M = num_action) at construction instead of using the (N, K)
         # heuristic. Opt-in until Thor confirms it (opportunities.md OPT-018).
@@ -353,7 +380,7 @@ class ImageWAMTorchFrontendThor:
                                  "tied to one real checkpoint)")
             from flash_rt.models.imagewam.calibration_file import load_calibration
             self._calibration = load_calibration(calibration_path)
-            self._calibration.validate_for(checkpoint_path=ckpt_path, dims=d)
+            self._calibration.validate_for(checkpoint_path=ckpt_path, dims=d, text_trim=self._text_trim)
             with open(calibration_path, "rb") as f:
                 self._calibration_digest = hashlib.sha256(f.read()).hexdigest()[:16]
 
@@ -362,7 +389,11 @@ class ImageWAMTorchFrontendThor:
         # frontend. Both then run the same cuBLASLt algorithm per shape,
         # which an A/B of two frontends needs for a bit-exact comparison
         # (`benchmarks/imagewam_fusion_ab.py`); the autotune shape set does
-        # not depend on dims flags, so one autotune covers both.
+        # not depend on dims flags, so one autotune covers both. A frontend
+        # autotunes only a runner it owns, including the shapes a new
+        # trimmed text length adds (`_activate_text_length`).
+        self._owns_gemm = gemm_runner is None
+        self._tuned_gemm_shapes: set[tuple[str, int, int, int]] = set()
         if gemm_runner is None:
             self._gemm = fvk.GemmRunner()
             self._autotune_gemm(d)
@@ -455,7 +486,8 @@ class ImageWAMTorchFrontendThor:
             raise ValueError(
                 f"ref_h*ref_w ({ref_h}*{ref_w}={ref_h * ref_w}) must equal img_len "
                 f"(a0-x0={img_len}) -- every image patch needs exactly one RoPE position")
-        self._rope_table = self._own(build_backbone_rope_table(
+        self._ref_hw = (ref_h, ref_w)
+        self._max_rope_table = self._own(build_backbone_rope_table(
             d["x0"], ref_h, ref_w, device=DEV))
         self._action_rope_table = self._own(build_action_rope_table(d["num_action"], device=DEV))
         self._mod_txt, self._mod_img, self._mod_single = self._compute_backbone_modulation(
@@ -501,10 +533,29 @@ class ImageWAMTorchFrontendThor:
         self._attn_slots = {"backbone": dict(common), "mot": dict(common, layer_stride=layer_stride)}
         self._attn = self._build_attn_backend()
 
+        # The active capture: the graph `infer()` replays, the dims it
+        # runs, and its backbone RoPE table. Set only by
+        # `_activate_text_length` (and `_capture_graph`, which fills
+        # `_graph` for the dims/table already made active). With
+        # `text_trim=False` the dims are always `self.dims` itself.
         self._graph = None
-        # The capture stream, kept for the runtime export: ABI replay and
-        # ABI staging verbs run on it (see runtime_export.py).
-        self._graph_stream = None
+        self._active_dims = self.dims
+        self._rope_table = self._max_rope_table
+        # One `TextLengthCapture` per captured context length `x0`.
+        self._captures: dict[int, TextLengthCapture] = {}
+        # `text_trim`: set once the max-dims eager prefill that sizes every
+        # lazily grown GEMM scratch has run (`_capture_graph`).
+        self._scratch_reserved = False
+        # Set once `_calibrate_fp8` has run (before the first capture only).
+        self._fp8_calibrated = False
+        # Capture stream and CUDA-graph memory pool shared by every capture
+        # of this frontend (created at the first capture, `_capture_graph`).
+        # The runtime export also runs ABI replay and staging verbs on the
+        # stream (see runtime_export.py).
+        self._graph_stream: torch.cuda.Stream | None = None
+        self._graph_pool: tuple[int, int] | None = None
+        # Cache key of the live-Qwen3 and random `set_prompt` paths; a
+        # precomputed `context` is always applied (issues.md ISSUE-060).
         self._current_prompt = None
         # Row index inside self._context where the proprio token lives
         # for the CURRENTLY captured prompt -- computed once in
@@ -562,7 +613,7 @@ class ImageWAMTorchFrontendThor:
         self._keepalive.append(t)
         return t
 
-    def _autotune_gemm(self, d: dict) -> None:
+    def _autotune_gemm(self, d: dict, *, fp16_nn_shapes: bool = True) -> None:
         """Autotune `GemmRunner.fp16_nn` once per distinct (M,N,K) shape
         this frontend's own real math uses (OPT-004 step 4,
         opportunities.md), at construction time -- before any weight/
@@ -585,6 +636,13 @@ class ImageWAMTorchFrontendThor:
         and therefore identical steady-state cost"), so exactly one
         autotune call per distinct shape below covers every layer of
         that type -- not one call per layer.
+
+        Shapes already tuned by this frontend (`self._tuned_gemm_shapes`)
+        are skipped, so a trimmed text length (`text_trim`) tunes only the
+        shapes it adds: the text GEMMs at `M = x0` and the single-stream
+        GEMMs at `M = a0`. `fp16_nn_shapes=False` tunes the `bf16_nn`
+        shapes only (`txt_in`/`img_in`, which run on cuBLASLt at every
+        precision).
         """
         hidden, mlp_hidden, HD = d["hidden"], d["mlp_hidden"], d["HD"]
         joint_attention_dim = d["joint_attention_dim"]
@@ -602,11 +660,16 @@ class ImageWAMTorchFrontendThor:
             (x0, hidden, joint_attention_dim),      # txt_in
             (img_len, hidden, HD),                    # img_in (OPT-001/OPT-008)
         }
+        tuned_any = False
         for m, n, k in bf16_shapes:
+            if ("bf16", m, n, k) in self._tuned_gemm_shapes:
+                continue
             x = torch.zeros(m, k, dtype=BF16, device=DEV)
             w = torch.zeros(k, n, dtype=BF16, device=DEV)
             out = torch.zeros(m, n, dtype=BF16, device=DEV)
             self._gemm.autotune_bf16_nn(x.data_ptr(), w.data_ptr(), out.data_ptr(), m, n, k, 16)
+            self._tuned_gemm_shapes.add(("bf16", m, n, k))
+            tuned_any = True
 
         shapes = {
             (x0, 3 * hidden, hidden),                 # txt_qkv (OPT-004 step 2, fused)
@@ -631,11 +694,16 @@ class ImageWAMTorchFrontendThor:
             (num_action, action_dim, ahd),                         # head.linear (OPT-001)
         }
         for m, n, k in shapes:
+            if not fp16_nn_shapes or ("fp16", m, n, k) in self._tuned_gemm_shapes:
+                continue
             x = torch.zeros(m, k, dtype=FP16, device=DEV)
             w = torch.zeros(k, n, dtype=FP16, device=DEV)
             out = torch.zeros(m, n, dtype=FP16, device=DEV)
             self._gemm.autotune_fp16_nn(x.data_ptr(), w.data_ptr(), out.data_ptr(), m, n, k, 16)
-        torch.cuda.synchronize()
+            self._tuned_gemm_shapes.add(("fp16", m, n, k))
+            tuned_any = True
+        if tuned_any:
+            torch.cuda.synchronize()
 
     def _rnd_linear(self, n: int, k: int):
         """Real GEMM (K,N) convention: `n` = output width, `k` = input
@@ -1176,37 +1244,94 @@ class ImageWAMTorchFrontendThor:
         return mods, head_mods, deltas_out
 
     def _capture_graph(self) -> None:
-        s = torch.cuda.Stream()
+        """Warm up and capture the active length (`self._active_dims`,
+        `self._rope_table`) into `self._graph`.
+
+        Every capture of this frontend uses one capture stream and one
+        CUDA-graph memory pool, so the graphs of different text lengths
+        share the temporaries their captures allocate (the VAE stage's
+        activations, about 200 MB at 224x448, are the large ones). This
+        is safe because `infer()` replays one graph at a time, to
+        completion, and every value that outlives a replay lives in the
+        frontend's own buffers, not in the pool.
+
+        Python's cyclic garbage collector does not run during the capture:
+        it runs once just before it, and is disabled until the capture
+        ends. A dead reference cycle holding a CUDA graph (another
+        frontend, for example) would otherwise be destroyed whenever an
+        allocation triggers a collection, and destroying a CUDA graph
+        while a stream captures invalidates the capture. `text_trim`
+        captures new lengths while the process serves, so a collection
+        can fall inside a capture at any time."""
+        dims = self._active_dims
+        if self._graph_stream is None:
+            self._graph_stream = torch.cuda.Stream()
+            self._graph_pool = torch.cuda.graph_pool_handle()
+        s = self._graph_stream
         s.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(s):
+            if self._text_trim and not self._scratch_reserved:
+                self._reserve_scratch_at_max_dims(s.cuda_stream)
             for _ in range(2):
                 if self._vae_stage is not None:
                     self._vae_stage.run()
                 imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, self._weights,
-                                  self.dims, stream=s.cuda_stream, attn=self._attn,
+                                  dims, stream=s.cuda_stream, attn=self._attn,
                                   mod_txt=self._mod_txt, mod_img=self._mod_img,
                                   mod_single=self._mod_single, rope_table=self._rope_table.data_ptr())
                 imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, self._weights,
-                                       self.dims, stream=s.cuda_stream, attn=self._attn,
+                                       dims, stream=s.cuda_stream, attn=self._attn,
                                        action_mods=self._action_mods, head_mods=self._head_mods,
                                        action_rope_table=self._action_rope_table.data_ptr(),
                                        deltas=self._deltas)
         torch.cuda.current_stream().wait_stream(s)
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph, stream=s):
+        gc.collect()
+        gc_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            self._record_graph(graph, dims, s)
+        finally:
+            if gc_enabled:
+                gc.enable()
+        self._graph = graph
+
+    def _record_graph(self, graph: torch.cuda.CUDAGraph, dims: dict, s: torch.cuda.Stream) -> None:
+        """The capture itself (`_capture_graph`): VAE stage, prefill and
+        denoise loop for `dims` on stream `s`, into the shared pool."""
+        with torch.cuda.graph(graph, pool=self._graph_pool, stream=s):
             if self._vae_stage is not None:
                 self._vae_stage.run()
             imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, self._weights,
-                              self.dims, stream=s.cuda_stream, attn=self._attn,
+                              dims, stream=s.cuda_stream, attn=self._attn,
                               mod_txt=self._mod_txt, mod_img=self._mod_img,
                               mod_single=self._mod_single, rope_table=self._rope_table.data_ptr())
             imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, self._weights,
-                                   self.dims, stream=s.cuda_stream, attn=self._attn,
+                                   dims, stream=s.cuda_stream, attn=self._attn,
                                    action_mods=self._action_mods, head_mods=self._head_mods,
                                    action_rope_table=self._action_rope_table.data_ptr(),
                                    deltas=self._deltas)
-        self._graph = graph
-        self._graph_stream = s
+
+    def _reserve_scratch_at_max_dims(self, stream: int) -> None:
+        """`text_trim`, before the first capture: one eager prefill at the
+        max dims.
+
+        `Nvfp4Linear`, `Fp8Linear`, `StaticFp8Linear`,
+        `CutlassFp16SwiGluMlp`, `Nvfp4SwiGluMlp` and `E0m3HadamardLinear`
+        size their activation scratch by the largest `m` they have been
+        called with and
+        reallocate it for a larger one, which would free a buffer an
+        already captured graph reads. After this pass every backbone
+        weight op has seen its largest `m` (`x0` or `a0` of the max dims),
+        so no later length reallocates. ActionDiT ops always run at
+        `m = num_action`. The pass writes only rows that every captured
+        graph recomputes before reading.
+        """
+        imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, self._weights,
+                          self.dims, stream=stream, attn=self._attn,
+                          mod_txt=self._mod_txt, mod_img=self._mod_img,
+                          mod_single=self._mod_single, rope_table=self._max_rope_table.data_ptr())
+        self._scratch_reserved = True
 
     def _capture_graph_or_fall_back(self) -> None:
         """`_capture_graph()`, falling back to the cuBLAS chain when FA4
@@ -1220,7 +1345,9 @@ class ImageWAMTorchFrontendThor:
         a `RuntimeWarning`, records the reason in
         `self.fa4_fallback_reason`, rebuilds the attention backend with
         FA4 off at both sites, and captures again. A failure with FA4 off,
-        or a second failure after the fallback, propagates.
+        or a second failure after the fallback, propagates; after a second
+        failure the frontend holds no graph (`_graph` is None and the
+        per-length cache is empty).
 
         An invalidated capture (for example a device sync inside it)
         makes `torch.cuda.graph`'s exit raise before it restores the
@@ -1245,7 +1372,18 @@ class ImageWAMTorchFrontendThor:
         self.use_fa4_mot = False
         self._attn = self._build_attn_backend()
         torch.cuda.synchronize()
-        self._capture_graph()
+        try:
+            self._capture_graph()
+        except BaseException:
+            torch.cuda.set_stream(caller_stream)
+            self._graph = None
+            self._captures.clear()
+            raise
+        # Graphs of other text lengths captured with FA4 are dropped, so
+        # every graph this frontend replays uses the same attention. They
+        # (and their RoPE tables) stay alive until the replacement graph
+        # exists; after a second failure no graph is left at all.
+        self._captures.clear()
 
     def _set_context_with_optional_proprio(self, text_ctx: torch.Tensor, text_mask: torch.Tensor) -> None:
         """`text_ctx`: `(text_len, joint_attention_dim)` BF16 -- the
@@ -1287,6 +1425,120 @@ class ImageWAMTorchFrontendThor:
         self._context[:valid_counts].copy_(text_ctx[:valid_counts])
         self._context[valid_counts + 1:x0].copy_(text_ctx[valid_counts:text_len])
 
+    def _write_trimmed_context(self, text_ctx: torch.Tensor, text_mask: torch.Tensor) -> int:
+        """`text_trim`: the valid text rows packed by rank, then the
+        proprio slot (when `dims["proprio_dim"]` is set), into
+        `self._context[:x0]`; the rows after them are zeroed. Returns the
+        active `x0` (`n_valid + 1` with proprio, `n_valid` without)."""
+        packed = pack_trimmed_context(text_ctx, text_mask, proprio_slot=self._proprio_dim is not None)
+        x0 = int(packed.rows.shape[0])
+        if x0 > self.dims["x0"]:
+            raise ValueError(f"{packed.n_valid} valid text tokens need x0={x0} rows, more than "
+                             f"dims['x0']={self.dims['x0']}")
+        self._context.zero_()
+        self._context[:x0].copy_(packed.rows)
+        self._proprio_row = packed.proprio_row
+        return x0
+
+    def _write_context(self, text_ctx: torch.Tensor, text_mask: torch.Tensor) -> int:
+        """Writes a prompt's context rows and returns the context length
+        `x0` the prompt runs at: `dims["x0"]` with `text_trim=False`
+        (every row, padding included), the valid length with
+        `text_trim=True`."""
+        if self._text_trim:
+            return self._write_trimmed_context(text_ctx, text_mask)
+        self._set_context_with_optional_proprio(text_ctx, text_mask)
+        return self.dims["x0"]
+
+    def _capture_text_length(self, x0: int) -> TextLengthCapture:
+        """Captures a graph for context length `x0` and returns its record
+        (not yet cached; `_active_dims`/`_rope_table`/`_graph` hold the new
+        length afterwards).
+
+        The new length gets its sequence dims (`trimmed_sequence_dims`),
+        its backbone RoPE table (text positions `0..x0-1`, image positions
+        unchanged), the static FP8 calibration before the first capture
+        only, the GEMM autotune of the shapes it adds (only on a
+        `GemmRunner` this frontend owns; the `fp16_nn` weight-GEMM shapes
+        only for `precision="fp16"`, the one precision whose backbone
+        weight GEMMs run on `fp16_nn`), and a capture."""
+        dims = trimmed_sequence_dims(self.dims, x0)
+        if dims is self.dims:
+            rope_table = self._max_rope_table
+        else:
+            rope_table = build_backbone_rope_table(x0, *self._ref_hw, device=DEV)
+        self._active_dims, self._rope_table = dims, rope_table
+        if not self._fp8_calibrated:
+            self._calibrate_fp8(self.dims)
+            self._fp8_calibrated = True
+        if self._owns_gemm:
+            self._autotune_gemm(dims, fp16_nn_shapes=self._precision == "fp16")
+        self._capture_graph_or_fall_back()
+        return TextLengthCapture(dims=dims, rope_table=rope_table, graph=self._graph)
+
+    def _invalidate_active_graph(self) -> None:
+        """After a failed capture: the context rows may already hold a
+        prompt no captured graph matches, so `infer()` refuses until a
+        `set_prompt` succeeds, and the next `set_prompt` never returns
+        early on the old cache key. Cached captures stay valid."""
+        self._graph = None
+        self._current_prompt = None
+
+    def _activate_text_length(self, x0: int) -> None:
+        """Makes the capture for context length `x0` the one `infer()`
+        replays, capturing it first if this length has none
+        (`_capture_text_length`). If that capture raises, no graph is
+        active afterwards (`_invalidate_active_graph`) and the exception
+        propagates; the cached captures of other lengths, with their RoPE
+        tables, are kept (the FA4 fallback's own rule aside)."""
+        capture = self._captures.get(x0)
+        if capture is None:
+            try:
+                capture = self._capture_text_length(x0)
+            except BaseException:
+                self._invalidate_active_graph()
+                raise
+            self._captures[x0] = capture
+        self._active_dims, self._rope_table, self._graph = capture.dims, capture.rope_table, capture.graph
+
+    def precapture_text_lengths(self, x0s: Sequence[int]) -> None:
+        """`text_trim`: captures a graph for every context length in `x0s`
+        (valid text tokens + 1 with proprio, as `captured_text_lengths`
+        reports) that has none, so the first `set_prompt` of a prompt
+        with that length only switches graphs. The context rows and the
+        active length are unchanged afterwards. If a capture raises, no
+        graph is active afterwards, as for a failed `set_prompt`."""
+        if not self._text_trim:
+            raise ValueError("precapture_text_lengths needs text_trim=True")
+        active_x0 = None if self._graph is None else int(self._active_dims["x0"])
+        wanted = [int(x0) for x0 in x0s]
+        try:
+            # An FA4 fallback during one capture drops the graphs captured
+            # before it (at most once: FA4 is off afterwards), so the
+            # missing set is recomputed after every capture.
+            missing = [x0 for x0 in wanted if x0 not in self._captures]
+            while missing:
+                self._captures[missing[0]] = self._capture_text_length(missing[0])
+                missing = [x0 for x0 in wanted if x0 not in self._captures]
+        except BaseException:
+            self._invalidate_active_graph()
+            raise
+        if active_x0 is None:
+            self._graph = None
+        else:
+            self._activate_text_length(active_x0)
+
+    @property
+    def active_dims(self) -> dict:
+        """A copy of the dims the active graph runs (`x0/a0/total` of the
+        current prompt with `text_trim=True`; `self.dims` otherwise)."""
+        return dict(self._active_dims)
+
+    @property
+    def captured_text_lengths(self) -> tuple[int, ...]:
+        """The context length `x0` of every cached capture, ascending."""
+        return tuple(sorted(self._captures))
+
     def set_prompt(self, prompt_text: str | None = None, *,
                     context: torch.Tensor | None = None,
                     context_mask: torch.Tensor | None = None) -> None:
@@ -1298,34 +1550,35 @@ class ImageWAMTorchFrontendThor:
         `_prepare_flux2_infer_text`: a raw prompt XOR a precomputed
         `context`/`context_mask` pair, never both.
 
-        `context_mask` is accepted (matching the real interface and
-        `_imagewam_thor_spec.py`'s own declared input shape). Used for
-        two things when `dims["proprio_dim"]` is set (see
-        `_set_context_with_optional_proprio`): finding the real proprio
-        insertion row, and nothing else -- `pipeline_thor.py`'s own
-        attention math still treats every context row as valid
-        regardless of padding, a pre-existing, separately-documented
-        gap (see that module's own docstring), not something this
-        change fixes.
+        A precomputed `context` is applied on every call (issues.md
+        ISSUE-060). The live-Qwen3 and random paths return early when
+        called again with the same `prompt_text`.
+
+        `context_mask` places the proprio row (`dims["proprio_dim"]`
+        set, see `_set_context_with_optional_proprio`). With
+        `text_trim=True` it also sets the context length: the valid
+        tokens and the proprio row only (`_write_trimmed_context`), with
+        one graph per distinct length, captured on first use. With
+        `text_trim=False` the attention reads every context row,
+        padding included. The random path always uses `dims["x0"]`.
         """
         if prompt_text is not None and context is not None:
             raise ValueError("set_prompt: prompt_text and context are mutually exclusive "
                               "(matches imagewam.py's own _prepare_flux2_infer_text)")
         cache_key = (prompt_text, context is not None)
-        if cache_key == self._current_prompt:
+        if context is None and cache_key == self._current_prompt:
             return
         if context is not None:
             if context_mask is None:
                 raise ValueError("set_prompt(context=...) requires context_mask too "
                                   "(matches imagewam.py's own _prepare_flux2_infer_text)")
-            self._set_context_with_optional_proprio(
+            x0 = self._write_context(
                 context.to(device=DEV, dtype=BF16), context_mask.to(device=DEV, dtype=torch.bool))
         elif self._qwen3 is not None and prompt_text is not None:
             from flash_rt.models.imagewam.text_encoder import encode_prompts
             model, tokenizer = self._qwen3
             real_context, real_mask = encode_prompts(model, tokenizer, [prompt_text])
-            self._set_context_with_optional_proprio(
-                real_context[0].to(device=DEV, dtype=BF16), real_mask[0].to(device=DEV))
+            x0 = self._write_context(real_context[0].to(device=DEV, dtype=BF16), real_mask[0].to(device=DEV))
         else:
             self._context.normal_()
             if self._proprio_dim is not None:
@@ -1335,9 +1588,8 @@ class ImageWAMTorchFrontendThor:
                 # accuracy claim on this path either way (matches
                 # every other random-fill branch in this class).
                 self._proprio_row = self.dims["x0"] - 1
-        if self._graph is None:
-            self._calibrate_fp8(self.dims)
-            self._capture_graph_or_fall_back()
+            x0 = self.dims["x0"]
+        self._activate_text_length(x0)
         self._current_prompt = cache_key
 
     def infer(self, observation: dict, *, action_noise: torch.Tensor | None = None) -> dict:
@@ -1449,7 +1701,9 @@ class ImageWAMTorchFrontendThor:
         this frontend's own) must have the same keys; the calibration
         builder passes recording wrappers around the real weights
         (`activation_recorder.py`), which a graph replay would bypass.
-        `set_prompt()` must have run (it stages the text context)."""
+        `set_prompt()` must have run (it stages the text context). Runs
+        the active prompt's dims and RoPE table (`active_dims`: the
+        trimmed length with `text_trim=True`), as the active graph does."""
         if self._current_prompt is None:
             raise RuntimeError("call set_prompt() before run_eager()")
         w = self._weights if weights is None else weights
@@ -1459,10 +1713,11 @@ class ImageWAMTorchFrontendThor:
             # stage_inputs() only filled the stage's uint8 view buffer;
             # run the stage here, as the graph would, to fill img_raw.
             self._vae_stage.run()
-        imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, w, self.dims, stream=stream,
+        dims = self._active_dims
+        imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, w, dims, stream=stream,
                          attn=self._attn, mod_txt=self._mod_txt, mod_img=self._mod_img,
                          mod_single=self._mod_single, rope_table=self._rope_table.data_ptr())
-        imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, w, self.dims, stream=stream,
+        imagewam_denoise_loop(self._ctx, fvk, self._gemm, self._bufs, w, dims, stream=stream,
                               attn=self._attn, action_mods=self._action_mods, head_mods=self._head_mods,
                               action_rope_table=self._action_rope_table.data_ptr(),
                               deltas=self._deltas)
@@ -1521,8 +1776,20 @@ class ImageWAMTorchFrontendThor:
 
     # -- runtime export ---------------------------------------------------
 
+    def _refuse_text_trim(self, what: str) -> None:
+        """`runtime_surface()` / `pipeline_resources()` describe one graph at
+        `self.dims`; with `text_trim` the graph, the context length and the
+        RoPE table change with every new prompt length (opportunities.md
+        OPT-030 lists what per-length support needs)."""
+        if self._text_trim:
+            raise ValueError(f"{what} does not support text_trim=True: it describes one graph at the max dims, "
+                             f"while a trimmed frontend runs one graph per prompt length (active_dims); "
+                             f"construct with text_trim=False")
+
     def runtime_surface(self) -> ImageWAMRuntimeSurface:
-        """The captured graph and its device windows, for the runtime export."""
+        """The captured graph and its device windows, for the runtime export.
+        Not available with `text_trim=True` (`ValueError`)."""
+        self._refuse_text_trim("runtime_surface()")
         if self._graph is None:
             raise RuntimeError("call set_prompt() before runtime_surface()")
         d = self.dims
@@ -1571,7 +1838,9 @@ class ImageWAMTorchFrontendThor:
         `fp16_adaln_operands` / `fp16_adaln_shift_scale` build (the unfused path and the
         standalone AdaLN that starts each chain) and the FP32 modulation
         chunks the fused gated residual + next AdaLN kernel reads
-        (`dims["fuse_res_norm"]`)."""
+        (`dims["fuse_res_norm"]`). Not available with `text_trim=True`
+        (`ValueError`)."""
+        self._refuse_text_trim("pipeline_resources()")
         if self._graph is None:
             raise RuntimeError("call set_prompt() before pipeline_resources()")
         if self.use_fa4 or self.use_fa4_mot:
@@ -1686,6 +1955,8 @@ class ImageWAMTorchFrontendThor:
         """Package the captured graph as an `frt_model_runtime_v1`. See
         `flash_rt.models.imagewam.runtime_export.export_model_runtime`.
         Needs the exec/ and runtime/ native modules (built separately);
-        `io="native"` also needs `native` (an `ImageWAMNativeRuntime`)."""
+        `io="native"` also needs `native` (an `ImageWAMNativeRuntime`).
+        Not available with `text_trim=True` (`runtime_surface()` raises
+        `ValueError`)."""
         from flash_rt.models.imagewam.runtime_export import export_model_runtime
         return export_model_runtime(self, identity=identity, io=io, native=native)
