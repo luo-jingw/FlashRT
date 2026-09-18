@@ -6433,3 +6433,520 @@ machine as it is (no clock or power-mode changes) and report the
 
 Decision for the owner after steps 2-4 and 6: serve `text_trim=True` by
 default (issues.md ISSUE-080 lists the conditions).
+
+
+# Plan: configuration consolidation (workload / precision / profile)
+
+Plan Status: pending
+
+## Problem
+
+### Current
+
+`ImageWAMThorFrontend.__init__` takes about twenty parameters
+(`imagewam_thor.py:199`), and the per-model shape lives in a 19-key
+`dims` dict (`_DEFAULT_DIMS`, `imagewam_thor.py:166`, toy defaults) that
+callers override with `dims_override`. Two kinds of knobs are mixed in
+one surface:
+
+- **Workload** (what the deployment serves): camera count and image size
+  (through `ref_h/ref_w`), text length (`x0`), action horizon
+  (`num_action`), proprio dim, denoise steps and schedule shift. Today
+  these are entered as derived numbers (`x0`, `a0`, `total`, `img_len`,
+  `dt`) that must agree with each other; nothing checks that they do
+  except `ref_h * ref_w == img_len` (`imagewam_thor.py:485`).
+- **Optimisation switches** that grew from parallel roadmap branches:
+  `precision` (8 values, `_PRECISIONS`, `imagewam_thor.py:117`),
+  `text_trim`, `use_fa4` (env `FLASHRT_THOR_FA4`), `use_fa4_mot`,
+  `vae_encoder`, `vae_graph_input`, `nvfp4_awq` (+ `awq_alpha`,
+  `awq_scope`), `gemm_variant_autotune`, `gemm_runner`, and the fusion
+  flags (`merge_qkv_mlp`, `merge_linear2`).
+
+Consequences observed in this repository:
+
+- 20 files carry a literal copy of the LIBERO dims (`grep x0=513`:
+  benchmarks, gates and tests). Only 3 import the canonical
+  `flash_rt/models/imagewam/libero_dims.py` (`LIBERO_REAL_DIMS`).
+- The served defaults are decided by an env var plus constructor flags;
+  the configuration that is fastest on Thor (`text_trim` + FA4 backbone +
+  FA4 mot + native VAE in graph, 106.1 ms vs 203.3 ms default, THOR
+  results in opportunities.md) needs four switches that no single entry
+  point sets.
+- `text_trim=True` is refused by `runtime_surface()`, `pipeline_resources()`
+  and `export_model_runtime()` (`_refuse_text_trim`,
+  `imagewam_thor.py:1779`), because the ABI describes one graph at the
+  maximum dims (issues.md ISSUE-080, conditions 4, 5, 6).
+- Illegal combinations are rejected in scattered places
+  (`gemm_variant_autotune` vs precision at `imagewam_thor.py:226`,
+  `vae_graph_input` needing `ae_model_path` at `:255`, `nvfp4_awq` needing
+  a calibration file, native runtime not supporting AWQ), not by one
+  resolver, so the set of legal configurations is not written down.
+
+Facts that constrain the design (checked in source and in the checkpoint
+config, not assumed):
+
+- Backbone widths (`hidden`, `HD`, `NH`, `mlp_hidden`,
+  `joint_attention_dim`, layer counts) are read from checkpoint tensor
+  shapes and key counts, not from `config.yaml`. `config.yaml` carries the
+  action-expert dims, `max_action_horizon` (64), the noise schedule shifts,
+  `proprio_dim` and the step counts.
+- `benchmarks/imagewam_e2e_official_compare.py:REAL_DIMS` and
+  `libero_dims.LIBERO_REAL_DIMS` describe one workload: two 224x224 views
+  -> `ref_h=14, ref_w=28`, `x0=513` (512 text + 1 proprio), `a0=905`
+  (`x0 + 392`), `total=969` (`a0 + 64`), `proprio_dim=8`, `shift=5.0`,
+  10 steps.
+- `precapture_text_lengths` already exists (`imagewam_thor.py:1504`);
+  ISSUE-080 condition 6 is only the bounded per-length cache and its use
+  at startup.
+- `vae_graph_input=(num_views, in_h, in_w)` is fully determined by the
+  workload; it is a derived value today entered by hand.
+- `tests/test_imagewam_thor_precision_routing.py` already pins the
+  weight-to-linear-class routing per precision (`EXPECTED_ROUTING`, CPU
+  only). A profile test belongs there, not in a new file.
+
+### Problem
+
+There is no single object that says what workload is served, and no
+single place that maps a named deployment profile to a legal set of
+switches. Deployment-relevant knobs (sequence length, action dimension,
+ODE loop) are entered as derived integers, optimisation switches are
+independent booleans, and the best configuration is not reachable by name.
+
+### Measurable goal
+
+- One immutable `ImageWAMWorkload` carries the workload; `x0`, `a0`,
+  `total`, `img_len`, `ref_h/ref_w`, `dt` and `vae_graph_input` are
+  derived from it and validated (inconsistent input raises before any
+  allocation).
+- One `resolve_config(...)` returns `(dims, options)` or raises a single
+  error naming the illegal combination; every check currently scattered
+  in `__init__` is a rule in it.
+- Named profiles (`default`, `fast`, plus the precision tiers) map to
+  option sets and are pinned by a CPU-only test; changing a profile
+  without changing the test fails.
+- The `LIBERO_REAL_DIMS` dict is produced from
+  `ImageWAMWorkload.libero()` and the 20 literal copies import it;
+  none redefines `x0/a0/total`.
+- With `ImageWAMWorkload.libero()` and the profile that reproduces today's
+  defaults, `infer()` outputs are bit-identical to the current frontend
+  (fp16 and nvfp4), and the resolved `effective_config` line matches.
+- Thor: the matrix (`scripts/imagewam_thor_matrix.sh`) rows reproduce
+  their recorded P50 within run-to-run noise when built through the new
+  entry point, and the target-workload table (THOR_CHECKLIST.md D) can be
+  entered as a workload instead of hand-edited dims.
+
+Not a goal: changing any kernel, precision numerics or graph capture
+order; removing a switch that the experts need (they move, they are not
+deleted); making `text_trim` default (that stays with ISSUE-080).
+
+## Structure
+
+| Module | Responsibility | State it owns |
+|---|---|---|
+| `Workload` (`flash_rt/models/imagewam/workload.py`, new) | Workload description, derivation of sequence layout, validation | The workload fields and the derived layout (`x0`, `img_len`, `a0`, `total`, `ref_h`, `ref_w`, `dt`) |
+| `StructureConstants` (`flash_rt/models/imagewam/structure.py`, new) | Model structure read once: backbone widths from checkpoint tensor shapes, action-expert dims and schedule from `config.yaml` | Backbone/action-expert dims; none of the workload |
+| `PrecisionSpec` (`flash_rt/models/imagewam/precision.py`, new) | Enum of precision tiers with their properties: needs calibration, alignment rule, native-runtime support, whether tile autotune applies, fallback class per shape | The precision property table (replaces `_PRECISIONS`, `_NVFP4_PRECISIONS`, `_STATIC_FP8_PRECISIONS`, `_VARIANT_TUNED_PRECISIONS`, `_wrap_linear` fallback conditions) |
+| `Options` + `resolve_config` (`flash_rt/models/imagewam/config_resolver.py`, new) | Named profiles; the single rule set for illegal combinations; produce `(dims, Options)` and the `effective_config` string | The profile table and the rule set |
+| Frontend (`imagewam_thor.py`) | Build buffers, weights and graphs from resolved `(dims, Options)` | Buffers, graphs, weights (unchanged) |
+| ABI / native identity (`runtime_export.py`, `runtime_surface.py`, `pipeline_resources.py`, `native_*.py`, `calibration_file.py`) | Carry the workload as part of the model identity so a runtime and a calibration file are checked against one description | Runtime identity and calibration identity (`calibration_file.py:identity_dims`, `validate_for`) |
+| Public entry (`flash_rt/frontends/torch/imagewam_thor.py`, `load_imagewam(workload, profile=..., **expert)`) | The small surface a deployment uses | None |
+
+Ownership rules:
+
+- The workload is owned by `Workload`. Nothing else stores `x0`, `a0`,
+  `total`, `dt` or `vae_graph_input` as an independent input; they are
+  read from it.
+- Structure constants are owned by `StructureConstants`; the workload
+  never contains them, and they are never typed by hand outside toy test
+  dims.
+- Legality of a combination is owned by `resolve_config`; the frontend
+  constructor keeps only assertions for internal invariants.
+- Optimisation switches are split into three tiers (the public entry
+  exposes only the first):
+  1. Deployment surface: `Workload`, `precision`, `profile`, calibration
+     path.
+  2. Profile-controlled (set by a named profile, overridable by an
+     expert): `text_trim`, FA4 (backbone and mot as one tier),
+     `vae_encoder`/`vae_graph_input` (derived from the workload when the
+     native VAE is selected), `nvfp4_awq`.
+  3. Expert/diagnostic (constructor only, not on the public entry):
+     `gemm_variant_autotune`, `gemm_runner`, `awq_alpha`, `awq_scope`, the
+     fusion flags (`merge_qkv_mlp`, `merge_linear2`; kept as A/B switches
+     for `benchmarks/imagewam_fusion_ab.py`).
+
+## Interface
+
+`flash_rt/models/imagewam/workload.py`:
+
+```
+@dataclass(frozen=True)
+class ImageWAMWorkload:
+    num_views: int
+    image_h: int; image_w: int          # per view, pixels
+    text_max_len: int                   # tokens padded to (512 for LIBERO)
+    action_horizon: int                 # <= structure.max_action_horizon
+    action_dim: int                     # output dim after de-normalisation
+    proprio_dim: int
+    num_steps: int                      # denoise steps
+    shift: float                        # schedule shift
+    num_train_timesteps: int = 1000
+
+    @staticmethod
+    def libero() -> "ImageWAMWorkload"  # 2 x 224x224, 512, 64, 8, 10, 5.0
+    def layout(self, structure) -> "SequenceLayout"
+    # SequenceLayout(x0, img_len, a0, total, ref_h, ref_w, dt); raises on
+    # non-multiple-of-patch image size, horizon > structure limit, any
+    # dimension <= 0.
+    def vae_graph_input(self) -> tuple[int, int, int]   # (num_views, h, w)
+```
+
+`flash_rt/models/imagewam/structure.py`:
+
+```
+@dataclass(frozen=True)
+class ImageWAMStructure:            # backbone + action expert, no workload
+    hidden, HD, NH, mlp_hidden, joint_attention_dim,
+    num_layers_double, num_layers_single,
+    action_hidden_dim, action_attn_width, action_mlp_hidden,
+    action_num_layers_double, action_num_layers_single,
+    max_action_horizon, patch_stride
+    @staticmethod
+    def from_checkpoint(ckpt_path) -> "ImageWAMStructure"
+    @staticmethod
+    def toy() -> "ImageWAMStructure"   # the current _DEFAULT_DIMS values
+```
+
+`flash_rt/models/imagewam/precision.py`:
+
+```
+class Precision(str, Enum): FP16, FP16_CUTLASS, FP8, NVFP4, FP8_STATIC,
+    FP8_STATIC_CUTLASS, E0M3_HADAMARD, NVFP4_SIM
+    needs_calibration: bool         # fp8_static*
+    supports_native_runtime: bool
+    supports_awq: bool              # nvfp4 family
+    supports_tile_autotune: bool
+    alignment_fallback(n, k) -> Fp16 | native   # today's _wrap_linear rules
+```
+
+`flash_rt/models/imagewam/config_resolver.py`:
+
+```
+@dataclass(frozen=True)
+class ImageWAMOptions:
+    precision: Precision
+    text_trim: bool
+    use_fa4: bool; use_fa4_mot: bool
+    vae_encoder: Literal["torch", "native"]
+    vae_graph_input: tuple[int,int,int] | None
+    nvfp4_awq: bool
+    calibration_path: str | None
+    # expert tier
+    gemm_variant_autotune: bool; gemm_runner: object | None
+    awq_alpha: float; awq_scope: str
+    merge_qkv_mlp: bool; merge_linear2: bool
+
+PROFILES: dict[str, ProfileSpec]    # "default", "fast", ...
+
+def resolve_config(workload, structure, *, profile="default",
+                   precision=None, calibration_path=None, ae_model_path=None,
+                   **expert) -> ResolvedConfig
+# ResolvedConfig(dims: dict, options: ImageWAMOptions, effective_config: str)
+# Raises ConfigError("<rule id>: <combination> ...") on an illegal set.
+```
+
+Rules (each has an id, a test, and moves an existing check):
+
+| Rule | Combination | Today's location |
+|---|---|---|
+| R1 | `Precision.needs_calibration` without `calibration_path` | `_calibrate_fp8` path / `calibration_file.py` |
+| R2 | `gemm_variant_autotune` with a precision that does not support it | `imagewam_thor.py:226` |
+| R3 | native VAE in graph without `ae_model_path`/`flux2_src` | `imagewam_thor.py:255` |
+| R4 | `nvfp4_awq` with a non-AWQ precision or without calibration | AWQ setup |
+| R5 | `text_trim=True` together with a consumer that needs one fixed graph (`runtime_surface`, `pipeline_resources`, ABI export, native runtime) | `_refuse_text_trim` (`imagewam_thor.py:1779`); stays a refusal until ISSUE-080 condition 5 |
+| R6 | native runtime with AWQ | native runtime |
+| R7 | workload layout inconsistent (`ref_h * ref_w != img_len`, horizon above structure limit) | `imagewam_thor.py:485` |
+| R8 | calibration file identity mismatch vs the workload and `text_trim` | `calibration_file.py:validate_for` |
+
+Frontend entry (`imagewam_thor.py`), added beside the existing
+constructor (which keeps its signature, so existing callers, tests and
+benchmarks do not break):
+
+```
+ImageWAMThorFrontend.from_config(resolved: ResolvedConfig, *, ckpt_path, ...)
+def load_imagewam(ckpt_path, workload, *, profile="default",
+                  precision=None, calibration_path=None, **expert)
+```
+
+State transitions: `Workload` + `Structure` -> `resolve_config` ->
+`ResolvedConfig` (immutable) -> frontend construction. No state is
+mutated after resolution; `effective_config` is the resolved value, not a
+re-read of the frontend attributes, so the compare script, the matrix
+script and the ABI identity print the same string.
+
+## Flow
+
+```
+Deployment:
+  ImageWAMWorkload(...)            ImageWAMStructure.from_checkpoint(ckpt)
+              \                       /
+               resolve_config(workload, structure, profile, precision, ...)
+                       |  (rules R1..R8; ConfigError on illegal)
+                       v
+                ResolvedConfig(dims, options, effective_config)
+                       |
+        ImageWAMThorFrontend.from_config(...)   # thin: build buffers/graphs
+                       |
+        infer()  |  export_model_runtime(identity=workload+options)  |  native
+```
+
+Runtime inference flow, the graph, the per-length `text_trim` graph cache
+and `set_prompt` are unchanged.
+
+Existing callers: `dims_override=` remains accepted by the constructor;
+`from_config` is the new path. A test asserts that
+`resolve_config(ImageWAMWorkload.libero(), ...)` produces a `dims` dict
+equal to `LIBERO_REAL_DIMS`, which is what makes the switch of the 20
+files a mechanical change.
+
+## Code Mapping
+
+| Item | File |
+|---|---|
+| Workload, layout, validation | `flash_rt/models/imagewam/workload.py` (new) |
+| Structure constants | `flash_rt/models/imagewam/structure.py` (new); reads via `checkpoint_loader.py:load_real_imagewam_state_dict` and the checkpoint `config.yaml` |
+| Precision enum and property table | `flash_rt/models/imagewam/precision.py` (new); absorbs the tuples at `imagewam_thor.py:117-130` and the `_wrap_linear` fallback rules (`imagewam_thor.py:754`) |
+| Options, profiles, rules R1-R8, `effective_config` | `flash_rt/models/imagewam/config_resolver.py` (new) |
+| Canonical LIBERO dims | `flash_rt/models/imagewam/libero_dims.py` (becomes a thin view over `ImageWAMWorkload.libero()`) |
+| Routing / profile / rules tests | `tests/test_imagewam_thor_precision_routing.py` (extended: profile table, rule ids), `tests/test_imagewam_workload.py` (new, CPU: layout derivation, validation, `libero()` equals `LIBERO_REAL_DIMS`) |
+| Frontend construction | `flash_rt/frontends/torch/imagewam_thor.py` (`from_config`, `load_imagewam`; constructor kept) |
+| Hand-copied dims to replace | `benchmarks/imagewam_e2e_official_compare.py`, `imagewam_thor_graph_bench.py`, `imagewam_attention_share_bench.py`, `imagewam_fusion_ab.py`, `imagewam_e0m3_accuracy_study.py`, `imagewam_text_trim_bench.py`, `imagewam_vae_stage_bench.py`, `imagewam_e0m3_hadamard_thor_check.py`, `imagewam_thor_small_m_tile_sweep.py`; `tests/gate_imagewam_model_runtime_export.py`, `gate_imagewam_native_parity.py`, `gate_imagewam_native_schema_parity.py`, `test_imagewam_residual_norm_fusion.py`, `test_imagewam_fa4_backbone.py`, `test_imagewam_fa4_dispatch.py`, `test_imagewam_thor_real_wiring.py`, `test_imagewam_text_trim_graph_safety.py`, `test_imagewam_quant_linear.py`, `test_imagewam_text_trim.py`, `test_imagewam_thor_precision_routing.py` (toy dims stay toy and are marked as such) |
+| Derived flags | `vae_graph_input` from `workload.vae_graph_input()`; `use_fa4_mot` folded into the FA4 tier; tuner/AWQ knobs and fusion flags stay constructor-only |
+| ABI / native identity | `flash_rt/models/imagewam/runtime_export.py`, `runtime_surface.py`, `pipeline_resources.py`, `native_resources.py`, `native_runtime.py`, `calibration_file.py` (`identity_dims`, `validate_for`); C++ side under `cpp/models/imagewam` reads the same identity fields |
+| Effective-config string | produced by `config_resolver.py`; consumed by `benchmarks/imagewam_e2e_official_compare.py`, `scripts/imagewam_thor_matrix.sh` (`parse_log`), `scripts/imagewam_thor_validation.sh` |
+| Thor checklist / status | `THOR_CHECKLIST.md`, `THOR_STATUS_SUMMARY.md`, `opportunities.md` |
+
+## Implementation Phases
+
+Work items are grouped into a dependency graph so independent ones can be
+done in parallel. `W` items are code; `T` items are Thor runs; `S` is a
+side track that does not block the rest.
+
+```
+W0 freeze the interface (this section: Workload / Structure /
+   Precision / Options / rule ids)
+ |
+ +--> W1 Workload: layout derivation + validation ---------------+
+ +--> W2 Structure constants (checkpoint tensors + config.yaml) -+
+ +--> W3 Precision enum + property table -----------------------+
+ +--> W4 resolve_config: profiles + rules R1-R8 (pure Python) ---+  (needs W1, W3 types)
+ +--> W5 tests: workload, profile table, rule ids (CPU) --------+   (extends routing test)
+                                                                 |
+                                   join                          v
+                                    W6 frontend: build dims from ResolvedConfig
+                                     |     (from_config, constructor kept)
+                                     v
+                                    W7 frontend: wire Precision + resolver
+                                     |     (replace tuples / fallback rules)
+                        +------------+-------------+
+                        v            v             v
+                       W8 hand-    W9 derive /    W10 ABI + native identity
+                       copied      demote flags   carries the workload
+                       dims        (vae_graph_    (runtime_export, surface,
+                       -> import   input, fa4_mot, pipeline_resources,
+                                   tuner, fusion) native_*, calibration_file)
+                        |            |             |
+                        +------------+-------------+
+                                     v
+                                    W11 public entry load_imagewam +
+                                        expert-constructor split
+                                        (needs T4: preset contents)
+                                     v
+                                    W12 Thor validation on the new entry
+
+Thor line (independent of W0-W10; T4 feeds W11 and the profile contents):
+ T1 THOR_CHECKLIST A (data trustworthy) -> T2 B (missing data)
+   -> T3 C (configuration matrix) -> T4 decide preset contents
+   -> T5 FA4 / native VAE default decision (THOR_CHECKLIST C criteria)
+
+Side track S (blocks R5 becoming a non-refusal, not the rest):
+ S1 ISSUE-080 condition 4: fixture v2 with trim (fp16 reference)
+ S2 ISSUE-080 condition 5: runtime surface / ABI / native for per-length graphs
+ S3 ISSUE-080 condition 6: bounded per-length graph cache + startup use of
+    `precapture_text_lengths`
+```
+
+Parallelism:
+
+- W1, W2, W3 are independent files and can proceed in parallel after W0.
+  W4 needs the types from W1 and W3 but not their implementations, so it
+  starts once W0 is frozen. W5 tests are written against W0 and run when
+  W1-W4 land.
+- W6 and W7 both edit the frontend constructor (`imagewam_thor.py`) and
+  are serial, one owner. To keep the seam small, all logic lives in the
+  new pure-Python modules; the constructor change is only "take resolved
+  dims and options".
+- W8, W9, W10 touch disjoint files after W7 and run in parallel. W8 is
+  mechanical (import instead of literal), W9 changes which flags are
+  public, W10 changes the identity that ABI and calibration files check.
+- W11 waits for T4 because the `fast` profile contents are a measured
+  decision; the mechanism (W0-W10) does not wait for it.
+- T1-T5 run on Thor independently of the code work; they are the source
+  of the profile contents.
+
+### Phase W0: interface freeze
+Phase Status: pending
+- Goal: this section's Interface and rule table are the contract; any
+  change to a name here is a plan edit.
+- Modified files: `plan.md` only.
+- Observation: review of this section.
+
+### Phase W1: `ImageWAMWorkload` and layout
+Phase Status: pending
+- Goal: derive `x0`, `img_len`, `a0`, `total`, `ref_h`, `ref_w`, `dt`,
+  `vae_graph_input` from the workload; reject inconsistent input.
+- First step: confirm from `vae_stage.py`, `pipeline_real.py` and
+  `rope.py:build_img_ids` how multiple views form the `ref_h x ref_w`
+  grid (LIBERO's two 224x224 views give 14 x 28, so views concatenate
+  along the width); the derivation must reproduce 513/905/969 and 14 x 28
+  exactly for `libero()`.
+- Modified files: `flash_rt/models/imagewam/workload.py` (new).
+- New structures: `ImageWAMWorkload`, `SequenceLayout`.
+- Affected modules: none yet (not wired).
+- Observation: `tests/test_imagewam_workload.py` (CPU): `libero()` layout
+  equals `LIBERO_REAL_DIMS`; invalid inputs raise.
+
+### Phase W2: `ImageWAMStructure`
+Phase Status: pending
+- Goal: one place that reads backbone dims from checkpoint tensor shapes
+  and the rest from `config.yaml`, with `toy()` for tests.
+- Modified files: `flash_rt/models/imagewam/structure.py` (new).
+- Affected modules: `checkpoint_loader.py` (reads only).
+- Observation: on the local checkpoint, `from_checkpoint()` matches the
+  backbone values in `LIBERO_REAL_DIMS`; `toy()` matches `_DEFAULT_DIMS`.
+
+### Phase W3: `Precision` property table
+Phase Status: pending
+- Goal: precision properties as data. The alignment rules reproduce
+  today's `_wrap_linear` fallbacks (fp16_cutlass n/k % 8, nvfp4 % 16,
+  fp8/fp8_static/fp8_static_cutlass % 8 -> fp16 linear).
+- Modified files: `flash_rt/models/imagewam/precision.py` (new).
+- Observation: unit test compares the property table with
+  `_PRECISIONS`, `_NVFP4_PRECISIONS`, `_STATIC_FP8_PRECISIONS`,
+  `_VARIANT_TUNED_PRECISIONS`.
+
+### Phase W4: `resolve_config`, profiles, rules
+Phase Status: pending
+- Goal: rules R1-R8 in one function with ids; `effective_config` string
+  identical in format to the current compare-script line.
+- Modified files: `flash_rt/models/imagewam/config_resolver.py` (new).
+- Observation: one test per rule id (legal and illegal case); the
+  `default` profile reproduces today's constructor defaults.
+
+### Phase W5: tests
+Phase Status: pending
+- Goal: pin profiles and rules.
+- Modified files: `tests/test_imagewam_thor_precision_routing.py`
+  (extend), `tests/test_imagewam_workload.py` (new).
+- Observation: CPU-only, no GPU needed; run locally.
+
+### Phase W6: frontend builds dims from `ResolvedConfig`
+Phase Status: pending
+- Goal: `from_config` constructs the frontend from resolved dims and
+  options; the constructor signature and behaviour with `dims_override`
+  stay.
+- Modified files: `flash_rt/frontends/torch/imagewam_thor.py`.
+- Observation: `libero()` through `from_config` is bit-identical to the
+  old constructor with `LIBERO_REAL_DIMS` (fp16 and nvfp4, existing
+  `test_imagewam_thor_real_wiring.py` plus a new equality check).
+
+### Phase W7: frontend uses `Precision` and the resolver
+Phase Status: pending
+- Goal: delete the precision tuples and scattered checks the resolver now
+  owns; `_wrap_linear` reads `Precision` properties.
+- Modified files: `flash_rt/frontends/torch/imagewam_thor.py`.
+- Observation: `test_imagewam_thor_precision_routing.py` unchanged
+  results (`EXPECTED_ROUTING` still holds).
+
+### Phase W8: replace hand-copied dims
+Phase Status: pending
+- Goal: the 20 literal copies import the workload/`libero_dims`; toy dims
+  stay toy and are labelled.
+- Modified files: the list in Code Mapping.
+- Observation: `grep -rE "x0\s*=\s*513"` returns only `libero_dims.py` and
+  the workload test; every touched script still imports and its
+  `--help`/collect step works.
+
+### Phase W9: derive and demote flags
+Phase Status: pending
+- Goal: `vae_graph_input` derived from the workload; `use_fa4_mot` folded
+  into the FA4 tier of a profile; tuner, AWQ tuning and fusion flags
+  remain constructor-only.
+- Modified files: `imagewam_thor.py`, `config_resolver.py`,
+  `benchmarks/imagewam_fusion_ab.py` (uses the fusion flags).
+- Observation: existing callers of these flags still work; resolved
+  `effective_config` shows them.
+
+### Phase W10: ABI and native identity carry the workload
+Phase Status: pending
+- Goal: `identity` (ABI) and the calibration file identity include the
+  workload fields, so a runtime and a calibration file for a different
+  workload are rejected by name.
+- Modified files: `runtime_export.py`, `runtime_surface.py`,
+  `pipeline_resources.py`, `native_resources.py`, `native_runtime.py`,
+  `calibration_file.py`, `cpp/models/imagewam` (identity fields only).
+- Observation: `gate_imagewam_model_runtime_export.py` and
+  `gate_imagewam_native_schema_parity.py`; a mismatched-workload
+  calibration file is refused with the differing field named.
+
+### Phase W11: public entry and constructor split
+Phase Status: pending
+- Goal: `load_imagewam(ckpt_path, workload, profile=..., precision=...,
+  calibration_path=...)` is the deployment entry; expert switches go
+  through `**expert` into `resolve_config`, not through positional
+  constructor arguments. The `fast` profile contents come from T4.
+- Modified files: `imagewam_thor.py`, `config_resolver.py`,
+  `THOR_STATUS_SUMMARY.md` (options table).
+- Observation: profile test pins the contents; the compare script builds
+  its frontend through `load_imagewam`.
+
+### Phase W12: Thor validation on the new entry
+Phase Status: pending
+- Goal: the recorded numbers reproduce through the new path, and the
+  target workload (THOR_CHECKLIST D) runs as a `Workload`.
+- Modified files: `scripts/imagewam_thor_matrix.sh`,
+  `benchmarks/imagewam_e2e_official_compare.py`, `THOR_CHECKLIST.md`.
+- Observation: matrix rows `default` and `stack` within run-to-run noise
+  of the recorded 203.3 / 106.1 ms (same commit conditions, GPU
+  exclusivity recorded), `vs official` not below recorded values; the
+  target workload table filled.
+
+### Phase T1-T5: Thor line
+Phase Status: pending
+- Goal: T1-T3 are THOR_CHECKLIST sections A, B, C; T4 records the preset
+  contents in `plan.md` "Decisions"; T5 applies the FA4 and native-VAE
+  default criteria in THOR_CHECKLIST C.
+- Modified files: `THOR_CHECKLIST.md` (finished items removed),
+  `opportunities.md`, `issues.md`.
+- Observation: matrix CSV/MD per THOR_CHECKLIST.
+
+### Phase S1-S3: `text_trim` as a servable default
+Phase Status: pending
+- Goal: ISSUE-080 conditions 4, 5, 6 (fixture v2, per-length graphs in the
+  runtime surface / ABI / native, bounded graph cache with startup
+  pre-capture). Independent of W0-W12; until S2 lands, rule R5 refuses
+  `text_trim` for the ABI and native paths and a profile that needs those
+  paths cannot set `text_trim`.
+- Modified files: `benchmarks/imagewam_gate_fixture_generate.py`,
+  `tests/fixtures/imagewam_gate/`, `runtime_surface.py`,
+  `pipeline_resources.py`, `runtime_export.py`, `native_*.py`,
+  `imagewam_thor.py` (bounded cache).
+- Observation: ISSUE-080 conditions re-checked one by one.
+
+## Decisions pending (owner)
+
+- Profile contents (T4): whether `fast` = `text_trim` + FA4 (bb+mot) +
+  native VAE in graph, and whether any of these become the default.
+- Whether `text_trim` may be part of a profile used with the ABI before
+  S2 (rule R5 says no).
+- Whether `libero_dims.py` stays as a module or is removed once the
+  workload test pins the equality.

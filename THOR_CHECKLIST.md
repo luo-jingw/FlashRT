@@ -130,7 +130,7 @@ Thor 上已满足：条件 1（三套件 trim ≥ 未 trim，P50 更低）、条
 - 条件 2 的 FA4 开分支（依赖 A1）。
 - 条件 4：fixture v2（带 trim 的 fp16 参考，`benchmarks/imagewam_gate_fixture_generate.py`）——代码与数据工作。
 - 条件 5：runtime surface / ABI / native 支持按长度的图（目前 `runtime_surface()`、`pipeline_resources()` 直接拒绝 `text_trim=True`）——代码工作。
-- 条件 6：`precapture_text_lengths` 与有界的按长度缓存——代码工作。
+- 条件 6：有界的按长度图缓存与启动时使用 `precapture_text_lengths`（该函数已存在，缺的是缓存上限与启动流程）——代码工作。
 
 条件 4、5、6 不是 Thor 测试，完成之前 `text_trim` 不能转默认。
 
