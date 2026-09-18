@@ -17,7 +17,7 @@
 
 ## 前置（每轮一次）
 
-环境变量与构建见 `scripts/imagewam_thor_validation.sh` 文件头。本轮只改了 Python 与脚本，不需要重编。
+环境变量与构建见 `scripts/imagewam_thor_validation.sh` 文件头。本轮改动是 Python 与脚本，不含 kernel 改动，不需要重编。
 
 ```
 export OUT=$HOME/thor_val/$(date +%m%d)
@@ -26,7 +26,7 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 (cd $BUNDLE && sha256sum -c SHA256SUMS) | tee $OUT/P0_bundle.log
 ```
 
-记录：GPU 是否被其他进程占用；`emc_locked` 是否为 `null`（目前未锁定）。这两项写在本轮所有数字旁边。
+记录：commit hash；GPU 是否被其他进程占用；`emc_locked` 是否为 `null`（目前未锁定）。这三项写在本轮所有数字旁边。
 
 ---
 
@@ -82,7 +82,7 @@ python benchmarks/imagewam_text_trim_bench.py --precision nvfp4 --section all --
 
 ## C. 配置矩阵（核心表）
 
-固定负载，一行一个配置，表格由脚本从日志生成（`$OUT/matrix_<suite>_<tag>.md/.csv`）。行定义见 `scripts/imagewam_thor_matrix.sh` 文件头。
+固定负载，一行一个配置，表格由脚本从日志生成（`$OUT/matrix_<suite>_<tag>.md/.csv`）。行定义见 `scripts/imagewam_thor_matrix.sh` 文件头。本轮起矩阵的每一行都经新入口构建 frontend：`benchmarks/imagewam_e2e_official_compare.py` 用 `load_imagewam(ckpt_path, workload, profile=..., precision=..., calibration_path=...)` 构建，环境变量 `PROFILE` 选具名 profile（未设时为 `default`），原有的逐开关环境变量（`TEXT_TRIM`、`FA4_MOT`、`VAE_GRAPH`、`VAE_ENCODER`、`VAE_RESIZE`、`PRECISION`、`CALIBRATION`、`NVFP4_AWQ`）作为 expert 覆盖传入。
 
 ```
 # 完整阶梯 + leave-one-out（libero_spatial，nvfp4）
@@ -92,7 +92,13 @@ SUITE=libero_goal PRECS=nvfp4 ROWS="default vae_trim stack" bash scripts/imagewa
 SUITE=libero_10   PRECS=nvfp4 ROWS="default vae_trim stack" bash scripts/imagewam_thor_matrix.sh
 # 精度行：默认与叠满两档
 SUITE=libero_spatial PRECS="e0m3_hadamard fp8_static_cutlass fp16" ROWS="default stack" bash scripts/imagewam_thor_matrix.sh
+# profile 行：一行是一个具名 profile，不是一组开关；单独输出目录，避免与上面的开关行写出同名日志
+OUT=$OUT/C_profile SUITE=libero_spatial PRECS=nvfp4 PROFILES="default fast" bash scripts/imagewam_thor_matrix.sh
+OUT=$OUT/C_profile SUITE=libero_goal   PRECS=nvfp4 PROFILES="default fast" bash scripts/imagewam_thor_matrix.sh
+OUT=$OUT/C_profile SUITE=libero_10     PRECS=nvfp4 PROFILES="default fast" bash scripts/imagewam_thor_matrix.sh
 ```
+
+`PROFILES` 模式一行是一个具名 profile（`default`、`fast`），行名即 profile 名，行在表和 CSV 里的列与开关行相同；不加 `PROFILES` 时仍按 `ROWS` 的开关行跑，行名与含义不变（`default vae vae_trim vae_trim_fa4bb stack stack_no_vae stack_no_trim`）。两种模式的 per-row 日志同名（`matrix_<suite>_<prec>_<row>.log`），跑进同一个 `OUT` 会互相覆盖。
 
 行有效性：`rc=0`，`FA4 bb` / `FA4 mot` 与该行的定义一致，`FA4 fallback` 为 `None`。不满足的行作废重跑。
 
@@ -101,8 +107,76 @@ SUITE=libero_spatial PRECS="e0m3_hadamard fp8_static_cutlass fp16" ROWS="default
 - FA4 转默认的条件：`stack` 相对 `vae_trim` 的 P50 至少低 2 ms（约等于跑间波动），且 vs official 不劣于 `vae_trim`。否则 FA4 保持关。
 - 原生 VAE 转默认的条件：`vae` 相对 `default` 的 P50 降低，且 vs official 不劣于 `default`。
 - 精度行：各行 vs official 不低于 `tests/fixtures/imagewam_gate/fidelity_thresholds.json` 的阈值。
+- 新入口：记录值的复现见 C1，`effective_config` 与解析器的一致见 C2，runtime identity 见 C3。
 
 去向：OPT 条目写数字，`plan.md` 的 "Decisions" 写默认与 profile 的决定。
+
+### C1 新入口下复现记录值（W12）
+`default` 与 `stack` 是记录值 203.3 ms、106.1 ms 的来源（nvfp4，libero_spatial，`THOR_STATUS_SUMMARY.md`）；`PROFILES="default fast"` 的两行是同一组开关（`fast` 等于 `stack`），因此两者复现同一对记录值。本节第一条完整阶梯命令已包含 `default` 与 `stack`，可直接用它生成的表；只补这两行时：
+
+```
+SUITE=libero_spatial PRECS=nvfp4 ROWS="default stack" bash scripts/imagewam_thor_matrix.sh
+```
+
+判据：`default` 与 `stack` 的 P50 与 203.3 ms、106.1 ms 的差都在 2 ms 的跑间波动内（与 FA4 转默认判据同一工作值）；两行 `vs official` 的中位数不低于记录值 0.9976 与 0.99933；行有效性同本节。
+去向：复现则写 `plan.md` 的 W12 相位状态；不达标则写 `issues.md`。
+
+### C2 `effective_config` 与解析器逐字符一致（W12）
+新入口下 profile 是部署记录的一部分：比较脚本打印的 `effective_config` 行必须与 `config_resolver.format_effective_config` 为同一 resolved 配置产出的字符串完全相同。解析器不知道运行时才定的 `use_fa4`（`default` profile 打印 `auto`）与 `fa4_fallback_reason`，比较时把 frontend 的 `fe.use_fa4` / `fe.use_fa4_mot` / `fe.fa4_fallback_reason` 传进去。环境变量用 C 节 profile 行那一轮的环境（`CKPT_PATH`、`FLUX2_*`、`QWEN3_MODEL_SPEC`、`PYTHONPATH`、`BUNDLE`、`OUT`）。
+
+```
+grep '^effective_config' $OUT/C_profile/matrix_libero_spatial_nvfp4_default.log | tail -1 > $OUT/C2_default_script.txt
+PROFILE=default python - > $OUT/C2_default_resolver.txt <<'PY'
+import os
+from flash_rt.frontends.torch.imagewam_thor import load_imagewam
+from flash_rt.models.imagewam.config_resolver import format_effective_config, resolve_config
+from flash_rt.models.imagewam.structure import ImageWAMStructure
+from flash_rt.models.imagewam.workload import ImageWAMWorkload
+
+w = ImageWAMWorkload.libero()
+st = ImageWAMStructure.from_checkpoint(os.environ["CKPT_PATH"])
+opts = dict(profile=os.environ.get("PROFILE", "default"), precision="nvfp4",
+            ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"])
+r = resolve_config(w, st, **opts)
+fe = load_imagewam(os.environ["CKPT_PATH"], w, structure=st, flux2_src=os.environ["FLUX2_SRC"],
+                   qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"],
+                   dataset_stats_path=os.path.join(os.path.dirname(os.environ["CKPT_PATH"]),
+                                                   "dataset_stats.json"),
+                   **opts)
+print(format_effective_config(r.options, use_fa4=fe.use_fa4, use_fa4_mot=fe.use_fa4_mot,
+                              fa4_fallback_reason=fe.fa4_fallback_reason))
+PY
+diff -u $OUT/C2_default_resolver.txt $OUT/C2_default_script.txt
+```
+
+判据：`diff` 退出码 0；`fast` 行同样比较（`PROFILE=fast`，日志换成 `matrix_libero_spatial_nvfp4_fast.log`，输出文件换名）。
+去向：一致则并入 W12 的相位状态；不一致则写 `issues.md`，`diff` 打出的差异就是缺口。
+
+### C3 runtime identity 带 `workload.<field>`（W10）
+`from_config` 或 `load_imagewam` 构建的 frontend 在导出 runtime / ABI 描述时，`setup_identity` 在原有 `dims.<key>` 之外带九个 workload 字段：`workload.num_views`、`workload.image_h`、`workload.image_w`、`workload.text_max_len`、`workload.action_horizon`、`workload.action_dim`、`workload.proprio_dim`、`workload.num_steps`、`workload.shift`，值与 `ImageWAMWorkload.libero()` 的同名字段一致。这些条目是附加描述，不改 `calibration_file.IDENTITY_DIM_KEYS`，已记录的校准文件仍然有效。
+
+```
+python tests/gate_imagewam_model_runtime_export.py --precision nvfp4 2>&1 | tee $OUT/C3_export.log
+python tests/gate_imagewam_native_schema_parity.py --precision nvfp4 2>&1 | tee $OUT/C3_native_schema.log
+python - > $OUT/C3_export_identity.log 2>&1 <<'PY'
+import os
+from flash_rt.frontends.torch.imagewam_thor import load_imagewam
+from flash_rt.models.imagewam.workload import ImageWAMWorkload
+
+fe = load_imagewam(os.environ["CKPT_PATH"], ImageWAMWorkload.libero(), profile="default",
+                   precision="nvfp4", ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"],
+                   flux2_src=os.environ["FLUX2_SRC"],
+                   qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"],
+                   dataset_stats_path=os.path.join(os.path.dirname(os.environ["CKPT_PATH"]),
+                                                   "dataset_stats.json"))
+fe.set_prompt("pick up the black bowl between the plate and the ramekin and place it on the plate")
+print(fe.export_model_runtime().identity)
+PY
+grep -o 'workload\.[a-z_]*' $OUT/C3_export_identity.log | sort | uniq -c
+```
+
+判据：`C3_export.log`、`C3_native_schema.log` 都以 PASS 结束；`C3_export_identity.log` 里九项 `workload.*` 齐全且值等于 `ImageWAMWorkload.libero()` 的同名字段，`dims.*` 条目仍在。
+去向：`plan.md` 的 W10 与 W12 相位状态；缺项或值不对写 `issues.md`。
 
 ---
 
@@ -122,7 +196,14 @@ SUITE=libero_spatial PRECS="e0m3_hadamard fp8_static_cutlass fp16" ROWS="default
 | checkpoint 与校准文件 | |
 | 图显存预算 | |
 
-说明：`benchmarks/imagewam_e2e_official_compare.py`（矩阵脚本用的）读取 LIBERO 数据，`REAL_DIMS` 固定为 LIBERO。目标配置的延迟部分可以用 `benchmarks/imagewam_thor_graph_bench.py`（随机权重，改 `REAL_DIMS`，不含 VAE 与 proprio，也无法测 `text_trim`）；精度与 trim 需要目标配置的数据和官方对照，这个缺口要在配置表填完之后再补。
+说明：目标配置按 `ImageWAMWorkload` 的字段填入：部署方给出 `num_views`、每视角 `image_h`/`image_w`、`text_max_len`、`action_horizon`、`action_dim`、`proprio_dim`、`num_steps`、`shift`，`x0`、`img_len`、`a0`、`total`、`ref_h`、`ref_w`、`dt` 与 `vae_graph_input` 由它派生并在不一致时报错，不再手改 dims。
+
+表内还缺三个 workload 字段，要由目标配置的所有者给定：`action_dim`（反归一化后的动作维度）、`shift`（噪声调度位移）、`text_max_len`（填充后的文本长度，与表内的指令 token 数 min / median / max 不是同一个量）；分辨率一栏写成每个视角的 `image_h`×`image_w`。`num_train_timesteps` 用默认 1000，除非目标 checkpoint 另有记录。
+
+说明：`benchmarks/imagewam_e2e_official_compare.py`（矩阵脚本用的）读取 LIBERO 数据，dims 取自 `flash_rt/models/imagewam/libero_dims.py` 的 `LIBERO_REAL_DIMS`，即 LIBERO 工作负载。目标配置的延迟部分可以用 `benchmarks/imagewam_thor_graph_bench.py`（随机权重，dims 换成目标工作负载，不含 VAE 与 proprio，也无法测 `text_trim`）；精度与 trim 需要目标配置的数据和官方对照，这个缺口要在配置表填完之后再补。
+
+判据：`ImageWAMWorkload` 的九个字段都能从表里取到值，且 `ImageWAMWorkload(...)` 加 `resolve_config(..., profile=...)` 不抛 `ConfigError`（`layout()` 与 `vae_graph_input()` 也不报错）。
+去向：`plan.md` 的 W12 相位状态。
 
 ---
 
@@ -137,6 +218,7 @@ Thor 上已满足：条件 1（三套件 trim ≥ 未 trim，P50 更低）、条
 - 条件 6：有界的按长度图缓存与启动时使用 `precapture_text_lengths`（该函数已存在，缺的是缓存上限与启动流程）——代码工作。
 
 条件 4、5、6 不是 Thor 测试，完成之前 `text_trim` 不能转默认。
+规则 R5 同样在 `consumer="abi"` 与 `consumer="native"` 下拒绝 `text_trim=True`，所以含 `text_trim` 的 profile（`fast`）不能用于 ABI 与 native 两条服务路径；需要这两条路径的部署在条件 5 落地前不能设 `text_trim`。
 
 ### E2 重定 Thor 延迟基线
 矩阵结果稳定后，更新 `tests/fixtures/imagewam_gate/latency_baselines.json` 的 Thor 项（当前 nvfp4 门限 243 ms 对应旧基线 231.6 ms）。

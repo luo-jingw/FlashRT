@@ -11,7 +11,20 @@
 - **ActionDiT**：5 double + 20 single，10 步 flow-matching 去噪，官方 shift-based schedule。
 - **输出**：反归一化到真实 action space。
 - **执行**：prefill + 10 步 denoise 捕成一张 CUDA Graph，`infer()` 只是 replay；启用 `text_trim` 时每个有效文本长度一张图。
-- **对外接口**：Python `infer()`；`frt_model_runtime_v1` ABI（`io="python"`）；原生 C++ overlay（`io="native"`，热路径不经过 Python）。
+- **对外接口**：部署入口 `load_imagewam(ckpt_path, workload, profile=..., precision=..., calibration_path=...)`；Python `infer()`；`frt_model_runtime_v1` ABI（`io="python"`）；原生 C++ overlay（`io="native"`，热路径不经过 Python）。
+
+## 部署配置：workload / profile / precision
+
+解析链是 `workload + structure + profile + precision + calibration_path` → `resolve_config(...)` → `(dims, options)` → `from_config` → frontend；解析在构造后不再改变。
+
+- **workload**：服务的工作负载，由 `ImageWAMWorkload` 描述。部署方给出相机数、每视角图像尺寸、文本长度、action horizon、动作维度、proprio 维度、去噪步数、调度 shift；序列布局由它派生：`x0`、`img_len`、`a0`、`total`、`ref_h`、`ref_w`、`dt`，以及原生 VAE 进图时的 `vae_graph_input`。派生值互相矛盾时在解析阶段报错，不再手填这些整数。LIBERO 工作负载是 `ImageWAMWorkload.libero()`：两个 224×224 视角、512 token 文本、horizon 64、7 维动作、8 维 proprio、10 步去噪、shift=5.0，派生 `x0=513`、`img_len=392`、`a0=905`、`total=969`、`ref_h×ref_w=14×28`。
+- **profile**：一组开关的具名集合，按名字选用。`default` 复现今天的构造函数默认值：nvfp4、不裁文本、FA4 由 `FLASHRT_THOR_FA4` 决定、torch VAE 编码器在图外、无 AWQ。`fast` 是 `text_trim` + FA4 backbone + FA4 mot + 原生 VAE 进图，实测 106.1 ms 对 `default` 的 203.3 ms（nvfp4，libero_spatial），标为 PROVISIONAL，内容与是否转默认待 T4/T5 决定。
+- **precision**：覆盖 profile 的精度档位。
+- **calibration_path**：静态 FP8 与 AWQ 所需的校准文件。
+
+`resolve_config` 是唯一的合法性判定点，非法组合抛一条带规则编号（R1–R11，以及值域规则 V1）的错误。日志里的 `effective_config` 行由 `config_resolver.format_effective_config` 产出，比较脚本、矩阵脚本与 runtime 身份打印同一个字符串，因此 profile 与精度是一份可记录的部署身份。
+
+同一 workload 也是 runtime 与校准文件身份的一部分：ABI 描述与 `setup_identity` 在 `dims.<key>` 之外带 `workload.<field>`（`num_views`、`image_h`、`image_w`、`text_max_len`、`action_horizon`、`action_dim`、`proprio_dim`、`num_steps`、`shift`）；这些条目是附加描述，已记录的校准文件仍然有效。
 
 ## 用了哪些优化
 
@@ -40,6 +53,8 @@
 
 | 选项 | 当前默认 | 作用 | 限制 |
 |---|---|---|---|
+| `workload` | `ImageWAMWorkload.libero()` | 服务的工作负载；序列布局与 `vae_graph_input` 由它派生并校验 | 字段必须与 checkpoint 的结构一致（规则 R7） |
+| `profile` | `default` | 开关的具名集合；`fast` 为 `text_trim` + FA4 双位点 + 原生 VAE 进图（106.1 ms 对 203.3 ms，nvfp4，libero_spatial） | `fast` 标为 PROVISIONAL，待 T4/T5 决定；含 `text_trim`，ABI 与 native 路径被规则 R5 拒绝 |
 | `precision` | `nvfp4` | 精度/速度档位 | `fp8_static*` 需要校准文件 |
 | `text_trim` | 关 | 按有效文本长度裁剪 | `runtime_surface()` / ABI 导出不支持（ABI 描述单一最大 shape 的图） |
 | FA4（`FLASHRT_THOR_FA4`、`use_fa4_mot`） | 关 | 注意力 kernel | 首次调用编译，失败自动回退 |
