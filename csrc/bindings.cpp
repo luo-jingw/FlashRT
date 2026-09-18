@@ -1873,12 +1873,17 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
     // every existing caller's own layout -- pass a wider buffer's real
     // row width to read gate/up from a column-slice of it instead
     // (opportunities.md op-fusion audit finding 1).
+    // `out_row_stride=0` (default) means a packed `(seq, half_dim)`
+    // output; pass a wider buffer's row width to write into a column
+    // slice of it (merged single-stream linear2 input, roadmap item 4).
     m.def("silu_glu_merged_fp16", [](uintptr_t merged, uintptr_t out,
-                                      int seq, int half_dim, uintptr_t stream, int row_stride) {
+                                      int seq, int half_dim, uintptr_t stream, int row_stride,
+                                      int out_row_stride) {
         silu_glu_merged_fp16(reinterpret_cast<const __half*>(merged),
-                              reinterpret_cast<__half*>(out), seq, half_dim, to_stream(stream), row_stride);
+                              reinterpret_cast<__half*>(out), seq, half_dim, to_stream(stream), row_stride,
+                              out_row_stride);
     }, py::arg("merged"), py::arg("out"), py::arg("seq"), py::arg("half_dim"), py::arg("stream") = 0,
-       py::arg("row_stride") = 0);
+       py::arg("row_stride") = 0, py::arg("out_row_stride") = 0);
 
     m.def("mul_fp16", [](uintptr_t a, uintptr_t b, uintptr_t out,
                          int n, uintptr_t stream) {

@@ -3037,3 +3037,203 @@ at closure" / "structured multi-variable investigation" -- each of the
 section is only an index; do not treat any item here as approved
 until it gets its own `# Plan: <item>` section with `Plan Status:
 approved`.
+
+# Plan: single-stream `linear2` merge (roadmap item 4)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+The official `SingleStreamBlock` (`third_party/flux2/src/flux2/model.py`)
+and `SlimFlux2SingleBlock` (ImageWAM
+`src/imagewam/models/backbones/action_dit_flux2.py`) compute the block
+output projection as ONE `linear2` GEMM over
+`cat([attn_out, mlp_act(mlp)], -1)`. `checkpoint_loader._extract_single_block`
+splits the real `linear2.weight` at load time into `attn_out_proj.weight`
+and `mlp_down.weight`. `pipeline_thor.py`'s `_single_stream_layer` and
+`_action_single_layer` then run two GEMMs (`attn_out_proj`, `mlp_down`)
+into two landing buffers, a torch elementwise add (`_add_inplace`), and
+the gated residual. This runs in 20 backbone single-stream layers (once
+per `infer()`) and 20 ActionDiT single-stream layers (200 times per
+`infer()`, 10 denoise steps).
+
+The `linear1` merge (OPT-015, commit 4e9f7d7) is the precedent: one GEMM
+launch removed per ActionDiT single-stream layer gave +8.0 ms of the
++7.9 ms `infer()` win on Thor, because the M=64 denoise loop is
+launch-bound.
+
+### Problem
+
+Each single-stream layer launches one GEMM (two kernels for `nvfp4`:
+activation quantize + GEMM) and one add kernel more than the official
+structure needs. The split also rounds three times (two FP16 GEMM outputs
+and their FP16 sum) where the official structure rounds once.
+
+### Measurable goal
+
+- Every precision except `fp16_cutlass` runs ONE `linear2` GEMM with
+  `K = attn_width + mlp_hidden` per single-stream layer, feeding the
+  existing gated residual. `fp16_cutlass` keeps the split path, as it
+  does for `linear1`.
+- Locally (H100, `fp16`), at the real shapes: merged vs split
+  single-stream layer output cosine >= 0.9999, reported with max-abs and
+  rel_l2; the end-to-end compare stays at baseline (`fr_vs_off` median
+  0.99840, min 0.99567; mean `mae_fr_vs_gt` 0.18359).
+- Thor: merged vs split `infer()` P50 A/B on `nvfp4` and `fp16`.
+
+## Structure
+
+- `csrc/kernels/activation.{cu,cuh}`, `csrc/bindings.cpp`:
+  `silu_glu_merged_fp16` gains an output row stride so the SiLU-GLU
+  result lands directly in the MLP columns of the `linear2` input
+  buffer. Owns no state.
+- `flash_rt/models/imagewam/checkpoint_loader.py`:
+  `_extract_single_block`/`build_real_weights` gain `merge_linear2`.
+  When set, the real unsplit `linear2.weight` is returned in the (K,N)
+  GEMM convention instead of the two split slots.
+- `flash_rt/frontends/torch/imagewam_thor.py`: owns `dims["merge_linear2"]`
+  (default `precision != "fp16_cutlass"`, overridable through
+  `dims_override` for A/B), the `linear2.weight` slots (random and real
+  weights), the `single_linear2_in`/`action_linear2_in` buffers, and the
+  autotune shapes for the merged GEMM.
+- `flash_rt/models/imagewam/pipeline_thor.py`: `_single_stream_layer` and
+  `_action_single_layer` own the merged data flow (see Flow).
+
+State ownership: `dims["merge_linear2"]` is set once by the frontend
+constructor and only read by the pipeline. The `linear2` input buffers
+are allocated once by `_alloc_buffers`, like every other scratch buffer.
+
+## Interface
+
+```python
+# csrc/kernels/activation.cuh
+void silu_glu_merged_fp16(const __half* merged, __half* out, int seq, int half_dim,
+                          cudaStream_t stream = 0, int row_stride = 0,
+                          int out_row_stride = 0);   # 0 = packed (half_dim)
+
+# python binding (flash_rt_kernels)
+silu_glu_merged_fp16(merged, out, seq, half_dim, stream=0, row_stride=0, out_row_stride=0)
+
+# flash_rt/models/imagewam/checkpoint_loader.py
+_extract_single_block(sd, prefix, *, attn_dim, merge_qkv_mlp=False, merge_linear2=False) -> dict
+build_real_weights(sd, *, ..., merge_qkv_mlp=False, merge_linear2=False) -> dict
+#   merge_linear2=True: slot "linear2.weight", shape (attn_dim + mlp_hidden, hidden)
+#   replaces "attn_out_proj.weight" and "mlp_down.weight".
+
+# dims keys read by pipeline_thor.py
+dims["merge_linear2"]: bool   # requires dims["merge_qkv_mlp"]
+bufs["single_linear2_in"]: (a0, hidden + mlp_hidden) fp16
+bufs["action_linear2_in"]: (num_action, action_attn_width + action_mlp_hidden) fp16
+weights[(stream, "single", L, "linear2.weight")]: callable linear op, N=hidden, K=attn+mlp
+```
+
+`merge_linear2=True` with `merge_qkv_mlp=False` is rejected (frontend
+constructor and pipeline both raise `ValueError`): the merged path relies
+on the `linear1`-merged SiLU-GLU call to write into the `linear2` input
+buffer.
+
+## Flow
+
+Merged single-stream layer (backbone shown; ActionDiT is identical at
+`action_*` widths, with the attention output at row offset `a0` of the
+"mot" site's `Q_O`):
+
+1. AdaLN: `combined` -> `modded`.
+2. `linear1.weight` GEMM -> `single_linear1_merged`; Q/K/V column slices
+   copied to `Q_O`/`K_cache`/`V_cache`; `silu_glu_merged_fp16` reads the
+   gate/up columns and writes `(a0, mlp_hidden)` into
+   `single_linear2_in[:, hidden:]` (`out_row_stride = hidden + mlp_hidden`).
+3. QK-Norm, RoPE, attention (`Q_O` holds the attention output).
+4. Strided copy `Q_O` -> `single_linear2_in[:, :hidden]`.
+5. `linear2.weight` GEMM (`K = hidden + mlp_hidden`) -> `proj_scratch`.
+6. Gated residual `combined += gate * proj_scratch` (unchanged kernel).
+
+Kernel count per layer, merged vs split: one strided copy + one GEMM
+replaces two GEMMs + one add.
+
+Precision notes:
+- `nvfp4`: `quantize_fp4_dynamic_sfa_fp16` scales every 16-element K
+  block independently, with no per-tensor scale. `hidden` (3072) is a
+  multiple of 16, so no block straddles the attn|mlp boundary, and the
+  quantized activation and weight operands are identical to the split
+  path's. K = 12288 (backbone) and 7168 (ActionDiT) are multiples of 64,
+  so the scale-factor layout has no K padding. Only the accumulation
+  differs.
+- `fp8` / `fp8_static*`: one per-tensor activation scale now covers both
+  halves. This is a numerics change that can only be checked on Thor
+  (ISSUE-001 blocks FP8 on H100).
+- `fp16`: one FP32-accumulated GEMM, rounded once.
+
+## Code Mapping
+
+| item | file |
+|---|---|
+| SiLU-GLU output stride | `csrc/kernels/activation.cu`, `csrc/kernels/activation.cuh`, `csrc/bindings.cpp` |
+| unsplit `linear2.weight` | `flash_rt/models/imagewam/checkpoint_loader.py` |
+| flag, weights, buffers, autotune | `flash_rt/frontends/torch/imagewam_thor.py` |
+| merged data flow | `flash_rt/models/imagewam/pipeline_thor.py` |
+| kernel test | `tests/test_imagewam_real_mlp.py` (extended) |
+| layer tests (small reference + real-shape merged vs split) | `tests/test_imagewam_thor_real_wiring.py` |
+| loader test | `tests/test_imagewam_checkpoint_loader.py` |
+| A/B + correctness script (local and Thor) | `benchmarks/imagewam_fusion_ab.py` |
+
+## Implementation Phases
+
+### Phase 1: SiLU-GLU output row stride
+
+Phase Status: completed
+
+- Goal: `silu_glu_merged_fp16` writes into a column slice of a wider
+  buffer.
+- Files: `csrc/kernels/activation.{cu,cuh}`, `csrc/bindings.cpp`,
+  `tests/test_imagewam_real_mlp.py`.
+- Observation: bit-exact vs a torch reference for packed output
+  (existing callers unchanged) and for strided output at the real shape
+  `(905, 9216)` inside a `(905, 12288)` buffer, with the untouched
+  columns still zero.
+
+### Phase 2: loader, frontend, and pipeline wiring
+
+Phase Status: active
+
+- Goal: merged path selected by `dims["merge_linear2"]`, default on for
+  every precision except `fp16_cutlass`.
+- Files: `checkpoint_loader.py`, `imagewam_thor.py`, `pipeline_thor.py`.
+- Observation: frontend constructs, captures, and replays at the default
+  dims for `fp16` in both modes; `linear2.weight` slot count = 20+20 at
+  real dims.
+
+### Phase 3: layer-level verification
+
+Phase Status: pending
+
+- Goal: merged == split within FP16 rounding at the real shapes.
+- Files: `tests/test_imagewam_thor_real_wiring.py`,
+  `tests/test_imagewam_checkpoint_loader.py`.
+- Observation: cosine / max-abs / rel_l2, merged vs split pointer path at
+  backbone (`a0=905`, hidden 3072, mlp 9216) and ActionDiT
+  (`num_action=64`, 1024 / 3072 / 4096) single-stream layers; merged vs
+  the tensor-level reference at the small test shapes; real
+  `linear2.weight` equals `cat(attn_out_proj, mlp_down)` of the split
+  loader.
+
+### Phase 4: regression, end to end, local A/B, sm_110 build
+
+Phase Status: pending
+
+- Goal: no regression; indicative local speed; Thor build compiles.
+- Files: `benchmarks/imagewam_fusion_ab.py` (new).
+- Observation: `pytest tests/test_imagewam_*.py` count;
+  `imagewam_e2e_official_compare.py` fp16 numbers vs baseline; merged vs
+  split P10/P50/P90 on H100 (indicative only);
+  `sm110_check.sh ... fusion` rc.
+
+### Phase 5: Thor handoff
+
+Phase Status: pending
+
+- Goal: a self-contained Thor check for `nvfp4` and `fp16`.
+- Files: `opportunities.md` (OPT-016).
+- Observation: commands, expected observations, and what to report.

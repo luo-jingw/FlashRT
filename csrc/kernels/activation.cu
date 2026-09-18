@@ -182,10 +182,16 @@ void gate_geglu_merged_fp16(const __half* merged, __half* out,
 // the real fused `linear1` GEMM's own output, `(seq, 3*hidden+
 // 2*mlp_hidden)`, gate/up columns `[3*hidden, 3*hidden+2*mlp_hidden)`)
 // with no separate copy -- opportunities.md op-fusion audit finding 1.
+// `out_row_stride` (elements): the OUTPUT buffer's real row width.
+// Defaults to `half_dim` (a packed `(seq, half_dim)` buffer). The
+// merged single-stream `linear2` path passes the width of its
+// `(seq, attn_width + half_dim)` GEMM input so the result lands in that
+// buffer's MLP columns directly (roadmap item 4, `linear2` merge).
 template<typename T>
 __global__ void silu_glu_merged_kernel(const T* __restrict__ merged,
                                         T* __restrict__ out,
-                                        int seq, int half_dim, int row_stride) {
+                                        int seq, int half_dim, int row_stride,
+                                        int out_row_stride) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = seq * half_dim;
     if (idx < total) {
@@ -194,18 +200,21 @@ __global__ void silu_glu_merged_kernel(const T* __restrict__ merged,
         float g = to_f32(merged[row * row_stride + col]);
         float u = to_f32(merged[row * row_stride + half_dim + col]);
         float silu = g / (1.0f + expf(-g));
-        out[idx] = from_f32<T>(silu * u);
+        out[row * out_row_stride + col] = from_f32<T>(silu * u);
     }
 }
 
-template __global__ void silu_glu_merged_kernel<__half>(const __half*, __half*, int, int, int);
+template __global__ void silu_glu_merged_kernel<__half>(const __half*, __half*, int, int, int, int);
 
 void silu_glu_merged_fp16(const __half* merged, __half* out,
-                           int seq, int half_dim, cudaStream_t stream, int row_stride) {
+                           int seq, int half_dim, cudaStream_t stream, int row_stride,
+                           int out_row_stride) {
     int total = seq * half_dim;
     int blocks = (total + 255) / 256;
     int stride = row_stride > 0 ? row_stride : half_dim * 2;
-    silu_glu_merged_kernel<__half><<<blocks, 256, 0, stream>>>(merged, out, seq, half_dim, stride);
+    int out_stride = out_row_stride > 0 ? out_row_stride : half_dim;
+    silu_glu_merged_kernel<__half><<<blocks, 256, 0, stream>>>(merged, out, seq, half_dim, stride,
+                                                                 out_stride);
 }
 
 // Vectorized 8-half / thread element-wise multiply.  BW-bound; pairs
