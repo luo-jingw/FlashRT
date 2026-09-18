@@ -79,6 +79,20 @@ void fp8_gemm_descale_f32out(const void* A_fp8, const void* B_fp8, void* C_fp32,
                               const float* act_descale, const float* w_descale,
                               cudaStream_t stream = 0);
 
+// TN layout variants: B_fp8 is the weight stored [N,K] row-major (the NN
+// functions above take it as [K,N]). cuBLASLt supports FP8 on compute
+// capability 8.9/9.0 only in this layout; Blackwell supports both.
+// A_fp8 is the activation [M,K] row-major, C is [M,N] row-major, as above.
+void fp8_gemm_descale_fp16_tn(const void* A_fp8, const void* B_fp8, void* C_fp16,
+                              int M, int N, int K,
+                              const float* act_descale, const float* w_descale,
+                              cudaStream_t stream = 0);
+
+void fp8_gemm_descale_f32out_tn(const void* A_fp8, const void* B_fp8, void* C_fp32,
+                                int M, int N, int K,
+                                const float* act_descale, const float* w_descale,
+                                cudaStream_t stream = 0);
+
 // BF16 output variant — for models trained in BF16 with activations exceeding
 // FP16 range (e.g., Pi0-FAST decode_step where hidden state reaches ~569K).
 // FP8 inputs, BF16 accumulation in cuBLASLt, BF16 output.

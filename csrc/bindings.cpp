@@ -2207,6 +2207,26 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
        py::arg("M"), py::arg("N"), py::arg("K"),
        py::arg("act_descale"), py::arg("w_descale"), py::arg("stream") = 0);
 
+    // TN layout variants: B is the weight stored [N,K] row-major. cuBLASLt FP8
+    // supports only this layout on sm_89/sm_90 (issues.md ISSUE-001).
+    m.def("fp8_gemm_descale_fp16_tn", [](uintptr_t A, uintptr_t B, uintptr_t C,
+            int M, int N, int K, uintptr_t act_descale, uintptr_t w_descale, uintptr_t stream) {
+        fp8_gemm_descale_fp16_tn(to_ptr(A), to_ptr(B), to_ptr(C), M, N, K,
+            reinterpret_cast<const float*>(act_descale), reinterpret_cast<const float*>(w_descale),
+            to_stream(stream));
+    }, py::arg("A"), py::arg("B"), py::arg("C"),
+       py::arg("M"), py::arg("N"), py::arg("K"),
+       py::arg("act_descale"), py::arg("w_descale"), py::arg("stream") = 0);
+
+    m.def("fp8_gemm_descale_f32out_tn", [](uintptr_t A, uintptr_t B, uintptr_t C,
+            int M, int N, int K, uintptr_t act_descale, uintptr_t w_descale, uintptr_t stream) {
+        fp8_gemm_descale_f32out_tn(to_ptr(A), to_ptr(B), to_ptr(C), M, N, K,
+            reinterpret_cast<const float*>(act_descale), reinterpret_cast<const float*>(w_descale),
+            to_stream(stream));
+    }, py::arg("A"), py::arg("B"), py::arg("C"),
+       py::arg("M"), py::arg("N"), py::arg("K"),
+       py::arg("act_descale"), py::arg("w_descale"), py::arg("stream") = 0);
+
     // FP8 GEMM with device descale → BF16 output (Pi0-FAST decode_step path)
     m.def("fp8_gemm_descale_bf16out", [](uintptr_t A, uintptr_t B, uintptr_t C,
             int M, int N, int K, uintptr_t act_descale, uintptr_t w_descale, uintptr_t stream) {

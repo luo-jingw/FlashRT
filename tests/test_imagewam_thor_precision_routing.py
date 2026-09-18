@@ -40,6 +40,11 @@ from collections.abc import Iterator
 
 import pytest
 import torch
+# Meta-tensor math in test_nvfp4_awq_routing lazily imports torch._dynamo,
+# which registers a TORCH_LIBRARY. Imported here, outside the stubbed
+# window, so the window's sys.modules restore never drops it (a second
+# import would re-register and fail).
+import torch._dynamo  # noqa: F401
 
 import flash_rt
 
@@ -56,6 +61,8 @@ QUANT_LINEAR_MODULE = "flash_rt.models.imagewam.quant_linear"
 #   swiglu16   CutlassFp16SwiGluMlp (fused SwiGLU gate/up)
 #   fp8        Fp8Linear (dynamic scale)
 #   nvfp4      Nvfp4Linear
+#   nvfp4sim   SimNvfp4Linear (NVFP4 numerics emulated with fp16 GEMMs)
+#   e0m3h      E0m3HadamardLinear (Hadamard-rotated E0M3 weights and activations)
 #   sfp8       StaticFp8Linear(use_cutlass=False)
 #   sfp8c      StaticFp8Linear(use_cutlass=True)
 #   swiglu4    Nvfp4SwiGluMlp (exists, currently routed to by no precision)
@@ -69,50 +76,51 @@ QUANT_LINEAR_MODULE = "flash_rt.models.imagewam.quant_linear"
 # qkv + mlp_in (so the SwiGLU slot can use CutlassFp16SwiGluMlp) and
 # attn_out_proj + mlp_down.
 
-PRECISION_COLUMNS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass", "e0m3_hadamard")
+PRECISION_COLUMNS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass", "e0m3_hadamard",
+                     "nvfp4_sim")
 ABSENT = "-"
 
 EXPECTED_ROUTING: dict[tuple[str, str, str], tuple[str, ...]] = {
-    # (site, block, slot)                                fp16       fp16_cutlass  fp8       nvfp4     fp8_static  fp8_static_cutlass
-    ("backbone", "double", "txt_in.weight"):            ("bf16out", "bf16out",   "bf16out", "bf16out", "bf16out", "bf16out", "bf16out"),
-    ("backbone", "double", "img_in.weight"):            ("bf16out", "bf16out",   "bf16out", "bf16out", "bf16out", "bf16out", "bf16out"),
-    ("backbone", "double", "txt_qkv.weight"):           ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("backbone", "double", "img_qkv.weight"):           ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("backbone", "double", "txt_proj.weight"):          ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("backbone", "double", "img_proj.weight"):          ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("backbone", "double", "txt_mlp0.weight"):          ("f16",     "swiglu16",  "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("backbone", "double", "img_mlp0.weight"):          ("f16",     "swiglu16",  "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("backbone", "double", "txt_mlp2.weight"):          ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("backbone", "double", "img_mlp2.weight"):          ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("backbone", "double", "txt_query_norm"):           ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
-    ("backbone", "double", "txt_key_norm"):             ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
-    ("backbone", "double", "img_query_norm"):           ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
-    ("backbone", "double", "img_key_norm"):             ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
-    ("backbone", "single", "linear1.weight"):           ("f16",     ABSENT,      "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("backbone", "single", "qkv.weight"):               (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
-    ("backbone", "single", "mlp_in.weight"):            (ABSENT,    "swiglu16",  ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
-    ("backbone", "single", "linear2.weight"):           ("f16",     ABSENT,      "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("backbone", "single", "attn_out_proj.weight"):     (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
-    ("backbone", "single", "mlp_down.weight"):          (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
-    ("backbone", "single", "query_norm"):               ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
-    ("backbone", "single", "key_norm"):                 ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
-    ("action_dit", "shared", "action_encoder.weight"):  ("f16",     "f16",       "f16",     "f16",     "f16",     "f16", "f16"),
-    ("action_dit", "shared", "action_encoder.bias"):    ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
-    ("action_dit", "shared", "head.linear.weight"):     ("f16",     "f16",       "f16",     "f16",     "f16",     "f16", "f16"),
-    ("action_dit", "double", "qkv.weight"):             ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("action_dit", "double", "proj.weight"):            ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("action_dit", "double", "mlp0.weight"):            ("f16",     "swiglu16",  "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("action_dit", "double", "mlp2.weight"):            ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("action_dit", "double", "query_norm"):             ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
-    ("action_dit", "double", "key_norm"):               ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
-    ("action_dit", "single", "linear1.weight"):         ("f16",     ABSENT,      "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("action_dit", "single", "qkv.weight"):             (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
-    ("action_dit", "single", "mlp_in.weight"):          (ABSENT,    "swiglu16",  ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
-    ("action_dit", "single", "linear2.weight"):         ("f16",     ABSENT,      "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h"),
-    ("action_dit", "single", "attn_out_proj.weight"):   (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
-    ("action_dit", "single", "mlp_down.weight"):        (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
-    ("action_dit", "single", "query_norm"):             ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
-    ("action_dit", "single", "key_norm"):               ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
+    # (site, block, slot)                                fp16       fp16_cutlass  fp8       nvfp4     fp8_static  fp8_static_cutlass  e0m3_hadamard  nvfp4_sim
+    ("backbone", "double", "txt_in.weight"):            ("bf16out", "bf16out",   "bf16out", "bf16out", "bf16out", "bf16out", "bf16out", "bf16out"),
+    ("backbone", "double", "img_in.weight"):            ("bf16out", "bf16out",   "bf16out", "bf16out", "bf16out", "bf16out", "bf16out", "bf16out"),
+    ("backbone", "double", "txt_qkv.weight"):           ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("backbone", "double", "img_qkv.weight"):           ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("backbone", "double", "txt_proj.weight"):          ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("backbone", "double", "img_proj.weight"):          ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("backbone", "double", "txt_mlp0.weight"):          ("f16",     "swiglu16",  "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("backbone", "double", "img_mlp0.weight"):          ("f16",     "swiglu16",  "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("backbone", "double", "txt_mlp2.weight"):          ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("backbone", "double", "img_mlp2.weight"):          ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("backbone", "double", "txt_query_norm"):           ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr", "ptr"),
+    ("backbone", "double", "txt_key_norm"):             ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr", "ptr"),
+    ("backbone", "double", "img_query_norm"):           ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr", "ptr"),
+    ("backbone", "double", "img_key_norm"):             ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr", "ptr"),
+    ("backbone", "single", "linear1.weight"):           ("f16",     ABSENT,      "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("backbone", "single", "qkv.weight"):               (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT, ABSENT),
+    ("backbone", "single", "mlp_in.weight"):            (ABSENT,    "swiglu16",  ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT, ABSENT),
+    ("backbone", "single", "linear2.weight"):           ("f16",     ABSENT,      "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("backbone", "single", "attn_out_proj.weight"):     (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT, ABSENT),
+    ("backbone", "single", "mlp_down.weight"):          (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT, ABSENT),
+    ("backbone", "single", "query_norm"):               ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr", "ptr"),
+    ("backbone", "single", "key_norm"):                 ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr", "ptr"),
+    ("action_dit", "shared", "action_encoder.weight"):  ("f16",     "f16",       "f16",     "f16",     "f16",     "f16", "f16", "f16"),
+    ("action_dit", "shared", "action_encoder.bias"):    ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr", "ptr"),
+    ("action_dit", "shared", "head.linear.weight"):     ("f16",     "f16",       "f16",     "f16",     "f16",     "f16", "f16", "f16"),
+    ("action_dit", "double", "qkv.weight"):             ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("action_dit", "double", "proj.weight"):            ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("action_dit", "double", "mlp0.weight"):            ("f16",     "swiglu16",  "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("action_dit", "double", "mlp2.weight"):            ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("action_dit", "double", "query_norm"):             ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr", "ptr"),
+    ("action_dit", "double", "key_norm"):               ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr", "ptr"),
+    ("action_dit", "single", "linear1.weight"):         ("f16",     ABSENT,      "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("action_dit", "single", "qkv.weight"):             (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT, ABSENT),
+    ("action_dit", "single", "mlp_in.weight"):          (ABSENT,    "swiglu16",  ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT, ABSENT),
+    ("action_dit", "single", "linear2.weight"):         ("f16",     ABSENT,      "fp8",     "nvfp4",   "sfp8",    "sfp8c", "e0m3h", "nvfp4sim"),
+    ("action_dit", "single", "attn_out_proj.weight"):   (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT, ABSENT),
+    ("action_dit", "single", "mlp_down.weight"):        (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT, ABSENT),
+    ("action_dit", "single", "query_norm"):             ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr", "ptr"),
+    ("action_dit", "single", "key_norm"):               ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr", "ptr"),
 }
 
 # Real FLUX.2-4B LIBERO dims (benchmarks/imagewam_e2e_official_compare.py's
@@ -172,14 +180,20 @@ QUANT_LINEAR_STUBS: dict[str, tuple[str, tuple[tuple[str, inspect._ParameterKind
                                           ("mlp_hidden", _POS, inspect.Parameter.empty),
                                           ("k", _POS, inspect.Parameter.empty))),
     "Fp8Linear": ("fp8", (("weight_fp16_ptr", _POS, inspect.Parameter.empty),
-                          ("n", _POS, inspect.Parameter.empty), ("k", _POS, inspect.Parameter.empty))),
+                          ("n", _POS, inspect.Parameter.empty), ("k", _POS, inspect.Parameter.empty),
+                          ("layout", _KW, None))),
     "StaticFp8Linear": ("sfp8", (("weight_fp16_ptr", _POS, inspect.Parameter.empty),
                                  ("n", _POS, inspect.Parameter.empty), ("k", _POS, inspect.Parameter.empty),
-                                 ("use_cutlass", _KW, False))),
+                                 ("use_cutlass", _KW, False), ("layout", _KW, None))),
     "Nvfp4Linear": ("nvfp4", (("weight_fp16_ptr", _POS, inspect.Parameter.empty),
-                              ("n", _POS, inspect.Parameter.empty), ("k", _POS, inspect.Parameter.empty))),
+                              ("n", _POS, inspect.Parameter.empty), ("k", _POS, inspect.Parameter.empty),
+                              ("awq_inv_s", _KW, None))),
     "E0m3HadamardLinear": ("e0m3h", (("weight_fp16_ptr", _POS, inspect.Parameter.empty),
                                      ("n", _POS, inspect.Parameter.empty), ("k", _POS, inspect.Parameter.empty))),
+    "SimNvfp4Linear": ("nvfp4sim", (("gemm", _POS, inspect.Parameter.empty),
+                                    ("weight_fp16_ptr", _POS, inspect.Parameter.empty),
+                                    ("n", _POS, inspect.Parameter.empty), ("k", _POS, inspect.Parameter.empty),
+                                    ("awq_inv_s", _KW, None))),
     "Nvfp4SwiGluMlp": ("swiglu4", (("merged_weight_fp16_ptr", _POS, inspect.Parameter.empty),
                                    ("mlp_hidden", _POS, inspect.Parameter.empty),
                                    ("k", _POS, inspect.Parameter.empty))),
@@ -461,6 +475,51 @@ def test_cutlass_swiglu_split_slots_carry_mlp_hidden(frontend_module):
     assert weights[("backbone", "double", 0, "img_mlp0.weight")].shape == (9216, 3072)
     assert weights[("action_dit", "double", 0, "mlp0.weight")].shape == (4096, 1024)
     assert weights[("backbone", "single", 0, "qkv.weight")].shape == (3 * 3072, 3072)
+
+
+# AWQ fold A slots (flash_rt/models/imagewam/awq.py): the GEMMs whose input
+# is an AdaLN output carry awq_inv_s; every other NVFP4 GEMM does not (the
+# down projections get their 1/s through the preceding up columns).
+AWQ_FOLD_A_SLOTS = {
+    ("backbone", "double"): {"txt_qkv.weight", "img_qkv.weight", "txt_mlp0.weight", "img_mlp0.weight"},
+    ("backbone", "single"): {"linear1.weight"},
+    ("action_dit", "double"): {"qkv.weight", "mlp0.weight"},
+    ("action_dit", "single"): {"linear1.weight"},
+}
+
+
+@pytest.mark.parametrize("precision", ("nvfp4", "nvfp4_sim"))
+def test_nvfp4_awq_routing(frontend_module, precision):
+    """`nvfp4_awq=True` keeps every route of the precision column and adds
+    `awq_inv_s` exactly on the fold-A slots (synthetic per-channel
+    statistics; the constructor's calibration-file check is bypassed by
+    setting the parsed file directly)."""
+    import types as _types
+
+    import numpy as np
+
+    from flash_rt.models.imagewam.checkpoint_loader import build_real_weights
+
+    frontend = construct_until_gpu(frontend_module, precision, REAL_DIMS)
+    d = frontend.dims
+    sd = fake_real_state_dict(d)
+    raw = build_real_weights(
+        sd, num_double=d["num_layers_double"], num_single=d["num_layers_single"],
+        action_num_double=d["action_num_layers_double"], action_num_single=d["action_num_layers_single"],
+        action_attn_width=d["action_attn_width"], merge_qkv_mlp=d["merge_qkv_mlp"],
+        merge_linear2=d["merge_linear2"])
+    rng = np.random.default_rng(0)
+    sites = {".".join(str(p) for p in key): _types.SimpleNamespace(
+                 channel_amax=rng.random(t.shape[0]).astype(np.float32) + 0.1)
+             for key, t in raw.items() if t.ndim == 2}
+    frontend._calibration = _types.SimpleNamespace(sites=sites)
+    frontend._nvfp4_awq, frontend._awq_alpha, frontend._awq_scope = True, 0.5, "adaln+down"
+    weights = frontend._load_real_weights(d, sd)
+    assert not routing_mismatches(weights, d, precision)
+    with_inv_s = {key for key, v in weights.items()
+                  if getattr(v, "arguments", {}).get("awq_inv_s") is not None}
+    expected = {key for key in weights if key[3] in AWQ_FOLD_A_SLOTS.get(key[:2], set())}
+    assert with_inv_s == expected, sorted(with_inv_s ^ expected)[:5]
 
 
 @pytest.mark.parametrize("precision", PRECISION_COLUMNS)

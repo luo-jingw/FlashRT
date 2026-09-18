@@ -4,14 +4,16 @@
 Roadmap item 1 (plan.md, "Plan: ActionDiT small-M CUTLASS tile
 selection"; opportunities.md OPT-018). Two parts:
 
-`--part kernels` -- every real ActionDiT GEMM shape at M = 64:
+`--part kernels` -- every ActionDiT GEMM shape the served pipeline runs
+at M = 64 (merged single-stream linear1 and linear2):
 
   site                                   N      K   layers sharing it
   double qkv                          9216   1024    5
-  double proj + single attn_out_proj  1024   3072   25
+  double proj                         1024   3072    5
   double mlp0 (merged gate/up)        8192   1024    5
-  double mlp2 + single mlp_down       1024   4096   25
+  double mlp2                         1024   4096    5
   single linear1 (qkv + gate/up)     17408   1024   20
+  single linear2 (attn out + down)    1024   7168   20
 
   For each shape it builds as many distinct random weights as real layers
   share the shape, then for every NVFP4 variant (all `cutlass_fp4_gemm_variant`
@@ -25,7 +27,7 @@ selection"; opportunities.md OPT-018). Two parts:
     - which variant the (N, K) heuristic picks today (`*`) and which one
       `GemmVariantTuner` (the `gemm_variant_autotune=True` rule) picks (`T`).
   cuBLASLt fp16 (`fp16`) and cuBLASLt FP8 (`fp8_static`'s
-  `fp8_gemm_descale_fp16`) are timed on the same weights as references.
+  `fp8_gemm_descale_fp16`, or `_tn` off Blackwell) are timed on the same weights as references.
 
 `--part infer` -- for `nvfp4` and `fp8_static_cutlass`: one frontend
   built with `gemm_variant_autotune=True` at the real dims, two CUDA graphs
@@ -93,10 +95,11 @@ class ActionShape:
 
 SHAPES = (
     ActionShape("double qkv", 9216, 1024, 5),
-    ActionShape("proj / attn_out_proj", 1024, 3072, 25),
+    ActionShape("double proj", 1024, 3072, 5),
     ActionShape("double mlp0", 8192, 1024, 5),
-    ActionShape("mlp2 / mlp_down", 1024, 4096, 25),
+    ActionShape("double mlp2", 1024, 4096, 5),
     ActionShape("single linear1", 17408, 1024, 20),
+    ActionShape("single linear2", 1024, 7168, 20),
 )
 
 
@@ -190,15 +193,19 @@ def _reference_rows(weights: list[torch.Tensor], x: torch.Tensor, ref0: torch.Te
             lin(x.data_ptr(), out.data_ptr(), M, 0)  # stages each op's quantized activation
         torch.cuda.synchronize()
 
+        # Each op's own cuBLASLt entry point: the weight storage (w_f8)
+        # depends on the op's layout (NN on Blackwell, TN below; see
+        # quant_linear.fp8_cublaslt_layout), and only that function reads it.
         def fp8_batch(stream: int) -> None:
             for lin in lins:
-                fvk.fp8_gemm_descale_fp16(lin.act_f8.data_ptr(), lin.w_f8.data_ptr(), out.data_ptr(),
-                                          M, n, k, lin.act_scale.data_ptr(), lin.w_scale.data_ptr(), stream)
+                lin._gemm_fn(lin.act_f8.data_ptr(), lin.w_f8.data_ptr(), out.data_ptr(),
+                             M, n, k, lin.act_scale.data_ptr(), lin.w_scale.data_ptr(), stream)
 
+        label = f"cuBLASLt FP8 ({lins[0].layout.upper()}, fp8_gemm_descale_fp16{'' if lins[0].layout == 'nn' else '_tn'})"
         (t8,) = timer.us_per_launch([fp8_batch], len(lins))
-        rows.append(Row("cublaslt", "fp8_static", "cuBLASLt FP8 (fp8_gemm_descale_fp16)", t8, cos8, "ok"))
+        rows.append(Row("cublaslt", "fp8_static", label, t8, cos8, "ok"))
     except RuntimeError as e:
-        rows.append(Row("cublaslt", "fp8_static", "cuBLASLt FP8 (fp8_gemm_descale_fp16)", None, None,
+        rows.append(Row("cublaslt", "fp8_static", "cuBLASLt FP8 (fp8_gemm_descale_fp16[_tn])", None, None,
                         f"SKIP {str(e)[:60]}"))
     return rows
 

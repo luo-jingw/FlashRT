@@ -5006,3 +5006,148 @@ the 128x64x256 tile).
 - Side findings for the shipped `nvfp4` tier: ISSUE-050 (subnormal
   weight scales), ISSUE-051 (`txt_mlp2` activation scale saturation),
   ISSUE-052 (down-projection activation scales).
+
+# OPT-022: real activation calibration for `fp8_static*` (roadmap item 7)
+
+Status: done on H100; Thor confirmation pending (checklist below).
+Plan: `plan.md` "Real calibration data pipeline for `fp8_static*`
+(roadmap item 7)". Mechanism and file format:
+`docs/imagewam_calibration.md`.
+
+## What changed
+
+- `_calibrate_fp8()` takes its scales from a real calibration file
+  (`calibration_path=`), built by `benchmarks/imagewam_build_calibration.py`
+  from 64 LIBERO frames of `libero_object` / `libero_goal` / `libero_10`
+  through the real fp16 pipeline (VAE, Qwen3, proprio, 10 denoise
+  steps). Scale = house percentile (99.9) of per-sample absmax, / 448.
+  The `N(0, 0.1)` placeholder remains only without a file and logs a
+  warning.
+- Prerequisite: `issues.md` ISSUE-001 (TN cuBLASLt FP8) so `fp8` and
+  `fp8_static` run on the H100 dev machine at all.
+
+## Why the placeholder failed
+
+Real GEMM-input absmax per site ranges from ~2 (ActionDiT `proj`) to
+~7000 (backbone double `txt_mlp2`, whose input has p99.99/amax = 0.018:
+a few text-stream positions are huge). `N(0, 0.1)` noise has absmax ~0.5,
+so the placeholder clipped nearly every site by 1-4 orders of magnitude.
+
+## H100 results (real checkpoint, 20 held-out `libero_spatial` frames)
+
+`benchmarks/imagewam_precision_fidelity.py`, `fp8_static` vs `fp16`,
+official-sampler noise, median (min):
+
+| | backbone_hidden | action_hidden | action_latent | actions | MAE / fp16 |
+|---|---:|---:|---:|---:|---:|
+| placeholder (H100) | 0.45582 (0.42467) | 0.68728 | 0.87187 (0.67097) | 0.90093 (0.73530) | 1.697 |
+| **real file (H100)** | **0.99994 (0.99984)** | **0.99995** | **0.99997 (0.99995)** | **0.99997 (0.99989)** | **1.000** |
+| Thor, OPT-014 result 1 (placeholder, 1 frame, `infer()` noise) | 0.467 | - | 0.257 | 0.697 | 1.43 (`_cutlass`, 50 frames) |
+
+The H100 placeholder row reproduces the Thor collapse
+(`backbone_hidden` 0.456 vs 0.467).
+
+`benchmarks/imagewam_e2e_official_compare.py`, `N_TASKS=10 FRAMES=0,60
+SEEDS=0,1` (20 frames), vs official ImageWAM:
+
+| FlashRT path | fr_vs_off median | min | mean MAE vs GT | served_vs_off median |
+|---|---:|---:|---:|---:|
+| fp16 (baseline, re-run on this branch) | 0.99840 | 0.99567 | 0.18359 | 0.99602 |
+| fp8_static, placeholder | 0.87576 | 0.66887 | 0.30207 | 0.91927 |
+| **fp8_static, real file** | **0.99844** | **0.99559** | **0.18372** | **0.99599** |
+| fp8 (dynamic scale, `N_TASKS=3 FRAMES=0`) | 0.99845 | 0.99836 | 0.20706 (official 0.20688) | 0.99439 |
+
+With real scales `fp8_static` is indistinguishable from `fp16` against
+official ImageWAM (official's own seed-to-seed spread: median 0.99630).
+
+Sensitivity to the calibration set (same 20 held-out frames, vs `fp16`,
+median (min)):
+
+| calibration file | backbone_hidden | actions | MAE / fp16 |
+|---|---:|---:|---:|
+| N = 64, 22/21/21 frames per suite (the shipped build) | 0.99994 (0.99984) | 0.99997 (0.99989) | 1.000 |
+| N = 64, 31/27/6 frames per suite | 0.99994 (0.99985) | 0.99997 (0.99991) | 1.001 |
+| N = 8, 3/3/2 frames per suite | 0.99993 (0.99984) | 0.99997 (0.99991) | 1.000 |
+
+The regression gate (`tests/gate_imagewam_libero.py`, roadmap item 13,
+fixture v1, 40 runs) passes `fp8_static` with the N = 64 file on H100:
+vs official median 0.99834 / min 0.99540, vs its `fp16` reference median
+0.999968 / min 0.999943, MAE 0.18373 against the reference's 0.18364.
+
+## Re-validated after the `linear2` merge, residual+AdaLN fusion and VAE stage
+
+On the merged tree (roadmap items 1-6 in), the calibration file is
+rebuilt with the merged frontend (142 sites: `linear2` replaces
+`attn_out_proj` + `mlp_down`; a split-path file is refused by identity):
+
+| check (H100) | result |
+|---|---|
+| fidelity vs fp16, 20 frames | backbone_hidden 0.99994 (min 0.99984), actions 0.99997 (min 0.99994), MAE ratio 1.000 |
+| e2e vs official, 20 frames x 2 seeds | fp8_static median 0.99837 / min 0.99571 / MAE 0.18370; fp16 0.99840 / 0.99566 / 0.18359 |
+| regression gate, fixture v1 | pass: vs official 0.99830 / 0.99553, vs fp16 reference 0.999969, MAE 0.18373 vs 0.18364 |
+| `run_eager()` vs graph replay (real checkpoint) | bit-exact, with the VAE outside the graph and with `vae_graph_input` (the stage runs in `run_eager()`) |
+
+## Thor check
+
+Checklist item in the stream's final report: `fp8_static` and
+`fp8_static_cutlass` with the real file, vs `fp16`, compared with
+OPT-014 result 1/2; `infer()` P50 against OPT-014 result 4 (243.0 ms
+`fp8_static_cutlass`, 236.9 ms `nvfp4`). Calibration changes scale
+values only, not the captured graph, so P50 should not move.
+
+# OPT-023: AWQ per-channel scales folded into the NVFP4 weights (roadmap item 8)
+
+Status: implemented behind `nvfp4_awq=True` (default off); accuracy
+measured on H100 with simulated NVFP4; real `nvfp4` accuracy and speed
+pending on Thor. Plan: `plan.md` "AWQ per-channel scales folded into the
+NVFP4 weights (roadmap item 8)". Mechanism, fold points and exactness:
+`docs/imagewam_nvfp4_awq.md`.
+
+## H100 results (simulated NVFP4, bit-exact quantizer, real checkpoint)
+
+Whole pipeline vs `fp16`, 20 held-out `libero_spatial` frames, median
+(min) cosine, `benchmarks/imagewam_precision_fidelity.py`:
+
+| | backbone_hidden | action_latent | actions | MAE / fp16 |
+|---|---:|---:|---:|---:|
+| `nvfp4_sim` | 0.99819 (0.99762) | 0.99937 (0.99911) | 0.99931 (0.99848) | 1.010 |
+| `nvfp4_sim` + AWQ 0.5, folds A + B | **0.99956 (0.99916)** | **0.99973 (0.99944)** | **0.99965 (0.99882)** | **1.000** |
+| Thor `nvfp4`, OPT-014 result 1/2 (1 frame; 50 frames for MAE) | 0.9939 | 0.9997 | 0.9998 | 1.01 |
+
+AWQ cuts the backbone_hidden error (1 - cosine) 4x and the action error
+about 2x, and brings the open-loop MAE ratio from 1.010 to 1.000.
+
+Against official ImageWAM (`imagewam_e2e_official_compare.py`,
+`N_TASKS=10 FRAMES=0,60 SEEDS=0,1`, same N(0,1) noise both sides):
+
+| FlashRT path (H100) | fr_vs_off median | min | mean MAE vs GT |
+|---|---:|---:|---:|
+| fp16 (baseline) | 0.99840 | 0.99567 | 0.18359 |
+| `nvfp4_sim` | 0.99746 | 0.99399 | 0.18519 |
+| `nvfp4_sim` + AWQ 0.5, folds A + B | 0.99779 | 0.99469 | 0.18378 |
+
+Per-layer: alpha 0.5 is best for both fold classes (0.25-1.0 swept);
+fold A sites 0.0742 -> 0.0610 rel_l2, fold B sites 0.0788 -> 0.0679;
+sites without a fold point would gain ~1% at most.
+
+After the `linear2` merge and the residual+AdaLN fusion (fold A reaches
+the fused kernel as an FP32 pair, fold B covers the MLP channels of the
+merged `linear2`), the same comparison gives `nvfp4_sim` 0.99820 /
+0.99938 / 0.99933 / MAE 1.009 and with AWQ 0.99956 / 0.99973 / 0.99971
+/ MAE 1.000 (backbone_hidden / action_latent / actions median).
+
+Speed: AWQ changes weight values and the AdaLN constants only. At toy
+dims the AWQ pipeline launches the same kernels per forward (413 = 413
+unfused, 285 = 285 fused, `tests/test_imagewam_awq.py`). Thor `infer()`
+P50 should not move; that and the real-hardware cosines are the Thor
+check.
+
+## Follow-up, not started
+
+- Per-tensor power-of-two NVFP4 weight pre-scale: tracked in
+  `issues.md` ISSUE-050. It combines with AWQ: in this study's
+  per-layer comparison, fold-A sites gave rel_l2 0.0610 with AWQ 0.5
+  alone and 0.0595 with AWQ 0.5 plus the pre-scale.
+- `proj` / `attn_out_proj` have no exact fold point; a fused
+  multiply-and-quantize of the attention output would be needed to
+  scale them, for at most ~1% per-layer gain.

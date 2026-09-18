@@ -224,6 +224,7 @@ from dataclasses import dataclass
 
 import torch
 
+from flash_rt.models.imagewam.awq import AwqScaledLinear
 from flash_rt.models.imagewam.quant_linear import CutlassFp16SwiGluMlp, Nvfp4SwiGluMlp
 
 
@@ -424,6 +425,35 @@ def _fused_gate_res(fvk, proj_ptr: int, gate: torch.Tensor, residual_ptr: int, r
                _mod_vec_ptr(target.shift, dim), target.out_ptr, rows, dim, eps, stream)
 
 
+def _awq_input_scaled(lin: object) -> bool:
+    """Whether the GEMM `lin` carries an AWQ input scale `s`, so its input
+    must be `x / s` (fold A, `flash_rt/models/imagewam/awq.py`)."""
+    return isinstance(lin, AwqScaledLinear) and lin.awq_inv_s is not None
+
+
+def _awq_folded(lin, shift, scale, shift_t, scale_t):
+    """AWQ fold A for a standalone AdaLN (`ada_layer_norm_*` with FP16
+    `scale`/`shift`): when the GEMM that consumes its output carries an
+    AWQ input scale `s`, the pair becomes `(shift / s, (1 + scale) / s - 1)`.
+    Otherwise returns `(shift_t, scale_t)` unchanged. `shift`/`scale` are
+    the FP32 modulation tensors the folded pair is computed from."""
+    if _awq_input_scaled(lin):
+        return lin.folded_modulation(shift, scale)
+    return shift_t, scale_t
+
+
+def _awq_target(lin, target: AdaLNTarget | None) -> AdaLNTarget | None:
+    """AWQ fold A for an AdaLN emitted by the fused gated residual
+    (`dims["fuse_res_norm"]`): the target's FP32 modulation pair replaced
+    by the folded one when `lin` (the GEMM consuming `target.out_ptr`)
+    carries an AWQ input scale. The fused kernel rounds it to FP16 like
+    the standalone path, so both give the same AdaLN output."""
+    if target is None or not _awq_input_scaled(lin):
+        return target
+    shift_f, scale_f = lin.folded_modulation_fp32(target.shift, target.scale)
+    return AdaLNTarget(shift_f, scale_f, target.out_ptr)
+
+
 def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream, attn,
                           mod_txt, mod_img, rope_table, *, input_normed: bool = False,
                           next_txt: AdaLNTarget | None = None, next_img: AdaLNTarget | None = None):
@@ -457,6 +487,10 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
         if not input_normed:
             txt_shift1_t, txt_scale1_t = _fuse_mod_pair(txt_shift1, txt_scale1)
             img_shift1_t, img_scale1_t = _fuse_mod_pair(img_shift1, img_scale1)
+            txt_shift1_t, txt_scale1_t = _awq_folded(key("txt_qkv.weight"), txt_shift1, txt_scale1,
+                                                     txt_shift1_t, txt_scale1_t)
+            img_shift1_t, img_scale1_t = _awq_folded(key("img_qkv.weight"), img_shift1, img_scale1,
+                                                     img_shift1_t, img_scale1_t)
     else:
         # OPT-004 step 3: fuse LN+modulate and gated-residual into existing
         # FlashRT kernels -- see _fuse_mod_group's own docstring for why
@@ -467,6 +501,14 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
         txt_shift2_t, txt_scale2_t, txt_gate2_t = _fuse_mod_group(txt_shift2, txt_scale2, txt_gate2, x0, hidden)
         img_shift1_t, img_scale1_t, img_gate1_t = _fuse_mod_group(img_shift1, img_scale1, img_gate1, img_len, hidden)
         img_shift2_t, img_scale2_t, img_gate2_t = _fuse_mod_group(img_shift2, img_scale2, img_gate2, img_len, hidden)
+        txt_shift1_t, txt_scale1_t = _awq_folded(key("txt_qkv.weight"), txt_shift1, txt_scale1,
+                                                 txt_shift1_t, txt_scale1_t)
+        txt_shift2_t, txt_scale2_t = _awq_folded(key("txt_mlp0.weight"), txt_shift2, txt_scale2,
+                                                 txt_shift2_t, txt_scale2_t)
+        img_shift1_t, img_scale1_t = _awq_folded(key("img_qkv.weight"), img_shift1, img_scale1,
+                                                 img_shift1_t, img_scale1_t)
+        img_shift2_t, img_scale2_t = _awq_folded(key("img_mlp0.weight"), img_shift2, img_scale2,
+                                                 img_shift2_t, img_scale2_t)
 
     combined = bufs["backbone_hidden"]  # (a0, hidden)
     modded = bufs["modded_scratch"]
@@ -548,7 +590,8 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     proj = bufs["proj_scratch"]
     key("txt_proj.weight")(Q_O, proj, x0, stream)
     if fuse:
-        _fused_gate_res(fvk, proj, txt_gate1, txt_x, x0, hidden, AdaLNTarget(txt_shift2, txt_scale2, modded),
+        _fused_gate_res(fvk, proj, txt_gate1, txt_x, x0, hidden,
+                        _awq_target(key("txt_mlp0.weight"), AdaLNTarget(txt_shift2, txt_scale2, modded)),
                         stream, bf16_residual=True, eps=eps)
     else:
         fvk.gate_res_bf16res(proj, txt_gate1_t.data_ptr(), txt_x, x0 * hidden, stream)
@@ -557,7 +600,8 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     key("img_proj.weight")(img_Q_ptr, img_proj_ptr, img_len, stream)
     if fuse:
         _fused_gate_res(fvk, img_proj_ptr, img_gate1, img_x_ptr, img_len, hidden,
-                        AdaLNTarget(img_shift2, img_scale2, img_modded_ptr), stream, bf16_residual=True, eps=eps)
+                        _awq_target(key("img_mlp0.weight"), AdaLNTarget(img_shift2, img_scale2, img_modded_ptr)),
+                        stream, bf16_residual=True, eps=eps)
     else:
         fvk.gate_res_bf16res(img_proj_ptr, img_gate1_t.data_ptr(), img_x_ptr, img_len * hidden, stream)
 
@@ -616,6 +660,8 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
             shift_t, scale_t = _fuse_mod_pair(shift, scale)
     else:
         shift_t, scale_t, gate_t = _fuse_mod_group(shift, scale, gate, a0, hidden)
+    if dims.get("merge_qkv_mlp") and not input_normed:
+        shift_t, scale_t = _awq_folded(key("linear1.weight"), shift, scale, shift_t, scale_t)
 
     combined = bufs["backbone_hidden"]
     modded = bufs["modded_scratch"]
@@ -772,14 +818,19 @@ def imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None
     (txt_shift1, txt_scale1, _), _ = mod_txt
     (img_shift1, img_scale1, _), _ = mod_img
     single_shift, single_scale, _ = mod_single
+    # AWQ fold A (awq.py): each emitted AdaLN is folded for the GEMM that
+    # consumes it -- the next double layer's qkv, or single layer 0's /
+    # the next single layer's linear1.
+    single_linear1 = lambda i: weights.get(("backbone", "single", i, "linear1.weight"))
     for layer_idx in range(num_double):
         next_txt = next_img = None
         if fuse and layer_idx + 1 < num_double:
-            next_txt = AdaLNTarget(txt_shift1, txt_scale1, modded)
-            next_img = AdaLNTarget(img_shift1, img_scale1, img_modded)
+            nxt = lambda slot: weights[("backbone", "double", layer_idx + 1, slot)]
+            next_txt = _awq_target(nxt("txt_qkv.weight"), AdaLNTarget(txt_shift1, txt_scale1, modded))
+            next_img = _awq_target(nxt("img_qkv.weight"), AdaLNTarget(img_shift1, img_scale1, img_modded))
         elif fuse and num_single > 0:
-            next_txt = AdaLNTarget(single_shift, single_scale, modded)
-            next_img = AdaLNTarget(single_shift, single_scale, img_modded)
+            next_txt = _awq_target(single_linear1(0), AdaLNTarget(single_shift, single_scale, modded))
+            next_img = _awq_target(single_linear1(0), AdaLNTarget(single_shift, single_scale, img_modded))
         _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream, attn,
                               mod_txt, mod_img, rope_table, input_normed=fuse and layer_idx > 0,
                               next_txt=next_txt, next_img=next_img)
@@ -789,7 +840,8 @@ def imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None
     # restarting at 0, which would otherwise alias double-stream layer
     # 0..4's own K/V cache slots.
     for i in range(num_single):
-        next_norm = AdaLNTarget(single_shift, single_scale, modded) if fuse and i + 1 < num_single else None
+        next_norm = (_awq_target(single_linear1(i + 1), AdaLNTarget(single_shift, single_scale, modded))
+                     if fuse and i + 1 < num_single else None)
         _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, i, num_double + i, stream, attn,
                               mod_single, rope_table, input_normed=fuse and (num_double > 0 or i > 0),
                               next_norm=next_norm)
@@ -848,9 +900,12 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
     if fuse:
         if not input_normed:
             shift1_t, scale1_t = _fuse_mod_pair(shift1, scale1)
+            shift1_t, scale1_t = _awq_folded(key("qkv.weight"), shift1, scale1, shift1_t, scale1_t)
     else:
         shift1_t, scale1_t, gate1_t = _fuse_mod_group(shift1, scale1, gate1, num_action, action_hidden_dim)
         shift2_t, scale2_t, gate2_t = _fuse_mod_group(shift2, scale2, gate2, num_action, action_hidden_dim)
+        shift1_t, scale1_t = _awq_folded(key("qkv.weight"), shift1, scale1, shift1_t, scale1_t)
+        shift2_t, scale2_t = _awq_folded(key("mlp0.weight"), shift2, scale2, shift2_t, scale2_t)
 
     action_x = bufs["action_hidden"]  # (num_action, action_hidden_dim)
     modded = bufs["action_modded"]
@@ -886,7 +941,8 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
     key("proj.weight")(action_Q_ptr, proj, num_action, stream)
     if fuse:
         _fused_gate_res(fvk, proj, gate1, action_x, num_action, action_hidden_dim,
-                        AdaLNTarget(shift2, scale2, modded), stream, bf16_residual=False, eps=eps)
+                        _awq_target(key("mlp0.weight"), AdaLNTarget(shift2, scale2, modded)), stream,
+                        bf16_residual=False, eps=eps)
     else:
         fvk.gate_res_fp16(proj, gate1_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
         fvk.ada_layer_norm_fp16(action_x, scale2_t.data_ptr(), shift2_t.data_ptr(),
@@ -924,6 +980,8 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
             shift_t, scale_t = _fuse_mod_pair(shift, scale)
     else:
         shift_t, scale_t, gate_t = _fuse_mod_group(shift, scale, gate, num_action, action_hidden_dim)
+    if dims.get("merge_qkv_mlp") and not input_normed:
+        shift_t, scale_t = _awq_folded(key("linear1.weight"), shift, scale, shift_t, scale_t)
 
     action_x = bufs["action_hidden"]
     modded = bufs["action_modded"]
@@ -1072,14 +1130,18 @@ def imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=0, *
     modded = bufs["action_modded"]
     (double_shift1, double_scale1, _), _ = mod_double
     single_shift, single_scale, _ = mod_single
-    head_target = AdaLNTarget(head_mod[0], head_mod[1], bufs["head_modded"])
+    # AWQ fold A (awq.py): each emitted AdaLN is folded for the GEMM that
+    # consumes it (next double qkv, single linear1, head).
+    head_target = _awq_target(key("head.linear.weight"), AdaLNTarget(head_mod[0], head_mod[1], bufs["head_modded"]))
+    single_linear1 = lambda i: weights.get(("action_dit", "single", i, "linear1.weight"))
     for layer_idx in range(num_double):
         next_norm = None
         if fuse:
             if layer_idx + 1 < num_double:
-                next_norm = AdaLNTarget(double_shift1, double_scale1, modded)
+                next_norm = _awq_target(weights[("action_dit", "double", layer_idx + 1, "qkv.weight")],
+                                        AdaLNTarget(double_shift1, double_scale1, modded))
             elif num_single > 0:
-                next_norm = AdaLNTarget(single_shift, single_scale, modded)
+                next_norm = _awq_target(single_linear1(0), AdaLNTarget(single_shift, single_scale, modded))
             else:
                 next_norm = head_target
         _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, layer_idx, stream, attn,
@@ -1088,7 +1150,8 @@ def imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=0, *
     for i in range(num_single):
         next_norm = None
         if fuse:
-            next_norm = AdaLNTarget(single_shift, single_scale, modded) if i + 1 < num_single else head_target
+            next_norm = (_awq_target(single_linear1(i + 1), AdaLNTarget(single_shift, single_scale, modded))
+                         if i + 1 < num_single else head_target)
         _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, i, num_double + i, stream, attn,
                               mod_single, action_rope_table, input_normed=fuse and (num_double > 0 or i > 0),
                               next_norm=next_norm)

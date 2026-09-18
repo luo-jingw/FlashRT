@@ -438,6 +438,102 @@ void fp8_gemm_descale_f32out(const void* A_fp8, const void* B_fp8, void* C_fp32,
                    name, M, N, K, "cublasLtMatmul");
 }
 
+// ── TN layout variants (weight stored [N,K] row-major) ──
+// cuBLASLt supports FP8 matmul on compute capability 8.9 and 9.0 only in the
+// TN layout: A transposed, B not transposed. The NN functions above request
+// TRANSA=N and fail there with CUBLAS_STATUS_NOT_SUPPORTED at every shape.
+// In cuBLASLt's column-major view:
+//   A = weight, stored [N,K] row-major == column-major (K,N), ld=K, TRANSA=T
+//   B = activation, stored [M,K] row-major == column-major (K,M), ld=K
+//   C = output, stored [M,N] row-major == column-major (N,M), ld=N
+// so op(A) * B = (N,K)(K,M) = (N,M), the same C as the NN functions.
+// Descriptors are cached per (M,N,K,output type) in their own map, so the
+// NN path's cache and code are untouched.
+struct LtGemmTnKey {
+    int M, N, K;
+    cudaDataType_t c_type;
+    bool operator==(const LtGemmTnKey& o) const {
+        return M == o.M && N == o.N && K == o.K && c_type == o.c_type;
+    }
+};
+struct LtGemmTnKeyHash {
+    size_t operator()(const LtGemmTnKey& k) const {
+        size_t h = LtGemmKeyHash()(LtGemmKey{k.M, k.N, k.K});
+        h ^= std::hash<int>()(static_cast<int>(k.c_type)) + 0x9e3779b9 + (h<<6) + (h>>2);
+        return h;
+    }
+};
+static std::unordered_map<LtGemmTnKey, CachedLtGemm, LtGemmTnKeyHash> g_lt_tn_cache;
+
+static void fp8_gemm_descale_tn(const char* name, cudaDataType_t c_type,
+                                const void* A_fp8, const void* B_fp8, void* C,
+                                int M, int N, int K,
+                                const float* act_descale, const float* w_descale,
+                                cudaStream_t stream) {
+    ensure_fp8_lt(name, M, N, K);
+
+    LtGemmTnKey key{M, N, K, c_type};
+    auto it = g_lt_tn_cache.find(key);
+    if (it == g_lt_tn_cache.end()) {
+        CachedLtGemm cg{};
+        check_cublaslt(cublasLtMatmulDescCreate(&cg.desc, CUBLAS_COMPUTE_32F, CUDA_R_32F),
+                       name, M, N, K, "cublasLtMatmulDescCreate");
+        cublasOperation_t opT = CUBLAS_OP_T;
+        cublasOperation_t opN = CUBLAS_OP_N;
+        check_cublaslt(cublasLtMatmulDescSetAttribute(cg.desc, CUBLASLT_MATMUL_DESC_TRANSA, &opT, sizeof(opT)),
+                       name, M, N, K, "set TRANSA");
+        check_cublaslt(cublasLtMatmulDescSetAttribute(cg.desc, CUBLASLT_MATMUL_DESC_TRANSB, &opN, sizeof(opN)),
+                       name, M, N, K, "set TRANSB");
+        check_cublaslt(cublasLtMatrixLayoutCreate(&cg.Adesc, CUDA_R_8F_E4M3, K, N, K),
+                       name, M, N, K, "create A layout");
+        check_cublaslt(cublasLtMatrixLayoutCreate(&cg.Bdesc, CUDA_R_8F_E4M3, K, M, K),
+                       name, M, N, K, "create B layout");
+        check_cublaslt(cublasLtMatrixLayoutCreate(&cg.Cdesc, c_type, N, M, N),
+                       name, M, N, K, "create C layout");
+        cublasLtMatmulPreference_t pref;
+        check_cublaslt(cublasLtMatmulPreferenceCreate(&pref),
+                       name, M, N, K, "cublasLtMatmulPreferenceCreate");
+        check_cublaslt(cublasLtMatmulPreferenceSetAttribute(pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+                                              &g_fp8_ws_sz, sizeof(g_fp8_ws_sz)),
+                       name, M, N, K, "set workspace preference");
+        cublasLtMatmulHeuristicResult_t result; int ret = 0;
+        cublasStatus_t heuristic_status = cublasLtMatmulAlgoGetHeuristic(
+            g_fp8_lt, cg.desc, cg.Adesc, cg.Bdesc, cg.Cdesc, cg.Cdesc,
+            pref, 1, &result, &ret);
+        cublasLtMatmulPreferenceDestroy(pref);
+        check_heuristic(heuristic_status, ret, name, M, N, K);
+        cg.algo = result.algo;
+        g_lt_tn_cache[key] = cg;
+        it = g_lt_tn_cache.find(key);
+    }
+    auto& cg = it->second;
+    check_cublaslt(cublasLtMatmulDescSetAttribute(cg.desc, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &w_descale, sizeof(w_descale)),
+                   name, M, N, K, "set A scale pointer");
+    check_cublaslt(cublasLtMatmulDescSetAttribute(cg.desc, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &act_descale, sizeof(act_descale)),
+                   name, M, N, K, "set B scale pointer");
+    float alpha = 1.0f, beta = 0.0f;
+    check_cublaslt(cublasLtMatmul(g_fp8_lt, cg.desc, &alpha, B_fp8, cg.Adesc, A_fp8, cg.Bdesc,
+                    &beta, C, cg.Cdesc, C, cg.Cdesc,
+                    &cg.algo, g_fp8_ws, g_fp8_ws_sz, stream),
+                   name, M, N, K, "cublasLtMatmul");
+}
+
+void fp8_gemm_descale_fp16_tn(const void* A_fp8, const void* B_fp8, void* C_fp16,
+                              int M, int N, int K,
+                              const float* act_descale, const float* w_descale,
+                              cudaStream_t stream) {
+    fp8_gemm_descale_tn("fp8_gemm_descale_fp16_tn", CUDA_R_16F, A_fp8, B_fp8, C_fp16,
+                        M, N, K, act_descale, w_descale, stream);
+}
+
+void fp8_gemm_descale_f32out_tn(const void* A_fp8, const void* B_fp8, void* C_fp32,
+                                int M, int N, int K,
+                                const float* act_descale, const float* w_descale,
+                                cudaStream_t stream) {
+    fp8_gemm_descale_tn("fp8_gemm_descale_f32out_tn", CUDA_R_32F, A_fp8, B_fp8, C_fp32,
+                        M, N, K, act_descale, w_descale, stream);
+}
+
 // BF16 output variant — for models trained in BF16 with activations exceeding
 // FP16 range (Pi0-FAST decode_step). Same FP8 inputs and per-tensor descales as
 // the FP16 variant; only the C matrix dtype is BF16.
