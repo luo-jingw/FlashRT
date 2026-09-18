@@ -156,7 +156,9 @@ fi
     if [ "$(wc -l < "$f")" -le 6 ]; then
       lines=$(grep -v '^# ' "$f")
     else
-      lines=$(grep -E '^(fr_vs_off|mae_fr_vs_gt|mae_off_vs_gt) |[0-9]+ passed|[0-9]+ failed|verdict|^PASS|^FAIL|P50|bit_exact|equal=|fallback' "$f" | tail -25)
+      # imagewam_precision_fidelity.py prints its accuracy as "<col> min= median= mean=",
+      # "MAE ratio", "all finite" and "peak GPU mem"; keep them with the P50 line.
+      lines=$(grep -E '^(fr_vs_off|mae_fr_vs_gt|mae_off_vs_gt) |[0-9]+ passed|[0-9]+ failed|verdict|^PASS|^FAIL|P50|bit_exact|equal=|fallback|effective_config|^=== |min=.*median=|^MAE ratio|^all finite|^peak GPU mem' "$f" | tail -40)
     fi
     [ -n "$lines" ] && { echo "== $n"; echo "$lines"; }
   done

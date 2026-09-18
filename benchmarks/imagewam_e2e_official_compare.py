@@ -83,6 +83,9 @@ VAE_RESIZE = os.environ.get("VAE_RESIZE", "area")
 RAW_VIEWS = os.environ.get("RAW_VIEWS", "0") == "1"
 RAW_SIZE = int(os.environ.get("RAW_SIZE", "0"))
 TEXT_TRIM = os.environ.get("TEXT_TRIM", "0") == "1"
+# FA4_MOT=1 also runs the ActionDiT ("mot") attention through FA4; the
+# backbone site is switched by FLASHRT_THOR_FA4=1 as before.
+FA4_MOT = os.environ.get("FA4_MOT", "0") == "1"
 
 REAL_DIMS = dict(
     hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
@@ -203,6 +206,7 @@ def main():
         qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"], dataset_stats_path=STATS,
         calibration_path=CALIBRATION, **AWQ_KW,
         vae_encoder=VAE_ENCODER, vae_resize=VAE_RESIZE, text_trim=TEXT_TRIM,
+        use_fa4_mot=FA4_MOT,
         vae_graph_input=(2,) + tuple(samples[0]["v1"].shape[:2] if RAW_VIEWS else (224, 224)) if VAE_GRAPH else None)
     print(f"flashrt ({PRECISION}, calibration={CALIBRATION}, awq={AWQ_KW}) constructed in "
           f"{time.time() - t:.1f}s", flush=True)
@@ -277,6 +281,10 @@ def main():
     for _ in range(20):
         torch.cuda.synchronize(); t0 = time.perf_counter(); fe.infer(obs); ts.append((time.perf_counter() - t0) * 1e3)
     print(f"infer() P50={np.median(ts):.1f}ms min={min(ts):.1f}ms (shared GPU, not a perf number)")
+    # The configuration that actually ran: FA4 can fall back to cuBLAS at capture time.
+    print(f"effective_config precision={PRECISION} text_trim={TEXT_TRIM} vae_encoder={VAE_ENCODER} "
+          f"vae_graph={VAE_GRAPH} use_fa4={fe.use_fa4} use_fa4_mot={fe.use_fa4_mot} "
+          f"fa4_fallback_reason={fe.fa4_fallback_reason} calibration={CALIBRATION} awq={bool(AWQ_KW)}")
     print(f"peak GPU mem: {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB")
 
 
