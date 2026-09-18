@@ -105,3 +105,12 @@ Whole pipeline (`benchmarks/imagewam_precision_fidelity.py`,
 
 Fold B carries the backbone gain (`txt_mlp2`'s outlier channels); fold A
 carries most of the ActionDiT gain.
+
+Against official ImageWAM (`imagewam_e2e_official_compare.py`,
+`N_TASKS=10 FRAMES=0,60 SEEDS=0,1`):
+
+| FlashRT path | fr_vs_off median | min | mean MAE vs GT |
+|---|---:|---:|---:|
+| `fp16` | 0.99840 | 0.99567 | 0.18359 |
+| `nvfp4_sim` | 0.99746 | 0.99399 | 0.18519 |
+| `nvfp4_sim` + AWQ 0.5, folds A + B | 0.99779 | 0.99469 | 0.18378 |

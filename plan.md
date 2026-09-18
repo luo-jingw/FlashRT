@@ -3528,7 +3528,7 @@ Blocker: needs the Thor hardware and a copy of the v1 fixture there.
 
 # Plan: Real calibration data pipeline for `fp8_static*` (roadmap item 7)
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -3733,7 +3733,7 @@ Phase Status: completed
 
 ### Phase 5: H100 validation and Thor handoff
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: measured `fp8_static` accuracy with placeholder vs real
   calibration, against `fp16` and official; Thor checklist.
@@ -3744,7 +3744,7 @@ Phase Status: active
 
 # Plan: AWQ per-channel scales folded into the NVFP4 weights (roadmap item 8)
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -3887,7 +3887,7 @@ Phase Status: completed
 
 ### Phase 4: opt-in flag on `nvfp4`, sm110 check, Thor handoff
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: `nvfp4_awq=True` on the real `nvfp4` path.
 - Files: `imagewam_thor.py`, `quant_linear.py`, `opportunities.md`

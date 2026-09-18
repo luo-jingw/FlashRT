@@ -4114,6 +4114,15 @@ Whole pipeline vs `fp16`, 20 held-out `libero_spatial` frames, median
 
 AWQ cuts the backbone_hidden error (1 - cosine) 4x and the action error
 about 2x, and brings the open-loop MAE ratio from 1.010 to 1.000.
+
+Against official ImageWAM (`imagewam_e2e_official_compare.py`,
+`N_TASKS=10 FRAMES=0,60 SEEDS=0,1`, same N(0,1) noise both sides):
+
+| FlashRT path (H100) | fr_vs_off median | min | mean MAE vs GT |
+|---|---:|---:|---:|
+| fp16 (baseline) | 0.99840 | 0.99567 | 0.18359 |
+| `nvfp4_sim` | 0.99746 | 0.99399 | 0.18519 |
+| `nvfp4_sim` + AWQ 0.5, folds A + B | 0.99779 | 0.99469 | 0.18378 |
 Per-layer: alpha 0.5 is best for both fold classes (0.25-1.0 swept);
 fold A sites 0.0742 -> 0.0610 rel_l2, fold B sites 0.0788 -> 0.0679;
 sites without a fold point would gain ~1% at most.
