@@ -3258,7 +3258,7 @@ calibrate-before-call contract is unaffected.
 
 ### Phase 1: tuner and timer
 
-Phase Status: pending
+Phase Status: completed
 
 - Goal: selection policy and device timer, independent of any kernel.
 - Files: `gemm_variant_tuner.py`, `gemm_variant_timer.py`,
@@ -3271,7 +3271,7 @@ Phase Status: pending
 
 ### Phase 2: FP8 1-SM small-M tiles
 
-Phase Status: pending
+Phase Status: active
 
 - Goal: `cutlass_fp8_t128x64x256`, `_t128x64x128`, `_t128x128x128`,
   `_t128x256x128` exported under `ENABLE_SM100_CUTLASS`.
