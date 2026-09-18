@@ -250,7 +250,10 @@ FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_set_gemm_algo(
     frt_imagewam_native* h, const frt_imagewam_gemm_shape* shape,
     const void* algo, uint64_t bytes);
 
-/* Eager segments on the native stream, synchronized before return. */
+/* Eager segments on the native stream. They write the frontend's buffers,
+ * so `run` (and `capture`, which runs FULL once as its warm-up) first waits
+ * for all prior work on the device (cudaDeviceSynchronize), then
+ * synchronizes the native stream before return. */
 enum frt_imagewam_segment {
     FRT_IMAGEWAM_SEGMENT_DOUBLE_LAYER = 0,   /* backbone double-stream block `index` */
     FRT_IMAGEWAM_SEGMENT_SINGLE_LAYER = 1,   /* backbone single-stream block `index` */

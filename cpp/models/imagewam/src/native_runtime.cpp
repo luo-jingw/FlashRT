@@ -181,6 +181,11 @@ int NativeRuntime::set_gemm_algo(const frt_imagewam_gemm_shape& shape, const voi
 
 int NativeRuntime::run(uint32_t segment, int32_t index) {
     if (!pipeline_) return fail(kInvalid, "run: set_pipeline first");
+    // The segments write the frontend's buffers from the non-blocking native
+    // stream, which is not ordered after work other streams queued on them
+    // (a torch copy still reading a buffer, say): wait for that work first.
+    cudaError_t prior = cudaDeviceSynchronize();
+    if (prior != cudaSuccess) return fail(kBackend, cuda_message("run: prior device work", prior));
     try {
         switch (segment) {
             case FRT_IMAGEWAM_SEGMENT_DOUBLE_LAYER: pipeline_->double_layer(index, stream_); break;

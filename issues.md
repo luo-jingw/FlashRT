@@ -882,7 +882,7 @@ tests and re-run; all five should pass.
 
 # ISSUE-071
 
-Status: open
+Status: resolved
 
 Area: `ImageWAMTorchFrontendThor._graph` replay, final backbone residual
 (`backbone_hidden` after the last single-stream block)
@@ -902,9 +902,9 @@ bit-identical, and every later replay matched the eager result exactly.
 
 None on actions: after the last backbone layer, the residual is not read
 by the denoise loop (it reads only the K/V caches). Bit-exact parity
-checks that include `backbone_hidden` after a Python-graph replay can
-fail intermittently; the native-pipeline test compares the native graph
-with the eager Python run for that buffer.
+checks that included `backbone_hidden` after a Python-graph replay failed
+intermittently, so the native-pipeline test had dropped that buffer from
+its native-graph vs Python-graph comparison.
 
 ## Evidence
 
@@ -931,3 +931,32 @@ first replays after mixed eager work; if they disappear, hypothesis 1
 holds.
 
 ## Resolution
+
+Resolved 2026-09-18: a race in the test harness, not in the Python graph.
+
+- Root cause: the snapshot that followed the Python-graph replay queued
+  its `clone()` copies on the torch stream and returned without waiting
+  for them. The next call, `NativeRuntime::capture()`, ran its eager
+  warm-up on the native stream, which is created non-blocking and so is
+  not ordered after the torch stream. The warm-up's first GEMM
+  (`txt_in`, rows `[0, x0)` of `backbone_hidden`) could overwrite those
+  rows before the copy read them. With small random weights the final
+  residual is within a few bf16 ulps of the `txt_in` output, which is why
+  the differences were small and confined to the text rows.
+- Reproduction: with `backbone_hidden` back in
+  `test_native_graph`'s comparison, the test failed in 15 of 24 runs on
+  H100 (GPU shared with another process), with differences only in rows
+  `[0, x0)`. With a second Python replay added, only the snapshot taken
+  directly before `capture()` differed. A replica with no native work
+  right after the snapshot never failed.
+- Fix: `frt_imagewam_native_run` and `frt_imagewam_native_capture` now
+  wait for all prior device work (`cudaDeviceSynchronize`) before they
+  write the frontend's buffers, and the test's snapshot waits for its
+  copies. Either change alone removed the failure: 0 of 16 runs failed
+  (8 processes, both layer structures). With both
+  changes, the native runtime and pipeline tests, including the
+  restored comparison, passed in 10 of 10 runs.
+- Consistent with independent evidence that the Python graph is
+  deterministic: over 100 fresh-process runs of first versus later
+  replays and eager runs, across scenarios and the base commit, showed 0
+  mismatches, with one digest per structure across processes.

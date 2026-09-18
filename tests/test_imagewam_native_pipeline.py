@@ -77,8 +77,12 @@ class Harness:
         return {name: getattr(self.fe, f"_{name}") for name in STATE_NAMES}
 
     def snapshot(self) -> dict:
+        """Copies of the state buffers, complete on return (the native
+        stream is not ordered after the torch stream the copies run on)."""
         torch.cuda.synchronize()
-        return {k: v.detach().clone() for k, v in self.tensors().items()}
+        state = {k: v.detach().clone() for k, v in self.tensors().items()}
+        torch.cuda.synchronize()
+        return state
 
     def restore(self) -> None:
         for k, v in self.tensors().items():
@@ -184,8 +188,7 @@ def test_native_graph(h):
         consumer.close()
         rt.release()
     assert compare("native graph vs Python eager (prefill + denoise)", eager, native_graph)
-    assert compare("native graph vs Python graph", python_graph, native_graph,
-                   names=("K_cache", "V_cache", "Q_O", "action_latent"))
+    assert compare("native graph vs Python graph", python_graph, native_graph)
 
 
 def _infer_reference(fe) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray]:
