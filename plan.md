@@ -3227,7 +3227,7 @@ Phase Status: completed
 
 ### Phase 2 — Accuracy study on H100 (decision gate)
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: per-GEMM and whole-pipeline simulated accuracy of `nvfp4`,
   `nvfp4` with MSE weights, E0M3 weights with E2M1 activations, E0M3
@@ -3242,7 +3242,7 @@ Phase Status: active
 
 ### Phase 3 — `e0m3_hadamard` precision tier
 
-Phase Status: pending
+Phase Status: active
 
 - Goal: `E0m3HadamardLinear`, the precision string, the `K`/`N`
   alignment fallback, tests; `sm110_check.sh` passes.
