@@ -57,18 +57,19 @@ import torch.nn.functional as F
 
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.models.imagewam.gemm_variant_timer import CudaGraphVariantTimer
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_step, imagewam_prefill
 
 FP16 = torch.float16
-NH, HD = 24, 128
-REAL_DIMS = dict(
-    hidden=3072, HD=HD, NH=NH, mlp_hidden=9216, joint_attention_dim=7680,
-    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
-    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
-    num_action=64, total=969,
-    action_num_layers_double=5, action_num_layers_single=20,
-    dt=1.0 / 10, num_denoise_steps=10,
-)
+NH, HD = LIBERO_REAL_DIMS["NH"], LIBERO_REAL_DIMS["HD"]
+# The served dims minus the entries this structural run leaves at the
+# frontend's own defaults: `proprio_dim` (proprio conditioning), `shift` and
+# `num_train_timesteps` (the real timestep schedule). `ref_h`/`ref_w` (the
+# real 2D image RoPE grid) are added by `_frontend()` only when a checkpoint
+# is given.
+_DEFAULTED_DIM_KEYS = ("ref_h", "ref_w", "proprio_dim", "shift", "num_train_timesteps")
+REAL_DIMS = {key: value for key, value in LIBERO_REAL_DIMS.items()
+             if key not in _DEFAULTED_DIM_KEYS}
 
 
 def _pct(values: list[float], q: float) -> float:
@@ -111,7 +112,7 @@ def _frontend(precision: str, **kw):
     dims = dict(REAL_DIMS)
     ckpt = os.environ.get("CKPT_PATH")
     if ckpt:
-        dims.update(ref_h=14, ref_w=28)
+        dims.update(ref_h=LIBERO_REAL_DIMS["ref_h"], ref_w=LIBERO_REAL_DIMS["ref_w"])
         kw["ckpt_path"] = ckpt
     return ImageWAMTorchFrontendThor(precision=precision, dims_override=dims, **kw)
 

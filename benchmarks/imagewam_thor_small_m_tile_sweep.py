@@ -61,6 +61,7 @@ import torch
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.models.imagewam.gemm_variant_timer import CudaGraphVariantTimer
 from flash_rt.models.imagewam.gemm_variant_tuner import GemmVariantTuner
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 from flash_rt.models.imagewam.quant_linear import (
     FP8_CUTLASS_VARIANTS,
     Nvfp4Linear,
@@ -68,15 +69,16 @@ from flash_rt.models.imagewam.quant_linear import (
 )
 
 FP16 = torch.float16
-M = 64
-REAL_DIMS = dict(
-    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
-    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
-    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
-    num_action=M, total=969,
-    action_num_layers_double=5, action_num_layers_single=20,
-    dt=1.0 / 10, num_denoise_steps=10,
-)
+# The ActionDiT GEMM M this sweep runs at -- the served action horizon.
+M = LIBERO_REAL_DIMS["num_action"]
+# The served dims minus the entries this structural run leaves at the
+# frontend's own defaults: `proprio_dim` (proprio conditioning), `shift` and
+# `num_train_timesteps` (the real timestep schedule). `ref_h`/`ref_w` (the
+# real 2D image RoPE grid) are added by `_frontend()` only when a checkpoint
+# is given.
+_DEFAULTED_DIM_KEYS = ("ref_h", "ref_w", "proprio_dim", "shift", "num_train_timesteps")
+REAL_DIMS = {key: value for key, value in dict(LIBERO_REAL_DIMS, num_action=M).items()
+             if key not in _DEFAULTED_DIM_KEYS}
 FP8_TILES = {
     "sq": "256x256x128 c2x2x1", "wide": "256x128x128 c2x2x1", "t1": "128x256x128 c2x1x1 2SM",
     "plain": "256x128x64 c2x2x1", "t128x64x256": "128x64x256 c1x1x1 (v10 shape)",
@@ -285,7 +287,7 @@ def _frontend(precision: str):
     kwargs = {}
     ckpt = os.environ.get("CKPT_PATH")
     if ckpt:
-        dims.update(ref_h=14, ref_w=28)
+        dims.update(ref_h=LIBERO_REAL_DIMS["ref_h"], ref_w=LIBERO_REAL_DIMS["ref_w"])
         kwargs["ckpt_path"] = ckpt
     return ImageWAMTorchFrontendThor(precision=precision, dims_override=dims,
                                      gemm_variant_autotune=True, **kwargs), bool(ckpt)

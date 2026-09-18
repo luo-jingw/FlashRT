@@ -74,6 +74,12 @@ from flash_rt.models.imagewam.blockscaled_ref import (  # noqa: E402
     quantize_blocks,
     rotate_k_blocks,
 )
+from flash_rt.models.imagewam.libero_dims import (  # noqa: E402
+    LIBERO_HORIZON as HORIZON,
+    LIBERO_REAL_DIMS as REAL_DIMS,
+    LIBERO_SHIFT as SHIFT,
+    LIBERO_STEPS as STEPS,
+)
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill  # noqa: E402
 from flash_rt.models.imagewam.quant_linear import Fp16Linear  # noqa: E402
 from flash_rt.models.imagewam.text_encoder import encode_prompts  # noqa: E402
@@ -95,18 +101,7 @@ MERGE_LINEAR2 = os.environ.get("MERGE_LINEAR2")
 # fallback without a text encoder (context filled with N(0,1), proprio in
 # the last row), seeded per task so every tier sees the same values.
 CONTEXT = os.environ.get("CONTEXT", "qwen3")
-HORIZON, STEPS, SHIFT = 64, 10, 5.0
 OUT = os.environ.get("OUT", "/home/user1/workspace/jingwu/artifacts/hadamard-int4/accuracy_study.json")
-
-REAL_DIMS = dict(
-    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
-    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
-    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
-    num_action=HORIZON, total=969,
-    action_num_layers_double=5, action_num_layers_single=20,
-    dt=1.0 / STEPS, num_denoise_steps=STEPS,
-    ref_h=14, ref_w=28, proprio_dim=8, shift=SHIFT, num_train_timesteps=1000,
-)
 
 
 @dataclass(frozen=True)

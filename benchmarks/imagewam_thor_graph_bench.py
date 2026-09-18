@@ -18,20 +18,22 @@ can never drift out of sync with the real per-layer math again --
 whatever `pipeline_thor.py` actually does is what gets measured, by
 construction.
 
-Real dims (opportunities.md, confirmed 2026-09-15/16/17): `x0=513`
-(real text context, 512 real tokens + 1 reserved proprio row -- proprio
-CONDITIONING itself is not enabled here, `x0=513` is just the real
-structural width; a pure speed bench doesn't need real proprio/dataset
-stats), `a0=905` (`x0` + real LIBERO dual-camera image tokens, 392 =
-14x28 grid from the real confirmed 224x448 input), `num_action=64`
-(real LIBERO action horizon, confirmed via `_imagewam_thor_spec.py`),
-`num_denoise_steps=10` (real `eval_num_inference_steps`). Going
-through the real frontend also sidesteps a real quirk a hand-rolled
-`make_imagewam_attention_spec` call would hit at this exact `a0` (905,
-odd): the "backbone" site's `kernel="standard"` path requires an EVEN
-`kv_seq` -- the real frontend's own attention-site configuration
-already handles this correctly (confirmed: real Thor `infer()` runs
-fine at this exact `a0`), so there is nothing to work around here.
+Real dims (opportunities.md, confirmed 2026-09-15/16/17), imported as
+the served `libero_dims.LIBERO_REAL_DIMS` rather than re-typed here: the
+served `x0` is the real text context, 512 real tokens + 1 reserved
+proprio row -- proprio CONDITIONING itself is not enabled here, that
+width is just the real structural width; a pure speed bench doesn't need
+real proprio/dataset stats. `a0` is `x0` plus the real LIBERO
+dual-camera image tokens, 392 = 14x28 grid from the real confirmed
+224x448 input; `num_action` is the real LIBERO action horizon (confirmed
+via `_imagewam_thor_spec.py`), `num_denoise_steps` the real
+`eval_num_inference_steps`. Going through the real frontend also
+sidesteps a real quirk a hand-rolled `make_imagewam_attention_spec` call
+would hit at this exact `a0` (905, odd): the "backbone" site's
+`kernel="standard"` path requires an EVEN `kv_seq` -- the real frontend's
+own attention-site configuration already handles this correctly
+(confirmed: real Thor `infer()` runs fine at this exact `a0`), so there is
+nothing to work around here.
 
 INT8/INT4 (SM80 CUTLASS, opportunities.md OPT-007) are NOT included --
 they have no real dispatch path in `imagewam_thor.py`/`pipeline_thor.py`
@@ -49,15 +51,16 @@ import torch
 
 from flash_rt.frontends.torch.imagewam_thor import _PRECISIONS, ImageWAMTorchFrontendThor
 from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 
-REAL_DIMS = dict(
-    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
-    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
-    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
-    num_action=64, total=969,
-    action_num_layers_double=5, action_num_layers_single=20,
-    dt=1.0 / 10, num_denoise_steps=10,
-)
+# The served dims minus the entries this random-weight speed run leaves at
+# the frontend's own defaults: `ref_h`/`ref_w` (would select the real 2D
+# image RoPE grid in place of the flat placeholder), `proprio_dim` (proprio
+# conditioning), `shift` and `num_train_timesteps` (the real timestep
+# schedule).
+_DEFAULTED_DIM_KEYS = ("ref_h", "ref_w", "proprio_dim", "shift", "num_train_timesteps")
+REAL_DIMS = {key: value for key, value in LIBERO_REAL_DIMS.items()
+             if key not in _DEFAULTED_DIM_KEYS}
 
 WARMUP, ITERS = 15, 50
 

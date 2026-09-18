@@ -58,6 +58,12 @@ import torch
 from PIL import Image
 
 from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state
+from flash_rt.models.imagewam.libero_dims import (
+    LIBERO_HORIZON as HORIZON,
+    LIBERO_REAL_DIMS as REAL_DIMS,
+    LIBERO_SHIFT as SHIFT,
+    LIBERO_STEPS as STEPS,
+)
 
 sys.path.insert(0, os.environ["FLUX2_SRC"] + "/src")
 sys.path.insert(0, os.environ["FLUX2_SRC"])
@@ -76,7 +82,6 @@ CALIBRATION = os.environ.get("CALIBRATION") or None
 AWQ_KW = (dict(nvfp4_awq=True, awq_alpha=float(os.environ.get("AWQ_ALPHA", "0.5")),
                awq_scope=os.environ.get("AWQ_SCOPE", "adaln+down"))
           if os.environ.get("NVFP4_AWQ", "0") == "1" else {})
-HORIZON, STEPS, SHIFT = 64, 10, 5.0
 VAE_ENCODER = os.environ.get("VAE_ENCODER", "torch")
 VAE_GRAPH = os.environ.get("VAE_GRAPH", "0") == "1"
 VAE_RESIZE = os.environ.get("VAE_RESIZE", "area")
@@ -86,16 +91,6 @@ TEXT_TRIM = os.environ.get("TEXT_TRIM", "0") == "1"
 # FA4_MOT=1 also runs the ActionDiT ("mot") attention through FA4; the
 # backbone site is switched by FLASHRT_THOR_FA4=1 as before.
 FA4_MOT = os.environ.get("FA4_MOT", "0") == "1"
-
-REAL_DIMS = dict(
-    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
-    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
-    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
-    num_action=HORIZON, total=969,
-    action_num_layers_double=5, action_num_layers_single=20,
-    dt=1.0 / STEPS, num_denoise_steps=STEPS,
-    ref_h=14, ref_w=28, proprio_dim=8, shift=SHIFT, num_train_timesteps=1000,
-)
 
 
 def cos(a, b):

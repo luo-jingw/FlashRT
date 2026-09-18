@@ -51,17 +51,12 @@ import torch
 
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.frontends.torch.imagewam_thor import _PRECISIONS, ImageWAMTorchFrontendThor
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
 
-REAL_DIMS = dict(
-    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
-    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
-    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
-    num_action=64, total=969,
-    action_num_layers_double=5, action_num_layers_single=20,
-    dt=1.0 / 10, num_denoise_steps=10,
-    ref_h=14, ref_w=28, shift=5.0, num_train_timesteps=1000,
-)
+# The served dims minus `proprio_dim`: this A/B never enables proprio
+# conditioning.
+REAL_DIMS = {key: value for key, value in LIBERO_REAL_DIMS.items() if key != "proprio_dim"}
 FLAGS = ("merge_linear2", "fuse_res_norm")
 BF16 = torch.bfloat16
 DEV = "cuda"

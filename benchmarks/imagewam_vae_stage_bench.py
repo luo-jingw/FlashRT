@@ -18,8 +18,8 @@ Sections (`--section`, default `all`):
               graph, each with the torch encoder and with
               `NativeFlux2Encoder` (NHWC + FlashRT GroupNorm). Token
               equality / cosine against the legacy path is printed.
-  infer       whole `ImageWAMTorchFrontendThor.infer()` at the real dims
-              (x0=513 with proprio, a0=905, 64 actions, 10 steps), one
+  infer       whole `ImageWAMTorchFrontendThor.infer()` at the served dims
+              (max text length with proprio, a0=905, 64 actions, 10 steps), one
               frontend per `--vae-variants` entry (`<placement>-<encoder>`,
               placement eager|graph, encoder torch|native), called
               round-robin.
@@ -56,6 +56,7 @@ import numpy as np
 import torch
 from PIL import Image
 
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS as _REAL_DIMS
 from flash_rt.models.imagewam.vae_encoder import _prep_view, encode_to_tokens, load_real_ae
 from flash_rt.models.imagewam.vae_native_encoder import NativeFlux2Encoder
 from flash_rt.models.imagewam.vae_preprocess import VaePreprocessor
@@ -347,17 +348,6 @@ def section_encode(ae: torch.nn.Module, v1: np.ndarray, v2: np.ndarray, iters: i
         with torch.no_grad():
             ab_time(variants, iters)
             report_gpu(variants)
-
-
-_REAL_DIMS = dict(
-    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
-    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
-    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
-    num_action=64, total=969,
-    action_num_layers_double=5, action_num_layers_single=20,
-    dt=1.0 / 10, num_denoise_steps=10,
-    ref_h=14, ref_w=28, proprio_dim=8, shift=5.0, num_train_timesteps=1000,
-)
 
 
 def section_infer(v1: np.ndarray, v2: np.ndarray, iters: int, precision: str, variants: list[str],

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Text-context trimming (`text_trim=True`, issues.md ISSUE-020): capture
 cost and device memory per text length, and trimmed vs full-length speed,
-in one process at the real dims (x0=513 max with proprio, a0=905,
+in one process at the served dims (max text length with proprio, a0=905,
 64 actions, 10 steps).
 
 Sections (`--section`, default `all`):
@@ -14,10 +14,11 @@ Sections (`--section`, default `all`):
            max-dims scratch prefill and the calibration) and the device
            memory it adds. Cached length: wall time of `set_prompt`.
   ab       the same frontend, `--ab-valid` valid tokens (trimmed) vs 512
-           valid tokens (x0=513, the untrimmed shapes), alternating every
-           sample: graph replay alone (CUDA events) and `infer()` (wall
-           clock, synchronized; placeholder image tokens unless
-           --vae-graph). `--iters * --rounds` samples per side.
+           valid tokens (the served max text length, the untrimmed
+           shapes), alternating every sample: graph replay alone (CUDA
+           events) and `infer()` (wall clock, synchronized; placeholder
+           image tokens unless --vae-graph). `--iters * --rounds` samples
+           per side.
 
 Memory per new length is reported three ways: torch
 `memory_reserved()` delta (the graph's private pool and any autotune
@@ -48,21 +49,13 @@ import numpy as np
 import torch
 
 from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS as REAL_DIMS
 
 DEV = "cuda"
 BF16 = torch.bfloat16
 RESULT_PREFIX = "__TEXT_TRIM_BENCH__ "
 LIBERO_VALID_COUNTS = (16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)
 TEXT_LEN = 512
-REAL_DIMS = dict(
-    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
-    x0=TEXT_LEN + 1, a0=905, num_layers_double=5, num_layers_single=20,
-    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
-    num_action=64, total=969,
-    action_num_layers_double=5, action_num_layers_single=20,
-    dt=0.1, num_denoise_steps=10,
-    ref_h=14, ref_w=28, proprio_dim=8, shift=5.0, num_train_timesteps=1000,
-)
 
 
 @dataclass(frozen=True)
