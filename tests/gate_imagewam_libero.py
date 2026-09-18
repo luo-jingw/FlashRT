@@ -38,8 +38,8 @@ or ``$IMAGEWAM_FP8_CALIBRATION``:
 
 * no path, or the file does not exist: verdict ``skipped`` (exit 0);
 * the file exists and ``ImageWAMTorchFrontendThor.__init__`` declares a
-  ``fp8_calibration_path`` keyword: the path is passed there and the
-  precision is gated like any other;
+  ``calibration_path`` keyword (the calibration stream's name for it):
+  the path is passed there and the precision is gated like any other;
 * the file exists but the constructor has no such keyword: verdict
   ``blocked`` (exit 1). The gate never runs ``fp8_static`` on the
   placeholder ``N(0, 0.1)`` calibration.
@@ -118,7 +118,7 @@ DEFAULT_MANIFEST = CONFIG_DIR / "imagewam_libero_gate_v1.manifest.json"
 FIXTURE_DIR_ENV = "IMAGEWAM_GATE_FIXTURE_DIR"
 FP8_CALIBRATION_ENV = "IMAGEWAM_FP8_CALIBRATION"
 # The constructor keyword a real fp8_static calibration file is handed to.
-FP8_CALIBRATION_FRONTEND_KWARG = "fp8_calibration_path"
+FP8_CALIBRATION_FRONTEND_KWARG = "calibration_path"
 DEV = "cuda"
 BF16 = torch.bfloat16
 RESULT_PREFIX = "__IMAGEWAM_GATE__ "

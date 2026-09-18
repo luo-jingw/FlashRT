@@ -3970,7 +3970,8 @@ regenerated.
 `fp8_static` interface: thresholds mark it `requires_calibration`. The
 runner gates it only when `--fp8-calibration PATH` or
 `$IMAGEWAM_FP8_CALIBRATION` names an existing file, and hands the path to
-`ImageWAMTorchFrontendThor(..., fp8_calibration_path=PATH)`. Without a
+`ImageWAMTorchFrontendThor(..., calibration_path=PATH)`, the keyword the
+calibration stream's frontend uses. Without a
 file the verdict is `skipped` (exit 0); with a file but no such
 constructor keyword it is `blocked` (exit 1). It is never gated on the
 `N(0, 0.1)` placeholder calibration.
@@ -4016,7 +4017,7 @@ Gate runs:
 | fp16 | pass | vs official median 0.99836, min 0.99554 over 40 runs; vs fp16 reference 1.0 (max abs difference 0.0, bit-identical across processes); MAE 0.18364 against a limit of 0.18731; latency P50 158.2 ms (P10 142.9, P90 229.1), ungated; peak 9.56 GiB |
 | nvfp4 | blocked | frontend construction: `Nvfp4Linear requires a Blackwell/Thor NVFP4 build` (expected on sm_90) |
 | fp8_static, no calibration file | skipped | exit 0 |
-| fp8_static, file present | blocked | frontend declares no `fp8_calibration_path` keyword; exit 1 |
+| fp8_static, file present | blocked | this branch's frontend declares no `calibration_path` keyword; exit 1 |
 | fp8 | blocked | no thresholds configured |
 
 ## Open

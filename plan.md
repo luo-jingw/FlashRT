@@ -3388,14 +3388,14 @@ class GateFixtureStore:  save(fixture, directory, metadata) -> FixtureManifest; 
 
 # fp8_static hand-off (tests/gate_imagewam_libero.py)
 FP8_CALIBRATION_ENV = "IMAGEWAM_FP8_CALIBRATION"      # or --fp8-calibration PATH
-FP8_CALIBRATION_FRONTEND_KWARG = "fp8_calibration_path"
+FP8_CALIBRATION_FRONTEND_KWARG = "calibration_path"   # the calibration stream's keyword
 ```
 
 `fp8_static` contract: a precision whose thresholds say
 `requires_calibration` is gated only when a calibration file path is
 given and exists; otherwise the report verdict is `skipped` with the
 reason. When the file exists, the runner passes its path to
-`ImageWAMTorchFrontendThor(..., fp8_calibration_path=<path>)` only if the
+`ImageWAMTorchFrontendThor(..., calibration_path=<path>)` only if the
 constructor declares that keyword explicitly; if not, the verdict is
 `blocked`, naming the missing keyword. The runner never runs
 `fp8_static` on the placeholder `N(0, 0.1)` calibration. The file's
