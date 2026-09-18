@@ -56,6 +56,7 @@ import numpy as np
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
+from flash_rt.models.imagewam.blockscaled_ref import BLOCK, prepare_e0m3_hadamard_weight
 
 DEV = "cuda"
 FP16 = torch.float16
@@ -732,12 +733,13 @@ class E0m3HadamardLinear:
     exact arithmetic and any `K % 16 == 0` works.
 
     Construction (once): transpose the `(K,N)` fp16 weight to `(N,K)`,
-    rotate in fp32 (the activation kernel's butterfly), multiply by a per-tensor power of two `2^e` chosen so
-    the largest block scale `amax/7` stays at or below UE4M3's 448 (this
-    moves the block scales out of UE4M3's subnormal range, where ImageWAM's
-    weights otherwise put more than 90% of them), store as fp16, quantize
-    with `quantize_e0m3_dynamic_sfa_fp16` into packed codes + SFB. The
-    GEMM `alpha = 2^-e` undoes the pre-scale exactly.
+    prepare it with `blockscaled_ref.prepare_e0m3_hadamard_weight`
+    (butterfly rotation in fp32, per-tensor power of two `2^e` chosen so
+    the largest block scale `amax/7` stays at or below UE4M3's 448, which
+    moves the block scales out of UE4M3's subnormal range where ImageWAM's
+    weights otherwise put more than 90% of them, fp16), and quantize with
+    `quantize_e0m3_dynamic_sfa_fp16` into packed codes + SFB. The GEMM
+    `alpha = 2^-e` undoes the pre-scale exactly.
 
     Call: `quantize_e0m3_dynamic_sfa_fp16_vec(use_rht=1)` rotates and
     quantizes the activation into this object's scratch (allocated on
@@ -750,7 +752,7 @@ class E0m3HadamardLinear:
     `flash_rt.flash_rt_fp4`.
     """
 
-    def __init__(self, weight_fp16_ptr: int, n: int, k: int):
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int) -> None:
         try:
             import flash_rt.flash_rt_fp4 as fvk_fp4
             from flash_rt.executors.fp4_utils import pick_variant
@@ -759,20 +761,13 @@ class E0m3HadamardLinear:
                 "E0m3HadamardLinear requires a Blackwell/Thor build "
                 "(flash_rt.flash_rt_fp4) -- configure cmake with -DGPU_ARCH=110 and rebuild."
             ) from e
-        from flash_rt.models.imagewam.blockscaled_ref import BLOCK, E0M3_MAX, UE4M3_MAX, fwht16_butterfly
-
         if k % BLOCK != 0 or n % BLOCK != 0:
             raise ValueError(f"E0M3 requires N and K divisible by {BLOCK}, got N={n} K={k}")
         self._fp4 = fvk_fp4
         self.n, self.k = int(n), int(k)
-        # Butterfly in plain fp32 adds (exact order of the activation kernel's
-        # FWHT, independent of any TF32 matmul setting). (N,K) fp32.
-        w_rot = fwht16_butterfly(_wrap_fp16(weight_fp16_ptr, self.k, self.n).t().contiguous())
-        amax = float(w_rot.abs().max())
-        e = int(np.floor(np.log2(UE4M3_MAX * E0M3_MAX / amax))) if amax > 0 else 0
-        w_in = (w_rot * (2.0 ** e)).to(FP16).contiguous()
-        del w_rot
-        self.alpha = float(2.0 ** -e)
+        # Rotation (butterfly, fp32), per-tensor 2^e pre-scale, fp16.
+        w_in, self.alpha = prepare_e0m3_hadamard_weight(
+            _wrap_fp16(weight_fp16_ptr, self.k, self.n).t().contiguous())
         self.w_packed = torch.empty(self.n, self.k // 2, dtype=torch.uint8, device=DEV)
         # Zero-init: SF layout padding is never written and must stay inert.
         self.w_sfb = torch.zeros(fvk_fp4.sfa_size_bytes(self.n, self.k, True), dtype=torch.uint8, device=DEV)
