@@ -3926,8 +3926,9 @@ output norm (dominated by `txt_mlp2`, ISSUE-051).
 
 - The gain is on the activation side: E0M3 needs the rotation (without
   it, activations are worse than E2M1), and with it the uniform grid
-  beats E2M1 plus rotation. On weights alone the formats are within 10%
-  of each other; NVFP4 with MSE scales is the best weight quantizer.
+  beats E2M1 plus rotation. On weights alone the formats are close:
+  pooled weight-only error 0.0336 for `e0m3_hadamard` and 0.0319 for
+  NVFP4 with MSE scales, the best weight quantizer in the study.
 - Rotations larger than 16 are not better, so the existing in-register
   16-point kernel is the right one; no new rotation kernel is needed.
 - A per-tensor activation pre-scale adds nothing on top of H16
@@ -3957,8 +3958,8 @@ noise for every tier. `act` = denormalized 64-step actions.
   frames, and its open-loop MAE vs ground truth equals fp16's (0.18352
   vs 0.18359; `nvfp4` 0.18519). The plan's decision rule (at least 25%
   lower, MAE not worse) is met.
-- Every tier's error is 9-22x below the fp16 sampler's own seed-to-seed
-  spread (6.25e-3).
+- The quantized tiers' actions error is 4-22x below the fp16 sampler's
+  own seed-to-seed spread (6.25e-3); `e0m3_hadamard`'s is 22x below.
 - The eager run and the captured fp16 graph agree bit for bit
   (action_latent max |diff| = 0).
 
