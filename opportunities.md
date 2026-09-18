@@ -5053,4 +5053,8 @@ pool, each length with the VAE in the graph added 218 MiB.
 - `fp8`/`fp8_static`: blocked on H100 by ISSUE-001 (the calibration
   stream's fix), unverified with trimming.
 - The per-length graph cache is unbounded (up to 512 lengths).
+- Gate fixture v1 holds an untrimmed fp16 reference: trimmed fp16
+  measures 0.99837 / 0.99579 (median / min) against it, under the fp16
+  bounds 0.999 / 0.995, while vs official it is 0.99998 / 0.99992. A
+  trimmed default needs a regenerated fixture (ISSUE-080).
 - Owner decision: serve `text_trim=True` by default (ISSUE-080).

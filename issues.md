@@ -915,6 +915,14 @@ Costs that come with the flag:
 - Each cached length holds one CUDA graph: 10-16 MiB on H100 (NVML,
   per process). The cache has no bound; LIBERO has 15 distinct lengths
   over its four suites, and the buffers allow up to 512.
+- The regression gate's fixture v1 stores an untrimmed fp16 reference.
+  Trimmed fp16 on that fixture (H100, 40 runs) measures vs official
+  median 0.99998 / min 0.99992, but vs the stored fp16 reference median
+  0.99837 / min 0.99579, below the fp16 bounds 0.999 / 0.995; mean MAE
+  ratio to the reference 1.0115 (bound 1.02). Serving `text_trim=True`
+  by default needs the fixture's fp16 reference regenerated with
+  trimming (`benchmarks/imagewam_gate_fixture_generate.py`), a new
+  fixture version.
 
 ## Evidence
 
