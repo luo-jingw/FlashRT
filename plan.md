@@ -3040,7 +3040,7 @@ approved`.
 
 # Plan: ActionDiT small-M CUTLASS tile selection (roadmap item 1)
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -3307,7 +3307,7 @@ Phase Status: completed
 
 ### Phase 5: Thor sweep and A/B script, handoff
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: `benchmarks/imagewam_thor_small_m_tile_sweep.py`, plus
   results and Thor checklist in `opportunities.md` OPT-018.
@@ -3317,7 +3317,7 @@ Phase Status: active
 
 # Plan: attention-chain fusion recheck at ImageWAM's real shapes (roadmap item 6)
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -3482,7 +3482,7 @@ Phase Status: completed
 
 ### Phase 3: recommendation and Thor handoff
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: OPT-019 with evidence, recommendation, and Thor checks.
 - Files: `opportunities.md`.
