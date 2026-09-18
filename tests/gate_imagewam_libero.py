@@ -120,14 +120,24 @@ def file_sha256(path: Path) -> str:
 
 
 def git_state() -> dict[str, object]:
+    """HEAD plus the worktree state, untracked files included.
+
+    ``tracked_changes`` covers modified tracked files only; untracked
+    files are listed separately (first 50) with their count, and
+    ``clean`` is true only when there are neither.
+    """
     try:
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True,
                               text=True, check=True).stdout.strip()
-        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=REPO,
-                               capture_output=True, text=True, check=True).stdout.strip()
+        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=REPO,
+                                capture_output=True, text=True, check=True).stdout.splitlines()
     except (OSError, subprocess.CalledProcessError) as exc:
-        return {"commit": f"unknown ({type(exc).__name__})", "tracked_changes": None}
-    return {"commit": head, "tracked_changes": bool(dirty)}
+        return {"commit": f"unknown ({type(exc).__name__})", "tracked_changes": None,
+                "untracked_files": None, "untracked_count": None, "clean": None}
+    tracked = [line[3:] for line in status if not line.startswith("??")]
+    untracked = [line[3:] for line in status if line.startswith("??")]
+    return {"commit": head, "tracked_changes": bool(tracked), "tracked_changed_files": tracked[:50],
+            "untracked_files": untracked[:50], "untracked_count": len(untracked), "clean": not status}
 
 
 def explicit_constructor_params() -> set[str]:

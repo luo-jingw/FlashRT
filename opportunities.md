@@ -3958,6 +3958,15 @@ contexts (bfloat16 bits) and masks, the initial noise drawn as the
 official sampler draws it, and the official and FlashRT fp16 action
 chunks in normalized space.
 
+Provenance: v1 was produced by the generator content committed in
+`d03b073` (generator file SHA-256 `d16399e0e6afc3bf...`); that run took
+its git snapshot at the end rather than the start, which does not touch
+the data. Its manifest records `git.commit` `ae3a358` with
+`tracked_changes: false` because the generator was still untracked then.
+Manifests generated from now on also record `generator_sha256` and the
+untracked files (`git.untracked_files`, `git.clean`); v1 is not
+regenerated.
+
 `fp8_static` interface: thresholds mark it `requires_calibration`. The
 runner gates it only when `--fp8-calibration PATH` or
 `$IMAGEWAM_FP8_CALIBRATION` names an existing file, and hands the path to

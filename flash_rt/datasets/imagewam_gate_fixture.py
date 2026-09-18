@@ -32,6 +32,24 @@ array (bytes, shape, dtype), plus generation metadata. The manifest is
 committed to git; the ``.npz`` is not. ``GateFixtureStore.load`` refuses
 a fixture whose file or arrays do not match the manifest.
 
+Manifest ``metadata`` written by ``benchmarks/imagewam_gate_fixture_generate.py``:
+``generator`` (script path), ``generator_sha256`` (SHA-256 of the
+generator file that ran), ``git`` (HEAD at the start of generation;
+``tracked_changes`` for modified tracked files, ``untracked_files``,
+``untracked_count`` and ``clean``, so an uncommitted generator shows),
+``source``, ``sampler``, ``checkpoint`` (path, bytes, SHA-256),
+``dataset_stats`` (path, SHA-256), ``official``, ``fp16_reference``
+(precision, frontend call, dims), ``device``, ``torch``, ``peak_gib`` and
+``reference_summary``.
+
+``imagewam_libero_gate_v1`` predates ``generator_sha256`` and the
+untracked-file record. It was produced by the generator content
+committed in ``d03b073`` (file SHA-256 ``d16399e0e6afc3bf...``), with one
+difference that does not touch the data: that run took its git snapshot
+at the end instead of the start. Its ``git.commit`` is ``ae3a358`` with
+``tracked_changes: false`` because the generator was still an untracked
+file at that commit.
+
 numpy only; no torch, no GPU.
 """
 from __future__ import annotations

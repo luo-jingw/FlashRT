@@ -92,10 +92,24 @@ def file_sha256(path: str) -> str:
 
 
 def git_state() -> dict[str, object]:
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True).stdout.strip()
-    dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=REPO,
-                           capture_output=True, text=True).stdout.strip()
-    return {"commit": head, "tracked_changes": bool(dirty)}
+    """HEAD plus the worktree state, untracked files included.
+
+    ``tracked_changes`` covers modified tracked files only; untracked
+    files are listed separately (first 50) with their count, and
+    ``clean`` is true only when there are neither.
+    """
+    try:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True,
+                              text=True, check=True).stdout.strip()
+        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=REPO,
+                                capture_output=True, text=True, check=True).stdout.splitlines()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return {"commit": f"unknown ({type(exc).__name__})", "tracked_changes": None,
+                "untracked_files": None, "untracked_count": None, "clean": None}
+    tracked = [line[3:] for line in status if not line.startswith("??")]
+    untracked = [line[3:] for line in status if line.startswith("??")]
+    return {"commit": head, "tracked_changes": bool(tracked), "tracked_changed_files": tracked[:50],
+            "untracked_files": untracked[:50], "untracked_count": len(untracked), "clean": not status}
 
 
 def cosine(a: np.ndarray, b: np.ndarray) -> float:
@@ -119,6 +133,7 @@ def main() -> int:
         raise FileExistsError(f"{args.output_dir}/fixture.npz exists; fixtures are immutable, pick a new name")
 
     generator_git = git_state()
+    generator_sha256 = file_sha256(__file__)
     samples = load_samples()
     print(f"samples: {len(samples)} ({SUITE}, tasks {N_TASKS}, frames {FRAMES}, seeds {SEEDS})", flush=True)
     prompts: list[str] = []
@@ -222,6 +237,7 @@ def main() -> int:
     metadata = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "generator": "benchmarks/imagewam_gate_fixture_generate.py",
+        "generator_sha256": generator_sha256,
         "git": generator_git,
         "source": {"dataset": "yuanty/LIBERO-fastwam (LeRobot v2.1)", "suite": SUITE, "n_tasks": N_TASKS,
                    "frames": FRAMES, "seeds": SEEDS, "views": "observation.images.image, "
