@@ -142,3 +142,83 @@ Compare the backbone per layer on H100 with the SDPA backend pinned
 divergent layer.
 
 ## Resolution
+
+# ISSUE-030
+
+Status: open (decision needed: served resize filter)
+
+Area: VAE input resize in the served path
+(`vae_encoder._prep_view`, and `VaePreprocessor(resize="area")`, the
+frontend default `vae_resize="area"`), against the official LIBERO eval
+(`ImageWAM/experiments/libero/eval_libero_single._center_crop_resize`)
+and training (`torchvision.transforms.Resize([224, 224])` per camera,
+`config.yaml` `processor.val_transforms`/`train_transforms`)
+
+## Observation
+
+The served path resizes each camera view to 224x224 with
+`F.interpolate(mode="area")`. The official eval uses PIL
+`Image.resize(BILINEAR)` plus a center crop (a no-op for the square
+512x512 LIBERO frames). Training resizes with torchvision `Resize`
+(bilinear, antialias). `benchmarks/imagewam_e2e_official_compare.py`
+feeds the same PIL-resized 224x224 views to both sides by default, so its
+baseline does not see this difference.
+
+## Impact
+
+With raw frames the served policy sees a slightly different image than
+the model saw in training and in the official eval. Measured action
+effect on open-loop LIBERO frames is small (below the official model's
+own seed-to-seed spread); closed-loop effect is unmeasured.
+
+## Evidence
+
+Resize filters on real 512x512 LIBERO frames (episode 0, frame 0, both
+cameras), uint8 levels: torchvision `Resize` vs PIL mean |diff| 0.07,
+max 1; area vs PIL mean |diff| 0.66-0.80, max 31-34.
+
+Same 20 raw frames (libero_spatial, 10 tasks x frames {0,60}), served
+area vs `pil_bilinear` preprocessing, torch BF16 VAE on H100:
+
+| quantity | min | median | max |
+|---|---:|---:|---:|
+| VAE input image cosine | 0.99887 | 0.99934 | 0.99957 |
+| VAE token cosine | 0.98757 | 0.98933 | 0.99077 |
+| VAE token rel_l2 | 0.136 | 0.146 | 0.158 |
+| VAE token max-abs | 1.15 | 1.43 | 2.30 |
+
+End to end, `imagewam_e2e_official_compare.py`, fp16, same 20 frames,
+seeds {0,1}, the official side always PIL-resized:
+
+| FlashRT input | `fr_vs_off` median | min | mean | mean `mae_fr_vs_gt` |
+|---|---:|---:|---:|---:|
+| PIL-resized 224x224 (baseline) | 0.99840 | 0.99567 | 0.99803 | 0.18359 |
+| raw 512x512, `vae_resize="area"` (served) | 0.99830 | 0.99531 | 0.99806 | 0.18375 |
+| raw 512x512, `vae_resize="pil_bilinear"` | 0.99840 | 0.99567 | 0.99803 | 0.18359 |
+
+Official seed 0 vs seed 1: median 0.99630, min 0.97154. Official mean
+MAE vs ground truth: 0.18538. The `pil_bilinear` row reproduces the
+baseline exactly because the kernel is bit-exact to the official PIL
+resize (`tests/test_imagewam_vae_preprocess.py`).
+
+Secondary: the official eval normalizes in the model dtype (BF16 math,
+`bf16(bf16(v * (2/255)) - 1)`), which differs from the served table
+(float32 math, then BF16) in 127 of 256 entries by at most 0.0039 (one
+BF16 ulp). The end-to-end harness normalizes in float32, which equals
+the served table, so this part is not in the numbers above.
+
+## Hypotheses
+
+The VAE amplifies the resize-filter difference to about 1% token
+cosine, and the policy is robust to it in open loop. Because training
+used a bilinear antialiased resize, `pil_bilinear` is the in-distribution
+choice; area averaging is a different low-pass filter.
+
+## Next Experiment
+
+Owner decision: make `vae_resize="pil_bilinear"` the served default
+(same kernel launch count and cost; bit-exact to the official eval).
+A closed-loop LIBERO success-rate A/B of `area` vs `pil_bilinear` on
+Thor would settle whether the difference matters beyond open loop.
+
+## Resolution

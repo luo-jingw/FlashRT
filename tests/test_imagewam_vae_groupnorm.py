@@ -136,7 +136,7 @@ def test_bias_residual_nhwc_bitexact(shortcut_bias: bool):
 
 _FLUX2_SRC = os.environ.get("FLUX2_SRC", "")
 _FLUX2_SRC = os.path.join(_FLUX2_SRC, "src") if os.path.isdir(os.path.join(_FLUX2_SRC, "src", "flux2")) else _FLUX2_SRC
-_AE_PATH = os.environ.get("AE_MODEL_PATH", "")
+_AE_PATH = os.environ.get("AE_MODEL_PATH") or os.environ.get("FLUX2_AE_MODEL_PATH", "")
 
 
 @pytest.mark.skipif(not (os.path.isdir(_FLUX2_SRC) and os.path.isfile(_AE_PATH)), reason="real AE not present")

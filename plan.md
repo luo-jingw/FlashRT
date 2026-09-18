@@ -3040,7 +3040,7 @@ approved`.
 
 # Plan: VAE image preprocessing kernel with normalization LUT (roadmap item 2)
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -3202,7 +3202,7 @@ regression suite.
 
 ### Phase 3 — preprocessing mismatch measurement and record
 
-Phase Status: active
+Phase Status: completed
 
 Goal: measure the action effect of area vs PIL bilinear on raw
 512x512 frames against the official model; record ISSUE-030 and
@@ -3212,9 +3212,27 @@ Modified files: `benchmarks/imagewam_e2e_official_compare.py`,
 Observation method: end-to-end compare with raw frames, served
 `area` and opt-in `pil_bilinear`, next to the pre-resized baseline.
 
+## Thor Check
+
+Environment on Thor: this branch built with `cmake --build build -j
+--target flash_rt_kernels` (CMake re-configures for the new
+`csrc/kernels/imagewam_vae_*.cu` files); `FLUX2_SRC`, `FLUX2_AE_MODEL_PATH`
+(and `AE_MODEL_PATH` set to the same file), `CKPT_PATH`, optional
+`DATA_ROOT` (LIBERO-fastwam; synthetic frames without it);
+`PYTHONPATH=<FlashRT>:<ImageWAM>/src:$FLUX2_SRC/src`.
+
+1. `python -m pytest tests/test_imagewam_vae_preprocess.py -q -s`:
+   every printed line shows `differing_bf16=0/...` for both `area` and
+   `pil` (bit-exact on sm_110 too). Report the pass count and any
+   non-zero line.
+2. `python benchmarks/imagewam_vae_stage_bench.py --section preprocess
+   --iters 200`: per input, P10/P50/P90 of the torch path and the
+   kernel, kernels per call, GPU kernel time and host enqueue time; the
+   `bit-identical` lines must print `True`. Report the whole section.
+
 # Plan: VAE encode in-graph capture and native NHWC GroupNorm+SiLU (roadmap item 5)
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -3394,7 +3412,7 @@ alternating eager and graph in one process.
 
 ### Phase 3 — VAE folded into the main graph
 
-Phase Status: active
+Phase Status: completed
 
 Goal: `vae_graph_input=(nv, H, W)`: one replay per `infer()`; tokens
 and actions bit-identical to the eager path with the same noise.
@@ -3405,7 +3423,7 @@ real-dims frontend; regression suite; quick end-to-end compare.
 
 ### Phase 4 — native NHWC GroupNorm+SiLU encoder
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `vae_encoder="native"`: channels_last convolutions plus the
 FlashRT GroupNorm(+SiLU) and bias+residual kernels, in either
@@ -3421,8 +3439,45 @@ end-to-end compare; sm_110 compile check.
 
 ### Phase 5 — close-out
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: record measured results and the Thor checklist.
 Modified files: `opportunities.md` (OPT-021), `plan.md`.
 Observation method: every number recorded is labeled H100 or Thor.
+
+## Thor Check
+
+Same environment as the item-2 Thor check.
+
+1. `python -m pytest tests/test_imagewam_vae_groupnorm.py
+   tests/test_imagewam_vae_stage.py -q -s`: all pass. Expected prints:
+   GroupNorm cosine >= 0.9999 with at most ~0.03% differing elements;
+   `bias+residual` and every `graph` / `graph[...]` / `eager[native]`
+   line with `max_abs=0.000e+00`; `native stage eager vs torch` cosine
+   about 0.99998 with mean about -0.01, std about 0.97, absmax about 4.8.
+   Report the pass count and the `native stage eager vs torch` lines.
+2. `python benchmarks/imagewam_vae_stage_bench.py --section encode
+   --iters 100`: the `legacy` row is the stock VAE stage (21.5 ms in
+   OPT-012); report every row's P10/P50/P90 and the kernels / GPU
+   kernel time lines. Expected: native rows well below the torch rows;
+   graph rows at or below the matching eager rows.
+3. `python benchmarks/imagewam_vae_stage_bench.py --section profile`:
+   report the two `CUDA kernels per encode ... GPU time per encode`
+   lines and the top 10 rows of each table.
+4. `infer()` A/B on `nvfp4`, real dims, four frontends in one process
+   (random weights; latency does not depend on the values; set
+   `CKPT_PATH` to use the real checkpoint instead):
+   `env -u CKPT_PATH python benchmarks/imagewam_vae_stage_bench.py
+   --section infer --precision nvfp4 --iters 40`. If memory is short,
+   run `--vae-variants eager-torch,graph-native` and then
+   `--vae-variants eager-torch,eager-native,graph-torch`. Expected:
+   `eager-torch` near the 231.6 ms production P50; `graph-native` lower
+   by roughly the VAE-stage saving of step 2. Report P10/P50/P90 per
+   variant. Repeat with `--raw-views` if the deployment feeds raw
+   512x512 frames.
+5. Optional, if the official model fits next to FlashRT on Thor:
+   `PRECISION=nvfp4 N_TASKS=3 FRAMES=0 python
+   benchmarks/imagewam_e2e_official_compare.py` and the same with
+   `VAE_ENCODER=native VAE_GRAPH=1`. Expected: `fr_vs_off` and
+   `mae_fr_vs_gt` equal between the two runs to about 1e-4. Report both
+   SUMMARY blocks.

@@ -21,7 +21,7 @@ BF16 = torch.bfloat16
 
 _FLUX2_SRC = os.environ.get("FLUX2_SRC", "")
 _FLUX2_SRC = os.path.join(_FLUX2_SRC, "src") if os.path.isdir(os.path.join(_FLUX2_SRC, "src", "flux2")) else _FLUX2_SRC
-_AE_PATH = os.environ.get("AE_MODEL_PATH", "")
+_AE_PATH = os.environ.get("AE_MODEL_PATH") or os.environ.get("FLUX2_AE_MODEL_PATH", "")
 _AVAILABLE = os.path.isdir(_FLUX2_SRC) and os.path.isfile(_AE_PATH)
 pytestmark = pytest.mark.skipif(not _AVAILABLE, reason="real flux2 clone / AE checkpoint not present")
 
