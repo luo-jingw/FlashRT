@@ -4767,6 +4767,148 @@ eager-native 114.3 ms (512x512 views).
   convolutions and the conv_in input layout conversion are the next
   copy-elimination candidates.
 
+# OPT-024: Hadamard-rotated INT4 (E0M3) precision tier, `e0m3_hadamard`
+
+Status: implemented behind `precision="e0m3_hadamard"` (default stays
+`nvfp4`). Accuracy decided by an H100 simulation matched byte for byte
+to the CUDA quantizers; Thor correctness and latency pending
+(`benchmarks/imagewam_e0m3_hadamard_thor_check.py`,
+`tests/test_imagewam_e0m3_hadamard.py`).
+
+Area: 4-bit block-scaled GEMM tier for every 16-aligned ImageWAM weight
+(`quant_linear.py` `E0m3HadamardLinear`, `imagewam_thor.py`
+`_wrap_linear`), plan.md "Plan: Hadamard-rotated INT4 (E0M3) precision
+tier (roadmap item 9)".
+
+## Mechanism
+
+- Thor's tcgen05 block-scaled MMA reads the operand element format from
+  the runtime instruction descriptor. Value 0 decodes E0M3: sign-magnitude
+  integers -7..7 with the same per-16 UE4M3 scale layout as NVFP4. This
+  is the full-rate `kind::mxf4nvf4` path (`SM100_MMA_MXF4_SS`, K = 64 per
+  instruction), not the SM80 `s4` path OPT-007 closed.
+- Both operands get the same orthonormal 16-point Hadamard rotation of
+  every 16-wide K block. The rotation is block-diagonal along K, so any
+  `K % 16 == 0` works; ImageWAM's quantized K values are 1024, 3072, 4096,
+  and 9216, and 7680/12288 would also work. The OPT-007 power-of-two
+  padding problem does not arise.
+  - Weight, offline: fp32 butterfly, times a per-tensor power of two
+    `2^e` (largest block scale at most 448), stored as fp16, quantized
+    by `quantize_e0m3_dynamic_sfa_fp16`. The GEMM `alpha = 2^-e` undoes
+    the pre-scale exactly.
+  - Activation, online: `quantize_e0m3_dynamic_sfa_fp16_vec(use_rht=1)`
+    rotates in registers and quantizes (existing Pi0.5 kernel).
+  - GEMM: `cutlass_fp4_gemm_e0m3w_variant(a_format=0)`, new tile variants
+    1/6/8 (128x256 tiles) beside the existing 10 (128x64x256), picked by
+    the same `pick_variant(N, K)` as `nvfp4`.
+- The merged single-stream `linear1` (qkv + mlp gate/up, K = 3072 or
+  1024) is one ordinary weight to this tier. `action_encoder` (K=7) and
+  `head.linear` (N=7) fall back to `Fp16Linear`, as in `nvfp4`.
+
+## Simulation fidelity (H100)
+
+`flash_rt/models/imagewam/blockscaled_ref.py` reproduces the quantizers.
+`tools/check_blockscaled_quantizers_sm90.py` compiles the unmodified
+quantizer sources (same flags as `fp4_kernels_obj`) for sm_90a and
+compares bytes on real ImageWAM weights (65M elements) and outlier
+activations: E0M3 weights (plain, rotated, rotated and pre-scaled),
+E0M3 + H16 activations, and NVFP4 amax are byte-exact; NVFP4 MSE differs
+on about 2 codes per million. Dequantized operands of every tier are
+exactly representable in fp16 (0 inexact elements across the whole
+pipeline), so the whole-pipeline simulation runs the unchanged fp16
+cuBLASLt GEMM (fp32 accumulation) on them; it differs from the
+block-scaled GEMM only in accumulation order.
+
+## Result 1: per-GEMM error on real activations (H100 simulation)
+
+`benchmarks/imagewam_e0m3_accuracy_study.py`, real checkpoint, fp16
+pipeline on 4 LIBERO frames (libero_spatial), all 180 quantized weights,
+all 10 denoise steps. Output rel_l2 vs the exact fp32 product; "mean"
+is the unweighted mean over the 18 GEMM groups, "pooled" weights by
+output norm (dominated by `txt_mlp2`, ISSUE-051).
+
+| tier | mean | pooled | weight-only (pooled) | act-only (pooled) | weights better than nvfp4 |
+|---|---:|---:|---:|---:|---:|
+| `nvfp4` (shipped) | 0.0669 | 0.0893 | 0.0343 | 0.0805 | - |
+| `nvfp4`, MSE weight scales | 0.0633 | 0.0884 | 0.0319 | 0.0805 | 180/180 |
+| `nvfp4` + H16 | 0.0662 | 0.0464 | 0.0388 | 0.0274 | 25/180 |
+| `nvfp4`, weight pre-scale | 0.0653 | 0.0884 | 0.0330 | 0.0805 | 180/180 |
+| E0M3 weights, E2M1 activations | 0.0650 | 0.0887 | 0.0360 | 0.0805 | 169/180 |
+| E0M3 W4A4, no rotation | 0.0686 | 0.0749 | 0.0360 | 0.0649 | 65/180 |
+| E0M3 W4A4 + H16 (Pi0.5's tier) | 0.0565 | 0.0399 | 0.0360 | 0.0179 | 180/180 |
+| **E0M3 W4A4 + H16, weight pre-scale (`e0m3_hadamard`)** | **0.0545** | **0.0380** | **0.0336** | **0.0179** | **180/180** |
+| same, H64 rotation | 0.0559 | 0.0401 | 0.0340 | 0.0211 | 180/180 |
+| same, H256 rotation | 0.0563 | 0.0420 | 0.0340 | 0.0242 | 180/180 |
+
+- The gain is on the activation side: E0M3 needs the rotation (without
+  it, activations are worse than E2M1), and with it the uniform grid
+  beats E2M1 plus rotation. On weights alone the formats are close:
+  pooled weight-only error 0.0336 for `e0m3_hadamard` and 0.0319 for
+  NVFP4 with MSE scales, the best weight quantizer in the study.
+- Rotations larger than 16 are not better, so the existing in-register
+  16-point kernel is the right one; no new rotation kernel is needed.
+- A per-tensor activation pre-scale adds nothing on top of H16
+  (0.0545 either way).
+
+## Result 2: whole pipeline vs fp16 (H100 simulation)
+
+Same study, 20 frames (libero_spatial, first episode of 10 tasks,
+frames 0 and 60), real VAE/Qwen3/proprio/shift schedule, same N(0,1)
+noise for every tier. `act` = denormalized 64-step actions.
+
+| tier | backbone_hidden cos med / min | action_latent cos med / min | act cos med / min | 1 - act cos med | act MAE vs fp16 | MAE vs GT |
+|---|---|---|---|---:|---:|---:|
+| fp16, other noise seed | 1 / 1 | 0.99633 / 0.98108 | 0.99375 / 0.98289 | 6.25e-3 | 0.02075 | 0.18369 |
+| fp16 | 1 / 1 | 1 / 1 | 1 / 1 | 0 | 0 | 0.18359 |
+| `nvfp4` | 0.99819 / 0.99762 | 0.99937 / 0.99912 | 0.99928 / 0.99857 | 7.17e-4 | 0.00906 | 0.18519 |
+| `nvfp4`, MSE weights | 0.99847 / 0.99813 | 0.99943 / 0.99922 | 0.99952 / 0.99867 | 4.77e-4 | 0.00855 | 0.18510 |
+| `nvfp4`, weight pre-scale | 0.99838 / 0.99803 | 0.99943 / 0.99920 | 0.99947 / 0.99868 | 5.35e-4 | 0.00841 | 0.18452 |
+| E0M3 weights, E2M1 act | 0.99848 / 0.99790 | 0.99947 / 0.99923 | 0.99947 / 0.99872 | 5.27e-4 | 0.00831 | 0.18498 |
+| E0M3 W4A4, no rotation | 0.99882 / 0.99840 | 0.99844 / 0.99781 | 0.99840 / 0.99624 | 1.60e-3 | 0.01644 | 0.18901 |
+| E0M3 W4A4 + H16 | 0.99970 / 0.99948 | 0.99969 / 0.99954 | 0.99968 / 0.99918 | 3.15e-4 | 0.00622 | 0.18363 |
+| **`e0m3_hadamard`** | **0.99960 / 0.99949** | **0.99970 / 0.99961** | **0.99971 / 0.99941** | **2.86e-4** | **0.00606** | **0.18352** |
+
+- `e0m3_hadamard` lowers the actions error vs fp16 (1 - cos, median) by
+  60% relative to `nvfp4`, has lower actions error, lower
+  `backbone_hidden` error, and lower actions MAE vs fp16 on 20 of 20
+  frames, and its open-loop MAE vs ground truth equals fp16's (0.18352
+  vs 0.18359; `nvfp4` 0.18519). The plan's decision rule (at least 25%
+  lower, MAE not worse) is met.
+- The quantized tiers' actions error is 4-22x below the fp16 sampler's
+  own seed-to-seed spread (6.25e-3); `e0m3_hadamard`'s is 22x below.
+- The eager run and the captured fp16 graph agree bit for bit
+  (action_latent max |diff| = 0).
+
+## Result 3: activation quantizer cost (H100, indicative only)
+
+The same kernel sources built for sm_90a, CUDA events, 60 alternating
+rounds of 50 launches, P10/P50/P90 in us:
+
+| M x K | `quantize_fp4_dynamic_sfa_fp16` (nvfp4) | `quantize_e0m3_dynamic_sfa_fp16_vec` + H16 |
+|---|---|---|
+| 905 x 3072 | 10.6 / 10.6 / 10.7 | 6.1 / 6.2 / 6.2 |
+| 905 x 9216 | 19.6 / 19.7 / 19.8 | 10.6 / 10.6 / 10.6 |
+| 392 x 9216 | 10.9 / 10.9 / 10.9 | 6.4 / 6.4 / 6.5 |
+| 64 x 1024 | 4.4 / 4.4 / 4.4 | 3.0 / 3.0 / 3.1 |
+| 64 x 4096 | 4.6 / 4.6 / 4.7 | 3.1 / 3.1 / 3.2 |
+
+The vectorized E0M3 quantizer with the rotation is faster than the
+scalar NVFP4 quantizer ImageWAM uses. The GEMM tiles match `nvfp4`'s;
+the runtime-descriptor GEMM's Thor speed at ImageWAM's large-M shapes
+is unmeasured (Pi0.5 measured it equal to NVFP4 at decoder shapes with
+the 128x64x256 tile).
+
+## Open
+
+- Thor: correctness (`tests/test_imagewam_e0m3_hadamard.py`), whole
+  pipeline vs fp16 and open-loop MAE, `infer()` P50 vs `nvfp4`
+  (`benchmarks/imagewam_e0m3_hadamard_thor_check.py`).
+- Promotion to default needs the Thor numbers: better accuracy is
+  established in simulation; speed parity is not yet measured.
+- Side findings for the shipped `nvfp4` tier: ISSUE-050 (subnormal
+  weight scales), ISSUE-051 (`txt_mlp2` activation scale saturation),
+  ISSUE-052 (down-projection activation scales).
+
 # OPT-028: ImageWAM through `frt_model_runtime_v1` (Python producer)
 
 Status: implemented and verified on H100 (fp16, real checkpoint,
