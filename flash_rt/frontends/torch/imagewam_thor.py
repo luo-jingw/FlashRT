@@ -69,6 +69,7 @@ from flash_rt.models.imagewam.quant_linear import (
     StaticFp8Linear,
 )
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
+from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSurface
 
 _PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass")
 # OPT-004 step 6 (plan.md): the two `StaticFp8Linear` variants need a
@@ -144,6 +145,7 @@ class ImageWAMTorchFrontendThor:
         # other machine (see quant_linear.py's own module docstring),
         # not here.
         self._precision = precision
+        self._use_fa4 = bool(use_fa4)
         self._keepalive = []
         self.dims = dict(_DEFAULT_DIMS)
         if dims_override:
@@ -330,6 +332,9 @@ class ImageWAMTorchFrontendThor:
         )
 
         self._graph = None
+        # The capture stream, kept for the runtime export: ABI replay and
+        # ABI staging verbs run on it (see runtime_export.py).
+        self._graph_stream = None
         self._current_prompt = None
         # Row index inside self._context where the proprio token lives
         # for the CURRENTLY captured prompt -- computed once in
@@ -904,6 +909,7 @@ class ImageWAMTorchFrontendThor:
                                    action_rope_table=self._action_rope_table.data_ptr(),
                                    deltas=self._deltas)
         self._graph = graph
+        self._graph_stream = s
 
     def _set_context_with_optional_proprio(self, text_ctx: torch.Tensor, text_mask: torch.Tensor) -> None:
         """`text_ctx`: `(text_len, joint_attention_dim)` BF16 -- the
@@ -1031,9 +1037,7 @@ class ImageWAMTorchFrontendThor:
         if self._graph is None:
             raise RuntimeError("call set_prompt() before infer()")
         if self._ae is not None and "view1" in observation:
-            from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
-            tokens = encode_to_tokens(self._ae, observation["view1"], observation.get("view2"))
-            self._img_raw.copy_(tokens[0].to(dtype=BF16))
+            self.stage_images(observation["view1"], observation.get("view2"))
         else:
             self._img_raw.normal_()
         if self._proprio_dim is not None:
@@ -1043,17 +1047,72 @@ class ImageWAMTorchFrontendThor:
                     "infer(observation=...) requires observation['proprio'] when "
                     "dims['proprio_dim'] is set (matches imagewam.py's own "
                     "_append_proprio_to_context_if_enabled)")
-            proprio_t = torch.as_tensor(proprio, dtype=torch.float32, device=DEV).reshape(1, self._proprio_dim)
-            if self._state_norm is not None:
-                proprio_t = self._state_norm.forward(proprio_t)
-            proprio_tok = torch.nn.functional.linear(
-                proprio_t.to(dtype=BF16), self._proprio_w, self._proprio_b)
-            self._context[self._proprio_row].copy_(proprio_tok[0])
+            self.stage_proprio(proprio)
         self._action_latent.normal_()
         self._action_latent.mul_(0.01)
         self._graph.replay()
         torch.cuda.synchronize()
+        return {"actions": self.read_actions()}
+
+    # -- per-tick staging operations ------------------------------------
+    # Shared by infer() and the model-runtime verbs
+    # (flash_rt/models/imagewam/runtime_export.py). Each runs its torch
+    # ops on the caller's current stream.
+
+    def stage_images(self, view1: torch.Tensor, view2: torch.Tensor | None = None) -> None:
+        """Encode one or two `(H,W,3)` uint8 camera views through the real
+        VAE (outside the graph) and write the tokens into `img_raw`."""
+        if self._ae is None:
+            raise RuntimeError("stage_images requires ae_model_path/flux2_src at construction")
+        from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
+        tokens = encode_to_tokens(self._ae, view1, view2)
+        self._img_raw.copy_(tokens[0].to(dtype=BF16))
+
+    def stage_proprio(self, proprio: np.ndarray) -> None:
+        """Normalize raw robot state with the dataset `state` min/max (when
+        loaded), project it through the real `proprio_encoder` (outside the
+        graph), and write it into the context row `set_prompt()` reserved."""
+        if self._proprio_dim is None:
+            raise RuntimeError("stage_proprio requires dims['proprio_dim'] at construction")
+        proprio_t = torch.as_tensor(proprio, dtype=torch.float32, device=DEV).reshape(1, self._proprio_dim)
+        if self._state_norm is not None:
+            proprio_t = self._state_norm.forward(proprio_t)
+        proprio_tok = torch.nn.functional.linear(
+            proprio_t.to(dtype=BF16), self._proprio_w, self._proprio_b)
+        self._context[self._proprio_row].copy_(proprio_tok[0])
+
+    def read_actions(self) -> np.ndarray:
+        """The `(num_action, action_dim)` f32 chunk after replay: denormalized
+        with the dataset `action` min/max when loaded, else the raw latent.
+        Blocks on the current stream (device-to-host copy)."""
         actions = self._action_latent.detach()
         if self._action_norm is not None:
             actions = self._action_norm.backward(actions)
-        return {"actions": actions.cpu().numpy()}
+        return actions.cpu().numpy()
+
+    # -- runtime export ---------------------------------------------------
+
+    def runtime_surface(self) -> ImageWAMRuntimeSurface:
+        """The captured graph and its device windows, for the runtime export."""
+        if self._graph is None:
+            raise RuntimeError("call set_prompt() before runtime_surface()")
+        d = self.dims
+        setup = [("pipeline", type(self).__name__), ("precision", self._precision),
+                 ("use_fa4", str(self._use_fa4))]
+        setup.extend((f"dims.{k}", str(d[k])) for k in sorted(d))
+        return ImageWAMRuntimeSurface(
+            graph_exec=int(self._graph.raw_cuda_graph_exec()),
+            stream=self._graph_stream,
+            img_raw=self._img_raw,
+            context=self._context,
+            action_latent=self._action_latent,
+            img_len=d["a0"] - d["x0"],
+            token_dim=d["HD"],
+            num_action=d["num_action"],
+            action_dim=d["action_dim"],
+            proprio_dim=self._proprio_dim,
+            has_vae=self._ae is not None,
+            has_text_encoder=self._qwen3 is not None,
+            action_denormalized=self._action_norm is not None,
+            setup_identity=tuple(setup),
+        )

@@ -3198,7 +3198,7 @@ Tick (any host thread, through C function pointers):
 
 ### Phase 1 — frontend staging split and surface
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `infer()` delegates to `stage_images`, `stage_proprio` and
 `read_actions`; `_capture_graph` keeps its stream; `runtime_surface()`
@@ -3208,7 +3208,7 @@ Observation: `pytest tests/test_imagewam_*.py` count unchanged (68/6).
 
 ### Phase 2 — export module and unit test
 
-Phase Status: pending
+Phase Status: active
 
 Goal: `export_model_runtime(io="python")` with the port schema above;
 unit test at small random dims checks the schema, identity sensitivity,
