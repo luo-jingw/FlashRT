@@ -1,7 +1,14 @@
-"""`ImageWAMWorkload` layout derivation and validation (plan.md W1).
+"""`ImageWAMWorkload` layout derivation and validation (plan.md W1, W8).
 
-CPU only. `layout()` reads the structure through `patch_stride` and
-`max_action_horizon`, so a local stand-in replaces `ImageWAMStructure`.
+CPU only. The LIBERO numbers are pinned twice: as a literal table in this
+file (so a change to the derivation cannot silently move them) and
+against `libero_dims.LIBERO_REAL_DIMS`, which is itself the `dims`
+mapping `resolve_config(libero(), structure)` produces.
+
+`layout()` reaches the structure through `patch_stride` and
+`max_action_horizon` only, so the generic derivation and the invalid-input
+cases use a local stand-in; the LIBERO cases use the real
+`ImageWAMStructure.libero()`.
 """
 from __future__ import annotations
 
@@ -10,32 +17,69 @@ from collections import namedtuple
 
 import pytest
 
-from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
+from flash_rt.models.imagewam.config_resolver import resolve_config
+from flash_rt.models.imagewam.libero_dims import (
+    LIBERO_HORIZON, LIBERO_REAL_DIMS, LIBERO_SHIFT, LIBERO_STEPS,
+)
+from flash_rt.models.imagewam.structure import ImageWAMStructure
 from flash_rt.models.imagewam.workload import ImageWAMWorkload, SequenceLayout
 
 Struct = namedtuple("Struct", "patch_stride max_action_horizon")
 LIBERO_STRUCT = Struct(patch_stride=16, max_action_horizon=64)
 LAYOUT_KEYS = ("x0", "a0", "total", "ref_h", "ref_w", "dt")
 
+# The literal dims of the real ImageWAM-FLUX.2-4B-LIBERO release: the keys
+# `LIBERO_REAL_DIMS` held before it was derived from the workload and the
+# structure, plus `action_dim`, which the resolver's mapping adds.
+LIBERO_LITERAL_DIMS: dict = dict(
+    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
+    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
+    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
+    action_dim=7, num_action=64, total=969,
+    action_num_layers_double=5, action_num_layers_single=20,
+    dt=0.1, num_denoise_steps=10,
+    ref_h=14, ref_w=28, proprio_dim=8, shift=5.0, num_train_timesteps=1000,
+)
+# `img_len` is not a `dims` key; it is the image token count, `a0 - x0`.
+LIBERO_LITERAL_IMG_LEN = 392
+
 
 def _with(**kw) -> ImageWAMWorkload:
     return dataclasses.replace(ImageWAMWorkload.libero(), **kw)
 
 
+def test_libero_real_dims_is_the_literal_table():
+    assert LIBERO_REAL_DIMS == LIBERO_LITERAL_DIMS
+    assert (LIBERO_HORIZON, LIBERO_STEPS, LIBERO_SHIFT) == (64, 10, 5.0)
+
+
 def test_libero_layout_equals_libero_real_dims():
-    lay = ImageWAMWorkload.libero().layout(LIBERO_STRUCT)
+    w = ImageWAMWorkload.libero()
+    lay = w.layout(ImageWAMStructure.libero())
+    assert lay.img_len == LIBERO_LITERAL_IMG_LEN
     for key in LAYOUT_KEYS:
-        assert getattr(lay, key) == LIBERO_REAL_DIMS[key], key
-    assert lay.img_len == LIBERO_REAL_DIMS["a0"] - LIBERO_REAL_DIMS["x0"] == 392
+        assert getattr(lay, key) == LIBERO_REAL_DIMS[key] == LIBERO_LITERAL_DIMS[key], key
+    assert w.action_horizon == LIBERO_REAL_DIMS["num_action"] == LIBERO_LITERAL_DIMS["num_action"]
+    assert lay.img_len == LIBERO_REAL_DIMS["a0"] - LIBERO_REAL_DIMS["x0"]
     assert (lay.x0, lay.img_len, lay.a0, lay.total, lay.ref_h, lay.ref_w) == (513, 392, 905, 969, 14, 28)
+
+
+def test_resolve_config_dims_equal_libero_real_dims():
+    """plan.md: `LIBERO_REAL_DIMS` is the resolver's dims mapping for
+    `libero()` and the real structure, so its 24 literals are one
+    definition and not a copy."""
+    r = resolve_config(ImageWAMWorkload.libero(), ImageWAMStructure.libero())
+    assert r.dims == LIBERO_REAL_DIMS
+    assert set(r.dims) == set(LIBERO_REAL_DIMS) == set(LIBERO_LITERAL_DIMS)
 
 
 def test_libero_scalars_equal_libero_real_dims():
     w = ImageWAMWorkload.libero()
-    assert w.action_horizon == LIBERO_REAL_DIMS["num_action"]
+    assert w.action_horizon == LIBERO_REAL_DIMS["num_action"] == LIBERO_HORIZON
+    assert w.action_dim == LIBERO_REAL_DIMS["action_dim"] == 7
     assert w.proprio_dim == LIBERO_REAL_DIMS["proprio_dim"]
-    assert w.num_steps == LIBERO_REAL_DIMS["num_denoise_steps"]
-    assert w.shift == LIBERO_REAL_DIMS["shift"]
+    assert w.num_steps == LIBERO_REAL_DIMS["num_denoise_steps"] == LIBERO_STEPS
+    assert w.shift == LIBERO_REAL_DIMS["shift"] == LIBERO_SHIFT
     assert w.num_train_timesteps == LIBERO_REAL_DIMS["num_train_timesteps"]
 
 

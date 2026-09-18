@@ -99,6 +99,33 @@ class ImageWAMStructure:
         )
 
     @staticmethod
+    def libero() -> "ImageWAMStructure":
+        """The structure constants of the real `ImageWAM-FLUX.2-4B-LIBERO`
+        release, as a constant table (not read from a checkpoint):
+
+            hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
+            num_layers_double=5, num_layers_single=20,
+            action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
+            action_num_layers_double=5, action_num_layers_single=20,
+            max_action_horizon=64, patch_stride=16
+
+        These are the structure-related entries of
+        `libero_dims.LIBERO_REAL_DIMS`, which carries them beside the
+        served workload and sequence layout; `patch_stride` is the FLUX.2
+        VAE constant, as in `toy()`. Pinned two ways by
+        tests/test_imagewam_structure.py: field by field against that
+        literal table, and through `from_checkpoint(ckpt_path) ==
+        libero()` on the real checkpoint when one is configured.
+        """
+        return ImageWAMStructure(
+            hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
+            num_layers_double=5, num_layers_single=20,
+            action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
+            action_num_layers_double=5, action_num_layers_single=20,
+            max_action_horizon=64, patch_stride=VAE_PATCH_STRIDE,
+        )
+
+    @staticmethod
     def from_checkpoint(ckpt_path) -> "ImageWAMStructure":
         """Read the structure of the checkpoint at `ckpt_path`.
 

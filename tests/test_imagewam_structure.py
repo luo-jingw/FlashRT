@@ -4,11 +4,14 @@
   `_DEFAULT_DIMS`. The frontend needs a GPU context and the compiled
   kernels to import, so the dict is read out of the module SOURCE with
   `ast` (the actual literal, not a copy in this file).
+* `libero()` equals the literal structure table in this file and the
+  structure-related entries of `libero_dims.LIBERO_REAL_DIMS`.
 * `from_checkpoint()` on the real ImageWAM-FLUX.2-4B-LIBERO release equals
-  the structure keys of `libero_dims.LIBERO_REAL_DIMS`. The release is
-  looked up at `$CKPT_PATH` (the same variable the other real-checkpoint
-  tests use) or the default dev-machine path; the test skips when absent.
-  Only tensor shapes are read (mmap), the ~9 GB file is not loaded.
+  that same table (`from_checkpoint(ckpt) == libero()`) and the structure
+  keys of `libero_dims.LIBERO_REAL_DIMS`. The release is looked up at
+  `$CKPT_PATH` (the same variable the other real-checkpoint tests use) or
+  the default dev-machine path; the test skips when absent. Only tensor
+  shapes are read (mmap), the ~9 GB file is not loaded.
 * `from_checkpoint()` on small synthetic checkpoints (shapes only) covers
   the file/directory forms, the toy round trip and the error paths.
 """
@@ -234,6 +237,28 @@ def test_inconsistent_backbone_shapes_raise(tmp_path):
 
 # ── the real release ────────────────────────────────────────────────────
 
+# `ImageWAMStructure.libero()` field by field, as a constant table: the
+# structure entries of `LIBERO_REAL_DIMS` on the released checkpoint.
+LIBERO_LITERAL_STRUCTURE: dict = dict(
+    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
+    num_layers_double=5, num_layers_single=20,
+    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
+    action_num_layers_double=5, action_num_layers_single=20,
+    max_action_horizon=64, patch_stride=16,
+)
+
+
+def test_libero_equals_the_literal_structure_table():
+    libero = ImageWAMStructure.libero()
+    assert set(LIBERO_LITERAL_STRUCTURE) == {f.name for f in fields(ImageWAMStructure)}
+    for key, value in LIBERO_LITERAL_STRUCTURE.items():
+        assert getattr(libero, key) == value, key
+    for key in _DIMS_KEYS:
+        assert getattr(libero, key) == LIBERO_REAL_DIMS[key], key
+    assert libero.max_action_horizon == LIBERO_REAL_DIMS["num_action"] == LIBERO_HORIZON
+    assert libero.patch_stride == VAE_PATCH_STRIDE == 16
+
+
 _real_missing = not Path(_CKPT_PATH).is_file() or not (Path(_CKPT_PATH).parent / "config.yaml").is_file()
 _real_reason = (f"real ImageWAM-FLUX.2-4B-LIBERO release not found at {_CKPT_PATH} "
                 f"(model.pt + config.yaml; set CKPT_PATH to override)")
@@ -242,6 +267,7 @@ _real_reason = (f"real ImageWAM-FLUX.2-4B-LIBERO release not found at {_CKPT_PAT
 @pytest.mark.skipif(_real_missing, reason=_real_reason)
 def test_real_checkpoint_equals_libero_real_dims():
     s = ImageWAMStructure.from_checkpoint(_CKPT_PATH)
+    assert s == ImageWAMStructure.libero()
     for key in _DIMS_KEYS:
         assert getattr(s, key) == LIBERO_REAL_DIMS[key], key
     assert s.max_action_horizon == LIBERO_HORIZON
