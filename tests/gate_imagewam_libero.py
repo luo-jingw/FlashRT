@@ -41,6 +41,13 @@ into ``blocked`` (exit 1).
 Writes ``<output-dir>/result.json`` and prints one ``__IMAGEWAM_GATE__``
 JSON line. Exit code 0 for ``pass``/``skipped``, 1 for ``fail``/``blocked``.
 
+Inputs are checked before any GPU work: ``--iters`` must be at least
+``LATENCY_GROUP_COUNT`` (10), and the checkpoint must match the
+manifest's SHA-256 (about 9 GB hashed once per run). ``--skip-checkpoint-hash``
+replaces the hash with a size-only check and is recorded in the result;
+a manifest without a checkpoint hash requires that flag. A mismatch, or
+a ``dataset_stats.json`` that differs from the fixture's, is ``blocked``.
+
 Required env: ``CKPT_PATH`` (``dataset_stats.json`` beside it),
 ``FLUX2_AE_MODEL_PATH`` (or ``AE_MODEL_PATH``), ``FLUX2_SRC``. Example::
 
@@ -71,6 +78,7 @@ if str(REPO) not in sys.path:
 import flash_rt.flash_rt_kernels as fvk  # noqa: E402
 from flash_rt.core.parity import parity_metrics  # noqa: E402
 from flash_rt.core.regression_gate import (  # noqa: E402
+    LATENCY_GROUP_COUNT,
     VERDICT_BLOCKED,
     VERDICT_SKIPPED,
     CosineSummary,
@@ -126,6 +134,36 @@ def explicit_constructor_params() -> set[str]:
     """Keywords ``ImageWAMTorchFrontendThor.__init__`` declares by name (not ``**kwargs``)."""
     return {name for name, p in inspect.signature(ImageWAMTorchFrontendThor.__init__).parameters.items()
             if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
+
+
+def verify_checkpoint(ckpt: str, stats: str, manifest: FixtureManifest, skip_hash: bool,
+                      context: dict[str, object]) -> str | None:
+    """Check the checkpoint and dataset stats against the fixture; return a reason on mismatch.
+
+    The checkpoint is compared by SHA-256 when the manifest has one;
+    ``skip_hash`` replaces that with a byte-size comparison. How it was
+    verified goes into ``context["checkpoint"]``.
+    """
+    expected = manifest.metadata["checkpoint"]
+    record = context["checkpoint"]
+    expected_sha = expected.get("sha256")
+    if skip_hash:
+        record["verified_by"] = "size (--skip-checkpoint-hash)"
+        if os.path.getsize(ckpt) != expected["bytes"]:
+            return f"checkpoint is {os.path.getsize(ckpt)} bytes, fixture's is {expected['bytes']}"
+    elif expected_sha is None:
+        return "fixture manifest has no checkpoint sha256; pass --skip-checkpoint-hash to accept a size-only check"
+    else:
+        start = time.time()
+        actual_sha = file_sha256(Path(ckpt))
+        record.update(sha256=actual_sha, verified_by="sha256", hash_s=round(time.time() - start, 1))
+        if actual_sha != expected_sha:
+            return f"checkpoint sha256 {actual_sha[:16]} != fixture's {expected_sha[:16]}"
+    expected_stats = manifest.metadata["dataset_stats"]["sha256"]
+    actual_stats = file_sha256(Path(stats))
+    if actual_stats != expected_stats:
+        return f"dataset_stats.json sha256 {actual_stats[:16]} != fixture's {expected_stats[:16]}"
+    return None
 
 
 def context_tensors(fixture: ImageWAMGateFixture, task: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -238,9 +276,15 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--require-latency", action="store_true",
                         help="an ungated latency (no policy or no baseline) makes the verdict blocked")
+    parser.add_argument("--skip-checkpoint-hash", action="store_true",
+                        help="verify the checkpoint by byte size only, not by the manifest's SHA-256")
     args = parser.parse_args()
     if args.fixture_dir is None:
         parser.error(f"--fixture-dir is required (or set ${FIXTURE_DIR_ENV})")
+    if args.iters < LATENCY_GROUP_COUNT:
+        parser.error(f"--iters must be at least {LATENCY_GROUP_COUNT} (latency group medians), got {args.iters}")
+    if args.warmup < 0:
+        parser.error(f"--warmup must be non-negative, got {args.warmup}")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output_dir = args.output_dir or Path(f"/tmp/imagewam-gate-{args.precision}-{stamp}")
 
@@ -273,13 +317,10 @@ def main() -> int:
         return emit(GateReport.not_run(args.precision, policy.device, VERDICT_BLOCKED,
                                        f"no fidelity thresholds for precision {args.precision!r} in {args.thresholds}",
                                        context), output_dir)
-    expected_ckpt = manifest.metadata["checkpoint"]
-    expected_stats = manifest.metadata["dataset_stats"]["sha256"]
-    if os.path.getsize(ckpt) != expected_ckpt["bytes"] or file_sha256(Path(stats)) != expected_stats:
-        return emit(GateReport.not_run(args.precision, policy.device, VERDICT_BLOCKED,
-                                       f"checkpoint size or dataset_stats.json differs from the fixture's "
-                                       f"({expected_ckpt['bytes']} bytes, stats {expected_stats[:12]})",
-                                       context), output_dir)
+    mismatch = verify_checkpoint(ckpt, stats, manifest, args.skip_checkpoint_hash, context)
+    if mismatch is not None:
+        return emit(GateReport.not_run(args.precision, policy.device, VERDICT_BLOCKED, mismatch, context),
+                    output_dir)
 
     frontend_kwargs: dict[str, object] = {}
     if thresholds.requires_calibration:
