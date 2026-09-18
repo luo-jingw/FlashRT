@@ -8,15 +8,23 @@ GPU, together with `tools/blockscaled_quantizers_shim.cu`, and compares
 their packed codes and tile-interleaved scale bytes with
 `flash_rt.models.imagewam.blockscaled_ref`:
 
-- weights: real ImageWAM checkpoint tensors (`CKPT_PATH`), E0M3 plain,
-  E0M3 after the per-16 Hadamard rotation (also scaled by 2^10), NVFP4
-  amax, NVFP4 MSE;
+- weights: real ImageWAM checkpoint tensors (`CKPT_PATH`; 130M elements),
+  E0M3 plain, E0M3 after the per-16 Hadamard rotation, E0M3 of the
+  served `e0m3_hadamard` weight preparation
+  (`prepare_e0m3_hadamard_weight`: butterfly, per-tensor 2^e, fp16),
+  NVFP4 amax, NVFP4 MSE;
 - activations: random fp16 with outlier columns and near-zero rows,
   E0M3 with and without the rotation (`quantize_e0m3_dynamic_sfa_fp16_vec`)
-  and NVFP4.
+  and NVFP4;
+- NVFP4 on blocks built on the E2M1 rounding thresholds (about half the
+  elements scale exactly onto a threshold), in both the SFB and the SFA
+  layout: the kernel's reciprocal is `rcp.approx.ftz` and its `amax / 6`
+  is `div.approx` under `--use_fast_math`, the reference's are
+  round-to-nearest.
 
 Prints the mismatch count of every case; exits 1 if any case other than
-NVFP4 MSE mismatches. Needs nvcc (sm_89 or newer target), the CUTLASS
+NVFP4 MSE mismatches (MSE differs at ties of its sequential,
+FMA-contracted error sum). Needs nvcc (sm_89 or newer target), the CUTLASS
 checkout, and CUDA torch.
 
   python tools/check_blockscaled_quantizers_sm90.py --arch 90a
@@ -33,9 +41,11 @@ import tempfile
 import torch
 
 from flash_rt.models.imagewam.blockscaled_ref import (
+    BlockQuantized,
     fwht16_butterfly,
     pack_codes,
     pack_scales,
+    prepare_e0m3_hadamard_weight,
     quantize_blocks,
     rotate_k_blocks,
     sf_size_bytes,
@@ -59,8 +69,21 @@ def build(arch: str, cutlass: str, out_dir: str) -> str:
     return lib
 
 
+def e2m1_threshold_blocks(rows: int, k: int, seed: int) -> torch.Tensor:
+    """Blocks with amax = 6*s (s any UE4M3 value) whose other elements are
+    +-t*s, t an E2M1 threshold or grid value; fp16-exact."""
+    g = torch.Generator().manual_seed(seed)
+    scales = torch.arange(1, 127, dtype=torch.uint8).view(torch.float8_e4m3fn).float()
+    s = scales[torch.randint(0, scales.numel(), (rows, k // 16), generator=g)]
+    levels = torch.tensor([0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0])
+    t = levels[torch.randint(0, levels.numel(), (rows, k // 16, 16), generator=g)]
+    t[..., 0] = 6.0
+    sign = torch.where(torch.rand(rows, k // 16, 16, generator=g) < 0.5, -1.0, 1.0)
+    return (t * sign * s.unsqueeze(-1)).reshape(rows, k).to(torch.float16).to(DEV)
+
+
 class Shim:
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         self.lib = ctypes.CDLL(path)
         for fn in ("shim_e0m3_w", "shim_e0m3_vec", "shim_nvfp4", "shim_nvfp4_mse"):
             getattr(self.lib, fn).argtypes = [ctypes.c_uint64] * 3 + [ctypes.c_int] * 3
@@ -75,7 +98,7 @@ class Shim:
         return packed, sf
 
 
-def compare(tag: str, got: tuple[torch.Tensor, torch.Tensor], ref) -> int:
+def compare(tag: str, got: tuple[torch.Tensor, torch.Tensor], ref: BlockQuantized) -> int:
     packed, sf = got
     bad_c = int((packed != pack_codes(ref.codes)).sum())
     bad_s = int((sf != pack_scales(ref.scale_bytes)).sum())
@@ -98,15 +121,15 @@ def main() -> int:
                 w = sd[key].to(torch.float16).to(DEV).contiguous()
                 n, k = w.shape
                 wr = rotate_k_blocks(w.float(), 16).half().contiguous()
-                wg = (rotate_k_blocks(w.float(), 16) * 1024.0).half().contiguous()
+                wg, alpha = prepare_e0m3_hadamard_weight(w)
                 print(f"{key} [{n}, {k}]")
                 exact_bad += compare("  weight e0m3", shim.run("shim_e0m3_w", w, 1), quantize_blocks(w, "e0m3"))
                 exact_bad += compare("  weight e0m3, H16-rotated", shim.run("shim_e0m3_w", wr, 1),
                                      quantize_blocks(wr, "e0m3"))
-                exact_bad += compare("  weight e0m3, H16-rotated x2^10", shim.run("shim_e0m3_w", wg, 1),
+                exact_bad += compare(f"  weight e0m3, served prep (alpha={alpha:g})", shim.run("shim_e0m3_w", wg, 1),
                                      quantize_blocks(wg, "e0m3"))
                 exact_bad += compare("  weight nvfp4 amax", shim.run("shim_nvfp4", w, 1), quantize_blocks(w, "e2m1"))
-                compare("  weight nvfp4 mse (sum-order ties expected)", shim.run("shim_nvfp4_mse", w, 1),
+                compare("  weight nvfp4 mse (sum-order and fma ties expected)", shim.run("shim_nvfp4_mse", w, 1),
                         quantize_blocks(w, "e2m1", "mse"))
         g = torch.Generator().manual_seed(0)
         for m, k in ((905, 3072), (905, 9216), (64, 1024), (64, 4096)):
@@ -119,6 +142,10 @@ def main() -> int:
                                  quantize_blocks(fwht16_butterfly(x), "e0m3"))
             exact_bad += compare("  e0m3 (vec)", shim.run("shim_e0m3_vec", x, 0), quantize_blocks(x, "e0m3"))
             exact_bad += compare("  nvfp4", shim.run("shim_nvfp4", x, 0), quantize_blocks(x, "e2m1"))
+        ties = e2m1_threshold_blocks(4096, 1024, 0)
+        print("nvfp4 on E2M1 thresholds [4096, 1024]")
+        exact_bad += compare("  SFB layout (weight)", shim.run("shim_nvfp4", ties, 1), quantize_blocks(ties, "e2m1"))
+        exact_bad += compare("  SFA layout (activation)", shim.run("shim_nvfp4", ties, 0), quantize_blocks(ties, "e2m1"))
     print(f"mismatches in byte-exact cases: {exact_bad}")
     return 1 if exact_bad else 0
 

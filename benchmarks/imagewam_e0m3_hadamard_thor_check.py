@@ -1,10 +1,11 @@
 """Thor check for the `e0m3_hadamard` precision tier vs `nvfp4` and `fp16`.
 
-Runs the served `ImageWAMTorchFrontendThor` (real checkpoint, real VAE,
-real Qwen3 context, real proprio, 10-step shift schedule) on real LIBERO
-frames, first as the `fp16` reference and then once per compared
-precision, with the same N(0,1) initial action noise for every run, and
-reports per compared precision:
+Runs the served `ImageWAMTorchFrontendThor.infer()` (real checkpoint,
+real VAE with the default preprocessing, real Qwen3 context, real
+proprio, 10-step shift schedule, merged single-stream `linear1`/`linear2`)
+on real LIBERO frames, first as the `fp16` reference and then once per
+compared precision, with the same N(0,1) initial action noise for every
+run (`infer(action_noise=...)`), and reports per compared precision:
 
   bh_cos    backbone_hidden (prefill output) cosine vs fp16
   al_cos    action_latent (normalized actions) cosine vs fp16
@@ -17,8 +18,16 @@ process with the calls interleaved (P10/P50/P90 of wall time around
 graph replay alone).
 
 Env (all optional): PRECISIONS ("nvfp4,e0m3_hadamard"; the compared
-precisions, `fp16` allowed as a sanity row), SUITE (libero_spatial), N_TASKS (10),
-FRAMES ("0,20,40,60,80"), LAT_ITERS (50), IMAGEWAM_USE_FA4 (0).
+precisions, `fp16` allowed as a sanity row), SUITE (libero_spatial),
+N_TASKS (10), FRAMES ("0,20,40,60,80"), LAT_ITERS (50). Attention
+follows the frontend's own rule (`use_fa4=None`: cuBLAS unless
+`FLASHRT_THOR_FA4=1`); the resolved choice is printed.
+
+Expected from the H100 simulation (`opportunities.md` OPT-024, merged
+`linear2`, 20 frames): `e0m3_hadamard` actions cosine vs fp16 about
+0.9997 and `backbone_hidden` about 0.9996, both above `nvfp4` (about
+0.9993 and 0.998), and open-loop MAE vs ground truth about equal to
+fp16's.
 Required env: CKPT_PATH (dataset_stats.json beside it),
 FLUX2_AE_MODEL_PATH, FLUX2_SRC, QWEN3_MODEL_SPEC, DATA_ROOT, and the
 ImageWAM `src/` plus FLUX2_SRC/src on PYTHONPATH.
@@ -45,7 +54,6 @@ from _imagewam_libero_frames import LiberoFrame, load_libero_frames  # noqa: E40
 
 from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor  # noqa: E402
 from flash_rt.models.imagewam.text_encoder import encode_prompts, load_real_text_encoder  # noqa: E402
-from flash_rt.models.imagewam.vae_encoder import encode_to_tokens  # noqa: E402
 
 DEV = "cuda"
 BF16 = torch.bfloat16
@@ -56,7 +64,6 @@ SUITE = os.environ.get("SUITE", "libero_spatial")
 N_TASKS = int(os.environ.get("N_TASKS", "10"))
 FRAMES = [int(x) for x in os.environ.get("FRAMES", "0,20,40,60,80").split(",")]
 LAT_ITERS = int(os.environ.get("LAT_ITERS", "50"))
-USE_FA4 = os.environ.get("IMAGEWAM_USE_FA4", "0") == "1"
 HORIZON, STEPS, SHIFT = 64, 10, 5.0
 
 REAL_DIMS = dict(
@@ -83,34 +90,34 @@ def noise_for(frame_idx: int) -> torch.Tensor:
 def build(precision: str) -> ImageWAMTorchFrontendThor:
     t = time.time()
     fe = ImageWAMTorchFrontendThor(
-        precision=precision, dims_override=dict(REAL_DIMS), ckpt_path=CKPT, use_fa4=USE_FA4,
+        precision=precision, dims_override=dict(REAL_DIMS), ckpt_path=CKPT,
         ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
         dataset_stats_path=STATS)
-    print(f"[{precision}] constructed in {time.time() - t:.1f}s", flush=True)
+    print(f"[{precision}] constructed in {time.time() - t:.1f}s; use_fa4={fe.use_fa4} "
+          f"merge_linear2={fe.dims.get('merge_linear2')}", flush=True)
     return fe
 
 
+def observation(f: LiberoFrame) -> dict:
+    return {"view1": torch.from_numpy(f.view1.copy()), "view2": torch.from_numpy(f.view2.copy()),
+            "proprio": f.state.copy()}
+
+
 def run_frame(fe: ImageWAMTorchFrontendThor, ctx: dict, f: LiberoFrame, idx: int) -> dict:
-    """`infer()` with the initial action noise fixed per frame (instead of
-    `infer()`'s own random draw), so every precision sees identical inputs."""
+    """Served `infer()` with the initial action noise fixed per frame, so
+    every precision sees identical inputs. `set_prompt` caches on
+    `(prompt_text, context given)`, so the cache is cleared to load each
+    task's context."""
     c, msk = ctx[f.task]
     fe._current_prompt = None
     fe.set_prompt(context=c, context_mask=msk)
-    tokens = encode_to_tokens(fe._ae, torch.from_numpy(f.view1), torch.from_numpy(f.view2))
-    fe._img_raw.copy_(tokens[0].to(dtype=BF16))
-    p = fe._state_norm.forward(torch.as_tensor(f.state, device=DEV).reshape(1, -1))
-    tok = torch.nn.functional.linear(p.to(BF16), fe._proprio_w, fe._proprio_b)
-    fe._context[fe._proprio_row].copy_(tok[0])
-    fe._action_latent.copy_(noise_for(idx))
-    fe._graph.replay()
-    torch.cuda.synchronize()
-    al = fe._action_latent.detach().float().clone()
-    return dict(bh=fe._backbone_hidden.detach().float().cpu(), al=al.cpu(),
-                act=fe._action_norm.backward(al).float().cpu())
+    act = torch.from_numpy(fe.infer(observation(f), action_noise=noise_for(idx))["actions"]).float()
+    return dict(bh=fe._backbone_hidden.detach().float().cpu(),
+                al=fe._action_latent.detach().float().cpu(), act=act)
 
 
 def latency(fes: dict, f: LiberoFrame) -> dict:
-    obs = {"view1": torch.from_numpy(f.view1), "view2": torch.from_numpy(f.view2), "proprio": f.state}
+    obs = observation(f)
     wall = {p: [] for p in fes}
     replay = {p: [] for p in fes}
     for fe in fes.values():
@@ -140,8 +147,7 @@ def latency(fes: dict, f: LiberoFrame) -> dict:
 @torch.no_grad()
 def main() -> None:
     frames = load_libero_frames(os.environ["DATA_ROOT"], SUITE, N_TASKS, FRAMES, HORIZON)
-    print(f"device: {torch.cuda.get_device_name(0)}; frames: {len(frames)} ({SUITE}, {FRAMES}); "
-          f"use_fa4={USE_FA4}", flush=True)
+    print(f"device: {torch.cuda.get_device_name(0)}; frames: {len(frames)} ({SUITE}, {FRAMES})", flush=True)
     q_model, q_tok = load_real_text_encoder(os.environ["QWEN3_MODEL_SPEC"])
     ctx = {}
     for task in sorted({f.task for f in frames}):
@@ -186,7 +192,8 @@ def main() -> None:
         for p, s in lat.items():
             print(f"{p:16s} infer P10/P50/P90 = {s['infer_p10']:.1f}/{s['infer_p50']:.1f}/{s['infer_p90']:.1f}   "
                   f"graph replay P10/P50/P90 = {s['replay_p10']:.1f}/{s['replay_p50']:.1f}/{s['replay_p90']:.1f}")
-    print("\nJSON " + json.dumps(dict(frames=[(f.episode, f.frame) for f in frames], use_fa4=USE_FA4,
+    print("\nJSON " + json.dumps(dict(frames=[(f.episode, f.frame) for f in frames],
+                                      use_fa4={p: fe.use_fa4 for p, fe in keep.items()},
                                       per_frame=rows, latency=lat)))
 
 

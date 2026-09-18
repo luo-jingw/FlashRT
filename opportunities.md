@@ -4810,10 +4810,25 @@ tier (roadmap item 9)".
 `flash_rt/models/imagewam/blockscaled_ref.py` reproduces the quantizers.
 `tools/check_blockscaled_quantizers_sm90.py` compiles the unmodified
 quantizer sources (same flags as `fp4_kernels_obj`) for sm_90a and
-compares bytes on real ImageWAM weights (65M elements) and outlier
-activations: E0M3 weights (plain, rotated, rotated and pre-scaled),
-E0M3 + H16 activations, and NVFP4 amax are byte-exact; NVFP4 MSE differs
-on about 2 codes per million. Dequantized operands of every tier are
+compares bytes on 130M real ImageWAM weight elements (65M packed
+bytes), outlier activations, and NVFP4 blocks built on the E2M1
+rounding thresholds (1.7M values scale exactly onto a threshold):
+
+- byte-exact: E0M3 weights (plain, rotated, and the served weight
+  preparation `prepare_e0m3_hadamard_weight`, which `E0m3HadamardLinear`
+  calls), E0M3 + H16 activations, and NVFP4 amax, including the
+  threshold blocks. The NVFP4 kernel's `1.f / bs_dq`
+  (`quantize_fp4_sfa.cu`) lowers to `rcp.approx.ftz` and its `amax / 6`
+  to `div.approx` under `--use_fast_math`; on sm_90 they choose the same
+  codes as the reference's round-to-nearest arithmetic even at exact
+  thresholds. Thor's lowering is checked by
+  `test_nvfp4_quantizer_bit_exact` (Thor only).
+- NVFP4 MSE (not used by ImageWAM) differs on about 2 codes per million:
+  the kernel sums each candidate's squared error sequentially and its
+  PTX contracts `e * scale - v` and `err += d * d` into `fma.rn`, so
+  near-equal candidates can tie-break differently from the reference.
+
+Dequantized operands of every tier are
 exactly representable in fp16 (0 inexact elements across the whole
 pipeline), so the whole-pipeline simulation runs the unchanged fp16
 cuBLASLt GEMM (fp32 accumulation) on them; it differs from the
@@ -4878,6 +4893,89 @@ noise for every tier. `act` = denormalized 64-step actions.
   own seed-to-seed spread (6.25e-3); `e0m3_hadamard`'s is 22x below.
 - The eager run and the captured fp16 graph agree bit for bit
   (action_latent max |diff| = 0).
+
+## Result 2b: merged single-stream `linear2` (H100 simulation)
+
+With OPT-016 the single-stream `linear2` is one GEMM for every precision
+that merges `linear1`, `e0m3_hadamard` included: K = 12288 in the
+backbone (tile variant 1) and 7168 in ActionDiT (variant 6). One
+per-tensor weight pre-scale now covers the attention half and the MLP
+half.
+
+- Weight side: in 11 of 20 backbone blocks and 6 of 20 ActionDiT blocks
+  the two halves alone would choose a different exponent (gap up to 2
+  and 3). With the merged exponent no block scale of either half is
+  subnormal, and UE4M3's relative step is the same across its normal
+  range: the dequantized E0M3 weights of all 40 merged `linear2`
+  tensors are bit-identical to the concatenated split halves.
+- Activation side: the attention/MLP boundary (3072) is a multiple of 16,
+  so no rotation or scale block straddles it; the quantized activation
+  equals the split one.
+- The merge therefore changes only the accumulation (one fp32 sum
+  instead of two fp16 outputs and an fp16 add), as for `nvfp4`.
+
+Same study, same 20 frames, merged and split forms run back to back with
+the same script (`MERGE_LINEAR2=1` / `0`):
+
+| tier | `linear2` | backbone_hidden cos med / min | action_latent cos med / min | act cos med / min | 1 - act cos med | act MAE vs fp16 | MAE vs GT |
+|---|---|---|---|---|---:|---:|---:|
+| fp16, other noise seed | merged | 1 / 1 | 0.99632 / 0.98107 | 0.99375 / 0.98289 | 6.25e-3 | 0.02075 | 0.18370 |
+| `nvfp4` | merged | 0.99820 / 0.99762 | 0.99935 / 0.99911 | 0.99933 / 0.99860 | 6.71e-4 | 0.00910 | 0.18515 |
+| `nvfp4` | split | 0.99819 / 0.99762 | 0.99937 / 0.99912 | 0.99928 / 0.99857 | 7.17e-4 | 0.00906 | 0.18519 |
+| E0M3 W4A4, no rotation | merged | 0.99882 / 0.99840 | 0.99842 / 0.99796 | 0.99839 / 0.99659 | 1.61e-3 | 0.01619 | 0.18896 |
+| E0M3 W4A4, no rotation | split | 0.99882 / 0.99840 | 0.99844 / 0.99781 | 0.99840 / 0.99624 | 1.60e-3 | 0.01644 | 0.18901 |
+| **`e0m3_hadamard`** | **merged** | **0.99960 / 0.99949** | **0.99970 / 0.99957** | **0.99970 / 0.99934** | **2.97e-4** | **0.00600** | **0.18353** |
+| `e0m3_hadamard` | split | 0.99960 / 0.99949 | 0.99971 / 0.99952 | 0.99966 / 0.99941 | 3.37e-4 | 0.00611 | 0.18348 |
+
+fp16 MAE vs GT: 0.18359.
+
+- Merged `e0m3_hadamard` has 56% lower median actions error than merged
+  `nvfp4` (2.97e-4 vs 6.71e-4) and is better on 20 of 20 frames in
+  actions error, `backbone_hidden` error, and actions MAE vs fp16.
+- Per frame, merged/split actions error has median ratio 0.986 (range
+  0.55-1.32) for `e0m3_hadamard` and 0.993 (0.75-1.26) for `nvfp4`: the
+  same accumulation-order spread for both tiers.
+- The split-form `e0m3_hadamard` value here (3.37e-4) differs from
+  Result 2 (2.86e-4) only in the simulated weight preparation, which is
+  now `prepare_e0m3_hadamard_weight` itself (butterfly, pre-scale before
+  the fp16 rounding) instead of matrix rotation with fp16 rounding before
+  the pre-scale. Pooled per-GEMM error is 0.03802 in both. At this error
+  level the median `1 - cos` moves by about 15% with sub-ulp operand
+  changes; the tier ranking does not move.
+- Per-GEMM error (4 frames), merged `linear2`: backbone `nvfp4` 0.08486,
+  `e0m3_hadamard` 0.07402 (split: `attn_out_proj` 0.09926 / 0.08870,
+  `mlp_down` 0.08626 / 0.07427); ActionDiT 0.04671 / 0.03448 (split
+  0.04767 / 0.04030 and 0.04686 / 0.03409). `e0m3_hadamard` is better
+  than `nvfp4` on all 140 weights of the merged tree.
+
+## Relation to OPT-014's Thor `backbone_hidden` cosine
+
+OPT-014 recorded `nvfp4` `backbone_hidden` cosine 0.9939 vs fp16 on
+Thor; the simulation with the real Qwen3 context gives 0.9976-0.9986.
+The same study with `set_prompt()`'s fallback for a frontend without a
+text encoder (every context row N(0,1), proprio in the last row;
+`CONTEXT=random`, merged tree, 20 frames):
+
+| context | tier | backbone_hidden cos median (range) | squared-error share: real-prompt rows / other text rows / image rows |
+|---|---|---|---|
+| Qwen3 | `nvfp4` | 0.99819 (0.9976-0.9986) | 0.873 / 0.050 / 0.077 |
+| Qwen3 | `e0m3_hadamard` | 0.99960 (0.9995-0.9997) | 0.265 / 0.259 / 0.492 |
+| random N(0,1) | `nvfp4` | 0.99247 (0.9536-0.9964) | 0.007 / 0.852 / 0.136 |
+| random N(0,1) | `e0m3_hadamard` | 0.99395 (0.9736-0.9969) | 0.005 / 0.831 / 0.144 |
+
+"Real-prompt rows" are the rows each task's real Qwen3 tokens occupy
+(about 30 of 513); "other text rows" are the rest of the text rows
+(padding and the proprio row). With a random context the rows standing
+in for padding carry 70-98% of the error and the median cosine (0.9925)
+is close to OPT-014's 0.9939; an independent H100 run with other random
+contexts gave median 0.9932 (0.9908-0.9958) with 78-87% of the error in
+those rows. With the real context, 74-90% of the `nvfp4` error sits in
+the real-prompt rows. Hypothesis, unconfirmed: OPT-014's Thor comparison
+ran on the random-context fallback. Its script is not in the repository;
+`benchmarks/imagewam_e0m3_hadamard_thor_check.py` uses the real Qwen3
+context and will show whether Thor reproduces the simulated 0.998.
+Actions error in the random-context run: `nvfp4` 8.06e-4,
+`e0m3_hadamard` 5.23e-4.
 
 ## Result 3: activation quantizer cost (H100, indicative only)
 
