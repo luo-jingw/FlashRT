@@ -48,6 +48,7 @@ import numpy as np
 import torch
 
 from flash_rt.frontends.torch.imagewam_thor import _PRECISIONS, ImageWAMTorchFrontendThor
+from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state
 
 REAL_DIMS = dict(
     hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
@@ -86,6 +87,7 @@ def bench_one(precision: str):
 
 
 def main():
+    report_jetson_clock_state()
     print(f"Real dims: {REAL_DIMS}\n")
     print(f"{'precision':22s} {'P50 (ms)':>10s} {'P90 (ms)':>10s} {'mean (ms)':>10s}")
     for precision in _PRECISIONS:

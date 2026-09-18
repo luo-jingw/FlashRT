@@ -143,6 +143,97 @@ divergent layer.
 
 ## Resolution
 
+# ISSUE-060
+
+Status: open
+
+Area: `ImageWAMTorchFrontendThor.set_prompt` prompt cache (`flash_rt/frontends/torch/imagewam_thor.py`)
+
+## Observation
+
+`set_prompt` returns early when `(prompt_text, context is not None)`
+equals the cached key. Every call that passes a precomputed `context`
+has the key `(None, True)`, so a second call with a different context
+and mask is ignored: the previous task's context stays in the buffer
+and `infer()` runs on it.
+
+## Impact
+
+Any caller that switches tasks through `set_prompt(context=...)` gets
+actions conditioned on the wrong instruction, without an error.
+`benchmarks/imagewam_e2e_official_compare.py`,
+`benchmarks/imagewam_gate_fixture_generate.py` and
+`tests/gate_imagewam_libero.py` work around it by setting
+`frontend._current_prompt = None` before each new context. The
+`prompt_text` path (live Qwen3) is not affected.
+
+## Evidence
+
+Source of the cache key: `cache_key = (prompt_text, context is not
+None)`, compared before any copy. The workaround line is present in the
+end-to-end script since commit `21a2080`.
+
+## Hypotheses
+
+The cache was written for the random-context and `prompt_text` paths,
+where the key identifies the content. For a precomputed context the key
+carries no content identity.
+
+## Next Experiment
+
+Skip the early return whenever `context` is given (a context copy is
+cheap and the graph is captured only once), then remove the three
+workarounds and confirm the gate's `fp16` result on the v1 fixture is
+unchanged.
+
+## Resolution
+
+# ISSUE-061
+
+Status: open
+
+Area: regression-gate latency baseline for Thor `nvfp4` (`tests/fixtures/imagewam_gate/latency_baselines.json`)
+
+## Observation
+
+The seeded baseline, `infer()` P50 = 231.6 ms (`opportunities.md`
+OPT-015), has no record of the Jetson power mode, the devfreq clock
+state, or whether `use_fa4` was set when it was measured. The gate runs
+the frontend with its defaults (`use_fa4=False`) and records the clock
+state of every run (`flash_rt/hardware/jetson_clock_state.py`).
+
+## Impact
+
+If the baseline was measured with locked clocks or FA4 and a gate run
+is not (or the reverse), the latency check compares different
+configurations. A run that differs by a few percent could pass or fail
+for that reason alone. The margin is 5% (limit 243.18 ms).
+
+## Evidence
+
+OPT-014 and OPT-015 report P50 values without clock or FA4 details. The
+40-call stability run before the `linear1` merge had a P50 of 243.5 ms
+with a 243.2-247.3 ms range, against 236.9 ms in the precision table of
+the same checklist.
+
+## Hypotheses
+
+Clock state and FA4 each move `infer()` P50 by a few percent on Thor.
+
+## Next Experiment
+
+On Thor, run the gate for `nvfp4` twice: once as the machine is, and
+once after `sudo nvpmodel -m 0 && sudo jetson_clocks`. Re-seed the
+baseline from the locked-clock run and record its clock state in the
+baseline's `source` field.
+
+Owner decision: the latency check records the clock state in every
+result but does not refuse unlocked clocks, unlike Pi0.5's
+`machine_state()`, which raises. Whether an unlocked Thor run should
+turn the latency verdict into `blocked` is open.
+
+## Resolution
+
 # ISSUE-070
 
 Status: open
