@@ -52,7 +52,11 @@ Double-stream block (real order, per side txt/img):
 Single-stream block: same shape, one stream (no txt/img split), one
 fused `qkv` GEMM + one `mlp_in` GEMM (both real fused `linear1` slices,
 see `real_single_stream_block.py`'s own docstring), attn-out-proj +
-mlp-down SUMMED before the one gated residual.
+mlp-down SUMMED before the one gated residual. With
+`dims["merge_qkv_mlp"]` the real `linear1` runs as ONE GEMM
+(opportunities.md OPT-015); with `dims["merge_linear2"]` the real
+`linear2` also runs as ONE GEMM over `[attn_out | mlp_act]` (roadmap
+item 4), exactly the official block's structure.
 
 **QKV fusion (OPT-004 step 2, 2026-09-14)**: `qkv` is ONE GEMM into a
 `(seq, 3*width)` scratch buffer (matches a real checkpoint's own fused
@@ -138,6 +142,20 @@ capture/warmup, NEVER during `.replay()` (the whole point of capturing
 a graph is that replay re-executes the recorded kernel launches
 directly, without re-running any Python).
 
+**Gated residual + next AdaLN in one kernel (roadmap item 3,
+`dims["fuse_res_norm"]`)**: `fvk.gate_res_ada_layer_norm_{bf16res,fp16}`
+updates the residual and writes the AdaLN output that follows it --
+AdaLN2 inside a double block, and across block boundaries the next
+block's AdaLN1 (double -> double), the single blocks' AdaLN (last double
+-> first single, per side), the next single block's AdaLN, and for
+ActionDiT the head's AdaLN into `head_modded`. It reads gate/scale/shift
+as `(dim,)` FP32 vectors straight from the modulation output and rounds
+them to FP16 in-kernel, so the result is bit-identical to the unfused
+`gate_res_*` + `ada_layer_norm_*` pair and no `_fuse_mod_group` copies
+are recorded per layer. `imagewam_prefill`/`imagewam_denoise_step`
+build the chain (`AdaLNTarget`); the per-layer functions take
+`input_normed`/`next_*`.
+
 `bufs` keys (pipeline-owned scratch, pre-allocated once by the
 frontend, fp16 throughout unless noted):
     context           (max_txt_seq, joint_attention_dim)  -- BF16 (real
@@ -170,6 +188,10 @@ frontend, fp16 throughout unless noted):
     txt_mlp_merged/txt_mlp_gated, img_mlp_merged/img_mlp_gated
                       (x0 or img_len, mlp_hidden*2 / mlp_hidden)
     single_mlp_merged/single_mlp_gated  (a0, mlp_hidden*2 / mlp_hidden)
+    single_linear2_in (a0, hidden + mlp_hidden)  -- merged `linear2`
+                      GEMM input `[attn_out | mlp_act]` (roadmap item 4;
+                      `action_linear2_in` is the ActionDiT counterpart,
+                      `(num_action, action_attn_width + action_mlp_hidden)`)
     proj_scratch      (a0, hidden)   -- GEMM output landing pad before
                                          the gated-residual accumulate
     proj_scratch2     (a0, hidden)   -- single-stream block's own
@@ -197,6 +219,8 @@ frontend, fp16 throughout unless noted):
                        AdaLN-modulated scratch before its final Linear
 """
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import torch
 
@@ -341,11 +365,77 @@ def _add_inplace(dst_ptr: int, src_ptr: int, seq: int, dim: int) -> None:
     dst.add_(src)
 
 
+def _merge_linear2(dims: dict) -> bool:
+    """`dims["merge_linear2"]` (roadmap item 4): single-stream blocks run
+    the real `linear2` as ONE GEMM over `[attn_out | mlp_act]`. Only the
+    merged-`linear1` path writes its SiLU-GLU output into that GEMM's
+    input buffer, so the flag requires `dims["merge_qkv_mlp"]`."""
+    merge = bool(dims.get("merge_linear2"))
+    if merge and not dims.get("merge_qkv_mlp"):
+        raise ValueError("dims['merge_linear2'] requires dims['merge_qkv_mlp']")
+    return merge
+
+
+@dataclass(frozen=True)
+class AdaLNTarget:
+    """The AdaLN step a layer's LAST gated residual update also performs
+    when `dims["fuse_res_norm"]` is set (roadmap item 3): the next
+    sub-block's `LN_no_affine(residual) * (1 + scale) + shift`, written
+    as FP16 to `out_ptr`. `shift`/`scale` are `(1, 1, dim)` FP32 chunks
+    straight from `compute_*_modulation`; `out_ptr` is row-aligned with
+    the residual rows being updated."""
+    shift: torch.Tensor
+    scale: torch.Tensor
+    out_ptr: int
+
+
+def _fuse_res_norm(dims: dict, input_normed: bool, *targets: AdaLNTarget | None) -> bool:
+    """`dims["fuse_res_norm"]` (roadmap item 3): every gated residual
+    update runs `gate_res_ada_layer_norm_*`, which also emits the AdaLN
+    that follows it. `input_normed`/`next_*` (the cross-layer chain built
+    by `imagewam_prefill`/`imagewam_denoise_step`) require the flag."""
+    fuse = bool(dims.get("fuse_res_norm"))
+    if not fuse and (input_normed or any(t is not None for t in targets)):
+        raise ValueError("input_normed / next AdaLN targets require dims['fuse_res_norm']")
+    return fuse
+
+
+def _mod_vec_ptr(t: torch.Tensor, dim: int) -> int:
+    """Device pointer of one `(1, 1, dim)` FP32 modulation chunk, which
+    the fused kernel reads as a contiguous `(dim,)` vector."""
+    if t.dtype != torch.float32 or t.numel() != dim or t.stride(-1) != 1:
+        raise ValueError(f"modulation chunk must be FP32 with {dim} contiguous elements, got "
+                         f"dtype={t.dtype} shape={tuple(t.shape)} stride={t.stride()}")
+    return t.data_ptr()
+
+
+def _fused_gate_res(fvk, proj_ptr: int, gate: torch.Tensor, residual_ptr: int, rows: int, dim: int,
+                     target: AdaLNTarget | None, stream: int, *, bf16_residual: bool, eps: float) -> None:
+    """`residual += gate * proj`, then (if `target`) the next AdaLN into
+    `target.out_ptr`, in ONE kernel (roadmap item 3). Bit-identical to
+    `gate_res_*` + `ada_layer_norm_*` on the FP16 modulation copies
+    `_fuse_mod_group` builds; reads the FP32 modulation directly, so no
+    per-layer cast/broadcast kernels are needed."""
+    kernel = fvk.gate_res_ada_layer_norm_bf16res if bf16_residual else fvk.gate_res_ada_layer_norm_fp16
+    if target is None:
+        kernel(proj_ptr, _mod_vec_ptr(gate, dim), residual_ptr, 0, 0, 0, rows, dim, eps, stream)
+    else:
+        kernel(proj_ptr, _mod_vec_ptr(gate, dim), residual_ptr, _mod_vec_ptr(target.scale, dim),
+               _mod_vec_ptr(target.shift, dim), target.out_ptr, rows, dim, eps, stream)
+
+
 def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream, attn,
-                          mod_txt, mod_img, rope_table):
+                          mod_txt, mod_img, rope_table, *, input_normed: bool = False,
+                          next_txt: AdaLNTarget | None = None, next_img: AdaLNTarget | None = None):
     """One real FLUX.2 double-stream block: separate img/txt fused-QKV
     GEMM + MLP, joint attn. Reads/writes `bufs["backbone_hidden"]` rows [0,x0)
     (text) and [x0,a0) (image) in place.
+
+    `dims["fuse_res_norm"]` (roadmap item 3): each gated residual update
+    also emits the AdaLN that follows it -- AdaLN2 of this block, and
+    `next_txt`/`next_img` (the next block's AdaLN1, into the modded rows
+    of each side) after the MLP. `input_normed`: the modded rows already
+    hold this block's AdaLN1 output (written by the previous block).
     """
     hidden = dims["hidden"]
     HD = dims["HD"]
@@ -359,15 +449,24 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
 
     (txt_shift1, txt_scale1, txt_gate1), (txt_shift2, txt_scale2, txt_gate2) = mod_txt
     (img_shift1, img_scale1, img_gate1), (img_shift2, img_scale2, img_gate2) = mod_img
-    # OPT-004 step 3: fuse LN+modulate and gated-residual into existing
-    # FlashRT kernels -- see _fuse_mod_group's own docstring for why
-    # these tensors must stay referenced as locals through this whole
-    # function (dangling-pointer safety), and why this Python-side cost
-    # is graph-capture-only, never per-replay.
-    txt_shift1_t, txt_scale1_t, txt_gate1_t = _fuse_mod_group(txt_shift1, txt_scale1, txt_gate1, x0, hidden)
-    txt_shift2_t, txt_scale2_t, txt_gate2_t = _fuse_mod_group(txt_shift2, txt_scale2, txt_gate2, x0, hidden)
-    img_shift1_t, img_scale1_t, img_gate1_t = _fuse_mod_group(img_shift1, img_scale1, img_gate1, img_len, hidden)
-    img_shift2_t, img_scale2_t, img_gate2_t = _fuse_mod_group(img_shift2, img_scale2, img_gate2, img_len, hidden)
+    fuse = _fuse_res_norm(dims, input_normed, next_txt, next_img)
+    if fuse:
+        # Roadmap item 3: the fused kernels read gate/scale/shift from the
+        # FP32 modulation directly; FP16 copies are only needed for a
+        # standalone AdaLN1 at the start of the chain.
+        if not input_normed:
+            txt_shift1_t, txt_scale1_t = _fuse_mod_pair(txt_shift1, txt_scale1)
+            img_shift1_t, img_scale1_t = _fuse_mod_pair(img_shift1, img_scale1)
+    else:
+        # OPT-004 step 3: fuse LN+modulate and gated-residual into existing
+        # FlashRT kernels -- see _fuse_mod_group's own docstring for why
+        # these tensors must stay referenced as locals through this whole
+        # function (dangling-pointer safety), and why this Python-side cost
+        # is graph-capture-only, never per-replay.
+        txt_shift1_t, txt_scale1_t, txt_gate1_t = _fuse_mod_group(txt_shift1, txt_scale1, txt_gate1, x0, hidden)
+        txt_shift2_t, txt_scale2_t, txt_gate2_t = _fuse_mod_group(txt_shift2, txt_scale2, txt_gate2, x0, hidden)
+        img_shift1_t, img_scale1_t, img_gate1_t = _fuse_mod_group(img_shift1, img_scale1, img_gate1, img_len, hidden)
+        img_shift2_t, img_scale2_t, img_gate2_t = _fuse_mod_group(img_shift2, img_scale2, img_gate2, img_len, hidden)
 
     combined = bufs["backbone_hidden"]  # (a0, hidden)
     modded = bufs["modded_scratch"]
@@ -404,7 +503,8 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     # aliases `combined`, the persistent BF16 residual buffer -- see
     # this function's own docstring and opportunities.md OPT-001 "FP16
     # residual overflow" for why FP16 cannot hold this buffer's values.
-    fvk.ada_layer_norm_bf16in_fp16out(txt_x, txt_scale1_t.data_ptr(), txt_shift1_t.data_ptr(), modded, x0, hidden, eps, stream)
+    if not input_normed:
+        fvk.ada_layer_norm_bf16in_fp16out(txt_x, txt_scale1_t.data_ptr(), txt_shift1_t.data_ptr(), modded, x0, hidden, eps, stream)
     txt_qkv_merged = bufs["txt_qkv_merged"]  # (x0, 3*hidden)
     key("txt_qkv.weight")(modded, txt_qkv_merged, x0, stream)
     _copy_slice(Q_O, txt_qkv_merged, x0, hidden, src_row_stride=3 * hidden)
@@ -424,8 +524,9 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     img_K_ptr = _ptr_offset(K_cache, x0, hidden)
     img_V_ptr = _ptr_offset(V_cache, x0, hidden)
 
-    fvk.ada_layer_norm_bf16in_fp16out(img_x_ptr, img_scale1_t.data_ptr(), img_shift1_t.data_ptr(),
-                             img_modded_ptr, img_len, hidden, eps, stream)
+    if not input_normed:
+        fvk.ada_layer_norm_bf16in_fp16out(img_x_ptr, img_scale1_t.data_ptr(), img_shift1_t.data_ptr(),
+                                 img_modded_ptr, img_len, hidden, eps, stream)
     img_qkv_merged = bufs["img_qkv_merged"]  # (img_len, 3*hidden)
     key("img_qkv.weight")(img_modded_ptr, img_qkv_merged, img_len, stream)
     _copy_slice(img_Q_ptr, img_qkv_merged, img_len, hidden, src_row_stride=3 * hidden)
@@ -446,30 +547,48 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     # --- separate output projections, GATED residual ---
     proj = bufs["proj_scratch"]
     key("txt_proj.weight")(Q_O, proj, x0, stream)
-    fvk.gate_res_bf16res(proj, txt_gate1_t.data_ptr(), txt_x, x0 * hidden, stream)
+    if fuse:
+        _fused_gate_res(fvk, proj, txt_gate1, txt_x, x0, hidden, AdaLNTarget(txt_shift2, txt_scale2, modded),
+                        stream, bf16_residual=True, eps=eps)
+    else:
+        fvk.gate_res_bf16res(proj, txt_gate1_t.data_ptr(), txt_x, x0 * hidden, stream)
 
     img_proj_ptr = _ptr_offset(proj, x0, hidden)
     key("img_proj.weight")(img_Q_ptr, img_proj_ptr, img_len, stream)
-    fvk.gate_res_bf16res(img_proj_ptr, img_gate1_t.data_ptr(), img_x_ptr, img_len * hidden, stream)
+    if fuse:
+        _fused_gate_res(fvk, img_proj_ptr, img_gate1, img_x_ptr, img_len, hidden,
+                        AdaLNTarget(img_shift2, img_scale2, img_modded_ptr), stream, bf16_residual=True, eps=eps)
+    else:
+        fvk.gate_res_bf16res(img_proj_ptr, img_gate1_t.data_ptr(), img_x_ptr, img_len * hidden, stream)
 
     # --- separate real SiLU-GLU MLPs, GATED residual ---
-    fvk.ada_layer_norm_bf16in_fp16out(txt_x, txt_scale2_t.data_ptr(), txt_shift2_t.data_ptr(), modded, x0, hidden, eps, stream)
+    if not fuse:
+        fvk.ada_layer_norm_bf16in_fp16out(txt_x, txt_scale2_t.data_ptr(), txt_shift2_t.data_ptr(), modded, x0, hidden, eps, stream)
     txt_mlp_merged, txt_mlp_gated = bufs["txt_mlp_merged"], bufs["txt_mlp_gated"]
     _mlp_gate_up(fvk, key, "txt_mlp0.weight", modded, txt_mlp_merged, txt_mlp_gated, x0, mlp_hidden, stream)
     key("txt_mlp2.weight")(txt_mlp_gated, proj, x0, stream)
-    fvk.gate_res_bf16res(proj, txt_gate2_t.data_ptr(), txt_x, x0 * hidden, stream)
+    if fuse:
+        _fused_gate_res(fvk, proj, txt_gate2, txt_x, x0, hidden, next_txt, stream, bf16_residual=True, eps=eps)
+    else:
+        fvk.gate_res_bf16res(proj, txt_gate2_t.data_ptr(), txt_x, x0 * hidden, stream)
 
-    fvk.ada_layer_norm_bf16in_fp16out(img_x_ptr, img_scale2_t.data_ptr(), img_shift2_t.data_ptr(),
-                             img_modded_ptr, img_len, hidden, eps, stream)
+    if not fuse:
+        fvk.ada_layer_norm_bf16in_fp16out(img_x_ptr, img_scale2_t.data_ptr(), img_shift2_t.data_ptr(),
+                                 img_modded_ptr, img_len, hidden, eps, stream)
     img_mlp_merged, img_mlp_gated = bufs["img_mlp_merged"], bufs["img_mlp_gated"]
     _mlp_gate_up(fvk, key, "img_mlp0.weight", img_modded_ptr, img_mlp_merged, img_mlp_gated,
                  img_len, mlp_hidden, stream)
     key("img_mlp2.weight")(img_mlp_gated, img_proj_ptr, img_len, stream)
-    fvk.gate_res_bf16res(img_proj_ptr, img_gate2_t.data_ptr(), img_x_ptr, img_len * hidden, stream)
+    if fuse:
+        _fused_gate_res(fvk, img_proj_ptr, img_gate2, img_x_ptr, img_len, hidden, next_img, stream,
+                        bf16_residual=True, eps=eps)
+    else:
+        fvk.gate_res_bf16res(img_proj_ptr, img_gate2_t.data_ptr(), img_x_ptr, img_len * hidden, stream)
 
 
 def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
-                          site_layer_idx, stream, attn, mod_single, rope_table):
+                          site_layer_idx, stream, attn, mod_single, rope_table, *,
+                          input_normed: bool = False, next_norm: AdaLNTarget | None = None):
     """One real FLUX.2 single-stream block: merged img+txt, fused
     `qkv` GEMM + separate `mlp_in` GEMM (both real fused `linear1`
     slices, see `real_single_stream_block.py`'s own docstring).
@@ -478,6 +597,10 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     declared weights; ``site_layer_idx`` continues after the
     double-stream layers, indexing the "backbone" attention site's
     shared 25-layer KV cache.
+
+    `dims["fuse_res_norm"]` (roadmap item 3): `input_normed` -- the
+    modded buffer already holds this block's AdaLN output; `next_norm`
+    -- the gated residual update also emits the next block's AdaLN.
     """
     hidden = dims["hidden"]
     HD = dims["HD"]
@@ -487,7 +610,12 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     eps = 1e-6
     key = lambda slot: weights[("backbone", "single", weight_layer_idx, slot)]
     shift, scale, gate = mod_single
-    shift_t, scale_t, gate_t = _fuse_mod_group(shift, scale, gate, a0, hidden)
+    fuse = _fuse_res_norm(dims, input_normed, next_norm)
+    if fuse:
+        if not input_normed:
+            shift_t, scale_t = _fuse_mod_pair(shift, scale)
+    else:
+        shift_t, scale_t, gate_t = _fuse_mod_group(shift, scale, gate, a0, hidden)
 
     combined = bufs["backbone_hidden"]
     modded = bufs["modded_scratch"]
@@ -495,7 +623,11 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     ptrs = attn.get_slot_ptrs("backbone", site_layer_idx)
     Q_O, K_cache, V_cache = ptrs["Q"], ptrs["K"], ptrs["V"]
 
-    fvk.ada_layer_norm_bf16in_fp16out(combined, scale_t.data_ptr(), shift_t.data_ptr(), modded, a0, hidden, eps, stream)
+    merge_linear2 = _merge_linear2(dims)
+    linear2_width = hidden + mlp_hidden
+
+    if not input_normed:
+        fvk.ada_layer_norm_bf16in_fp16out(combined, scale_t.data_ptr(), shift_t.data_ptr(), modded, a0, hidden, eps, stream)
 
     if dims.get("merge_qkv_mlp"):
         # op-fusion audit finding 1: the real fused `linear1` (qkv+
@@ -508,8 +640,16 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         _copy_slice(Q_O, linear1_out, a0, hidden, src_row_stride=linear1_width)
         _copy_slice(K_cache, _col_ptr(linear1_out, hidden), a0, hidden, src_row_stride=linear1_width)
         _copy_slice(V_cache, _col_ptr(linear1_out, 2 * hidden), a0, hidden, src_row_stride=linear1_width)
-        mlp_gated = bufs["single_mlp_gated"]
-        fvk.silu_glu_merged_fp16(_col_ptr(linear1_out, 3 * hidden), mlp_gated, a0, mlp_hidden, stream, linear1_width)
+        if merge_linear2:
+            # Roadmap item 4: the SiLU-GLU output lands in the MLP
+            # columns of the merged `linear2` input `[attn_out | mlp_act]`.
+            linear2_in = bufs["single_linear2_in"]  # (a0, linear2_width)
+            fvk.silu_glu_merged_fp16(_col_ptr(linear1_out, 3 * hidden), _col_ptr(linear2_in, hidden),
+                                      a0, mlp_hidden, stream, linear1_width, linear2_width)
+        else:
+            mlp_gated = bufs["single_mlp_gated"]
+            fvk.silu_glu_merged_fp16(_col_ptr(linear1_out, 3 * hidden), mlp_gated, a0, mlp_hidden, stream,
+                                      linear1_width)
     else:
         qkv_merged = bufs["single_qkv_merged"]  # (a0, 3*hidden)
         key("qkv.weight")(modded, qkv_merged, a0, stream)
@@ -527,11 +667,20 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     attn.run("backbone", site_layer_idx, q_seq=a0, stream=stream)
 
     from_attn = bufs["proj_scratch"]
-    from_mlp = bufs["proj_scratch2"]
-    key("attn_out_proj.weight")(Q_O, from_attn, a0, stream)
-    key("mlp_down.weight")(mlp_gated, from_mlp, a0, stream)
-    _add_inplace(from_attn, from_mlp, a0, hidden)
-    fvk.gate_res_bf16res(from_attn, gate_t.data_ptr(), combined, a0 * hidden, stream)
+    if merge_linear2:
+        # Roadmap item 4: attention output joins the MLP activation in
+        # the `linear2` input, then ONE GEMM with K = hidden + mlp_hidden.
+        _copy_slice(linear2_in, Q_O, a0, hidden, dst_row_stride=linear2_width)
+        key("linear2.weight")(linear2_in, from_attn, a0, stream)
+    else:
+        from_mlp = bufs["proj_scratch2"]
+        key("attn_out_proj.weight")(Q_O, from_attn, a0, stream)
+        key("mlp_down.weight")(mlp_gated, from_mlp, a0, stream)
+        _add_inplace(from_attn, from_mlp, a0, hidden)
+    if fuse:
+        _fused_gate_res(fvk, from_attn, gate, combined, a0, hidden, next_norm, stream, bf16_residual=True, eps=eps)
+    else:
+        fvk.gate_res_bf16res(from_attn, gate_t.data_ptr(), combined, a0 * hidden, stream)
 
 
 def imagewam_encode_once(ctx, fvk, gemm, bufs, weights, dims, stream=0):
@@ -611,17 +760,39 @@ def imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None
         bufs["img_raw"], _ptr_offset(combined, x0, hidden), img_len, stream)
 
     num_double = dims["num_layers_double"]
+    num_single = dims["num_layers_single"]
+    # Roadmap item 3 (`dims["fuse_res_norm"]`): each layer's last gated
+    # residual update also writes the NEXT layer's AdaLN output into
+    # `modded_scratch` (txt rows and img rows separately; LayerNorm is
+    # per row, so the last double layer can emit the single blocks'
+    # AdaLN for both). The last single layer has no following AdaLN.
+    fuse = bool(dims.get("fuse_res_norm"))
+    modded = bufs["modded_scratch"]
+    img_modded = _ptr_offset(modded, x0, hidden)
+    (txt_shift1, txt_scale1, _), _ = mod_txt
+    (img_shift1, img_scale1, _), _ = mod_img
+    single_shift, single_scale, _ = mod_single
     for layer_idx in range(num_double):
+        next_txt = next_img = None
+        if fuse and layer_idx + 1 < num_double:
+            next_txt = AdaLNTarget(txt_shift1, txt_scale1, modded)
+            next_img = AdaLNTarget(img_shift1, img_scale1, img_modded)
+        elif fuse and num_single > 0:
+            next_txt = AdaLNTarget(single_shift, single_scale, modded)
+            next_img = AdaLNTarget(single_shift, single_scale, img_modded)
         _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream, attn,
-                              mod_txt, mod_img, rope_table)
+                              mod_txt, mod_img, rope_table, input_normed=fuse and layer_idx > 0,
+                              next_txt=next_txt, next_img=next_img)
     # The "backbone" attention site's per-layer KV cache is ONE
     # contiguous 25-layer range (num_layers_double + num_layers_single);
     # single-stream layers continue that same indexing rather than
     # restarting at 0, which would otherwise alias double-stream layer
     # 0..4's own K/V cache slots.
-    for i in range(dims["num_layers_single"]):
+    for i in range(num_single):
+        next_norm = AdaLNTarget(single_shift, single_scale, modded) if fuse and i + 1 < num_single else None
         _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, i, num_double + i, stream, attn,
-                              mod_single, rope_table)
+                              mod_single, rope_table, input_normed=fuse and (num_double > 0 or i > 0),
+                              next_norm=next_norm)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -657,7 +828,11 @@ def imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None
 
 
 def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_layer_idx, stream, attn,
-                          mod, action_rope_table):
+                          mod, action_rope_table, *, input_normed: bool = False,
+                          next_norm: AdaLNTarget | None = None):
+    """ActionDiT double block (img-only). `dims["fuse_res_norm"]`: same
+    `input_normed`/`next_norm` contract as `_double_stream_layer`, FP16
+    residual."""
     action_hidden_dim = dims["action_hidden_dim"]
     action_attn_width = dims["action_attn_width"]  # == backbone's `hidden`, required for mot_joint
     HD = dims["HD"]
@@ -669,8 +844,13 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
     eps = 1e-6
     key = lambda slot: weights[("action_dit", "double", layer_idx, slot)]
     (shift1, scale1, gate1), (shift2, scale2, gate2) = mod
-    shift1_t, scale1_t, gate1_t = _fuse_mod_group(shift1, scale1, gate1, num_action, action_hidden_dim)
-    shift2_t, scale2_t, gate2_t = _fuse_mod_group(shift2, scale2, gate2, num_action, action_hidden_dim)
+    fuse = _fuse_res_norm(dims, input_normed, next_norm)
+    if fuse:
+        if not input_normed:
+            shift1_t, scale1_t = _fuse_mod_pair(shift1, scale1)
+    else:
+        shift1_t, scale1_t, gate1_t = _fuse_mod_group(shift1, scale1, gate1, num_action, action_hidden_dim)
+        shift2_t, scale2_t, gate2_t = _fuse_mod_group(shift2, scale2, gate2, num_action, action_hidden_dim)
 
     action_x = bufs["action_hidden"]  # (num_action, action_hidden_dim)
     modded = bufs["action_modded"]
@@ -685,8 +865,9 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
     action_K_ptr = _ptr_offset(K_cache, a0, action_attn_width)
     action_V_ptr = _ptr_offset(V_cache, a0, action_attn_width)
 
-    fvk.ada_layer_norm_fp16(action_x, scale1_t.data_ptr(), shift1_t.data_ptr(),
-                             modded, num_action, action_hidden_dim, eps, stream)
+    if not input_normed:
+        fvk.ada_layer_norm_fp16(action_x, scale1_t.data_ptr(), shift1_t.data_ptr(),
+                                 modded, num_action, action_hidden_dim, eps, stream)
     qkv_merged = bufs["action_qkv_merged"]  # (num_action, 3*action_attn_width)
     key("qkv.weight")(modded, qkv_merged, num_action, stream)
     _copy_slice(action_Q_ptr, qkv_merged, num_action, action_attn_width, src_row_stride=3 * action_attn_width)
@@ -703,18 +884,29 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
 
     proj = bufs["action_proj_scratch"]
     key("proj.weight")(action_Q_ptr, proj, num_action, stream)
-    fvk.gate_res_fp16(proj, gate1_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
-
-    fvk.ada_layer_norm_fp16(action_x, scale2_t.data_ptr(), shift2_t.data_ptr(),
-                             modded, num_action, action_hidden_dim, eps, stream)
+    if fuse:
+        _fused_gate_res(fvk, proj, gate1, action_x, num_action, action_hidden_dim,
+                        AdaLNTarget(shift2, scale2, modded), stream, bf16_residual=False, eps=eps)
+    else:
+        fvk.gate_res_fp16(proj, gate1_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
+        fvk.ada_layer_norm_fp16(action_x, scale2_t.data_ptr(), shift2_t.data_ptr(),
+                                 modded, num_action, action_hidden_dim, eps, stream)
     mlp_merged, mlp_gated = bufs["action_mlp_merged"], bufs["action_mlp_gated"]
     _mlp_gate_up(fvk, key, "mlp0.weight", modded, mlp_merged, mlp_gated, num_action, action_mlp_hidden, stream)
     key("mlp2.weight")(mlp_gated, proj, num_action, stream)
-    fvk.gate_res_fp16(proj, gate2_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
+    if fuse:
+        _fused_gate_res(fvk, proj, gate2, action_x, num_action, action_hidden_dim, next_norm, stream,
+                        bf16_residual=False, eps=eps)
+    else:
+        fvk.gate_res_fp16(proj, gate2_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
 
 
 def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
-                          site_layer_idx, stream, attn, mod, action_rope_table):
+                          site_layer_idx, stream, attn, mod, action_rope_table, *,
+                          input_normed: bool = False, next_norm: AdaLNTarget | None = None):
+    """ActionDiT single block. `dims["fuse_res_norm"]`: same
+    `input_normed`/`next_norm` contract as `_single_stream_layer`, FP16
+    residual (the last block's `next_norm` is the head's AdaLN)."""
     action_hidden_dim = dims["action_hidden_dim"]
     action_attn_width = dims["action_attn_width"]
     HD = dims["HD"]
@@ -726,7 +918,12 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     eps = 1e-6
     key = lambda slot: weights[("action_dit", "single", weight_layer_idx, slot)]
     shift, scale, gate = mod
-    shift_t, scale_t, gate_t = _fuse_mod_group(shift, scale, gate, num_action, action_hidden_dim)
+    fuse = _fuse_res_norm(dims, input_normed, next_norm)
+    if fuse:
+        if not input_normed:
+            shift_t, scale_t = _fuse_mod_pair(shift, scale)
+    else:
+        shift_t, scale_t, gate_t = _fuse_mod_group(shift, scale, gate, num_action, action_hidden_dim)
 
     action_x = bufs["action_hidden"]
     modded = bufs["action_modded"]
@@ -737,8 +934,12 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     action_K_ptr = _ptr_offset(K_cache, a0, action_attn_width)
     action_V_ptr = _ptr_offset(V_cache, a0, action_attn_width)
 
-    fvk.ada_layer_norm_fp16(action_x, scale_t.data_ptr(), shift_t.data_ptr(),
-                             modded, num_action, action_hidden_dim, eps, stream)
+    merge_linear2 = _merge_linear2(dims)
+    linear2_width = action_attn_width + action_mlp_hidden
+
+    if not input_normed:
+        fvk.ada_layer_norm_fp16(action_x, scale_t.data_ptr(), shift_t.data_ptr(),
+                                 modded, num_action, action_hidden_dim, eps, stream)
     if dims.get("merge_qkv_mlp"):
         # op-fusion audit finding 1: same real fused `linear1` merge as
         # `_single_stream_layer` above, for ActionDiT's own single-
@@ -751,9 +952,17 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
                     src_row_stride=linear1_width)
         _copy_slice(action_V_ptr, _col_ptr(linear1_out, 2 * action_attn_width), num_action, action_attn_width,
                     src_row_stride=linear1_width)
-        mlp_gated = bufs["action_mlp_gated"]
-        fvk.silu_glu_merged_fp16(_col_ptr(linear1_out, 3 * action_attn_width), mlp_gated,
-                                  num_action, action_mlp_hidden, stream, linear1_width)
+        if merge_linear2:
+            # Roadmap item 4: same merged `linear2` input as
+            # `_single_stream_layer` above.
+            linear2_in = bufs["action_linear2_in"]  # (num_action, linear2_width)
+            fvk.silu_glu_merged_fp16(_col_ptr(linear1_out, 3 * action_attn_width),
+                                      _col_ptr(linear2_in, action_attn_width),
+                                      num_action, action_mlp_hidden, stream, linear1_width, linear2_width)
+        else:
+            mlp_gated = bufs["action_mlp_gated"]
+            fvk.silu_glu_merged_fp16(_col_ptr(linear1_out, 3 * action_attn_width), mlp_gated,
+                                      num_action, action_mlp_hidden, stream, linear1_width)
     else:
         qkv_merged = bufs["action_qkv_merged"]  # (num_action, 3*action_attn_width)
         key("qkv.weight")(modded, qkv_merged, num_action, stream)
@@ -772,11 +981,19 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     attn.run("mot", site_layer_idx, q_seq=num_action, kv_seq=dims["total"], stream=stream, x0=x0, a0=a0)
 
     from_attn = bufs["action_proj_scratch"]
-    from_mlp = bufs["action_proj_scratch2"]
-    key("attn_out_proj.weight")(action_Q_ptr, from_attn, num_action, stream)
-    key("mlp_down.weight")(mlp_gated, from_mlp, num_action, stream)
-    _add_inplace(from_attn, from_mlp, num_action, action_hidden_dim)
-    fvk.gate_res_fp16(from_attn, gate_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
+    if merge_linear2:
+        _copy_slice(linear2_in, action_Q_ptr, num_action, action_attn_width, dst_row_stride=linear2_width)
+        key("linear2.weight")(linear2_in, from_attn, num_action, stream)
+    else:
+        from_mlp = bufs["action_proj_scratch2"]
+        key("attn_out_proj.weight")(action_Q_ptr, from_attn, num_action, stream)
+        key("mlp_down.weight")(mlp_gated, from_mlp, num_action, stream)
+        _add_inplace(from_attn, from_mlp, num_action, action_hidden_dim)
+    if fuse:
+        _fused_gate_res(fvk, from_attn, gate, action_x, num_action, action_hidden_dim, next_norm, stream,
+                        bf16_residual=False, eps=eps)
+    else:
+        fvk.gate_res_fp16(from_attn, gate_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
 
 
 def imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=0, *, attn=None,
@@ -847,19 +1064,42 @@ def imagewam_denoise_step(ctx, fvk, gemm, bufs, weights, dims, step, stream=0, *
     fvk.add_bias_fp16(bufs["action_hidden"], key("action_encoder.bias"), num_action, action_hidden_dim, stream)
 
     num_double = dims["action_num_layers_double"]
+    num_single = dims["action_num_layers_single"]
+    # Roadmap item 3 (`dims["fuse_res_norm"]`): same chain as
+    # `imagewam_prefill`; the last layer's fused update emits the head's
+    # AdaLN into `head_modded`.
+    fuse = bool(dims.get("fuse_res_norm"))
+    modded = bufs["action_modded"]
+    (double_shift1, double_scale1, _), _ = mod_double
+    single_shift, single_scale, _ = mod_single
+    head_target = AdaLNTarget(head_mod[0], head_mod[1], bufs["head_modded"])
     for layer_idx in range(num_double):
+        next_norm = None
+        if fuse:
+            if layer_idx + 1 < num_double:
+                next_norm = AdaLNTarget(double_shift1, double_scale1, modded)
+            elif num_single > 0:
+                next_norm = AdaLNTarget(single_shift, single_scale, modded)
+            else:
+                next_norm = head_target
         _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, layer_idx, stream, attn,
-                              mod_double, action_rope_table)
-    for i in range(dims["action_num_layers_single"]):
+                              mod_double, action_rope_table, input_normed=fuse and layer_idx > 0,
+                              next_norm=next_norm)
+    for i in range(num_single):
+        next_norm = None
+        if fuse:
+            next_norm = AdaLNTarget(single_shift, single_scale, modded) if i + 1 < num_single else head_target
         _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, i, num_double + i, stream, attn,
-                              mod_single, action_rope_table)
+                              mod_single, action_rope_table, input_normed=fuse and (num_double > 0 or i > 0),
+                              next_norm=next_norm)
 
     # --- decode: real head (AdaLN, no gate, + Linear) -> velocity
     # (fp16, action_dim); Euler step in action_dim space, matching
     # imagewam.py's own infer_action_flux2 exactly ---
-    head_shift_t, head_scale_t = _fuse_mod_pair(*head_mod)
-    fvk.ada_layer_norm_fp16(bufs["action_hidden"], head_scale_t.data_ptr(), head_shift_t.data_ptr(),
-                             bufs["head_modded"], num_action, action_hidden_dim, eps, stream)
+    if not (fuse and num_double + num_single > 0):
+        head_shift_t, head_scale_t = _fuse_mod_pair(*head_mod)
+        fvk.ada_layer_norm_fp16(bufs["action_hidden"], head_scale_t.data_ptr(), head_shift_t.data_ptr(),
+                                 bufs["head_modded"], num_action, action_hidden_dim, eps, stream)
     key("head.linear.weight")(bufs["head_modded"], bufs["velocity"], num_action, stream)
 
     step_delta = dims["dt"] if delta is None else delta

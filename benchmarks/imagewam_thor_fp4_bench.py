@@ -5,6 +5,10 @@ modulation, no gated residual, no real merged SiLU-GLU MLP, stale
 768-token image shape), kept only for historical reference. Use
 imagewam_thor_graph_bench.py instead (precision="nvfp4").
 
+`pipeline_thor.py` now runs single-stream `linear2` as one GEMM and fuses each gated
+residual with the next AdaLN (roadmap items 4 and 3); this script keeps the old split
+per-layer path and is not updated for them.
+
 ImageWAM FP4 (NVFP4) full-scale Thor steady-state speed benchmark.
 
 UNTESTED ON REAL HARDWARE. Written by reading flash_rt.executors.fp4_utils

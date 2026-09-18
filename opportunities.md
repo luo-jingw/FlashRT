@@ -4397,3 +4397,185 @@ chain's. Report it with the reason.
    padded tokens from the context (`x0 = n_valid + 1`), which needs no
    key mask in any kernel, fused or not. That fix belongs to a separate
    stream.
+
+# OPT-016: single-stream `linear2` merge (roadmap item 4)
+
+Status: implemented and locally verified (H100, `fp16`); default on for
+every precision except `fp16_cutlass`. Thor speed and `nvfp4` numerics
+pending (Thor check below).
+
+Area: single-stream blocks, 20 backbone + 20 ActionDiT
+(`pipeline_thor.py` `_single_stream_layer` / `_action_single_layer`).
+Plan: plan.md "single-stream `linear2` merge (roadmap item 4)". This is
+OPT-015's op-fusion audit finding 1, sub-problem 3.
+
+## What changed
+
+The official blocks run `linear2` as one GEMM over
+`cat([attn_out, mlp_act])`. FlashRT used to split it at load time and run
+`attn_out_proj` + `mlp_down` + a torch add before the gated residual.
+With `dims["merge_linear2"]` (default = the `merge_qkv_mlp` rule):
+
+- `checkpoint_loader._extract_single_block(merge_linear2=True)` keeps the
+  real unsplit `linear2.weight`: `(12288, 3072)` backbone, `(7168, 1024)`
+  ActionDiT, in the (K,N) convention.
+- `silu_glu_merged_fp16` gained `out_row_stride`; the `linear1`-merged
+  SiLU-GLU writes straight into the MLP columns of `single_linear2_in` /
+  `action_linear2_in`. A strided copy places the attention output in the
+  first `attn_width` columns, then one GEMM with K = attn + mlp_hidden
+  writes `proj_scratch`.
+- Per layer call: one strided copy + one GEMM replaces two GEMMs + one
+  add (two kernels fewer for `nvfp4`, whose linear op is quantize + GEMM).
+- `nvfp4`: `hidden` = 3072 is a multiple of the 16-element scale block,
+  so the merged activation and weight quantize to exactly the split
+  path's operands; K = 12288 and 7168 are multiples of 64 (no
+  scale-factor padding). Only the accumulation changes.
+
+## Local results (H100, `fp16`)
+
+| check | result |
+|---|---|
+| strided SiLU-GLU vs packed call, real shapes | bit-exact, untouched columns zero |
+| real `linear2.weight` vs `cat(attn_out_proj, mlp_down)` (blocks 0, 19, both experts) | `torch.equal` |
+| backbone single layer (a0=905), projection, merged vs split | cos 0.9999999, max-abs 3.9e-3, rel_l2 3.5e-4 |
+| ActionDiT single layer (M=64), projection, merged vs split | cos 0.9999998, max-abs 9.8e-4, rel_l2 3.6e-4 |
+| projection rel_l2 vs FP32 reference, merged / split | 2.07e-4 / 2.95e-4 (backbone), 2.08e-4 / 3.01e-4 (ActionDiT) |
+| real checkpoint, full graph, actions merged vs split | cos 0.999999, rel_l2 1.4e-3 |
+| CUDA kernels per prefill + 10-step denoise | 7082 -> 6662 |
+| e2e vs official, 20 frames, `fr_vs_off` median / min | 0.99840 / 0.99566 (baseline 0.99840 / 0.99567) |
+| e2e mean `mae_fr_vs_gt` | 0.18359 (baseline 0.18359) |
+
+The merged path is closer to the FP32 reference because it rounds once
+where the split path rounds three times.
+
+Speed on the shared H100 (indicative only, same process, interleaved,
+40 iterations): `infer()` P50 102.23 -> 101.27 ms (P10 91.42 / 98.87,
+P90 102.61 / 101.49). No Thor claim.
+
+## Thor check
+
+```
+# FlashRT at this branch, GPU_ARCH=110 build
+cmake --build build -j --target flash_rt_kernels flash_rt_fp4
+pytest tests/test_imagewam_real_mlp.py tests/test_imagewam_thor_real_wiring.py -q -s
+CKPT_PATH=<.../model.pt> AB=merge_linear2 PRECISIONS=nvfp4,fp16 COUNT_KERNELS=1 \
+  python benchmarks/imagewam_fusion_ab.py
+```
+
+Expected: pytest passes and prints `bit_exact_vs_packed=True` and merged
+vs split `cos` >= 0.9999. The A/B prints, per precision, `actions B vs A`
+(expect cos >= 0.9999 and finite for `nvfp4`; the `linear1` merge gave
+0.99998), `infer()` / `replay()` P10/P50/P90 for split (A) and merged
+(B), and the kernel count (B lower). The `linear1` precedent predicts
+most of any win in the ActionDiT loop. Report every printed line.
+
+## Follow-ups
+
+- The attention output is copied into the `linear2` input (one strided
+  copy per layer, 11 MB per backbone layer). Having the attention backend
+  write its output there directly (an output row stride in
+  `ImageWAMAttnBackend.run`, or the FA4 path's existing output copy
+  retargeted) would remove it.
+- FP8 precisions: one activation scale now spans both halves
+  (ISSUE-011).
+
+# OPT-017: gated residual + next AdaLN in one kernel (roadmap item 3)
+
+Status: implemented and locally verified bit-exact (H100); default on
+for every precision. Thor speed pending (Thor check below).
+
+Area: every gated residual update in `pipeline_thor.py` (backbone
+double/single, ActionDiT double/single, ActionDiT head). Plan: plan.md
+"gated-residual + next-AdaLN fusion (roadmap item 3)". Supersedes
+OPT-015's deferred CUTLASS gated-residual epilogue for this problem.
+
+## What changed
+
+- `csrc/kernels/fusion.cu`: `gate_res_ada_layer_norm_bf16res` (backbone,
+  BF16 residual) and `gate_res_ada_layer_norm_fp16` (ActionDiT) update
+  the residual and write the next normed + modulated FP16 activation in
+  one launch, one block per row. gate/scale/shift are `(dim,)` FP32
+  vectors read straight from the modulation output and rounded to FP16
+  in-kernel; the LayerNorm statistics use the stored residual and the
+  reduction of `ada_layer_norm_*`. `out == nullptr` gives the
+  residual-only update (the backbone's last layer).
+- `pipeline_thor.py` with `dims["fuse_res_norm"]`: AdaLN2 of each double
+  block fuses into its attention residual; `imagewam_prefill` and
+  `imagewam_denoise_step` chain each layer's last residual into the next
+  layer's AdaLN: double -> double, last double -> single (txt and img
+  rows each normalized with the single blocks' modulation), single ->
+  single, ActionDiT last single -> head (`head_modded`, the standalone
+  head AdaLN is skipped).
+- The fused path records no per-layer `_fuse_mod_group` kernels (FP16
+  casts of shift/scale/gate and the `(rows, dim)` gate broadcast). FP16
+  copies remain only for the standalone AdaLN at the start of each chain
+  (prefill layer 0, each denoise step's layer 0).
+
+## Local results (H100)
+
+| check | result |
+|---|---|
+| kernel vs `gate_res_*` + `ada_layer_norm_*`, 513 / 392 / 905 x 3072 BF16, 64 x 1024 FP16 | residual and output bit-exact |
+| kernel normed output vs FP32 torch reference | rel_l2 2.07e-4 (FP16 output rounding) |
+| residual-only mode vs `gate_res_bf16res` | bit-exact |
+| real dims, random weights, prefill + 10-step denoise, fused vs unfused | `backbone_hidden`, all 25 layers' K/V, `action_latent` bit-exact |
+| real checkpoint, captured graph, fused vs unfused (`fp16`) | actions and `backbone_hidden` bit-exact |
+| CUDA kernels per prefill + 10-step denoise | 6662 -> 4968 (-1694) |
+| e2e vs official, 20 frames, both items on, `fr_vs_off` median / min | 0.99840 / 0.99566 (baseline 0.99840 / 0.99567) |
+| e2e mean `mae_fr_vs_gt`, both items on | 0.18359 (baseline 0.18359) |
+
+Speed on the shared H100 (indicative only, same process, interleaved):
+
+| A/B | iterations | `infer()` P50 A -> B | P10 A / B | P90 A / B |
+|---|---:|---:|---:|---:|
+| `fuse_res_norm` | 40 | 101.38 -> 96.24 ms | 100.89 / 93.52 | 102.09 / 96.99 |
+| `merge_linear2` + `fuse_res_norm` | 200 | 102.30 -> 96.17 ms | 92.78 / 91.70 | 104.84 / 96.90 |
+
+Both items together: 7082 -> 4968 CUDA kernels per pass. No Thor claim.
+
+## Thor check
+
+```
+# FlashRT at this branch, GPU_ARCH=110 build
+cmake --build build -j --target flash_rt_kernels flash_rt_fp4
+pytest tests/test_imagewam_residual_norm_fusion.py -q -s
+CKPT_PATH=<.../model.pt> AB=fuse_res_norm PRECISIONS=nvfp4,fp16 COUNT_KERNELS=1 \
+  python benchmarks/imagewam_fusion_ab.py
+CKPT_PATH=<.../model.pt> AB=merge_linear2,fuse_res_norm PRECISIONS=nvfp4,fp16 \
+  python benchmarks/imagewam_fusion_ab.py
+```
+
+Expected: pytest prints `bit_exact=True` for every kernel case and for
+`backbone_hidden`, `K_cache`, `V_cache`, `action_latent` of the whole
+pass. `AB=fuse_res_norm`: `actions` and `backbone_hidden` B vs A
+bit-exact for both `nvfp4` and `fp16`. The script builds B on A's
+autotuned `GemmRunner` (`gemm_runner=`), so every cuBLASLt shape runs
+the same algorithm on both sides: all `fp16` weight GEMMs, and under
+`nvfp4` the `fp16_nn` fallbacks (`action_encoder`, `head.linear`) and
+the `bf16_nn` entry GEMMs (`txt_in`, `img_in`); the NVFP4 CUTLASS GEMMs
+choose their variant from the shape alone. Kernel count B lower by
+about 1700; `infer()` P50 B below A.
+The combined run gives the total of items 3 and 4 against the
+pre-roadmap per-layer path. Report every printed line. Add `USE_FA4=1`
+if the production configuration uses FA4.
+
+## Remaining per-pass launches after items 3 and 4 (H100 profiler, real dims, `fp16`)
+
+Prefill: 478 CUDA kernels. 10-step denoise: 4490, of which:
+
+| kernel | launches | source |
+|---|---:|---|
+| torch elementwise copy | 950 | 750 Q/K/V column-slice copies (`_copy_slice`, 3 per layer) + 200 attention-output copies into the merged `linear2` input |
+| `rms_norm_kernel` | 500 | QK-Norm, 2 per layer |
+| `rope_apply_fp16_perhead_kernel` | 500 | RoPE on Q and K, 2 per layer |
+| GEMM kernels (cuBLASLt, incl. 310 split-K reduces) | ~1100 | weight GEMMs + attention QK^T / PV |
+| `gate_res_ada_layer_norm_kernel` | 300 | this entry |
+| `fill_neginf_strided_kernel` | 250 | odd `kv_seq` (969) logits pad column |
+| `softmax_fp16_kernel`, `silu_glu_merged_kernel` | 250 each | |
+
+Candidates by launch count (not planned): one kernel doing the Q/K/V
+split + QK-Norm + RoPE from the `qkv`/`linear1` output would replace
+7 launches per layer with 1 (about 1500 per `infer()` in the denoise
+loop alone); an even-padded K/V length or a pad-aware softmax would
+drop the 250 pad fills; the attention-output copy is OPT-016's
+follow-up.

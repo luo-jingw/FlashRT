@@ -137,6 +137,7 @@ class ImageWAMTorchFrontendThor:
                  dataset_stats_path: str | None = None,
                  gemm_variant_autotune: bool = False,
                  use_fa4_mot: bool = False,
+                 gemm_runner: object | None = None,
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
@@ -195,10 +196,29 @@ class ImageWAMTorchFrontendThor:
         # standalone tensor, not a slice of a wider linear1 buffer (that
         # would need a stride-aware weight-loading path this class
         # doesn't have -- not attempted, `fp16_cutlass` keeps the old
-        # split unchanged). `linear2` (attn_out_proj+mlp_down) is
-        # UNCHANGED regardless -- a separate, larger, not-yet-attempted
-        # merge (this audit's own "sub-problem 3").
+        # split unchanged). `linear2` is governed by `merge_linear2` below.
         self.dims["merge_qkv_mlp"] = precision != "fp16_cutlass"
+        # Roadmap item 4 (plan.md "single-stream linear2 merge"): run the
+        # single-stream blocks' real `linear2` (attn_out_proj+mlp_down)
+        # as ONE GEMM over `[attn_out | mlp_act]`, like the official
+        # block. Same precision rule as `merge_qkv_mlp` (the merged path
+        # writes the SiLU-GLU output straight into the `linear2` input
+        # buffer, which only the merged-`linear1` path does);
+        # `dims_override={"merge_linear2": False}` selects the split
+        # path for A/B measurement.
+        self.dims.setdefault("merge_linear2", self.dims["merge_qkv_mlp"])
+        if self.dims["merge_linear2"] and not self.dims["merge_qkv_mlp"]:
+            raise ValueError(
+                f"merge_linear2=True needs merge_qkv_mlp=True (precision={precision!r} keeps "
+                f"the split linear1 path)")
+        # Roadmap item 3 (plan.md "gated-residual + next-AdaLN fusion"):
+        # every gated residual update also emits the AdaLN that follows
+        # it, in one kernel that reads the FP32 modulation directly (no
+        # per-layer modulation cast/broadcast kernels). Bit-identical to
+        # the unfused path, so on for every precision;
+        # `dims_override={"fuse_res_norm": False}` selects the unfused
+        # path for A/B measurement.
+        self.dims.setdefault("fuse_res_norm", True)
         d = self.dims
         if d["action_attn_width"] != d["hidden"]:
             raise ValueError(
@@ -229,8 +249,16 @@ class ImageWAMTorchFrontendThor:
                 "be passed explicitly for real-checkpoint accuracy")
 
         self._ctx = fvk.FvkContext()
-        self._gemm = fvk.GemmRunner()
-        self._autotune_gemm(d)
+        # `gemm_runner`: an already-autotuned `fvk.GemmRunner` from another
+        # frontend. Both then run the same cuBLASLt algorithm per shape,
+        # which an A/B of two frontends needs for a bit-exact comparison
+        # (`benchmarks/imagewam_fusion_ab.py`); the autotune shape set does
+        # not depend on dims flags, so one autotune covers both.
+        if gemm_runner is None:
+            self._gemm = fvk.GemmRunner()
+            self._autotune_gemm(d)
+        else:
+            self._gemm = gemm_runner
 
         # OPT-001 (plan.md): ckpt_path switches every weight/modulation
         # source from random to the real checkpoint's own tensors --
@@ -472,10 +500,12 @@ class ImageWAMTorchFrontendThor:
             (a0, hidden, hidden),                          # single attn_out_proj
             (a0, mlp_hidden * 2, hidden),                   # single mlp_in
             (a0, hidden, mlp_hidden),                        # single mlp_down
+            (a0, hidden, hidden + mlp_hidden),                # single linear2 (merged, roadmap item 4)
             (num_action, 3 * aaw, ahd),                       # action qkv (fused)
             (num_action, ahd, aaw),                            # action proj/attn_out_proj
             (num_action, amh * 2, ahd),                         # action mlp0/mlp_in
             (num_action, ahd, amh),                              # action mlp2/mlp_down
+            (num_action, ahd, aaw + amh),                         # action linear2 (merged, roadmap item 4)
             (num_action, ahd, action_dim),                        # action_encoder (OPT-001)
             (num_action, action_dim, ahd),                         # head.linear (OPT-001)
         }
@@ -715,8 +745,11 @@ class ImageWAMTorchFrontendThor:
             else:
                 weights[("backbone", "single", L, "qkv.weight")] = self._rnd_linear(3 * hidden, hidden)
                 weights[("backbone", "single", L, "mlp_in.weight")] = self._rnd_swiglu_mlp(mlp_hidden * 2, hidden)
-            weights[("backbone", "single", L, "attn_out_proj.weight")] = self._rnd_linear(hidden, hidden)
-            weights[("backbone", "single", L, "mlp_down.weight")] = self._rnd_linear(hidden, mlp_hidden)
+            if self.dims.get("merge_linear2"):
+                weights[("backbone", "single", L, "linear2.weight")] = self._rnd_linear(hidden, hidden + mlp_hidden)
+            else:
+                weights[("backbone", "single", L, "attn_out_proj.weight")] = self._rnd_linear(hidden, hidden)
+                weights[("backbone", "single", L, "mlp_down.weight")] = self._rnd_linear(hidden, mlp_hidden)
             weights[("backbone", "single", L, "query_norm")] = self._rnd_norm_scale(HD)
             weights[("backbone", "single", L, "key_norm")] = self._rnd_norm_scale(HD)
 
@@ -743,8 +776,11 @@ class ImageWAMTorchFrontendThor:
             else:
                 weights[("action_dit", "single", L, "qkv.weight")] = self._rnd_linear(3 * aaw, ahd)
                 weights[("action_dit", "single", L, "mlp_in.weight")] = self._rnd_swiglu_mlp(amh * 2, ahd)
-            weights[("action_dit", "single", L, "attn_out_proj.weight")] = self._rnd_linear(ahd, aaw)
-            weights[("action_dit", "single", L, "mlp_down.weight")] = self._rnd_linear(ahd, amh)
+            if self.dims.get("merge_linear2"):
+                weights[("action_dit", "single", L, "linear2.weight")] = self._rnd_linear(ahd, aaw + amh)
+            else:
+                weights[("action_dit", "single", L, "attn_out_proj.weight")] = self._rnd_linear(ahd, aaw)
+                weights[("action_dit", "single", L, "mlp_down.weight")] = self._rnd_linear(ahd, amh)
             weights[("action_dit", "single", L, "query_norm")] = self._rnd_norm_scale(HD)
             weights[("action_dit", "single", L, "key_norm")] = self._rnd_norm_scale(HD)
         return weights
@@ -767,7 +803,8 @@ class ImageWAMTorchFrontendThor:
         raw = build_real_weights(
             sd, num_double=d["num_layers_double"], num_single=d["num_layers_single"],
             action_num_double=d["action_num_layers_double"], action_num_single=d["action_num_layers_single"],
-            action_attn_width=d["action_attn_width"], merge_qkv_mlp=d.get("merge_qkv_mlp", False))
+            action_attn_width=d["action_attn_width"], merge_qkv_mlp=d.get("merge_qkv_mlp", False),
+            merge_linear2=d.get("merge_linear2", False))
 
         weights = {}
         seen_shared: dict[int, object] = {}  # id(cpu tensor) -> wrapped/ptr, for shared txt_in/img_in
@@ -847,6 +884,12 @@ class ImageWAMTorchFrontendThor:
             # unmerged path keeps working unchanged.
             "single_linear1_merged": z(a0, 3 * hidden + 2 * mlp_hidden).data_ptr(),
             "action_linear1_merged": z(num_action, 3 * aaw + 2 * amh).data_ptr(),
+            # Roadmap item 4: merged single-stream linear2 GEMM input,
+            # `[attn_out | mlp_act]` side by side (used when
+            # merge_linear2 is set; always allocated, like the linear1
+            # buffers above).
+            "single_linear2_in": z(a0, hidden + mlp_hidden).data_ptr(),
+            "action_linear2_in": z(num_action, aaw + amh).data_ptr(),
             "action_latent_fp16": z(num_action, action_dim).data_ptr(),
             "velocity": z(num_action, action_dim).data_ptr(),
             "head_modded": z(num_action, ahd).data_ptr(),

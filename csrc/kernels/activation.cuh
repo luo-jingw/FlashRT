@@ -60,9 +60,12 @@ void gate_geglu_merged_fp16(const __half* merged, __half* out,
 // every existing caller's own layout, unchanged. Pass a wider buffer's
 // real row width to read gate/up from a column-slice of it instead
 // (opportunities.md op-fusion audit finding 1).
+// `out_row_stride`: 0 (default) means a packed `(seq, half_dim)` output.
+// Pass a wider output buffer's row width to write into a column slice of
+// it (the merged single-stream `linear2` input, roadmap item 4).
 void silu_glu_merged_fp16(const __half* merged, __half* out,
                            int seq, int half_dim, cudaStream_t stream = 0,
-                           int row_stride = 0);
+                           int row_stride = 0, int out_row_stride = 0);
 
 // Element-wise multiply: out[i] = a[i] * b[i] for i in [0, n).
 // FP16 inputs and output, FP32 multiply.  Used by R3.1 split-G7 path

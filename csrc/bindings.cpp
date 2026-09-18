@@ -1199,6 +1199,35 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
        py::arg("seq_len"), py::arg("dim"), py::arg("eps") = 1e-6f,
        py::arg("stream") = 0);
 
+    // ImageWAM gated residual + next AdaLayerNorm (roadmap item 3): one
+    // launch replaces gate_res_{bf16res,fp16} + ada_layer_norm_*.
+    // gate/scale/shift are (dim,) FP32 pointers.
+    m.def("gate_res_ada_layer_norm_bf16res", [](uintptr_t proj, uintptr_t gate, uintptr_t residual,
+                                                  uintptr_t scale, uintptr_t shift, uintptr_t out,
+                                                  int rows, int dim, float eps, uintptr_t stream) {
+        gate_res_ada_layer_norm_bf16res(reinterpret_cast<const __half*>(proj),
+                                         reinterpret_cast<const float*>(gate),
+                                         reinterpret_cast<__nv_bfloat16*>(residual),
+                                         reinterpret_cast<const float*>(scale),
+                                         reinterpret_cast<const float*>(shift),
+                                         reinterpret_cast<__half*>(out),
+                                         rows, dim, eps, to_stream(stream));
+    }, py::arg("proj"), py::arg("gate"), py::arg("residual"), py::arg("scale"), py::arg("shift"),
+       py::arg("out"), py::arg("rows"), py::arg("dim"), py::arg("eps") = 1e-6f, py::arg("stream") = 0);
+
+    m.def("gate_res_ada_layer_norm_fp16", [](uintptr_t proj, uintptr_t gate, uintptr_t residual,
+                                               uintptr_t scale, uintptr_t shift, uintptr_t out,
+                                               int rows, int dim, float eps, uintptr_t stream) {
+        gate_res_ada_layer_norm_fp16(reinterpret_cast<const __half*>(proj),
+                                      reinterpret_cast<const float*>(gate),
+                                      reinterpret_cast<__half*>(residual),
+                                      reinterpret_cast<const float*>(scale),
+                                      reinterpret_cast<const float*>(shift),
+                                      reinterpret_cast<__half*>(out),
+                                      rows, dim, eps, to_stream(stream));
+    }, py::arg("proj"), py::arg("gate"), py::arg("residual"), py::arg("scale"), py::arg("shift"),
+       py::arg("out"), py::arg("rows"), py::arg("dim"), py::arg("eps") = 1e-6f, py::arg("stream") = 0);
+
     // Quantize
     m.def("quantize_fp8", [](uintptr_t input, uintptr_t output,
                               uintptr_t d_scale, int n, uintptr_t stream) {
@@ -1878,12 +1907,17 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
     // every existing caller's own layout -- pass a wider buffer's real
     // row width to read gate/up from a column-slice of it instead
     // (opportunities.md op-fusion audit finding 1).
+    // `out_row_stride=0` (default) means a packed `(seq, half_dim)`
+    // output; pass a wider buffer's row width to write into a column
+    // slice of it (merged single-stream linear2 input, roadmap item 4).
     m.def("silu_glu_merged_fp16", [](uintptr_t merged, uintptr_t out,
-                                      int seq, int half_dim, uintptr_t stream, int row_stride) {
+                                      int seq, int half_dim, uintptr_t stream, int row_stride,
+                                      int out_row_stride) {
         silu_glu_merged_fp16(reinterpret_cast<const __half*>(merged),
-                              reinterpret_cast<__half*>(out), seq, half_dim, to_stream(stream), row_stride);
+                              reinterpret_cast<__half*>(out), seq, half_dim, to_stream(stream), row_stride,
+                              out_row_stride);
     }, py::arg("merged"), py::arg("out"), py::arg("seq"), py::arg("half_dim"), py::arg("stream") = 0,
-       py::arg("row_stride") = 0);
+       py::arg("row_stride") = 0, py::arg("out_row_stride") = 0);
 
     m.def("mul_fp16", [](uintptr_t a, uintptr_t b, uintptr_t out,
                          int n, uintptr_t stream) {
