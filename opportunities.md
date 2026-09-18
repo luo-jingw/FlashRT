@@ -4019,6 +4019,10 @@ Gate runs:
 | fp8_static, no calibration file | skipped | exit 0 |
 | fp8_static, file present | blocked | this branch's frontend declares no `calibration_path` keyword; exit 1 |
 | fp8 | blocked | no thresholds configured |
+| fp16, rerun at `77b7bef` | pass | same fidelity values; checkpoint verified by SHA-256 (11.9 s); top-level `latency: "ungated"` with its reason, also named in the verdict reason; P50 159.3 ms; clean worktree recorded |
+| fp16, `--require-latency` | blocked | exit 1; ungated H100 latency |
+| fp16, wrong checkpoint | blocked | SHA-256 mismatch; with `--skip-checkpoint-hash`, byte-size mismatch |
+| any, `--iters 5` | argument error | rejected before any GPU work |
 
 ## Open
 

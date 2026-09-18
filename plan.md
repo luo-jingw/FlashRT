@@ -3517,3 +3517,11 @@ Blocker: needs the Thor hardware and a copy of the v1 fixture there.
   latency P50 158.2 ms recorded and ungated. `nvfp4` on sm_90 is
   `blocked` at construction; `fp8_static` is `skipped` without a
   calibration file and `blocked` with one (no constructor keyword yet).
+- Review follow-ups: an ungated latency is a top-level result field and
+  part of the verdict reason, and `--require-latency` makes it
+  `blocked`; `--iters` is validated before any GPU work; the checkpoint
+  is verified by SHA-256 (`--skip-checkpoint-hash` for size only);
+  provenance records untracked files and the generator's SHA-256; the
+  calibration keyword is the calibration stream's `calibration_path`.
+  Regression suite 150 passed, 6 skipped; the fp16 gate still passes
+  with the same fidelity values.
