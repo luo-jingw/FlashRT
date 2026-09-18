@@ -2945,3 +2945,95 @@ Phase Status: completed
 Goal: record what real image/text wiring achieves and what's still
 missing (live Qwen3, still deferred).
 Modified files: `opportunities.md` (new entry).
+
+# Roadmap: Pi0.5-derived optimization tracks
+
+Roadmap Status: pending (documentation/tracking only -- no item below
+is approved for implementation; each gets its own `# Plan: <item>`
+section, full `plan` skill rigor, when picked up individually)
+
+## Problem
+
+Current observable state: ImageWAM's Thor deployment is a pure Python
+frontend (`flash_rt/frontends/torch/imagewam_thor.py`) doing
+raw-pointer CUDA dispatch through `flash_rt/models/imagewam/pipeline_thor.py`
+-- no stable ABI, no native C++ callable surface, no committed
+CI/regression harness, placeholder (not real-data) FP8 calibration.
+FlashRT's own Pi0.5 deployment (`flash_rt/models/pi05/`,
+`cpp/models/pi05/`, `runtime/`) is materially more mature along all
+four of these dimensions. A 4-way parallel investigation (2026-09-18,
+forked) surveyed Pi0.5's real architecture, quantization/calibration,
+kernel-fusion, and CI stack end to end and assessed transferability to
+ImageWAM, itemized with real cost estimates -- cost was NOT used as a
+filter, per explicit instruction.
+
+Goal: track the resulting 14-item optimization inventory as a roadmap
+-- this section is an index + dependency map, not a substitute for a
+real per-item plan. Each item gets its OWN dedicated `# Plan: <item>`
+section (full Problem -> Structure -> Interface -> Flow -> Code
+Mapping -> Implementation Phases, same skill, same rigor) when picked
+up for real work.
+
+## Structure: three independent tracks
+
+- **Speed track** -- items that directly reduce real `infer()` latency.
+- **Accuracy track** -- items that improve quantization/calibration
+  quality (some also gate future speed/accuracy work, e.g. real
+  calibration data is a prerequisite for a fair AWQ/`fp8_static` trial).
+- **Deployment-engineering track** -- architecture/reliability/
+  maintainability, not raw speed.
+
+Tracks are independent of each other. Only 3 real dependency edges
+exist across all 14 items; the other 11 have zero prerequisites and
+can start in any order, in parallel, immediately.
+
+## The 14 items
+
+| id | item | track | cost | depends on | note |
+|---|---|---|---|---|---|
+| 1 | ActionDiT small-M CUTLASS tile retry (Pi0.5's proven "v10" `128x64x256` tile) | speed | hours | none | opportunities.md OPT-014's own `M=64` CUTLASS-slower-than-cuBLASLt regression |
+| 2 | Image normalization LUT (256-entry FP16, precomputed) | speed | hours | none | Pi0.5's own proven technique, "bit-identical" per its docs |
+| 3 | Gated-residual + next-layer-norm fusion (one elementwise kernel) | speed | hours -- 1-2 days | none | Pi0.5's own real, working equivalent -- supersedes the previously-deferred CUTLASS-epilogue idea for this same problem (opportunities.md OPT-013's deferred gated-residual epilogue) |
+| 4 | `linear2` merge (attn_out_proj + mlp_down) | speed | days | none | opportunities.md OPT-015 op-fusion audit sub-problem 3, not started |
+| 5 | VAE port to FlashRT kernel style + in-graph capture | speed | weeks, standalone | none | opportunities.md OPT-008; prerequisite for in-graph VAE, not for anything else here |
+| 6 | Attention-chain fusion feasibility recheck at ImageWAM's own real shapes | analysis | hours, analysis only | none | Pi0.5 rejected this at `M=10` (5-7x slower); ImageWAM's shapes (`M~905` backbone, `M=64` ActionDiT) differ, worth re-checking, not assuming the same verdict |
+| 7 | Real calibration data pipeline (replace `N(0,0.1)` placeholder in `_calibrate_fp8()`) | accuracy | days | none | hub node -- unlocks items 8 and 13 |
+| 8 | AWQ per-channel scale folded into NVFP4 weights | accuracy | +2-3 days | 7 | may help ImageWAM MORE than it helped Pi0.5 (ImageWAM's merged-`linear1` GEMMs are more bandwidth-shaped than Pi0.5's own compute-bound QKV case, where Pi0.5 shipped AWQ disabled) |
+| 9 | Hadamard-rotated INT4 (E0M3) new precision tier | accuracy | 1-2 weeks, standalone | none | NOT the same dead SM80 kernel OPT-007 already closed -- real native SM100 block-scaled path (same layout family as `nvfp4`); the only item here that could beat `nvfp4` on accuracy |
+| 10 | Jetson clock-locking check for benchmark scripts | deployment | hours | none | Pi0.5's own devfreq/nvpmodel check; ImageWAM benchmarks currently have none |
+| 11 | Precision-routing contract test (stubbed, no GPU) | deployment | hours -- 1 day | none | mirrors Pi0.5's `test_pi05_thor_fp4_routing.py` pattern against ImageWAM's own `_PRECISIONS`/`_wrap_linear` |
+| 12 | ABI integration (`frt_model_runtime_v1`, `io="python"` producer mode) | deployment | 1-3 days | none | zero C++, zero new kernels -- exposes ImageWAM's existing `self._graph`/buffers through the same generic ABI Pi0.5's Python producer already uses |
+| 13 | Fidelity + latency CI/regression gate harness | deployment | days | 7 | gate logic (cosine thresholds, `p50<baseline-margin`, JSON result schema) is generic/copyable from Pi0.5's own harness; content needs real calibration data + a real LIBERO fixture format; ready-made baseline: this session's own real 231.6ms `nvfp4` `infer()` number |
+| 14 | Native C++ overlay (`io="native"`/`"native_v2"`) | deployment | 2-4 weeks | 12 | ports existing Python orchestration to C++ against ImageWAM's EXISTING kernels, not a kernel rewrite; the item that actually removes the Python/GIL dependency from the hot path |
+
+## Dependency graph
+
+```
+7 (real calibration data) --> 8  (AWQ)
+7 (real calibration data) --> 13 (CI/regression harness)
+12 (ABI integration)      --> 14 (native C++ overlay)
+```
+
+Every other item (1, 2, 3, 4, 5, 6, 9, 10, 11, 12) has zero
+prerequisites and can start immediately, in parallel.
+
+## Not planned (confirmed, not cost-gated)
+
+- Multi-subgraph stage-splitting (Pi0.5's RTC-prefix-reuse/VJP-guided-
+  denoising scheduling machinery, `flash_rt/subgraphs/pi05/`) --
+  ImageWAM has no incremental-replanning requirement today; out of
+  scope for lack of a real need, not because it's expensive.
+- RMSNorm-into-GEMM prologue fusion -- CUTLASS has no prologue-fusion
+  mechanism at all (confirmed earlier this session); Pi0.5 doesn't do
+  this either. Dead, unchanged by this investigation.
+
+## Skill note
+
+No new skill needed for this roadmap. This project's existing skill
+suite (`plan`/`work`/`close`/`experiment`) already covers "plan one
+item in full rigor" / "execute an approved phase" / "reconcile state
+at closure" / "structured multi-variable investigation" -- each of the
+14 items above uses one of these unchanged when picked up. This
+section is only an index; do not treat any item here as approved
+until it gets its own `# Plan: <item>` section with `Plan Status:
+approved`.
