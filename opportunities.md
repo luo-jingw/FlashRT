@@ -1724,6 +1724,35 @@ justification (Thor-only; this SM80 kernel's only legitimate future
 target remains a hypothetical true Orin/Ampere deployment, unchanged
 from this entry's existing framing).
 
+## Root cause, sharpened further -- not FlashRT-specific, a real Blackwell architecture fact
+
+This isn't a quirk of this codebase's own kernel or an isolated
+"compatibility path" guess -- it's a documented, general property of
+Blackwell's fifth-generation Tensor Core (`sm_110a` on Thor). The
+`tcgen05.mma` instruction family CUTLASS's own SM100/SM110 support
+targets covers: legacy TF32/FP16/BF16/**INT8/UINT8** dense paths (kept
+for backward compatibility), plus the new sub-8-bit *block-scaled
+float* formats -- MXFP4, **NVFP4**, MXFP6, MXFP8 (`tcgen05`'s own
+`kind` enum includes `f16`, `i8`, `mxf8f6f4`, `mxf4`, `mxf4nvf4`).
+**There is no `kind::s4` / plain-integer-INT4 entry at all.** Thor's
+native full-speed 4-bit path is a *scaled float* format (E2M1
+mantissa + per-block scale), not the `s4×s4->s32` dense-integer MMA
+Ampere/Ada/Orin have. The old warp-level `mma.sync ... s4.s4`
+instruction this SM80 kernel emits may still assemble and execute on
+Thor (dense `s8` legacy support is real; sparse `mma.sp s4` has also
+been observed to compile) -- but only via the Ampere-compatibility
+path, never the real fifth-gen FP4 throughput. This is exactly why the
+SAME kernel binary is 5-9x faster than FP16 on Ada (hits the real
+native INT4 MMA there) and 11-26x SLOWER on Thor (falls through to a
+compatibility path with none of the real 4-bit tensor-core speedup) --
+not a bug or a missing optimization flag, a genuine hardware-generation
+fact. Any AWQ/GPTQ-style pre-packed INT4 model would need to be
+converted to NVFP4 (or dequantized) to reach Thor's real 4-bit
+throughput; there is no direct `s4` MMA path to it. This closes the
+question definitively -- confirms (does not merely support) the
+"NVFP4 is Thor's actual native low-bit path, not a kernel choice"
+conclusion this entry and OPT-014 already reached independently.
+
 ## Expected Mechanism
 
 Same mechanism the Chameleon-7B path already uses in production on its
@@ -2903,6 +2932,55 @@ far, and both are already running through FlashRT's own kernel system**
 already measured ~14-22% faster than FP16 on prefill/denoise
 specifically), not VAE fusion. Re-prioritizing: pick a default
 deployment precision (Stage 3) before investing in VAE fusion.
+
+## SUPERSEDED (2026-09-18): the official-vs-FlashRT comparison above used a stale FlashRT baseline and an unfair official-side setup
+
+The 284.9ms FlashRT number above, and the official `485/605/863ms`
+comparisons built on it, predate `x0=513`/proprio/the real shift
+schedule/`num_action=64` all being nailed down together, AND the
+official side's own `torch.compile` variants hadn't been tried yet.
+Re-measured under IDENTICAL real conditions on both sides (dual
+camera 224x448, proprio, shift=5.0, 10-step, `horizon=64`, real
+checkpoint, Qwen3 held OUTSIDE the timed region on both sides,
+`WARMUP=5`/`N=20`) via `official_torch_infer_bench.py`. Official
+implementation is **bf16 eager** (`nn.Linear` -> cuBLASLt + SDPA) --
+a different kernel family from FlashRT `fp16`/`nvfp4`, not just a
+different precision label.
+
+| path | P50 | vs FlashRT `nvfp4` |
+|---|---:|---:|
+| FlashRT `nvfp4` (production default) | **231.6 ms** | 1.00x |
+| FlashRT `fp16` | 280.2 ms | 1.21x |
+| FlashRT `fp16_cutlass` | 306.7 ms | 1.32x (not adopted, OPT-013) |
+| official bf16 eager, end to end | 453.6 ms | **1.96x** |
+| official `infer_action_flux2` (cached text) | 458.0 ms | 1.98x |
+| official `torch.compile` (`backend=cudagraphs`), e2e | 514.4 ms | 2.22x -- SLOWER than eager |
+| official `torch.compile` (`backend=inductor`) | FAILED | Triton `ptxas` (CUDA 13.0.48/Triton 3.5.1) rejects `sm_110a` kernels even with VAE excluded from the compiled region (fails inside a fused LayerNorm) |
+
+Official eager breakdown: VAE+proprio 21.4ms, transformer
+(prefill+10-step) 432.3ms -- confirms (again, at the current real
+shapes) that FlashRT's real advantage is almost entirely in the
+transformer compute, not VAE (VAE numbers match closely on both
+sides, as expected -- same AE).
+
+**`torch.compile` does not currently give Thor a faster official
+baseline to beat, and isn't a live comparison point**: `inductor`
+can't emit working Thor (`sm_110a`) Triton kernels on this toolchain
+at all; `cudagraphs` DOES run, but `_build_mot_attention_mask_flux2`
+builds its attention mask with a CPU-side Python bool, which makes
+`dynamo` skip real graph capture for that region -- the "compiled"
+path ends up paying tracing/dispatch overhead on top of eager's own
+cost, landing SLOWER (505ms transformer-only vs. eager's 432ms), not
+faster. Neither compile mode is a meaningful comparison target right
+now; **bf16 eager (~454ms) is the only valid official baseline**, and
+FlashRT `nvfp4` beats it by a real, currently-accurate 1.96x -- even
+FlashRT's own `fp16` baseline (280ms) beats the official implementation.
+
+This supersedes every number in the "Real vs official PyTorch" table
+above (superseded, not deleted, for the historical record of how the
+comparison evolved as the real config converged) -- use the table in
+this subsection for any future reference to "FlashRT vs official
+speed."
 
 # OPT-013: FP16 CUTLASS GEMM + SwiGLU epilogue fusion (new precision tier)
 
