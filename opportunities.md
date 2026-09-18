@@ -4834,6 +4834,14 @@ passed, 6 skipped (baseline 68/6 plus these 5).
 
 Thor, `nvfp4`: pending (Thor checklist).
 
+After merging the fusion and VAE streams (served layer structure,
+preprocessing kernel, optional in-graph VAE), re-run on H100 at fp16 with
+the real checkpoint: every parity row still `array_equal`, with the VAE
+outside the graph and inside it (`--vae-graph-input 224 224`, where the
+`image_views` SWAP window replaces `image_tokens`).
+`tests/test_imagewam_model_runtime_vae.py` adds both placements at the
+real token count.
+
 ## Promotion Condition
 
 Thor gate at `nvfp4` reports every parity row `array_equal=True`. The
@@ -4900,14 +4908,33 @@ only, real checkpoint, fp16, alternating A/B, 50 iterations each:
 | Python graph replay only (CUDA events) | 95.86 ms | 101.94 ms | 102.40 ms |
 | native graph replay only (CUDA events) | 100.58 ms | 100.97 ms | 101.56 ms |
 
-Thor, `nvfp4`: pending (Thor checklist items 2-4). The replay-only A/B
-there is the number that says whether the 1380 removed nodes matter on
-Thor.
+The rows above were measured before the fusion stream landed. With the
+served layer structure it introduced (merged `linear2`, gated residual
+fused with the next AdaLN, which also removed the per-layer modulation
+casts from the Python graph), re-run on the merged tree, H100, fp16, real
+checkpoint, 50 alternating iterations:
+
+| check | result |
+|---|---|
+| step-by-step parity, both layer structures (small dims) | every state buffer `array_equal` at every step |
+| real checkpoint: actions / actions_raw / native proprio token / native vs Python graph | all `array_equal` |
+| graph nodes (real dims) | native 4974, Python 4998 |
+| `io="python"` tick P10 / P50 / P90 | 85.54 / 98.26 / 100.99 ms |
+| `io="native"` tick P10 / P50 / P90 | 96.26 / 98.95 / 99.25 ms |
+| Python graph replay P10 / P50 / P90 | 93.14 / 96.04 / 96.87 ms |
+| native graph replay P10 / P50 / P90 | 85.94 / 96.92 / 97.90 ms |
+
+With the served structure the two graphs differ by 24 nodes (the fp16
+casts for the standalone AdaLN at each chain start), so no replay speed
+difference is expected; the native path's value is a tick with no
+Python and no GIL, not a faster graph.
+
+Thor, `nvfp4`: pending (Thor checklist).
 
 ## Promotion Condition
 
 Thor reports every parity row `array_equal` at `nvfp4`, and the
-replay-only A/B shows the native graph at or below the Python graph.
+replay-only A/B shows the native graph not slower than the Python graph.
 Remaining native work beyond this entry: VAE encoding in the graph
 (roadmap item 5, then an `images` STAGED native port), proprio projection
 inside the graph, and a native checkpoint loader (`native_v2`).

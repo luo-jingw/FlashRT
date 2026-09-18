@@ -24,10 +24,16 @@ buffers and must not run concurrently.
 
 What stays in Python: checkpoint loading and quantization, GEMM autotune,
 AdaLN modulation and RoPE precompute, VAE image encoding, Qwen3 prompt
-encoding, and building the declaration. FA4 (`use_fa4=True`) is not
-available to the native pipeline, which uses the cuBLAS-decomposed
-per-head attention (`attention_qkv_fp16_perhead`). Supported precisions:
-`fp16` and `nvfp4` (the merged single-stream `linear1` path).
+encoding, and building the declaration. The VAE runs outside the native
+graph: `io="native"` and the native pipeline refuse a frontend built with
+`vae_graph_input`, and the host supplies VAE tokens through
+`image_tokens`. FA4 (`use_fa4` / `use_fa4_mot`) is not available to the
+native pipeline, which uses the cuBLAS-decomposed per-head attention
+(`attention_qkv_fp16_perhead`). Supported precisions: `fp16` and `nvfp4`
+(the merged single-stream `linear1` path), with either layer structure:
+the served one (single-stream `linear2` as one GEMM, each gated residual
+fused with the following AdaLN) or the split/unfused one
+(`merge_linear2` / `fuse_res_norm` off).
 
 ## Module map
 
@@ -83,15 +89,19 @@ Verbs:
 ## Native pipeline
 
 `ImageWAMNativeRuntime.set_pipeline(frontend)` passes
-`frontend.pipeline_resources()`: dimensions, every pipeline buffer, the
-attention pointers (shared `Q_O`, per-layer K/V at base + layer ×
-stride, logits), RoPE tables, each weight as a linear descriptor
-(`fp16_nn`, `bf16_nn` or NVFP4 packed weight + scales + activation
-scratch + CUTLASS variant), the QK-norm and bias pointers, and the AdaLN
-modulation materialized once with `pipeline_thor`'s own
-`_fuse_mod_group` / `_fuse_mod_pair`. The Python graph recomputes these
-casts and gate expansions on every replay; the native graph reads the
-precomputed tensors, which carry the same values.
+`frontend.pipeline_resources()`: dimensions and the two layer-structure
+flags, every pipeline buffer, the attention pointers (shared `Q_O`,
+per-layer K/V at base + layer × stride, logits), RoPE tables, each
+weight as a linear descriptor (`fp16_nn`, `bf16_nn` or NVFP4 packed
+weight + scales + activation scratch + the CUTLASS tile the op launches),
+the QK-norm and bias pointers, and every AdaLN site in two forms: fp16
+shift/scale and materialized gate built once with `pipeline_thor`'s own
+`_fuse_mod_group` / `_fuse_mod_pair` (the unfused path and the
+standalone AdaLN that starts each chain), and the FP32 modulation chunks
+the fused `gate_res_ada_layer_norm_*` kernel reads. With `fuse_res_norm`
+the native pipeline follows the same chain as `imagewam_prefill` /
+`imagewam_denoise_step`: each block's last gated residual writes the
+next block's AdaLN, and the last ActionDiT block writes the head's.
 
 For every `fp16_nn` / `bf16_nn` shape the pipeline launches
 (`frt_imagewam_native_gemm_shapes`), the frontend's `GemmRunner`
@@ -127,18 +137,19 @@ rt = fe.export_model_runtime(io="native", native=native, identity={...})
 
 On H100, fp16:
 
-- `tests/test_imagewam_native_pipeline.py` (small random dims): one
-  backbone double-stream block, one single-stream block, the full prefill,
-  the full denoise loop, and the captured native graph are `array_equal`
-  to the Python pipeline in every state buffer (`backbone_hidden`, K/V
-  caches, `Q_O`, `action_latent`); the `io="native"` tick on the native
-  graph is `array_equal` to `infer()`.
+- `tests/test_imagewam_native_pipeline.py` (small random dims, both
+  layer structures): one backbone double-stream block, one single-stream
+  block, the full prefill, the full denoise loop, and the captured native
+  graph are `array_equal` to the Python pipeline in every state buffer
+  (`backbone_hidden`, K/V caches, `Q_O`, `action_latent`); the
+  `io="native"` tick on the native graph is `array_equal` to `infer()`.
 - `tests/test_imagewam_native_runtime.py`: the Python declaration's
   records equal the C++ records; a tick through the C verbs enters no
   Python function (the `io="python"` face enters 57); status codes.
 - `tests/gate_imagewam_native_schema_parity.py`: at the real dims the
   Python declaration, the C++ records and the golden file are identical.
 - `tests/gate_imagewam_native_parity.py --graph native`: with the real
-  checkpoint, the native graph (5732 nodes; the Python graph has 7112)
-  and the `io="native"` tick, including the native proprio token, are
-  `array_equal` to the Python graph and to `infer()`.
+  checkpoint and the served layer structure, the native graph (4974
+  nodes; the Python graph has 4998) and the `io="native"` tick, including
+  the native proprio token, are `array_equal` to the Python graph and to
+  `infer()`.

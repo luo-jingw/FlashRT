@@ -11,11 +11,13 @@ ImageWAM.
 
 - `flash_rt/frontends/torch/imagewam_thor.py` owns the weights, the
   captured graph, its capture stream, every device buffer, and the
-  per-tick staging operations: `stage_images` (VAE encode into
-  `img_raw`), `stage_proprio` (state normalization and `proprio_encoder`
-  projection into the context row), `read_actions` (action
-  denormalization and readback). `infer()` is these operations plus the
-  initial noise fill and one graph replay.
+  per-tick staging operations: `stage_images` (the configured
+  preprocessing kernel and VAE encoder into `img_raw`, or, with
+  `vae_graph_input`, a copy into the graph's uint8 view buffer),
+  `stage_proprio` (state normalization and `proprio_encoder` projection
+  into the context row), `read_actions` (action denormalization and
+  readback). `infer()` is these operations plus the initial noise
+  (`action_noise`, or `0.01 * N(0,1)`) and one graph replay.
 - `flash_rt/models/imagewam/runtime_surface.py` declares the interface
   between the two: `ImageWAMRuntimeSurface` (graph exec, stream, the
   `img_raw` / `context` / `action_latent` windows, setup identity) and the
@@ -34,8 +36,9 @@ omitted; the others keep this relative order.
 
 | port | dir | update | modality | dtype | shape | window | declared when |
 |---|---|---|---|---|---|---|---|
-| `images` | in | STAGED | IMAGE | u8 | (2, 224, 224, 3) | none | VAE loaded |
-| `image_tokens` | in | SWAP | TENSOR | bf16 | (392, 128) | `img_raw` | always |
+| `images` | in | STAGED | IMAGE | u8 | (views, H, W, 3) | none | VAE loaded |
+| `image_tokens` | in | SWAP | TENSOR | bf16 | (392, 128) | `img_raw` | VAE outside the graph |
+| `image_views` | in | SWAP | IMAGE | u8 | (views, H, W, 3) | `views_u8` | VAE inside the graph |
 | `proprio` | in | STAGED | STATE | f32 | (8,) | none | `dims["proprio_dim"]` set |
 | `noise` | in | SWAP | TENSOR | f32 | (64, 7) | `action_latent` | always |
 | `actions` | out | STAGED | ACTION | f32 | (64, 7) | none | always |
@@ -44,20 +47,27 @@ omitted; the others keep this relative order.
 
 Shapes are for the LIBERO release (`img_len=392`, `HD=128`,
 `num_action=64`, `action_dim=7`, `proprio_dim=8`); they follow the
-frontend's `dims`.
+frontend's `dims`. `(views, H, W)` is `(2, 224, 224)` with the VAE outside
+the graph and the frontend's `vae_graph_input` with the VAE inside it.
 
-- `images`: two `frt_image_view`, RGB8, 224x224, any row stride, in view
-  order `view1` (agent view), `view2` (wrist view). `set_input` runs the
-  VAE outside the graph and writes `img_raw`. The same window is exposed
-  raw as `image_tokens` for a host that brings its own VAE tokens.
+- `images`: `views` `frt_image_view`, RGB8, `W x H`, any row stride, in
+  view order `view1` (agent view), `view2` (wrist view). `set_input` runs
+  `stage_images`. With the VAE outside the graph the tokens land in
+  `img_raw`, which is also exposed raw as `image_tokens` for a host that
+  brings its own VAE tokens. With the VAE inside the graph the frames land
+  in the graph's uint8 view buffer, which is also exposed raw as
+  `image_views`; the graph writes `img_raw` itself, so `image_tokens` is
+  not declared.
 - `proprio`: raw robot state, f32. `set_input` applies the dataset
   `state` min/max normalization (when `dataset_stats_path` was given),
   the `proprio_encoder` linear, and writes the row `set_prompt()` reserved.
-- `noise`: the initial action latent. The graph reads it exactly as
-  written and integrates it in place, so after `step` the same window
-  holds the normalized chunk (`actions_raw`). The host rewrites it before
-  every `step`. `infer()` fills it with `0.01 * N(0,1)`; the ABI applies
-  no scale of its own (see `issues.md` ISSUE-002 for that factor).
+- `noise`: the initial action latent, the ABI form of
+  `infer(..., action_noise=)`. The graph reads it exactly as written and
+  integrates it in place, so after `step` the same window holds the
+  normalized chunk (`actions_raw`). The host rewrites it before every
+  `step`. Without `action_noise`, `infer()` fills it with
+  `0.01 * N(0,1)`; the ABI applies no scale of its own (see `issues.md`
+  ISSUE-002 for that factor).
 - `actions`: what `infer()` returns, the chunk denormalized with the
   dataset `action` min/max when loaded, else the raw latent. The identity
   record `action_denormalized` states which.
@@ -67,11 +77,13 @@ frontend's `dims`.
 - Stage plan: one GRAPH stage `infer` (backbone prefill plus the 10-step
   denoise loop). Region: `rollout_boundary` = the `action_latent` window.
 - Buffers: `img_raw` (input), `context` (input, state), `action_latent`
-  (input, output).
-- Identity: `model=imagewam`, the frontend class, `precision`, `use_fa4`,
-  every `dims` entry, `io`, `views`, `has_vae`, `has_text_encoder`,
-  `proprio_dim`, `action_denormalized`, then caller pairs (production
-  callers pass a weights digest).
+  (input, output), and `views_u8` (input) with the VAE inside the graph.
+- Identity: `model=imagewam`, the frontend class, `precision`, the
+  resolved `use_fa4` / `use_fa4_mot`, `vae_resize`, `vae_encoder`,
+  `vae_graph_input`, every `dims` entry, `io`, `graph_producer`, `views`,
+  `vae_in_graph`, `has_vae`, `has_text_encoder`, `proprio_dim`,
+  `action_denormalized`, then caller pairs (production callers pass a
+  weights digest).
 
 ## Verbs and ordering
 
@@ -113,9 +125,14 @@ rt = fe.export_model_runtime(identity={"weights_sha256": digest})
   dims. Schema, identity sensitivity, STAGED/SWAP guards, and a ctypes
   consumer tick that is `array_equal` to `infer()`. Skips when
   `exec/build` or `runtime/build` is missing.
+- `tests/test_imagewam_model_runtime_vae.py`: the real AE at the real
+  token count (random-weight backbone), both VAE placements; the `images`
+  STAGED path and (VAE inside the graph) the `image_views` SWAP path are
+  `array_equal` to `infer()`.
 - `tests/gate_imagewam_model_runtime_export.py`: real checkpoint, VAE,
   Qwen3 and dataset stats. On H100 at `fp16` with a real LIBERO frame,
-  the ABI consumer is bit-identical to `infer()` for the image tokens the
+  with the VAE outside and inside the graph (`--vae-graph-input 224 224`),
+  the ABI consumer is bit-identical to `infer()` for the VAE tokens the
   `images` port stages, the denormalized `actions`, `actions_raw`, the
-  `image_tokens` SWAP path, and the `prompt` SETUP path (all
-  `array_equal`, `max_abs = 0`).
+  `image_tokens` / `image_views` SWAP path, and the `prompt` SETUP path
+  (all `array_equal`, `max_abs = 0`).

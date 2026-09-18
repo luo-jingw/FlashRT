@@ -5016,8 +5016,9 @@ Port schema, `io="python"` (declaration order is the port index):
 
 | port | dir | update | modality | dtype | shape | window | present when |
 |---|---|---|---|---|---|---|---|
-| `images` | in | STAGED | IMAGE | u8 | (2, 224, 224, 3) | none | VAE loaded |
-| `image_tokens` | in | SWAP | TENSOR | bf16 | (img_len, 128) | `img_raw` | always |
+| `images` | in | STAGED | IMAGE | u8 | (views, H, W, 3) | none | VAE loaded |
+| `image_tokens` | in | SWAP | TENSOR | bf16 | (img_len, 128) | `img_raw` | VAE outside the graph |
+| `image_views` | in | SWAP | IMAGE | u8 | (views, H, W, 3) | `views_u8` | VAE inside the graph |
 | `proprio` | in | STAGED | STATE | f32 | (proprio_dim,) | none | `proprio_dim` set |
 | `noise` | in | SWAP | TENSOR | f32 | (num_action, action_dim) | `action_latent` | always |
 | `actions` | out | STAGED | ACTION | f32 | (num_action, action_dim) | none | always |
@@ -5348,3 +5349,23 @@ Thor checklist runs the parity gates at `nvfp4`.
 Modified files: `native_pipeline.{h,cpp}`, root `CMakeLists.txt`,
 `native_resources.py`.
 Observation: `sm110_check` rc; Thor parity (pending).
+
+### Phase 5 — follow the served layer structure and the VAE stage
+
+Phase Status: completed
+
+Goal: after `roadmap/integration` gained the fusion stream (merged
+single-stream `linear2`, gated residual fused with the next AdaLN, both
+on by default) and the VAE stream (preprocessing kernel, optional
+in-graph VAE), the native pipeline records both layer structures along
+the same AdaLN chain as `pipeline_thor.py`; the resource table carries
+the FP32 modulation chunks and `linear2`; image staging goes through the
+VAE stage; `io="native"` and the native pipeline refuse
+`vae_graph_input`, and the `io="python"` face exposes the in-graph view
+buffer as `image_views`.
+Modified files: `c_api.h`, `native_pipeline.{h,cpp}`,
+`imagewam_native.cmake` (`fusion.cu`), `pipeline_resources.py`,
+`native_library.py`, `native_resources.py`, `runtime_surface.py`,
+`runtime_export.py`, `imagewam_thor.py`, tests.
+Observation: step-by-step parity for both layer structures; the real
+checkpoint gates on the merged tree.
