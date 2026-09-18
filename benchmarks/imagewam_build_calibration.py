@@ -35,7 +35,8 @@ from flash_rt.models.imagewam.calibration_file import (
     DEFAULT_PERCENTILE, build_calibration, save_calibration,
 )
 from flash_rt.models.imagewam.libero_dims import LIBERO_HORIZON, LIBERO_REAL_DIMS
-from flash_rt.models.imagewam.libero_frames import (
+
+from _imagewam_libero_frames import (  # benchmarks/ helper, on sys.path when run as a script
     CALIBRATION_SUITES, EVAL_SUITE, evaluation_frames, load_frame, select_calibration_frames,
 )
 

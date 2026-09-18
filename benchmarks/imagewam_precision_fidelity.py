@@ -41,7 +41,8 @@ import torch
 
 from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
 from flash_rt.models.imagewam.libero_dims import LIBERO_HORIZON, LIBERO_REAL_DIMS
-from flash_rt.models.imagewam.libero_frames import LiberoFrame, evaluation_frames, load_frame
+
+from _imagewam_libero_frames import LiberoFrame, evaluation_frames, load_frame  # benchmarks/ helper
 
 DEV = "cuda"
 BF16 = torch.bfloat16
@@ -148,7 +149,7 @@ def main() -> None:
     for fr, r, c in zip(frames, ref_out, cand_out):
         gt = torch.from_numpy(fr.gt)
         n = min(len(gt), LIBERO_HORIZON)
-        row = dict(ep=fr.ref.episode, frame=fr.ref.frame,
+        row = dict(ep=fr.episode, frame=fr.frame,
                    backbone_hidden=cos(c["backbone_hidden"], r["backbone_hidden"]),
                    action_hidden=cos(c["action_hidden"], r["action_hidden"]),
                    action_latent=cos(c["action_latent"], r["action_latent"]),

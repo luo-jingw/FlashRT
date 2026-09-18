@@ -5215,7 +5215,7 @@ percentile.
   (`nn` on compute capability >= 10, `tn` below) and store the weight
   in the matching layout. `StaticFp8Linear` gains
   `set_activation_scale()`. Owner of each weight's layout and scales.
-- `flash_rt/models/imagewam/libero_frames.py` (new): LIBERO
+- `benchmarks/_imagewam_libero_frames.py` (shared with roadmap item 9's scripts): LIBERO
   LeRobot-v2.1 frame loading with the official eval preprocessing, and
   stratified calibration-frame selection. Owner of which frames are
   calibration frames.
@@ -5253,9 +5253,9 @@ class Fp8Linear:        __init__(weight_fp16_ptr, n, k, *, layout: str | None = 
 class StaticFp8Linear:  __init__(weight_fp16_ptr, n, k, *, use_cutlass=False, layout: str | None = None)
                         set_activation_scale(scale: float) -> None   # same ordering contract as calibrate()
 
-# libero_frames.py
+# benchmarks/_imagewam_libero_frames.py
 @dataclass class FrameRef: suite: str; episode: int; frame: int
-@dataclass class LiberoFrame: ref, task, view1, view2 (224x224x3 uint8), state (8,), gt (T,7)
+@dataclass class LiberoFrame: suite, episode, frame, task, view1, view2 (224x224x3 uint8), state (8,), gt (T,7)
 def select_calibration_frames(data_root, suites, n, *, exclude) -> list[FrameRef]
 def load_frame(data_root, ref, horizon) -> LiberoFrame
 
@@ -5311,7 +5311,7 @@ Serve:
 |---|---|
 | TN FP8 cuBLASLt GEMM | `csrc/kernels/decoder_fused.cu`, `.cuh`, `csrc/bindings.cpp` |
 | FP8 layout choice, weight layout, `set_activation_scale` | `flash_rt/models/imagewam/quant_linear.py` |
-| LIBERO frame loading and selection | `flash_rt/models/imagewam/libero_frames.py` |
+| LIBERO frame loading and selection | `benchmarks/_imagewam_libero_frames.py` |
 | Per-sample activation statistics | `flash_rt/models/imagewam/activation_recorder.py` |
 | Calibration file and scale derivation | `flash_rt/models/imagewam/calibration_file.py` |
 | Calibration lifecycle, `stage_inputs`, `run_eager` | `flash_rt/frontends/torch/imagewam_thor.py` |
@@ -5349,7 +5349,7 @@ Phase Status: completed
 Phase Status: completed
 
 - Goal: a real calibration file on disk.
-- Files: `libero_frames.py`, `activation_recorder.py`,
+- Files: `benchmarks/_imagewam_libero_frames.py`, `activation_recorder.py`,
   `calibration_file.py`, `benchmarks/imagewam_build_calibration.py`,
   `tests/test_imagewam_calibration_file.py`.
 - Observation: recorder statistics equal a torch reference on toy

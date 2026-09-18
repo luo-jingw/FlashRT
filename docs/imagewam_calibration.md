@@ -18,7 +18,7 @@ Environment: `CKPT_PATH` (with `dataset_stats.json` beside it),
 `FLUX2_AE_MODEL_PATH`, `FLUX2_SRC`, `QWEN3_MODEL_SPEC`, `DATA_ROOT`
 (LIBERO-fastwam, LeRobot v2.1).
 
-1. Frames (`flash_rt/models/imagewam/libero_frames.py`): `n` split
+1. Frames (`benchmarks/_imagewam_libero_frames.py`): `n` split
    evenly over `libero_object`, `libero_goal`, `libero_10`; each share
    stratified by episode x frame position with the house sampler
    (`flash_rt.core.calibration.stratified_sample_indices`). Every episode

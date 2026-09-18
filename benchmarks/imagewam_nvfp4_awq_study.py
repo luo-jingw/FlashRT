@@ -41,10 +41,11 @@ from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
 from flash_rt.models.imagewam.activation_recorder import site_name
 from flash_rt.models.imagewam.awq import awq_scale
 from flash_rt.models.imagewam.calibration_file import load_calibration
-from flash_rt.models.imagewam.libero_dims import LIBERO_HORIZON, LIBERO_REAL_DIMS
-from flash_rt.models.imagewam.libero_frames import evaluation_frames, load_frame
 from flash_rt.models.imagewam.blockscaled_ref import E2M1_MAX, UE4M3_MAX, fake_quantize, quantize_blocks
+from flash_rt.models.imagewam.libero_dims import LIBERO_HORIZON, LIBERO_REAL_DIMS
 from flash_rt.models.imagewam.quant_linear import Fp16Linear
+
+from _imagewam_libero_frames import evaluation_frames, load_frame  # benchmarks/ helper
 
 DEV = "cuda"
 BF16 = torch.bfloat16
