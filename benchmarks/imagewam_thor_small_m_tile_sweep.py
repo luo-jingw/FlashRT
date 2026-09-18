@@ -251,11 +251,12 @@ def run_kernels(timer: CudaGraphVariantTimer) -> list[dict]:
             if not timed:
                 continue
             best = min(timed, key=lambda r: r.us)
-            d, t = picks[fam]
-            print(f"winner {fam}: {best.variant} {best.us:.2f}us (heuristic {d}: {base[fam]:.2f}us, "
-                  f"{base[fam] / best.us:.3f}x); tuner picks {t}")
+            d, t = picks.get(fam, ("?", "?"))
+            b = base.get(fam)
+            vs = f"{b:.2f}us, {b / best.us:.3f}x" if b is not None else "not timed"
+            print(f"winner {fam}: {best.variant} {best.us:.2f}us (heuristic {d}: {vs}); tuner picks {t}")
             summary.append(dict(site=shape.site, n=shape.n, k=shape.k, family=fam, heuristic=d,
-                                heuristic_us=round(base[fam], 3), winner=best.variant,
+                                heuristic_us=None if b is None else round(b, 3), winner=best.variant,
                                 winner_us=round(best.us, 3), tuner=t))
         ref_fp16 = next(r for r in rows if r.variant == "fp16")
         summary.append(dict(site=shape.site, n=shape.n, k=shape.k, family="cublaslt_fp16",
