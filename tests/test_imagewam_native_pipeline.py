@@ -13,11 +13,13 @@ and through the `io="native"` model runtime against `infer()`, with every
 buffer the tick writes NaN-filled first. Native pipelines built from a
 mutated resource table (no backbone block, last single-stream block or
 denoise step dropped, one block fed another block's weight) must fail that
-tick. A second `set_pipeline` drops the graph captured from the first.
+tick. A second `set_pipeline` drops the graph captured from the first,
+and a native handle alone keeps its frontend alive.
 Runs the served layer structure (merged single-stream `linear2`,
 gated residual fused with the next AdaLN) and the split/unfused one.
 Skips when exec/, runtime/ or the native library is not built.
 """
+import ctypes
 import gc
 import os
 import weakref
@@ -290,3 +292,43 @@ def test_set_pipeline_drops_the_captured_graph(h):
         assert _differing(_poisoned_native_tick(fe, native, tokens, noise, proprio), ref) == []
     finally:
         native.close()
+
+
+def _replay_native_graph(native, tensors) -> np.ndarray:
+    """Seeded inputs, one launch of the native graph, the action latent."""
+    cudart = ctypes.CDLL("libcudart.so")
+    cudart.cudaGraphLaunch.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    cudart.cudaStreamSynchronize.argtypes = [ctypes.c_void_p]
+    context, img_raw, latent = tensors
+    torch.manual_seed(11)
+    context.normal_()
+    img_raw.normal_()
+    latent.normal_().mul_(0.01)
+    torch.cuda.synchronize()
+    assert cudart.cudaGraphLaunch(native.graph_exec, native.stream) == 0
+    assert cudart.cudaStreamSynchronize(native.stream) == 0
+    return latent.cpu().numpy().copy()
+
+
+def test_native_handle_keeps_the_frontend_alive():
+    """The captured graph reads the frontend's weights and buffers; the
+    handle must keep the frontend alive when nothing else refers to it."""
+    fe = ImageWAMTorchFrontendThor(precision=PRECISION, dims_override={"proprio_dim": PROPRIO_DIM})
+    fe.set_prompt("pick up the red cup")
+    native = ImageWAMNativeRuntime.create(fe.runtime_surface(), LIBRARY)
+    native.set_pipeline(fe)
+    native.capture()
+    tensors = (fe._context, fe._img_raw, fe._action_latent)
+    ref = _replay_native_graph(native, tensors)
+    alive = weakref.ref(fe)
+    del fe
+    gc.collect()
+    torch.cuda.empty_cache()
+    out = _replay_native_graph(native, tensors)
+    print(f"frontend alive with only the native handle referring to it: {alive() is not None}; "
+          f"replay array_equal={np.array_equal(out, ref)}")
+    assert alive() is not None and np.array_equal(out, ref)
+    native.close()
+    del native
+    gc.collect()
+    assert alive() is None, "closing the native handle must release the frontend"

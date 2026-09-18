@@ -1426,6 +1426,7 @@ class ImageWAMTorchFrontendThor:
             view_shape=((2, 224, 224) if self._vae_stage is None else
                         (self._vae_stage.spec.num_views, self._vae_stage.spec.in_h, self._vae_stage.spec.in_w)),
             views_u8=None if self._vae_stage is None else self._vae_stage.views_u8,
+            owner=self,
         )
 
     def pipeline_resources(self) -> ImageWAMPipelineResources:

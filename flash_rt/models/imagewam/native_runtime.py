@@ -1,9 +1,13 @@
 """Python-side owner of one ImageWAM native handle (setup operations only).
 
 `ImageWAMNativeRuntime` creates an `frt_imagewam_native` from a captured
-frontend, holds one reference plus the keepalive of every borrowed
-handoff buffer, and exposes the setup calls (`use_graph`,
-`set_proprio_row`, `schema_records`, `bind_declaration`). The hot-path
+frontend's runtime surface and exposes the setup calls (`use_graph`,
+`set_pipeline`, `capture`, `set_proprio_row`, `schema_records`,
+`bind_declaration`). It holds one reference to the handle, the surface
+(whose `owner`, the frontend, owns the graph exec, weights and buffers the
+handle borrows), the source of the installed pipeline, and the tensors
+and host arrays its handoff structs point to, so the handle stays valid
+without other references to the frontend. The hot-path
 verbs are the library's C functions; `runtime_export.py` installs them
 on the `io="native"` declaration. Interface record:
 docs/imagewam_native_cpp.md.
@@ -34,6 +38,7 @@ class ImageWAMNativeRuntime:
         self._handoff = handoff
         self._surface = surface
         self._pipeline_handoff: NativeHandoff | None = None
+        self._pipeline_source: ImageWAMPipelineSource | None = None
         self._graph_producer = ""
         self.gemm_algos_installed = 0
 
@@ -88,6 +93,7 @@ class ImageWAMNativeRuntime:
         # The library destroyed any graph captured from the previous
         # pipeline, so the previous handoff's resources can go.
         self._pipeline_handoff = handoff
+        self._pipeline_source = source
         if self._graph_producer == "native":
             self._graph_producer = ""
         count = ctypes.c_uint64(0)

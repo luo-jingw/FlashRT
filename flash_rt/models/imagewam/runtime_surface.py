@@ -8,7 +8,7 @@ module (`runtime_export.py`) only wraps pointers and dispatches verbs.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 import numpy as np
@@ -44,6 +44,9 @@ class ImageWAMRuntimeSurface:
     - `views_u8`: the graph's `(views, H, W, 3)` uint8 view buffer when
       the VAE runs inside the graph (the graph then writes `img_raw`
       itself), else `None`.
+    - `owner`: the object that owns `graph_exec` and every buffer and
+      weight the graph reads or writes (the frontend). Holding the surface
+      keeps them alive.
     """
 
     graph_exec: int
@@ -71,6 +74,7 @@ class ImageWAMRuntimeSurface:
     action_offset: torch.Tensor | None
     view_shape: tuple[int, int, int]
     views_u8: torch.Tensor | None
+    owner: object = field(repr=False, compare=False)
 
 
 class ImageWAMRuntimeSource(Protocol):
