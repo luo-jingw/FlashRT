@@ -134,9 +134,11 @@ def test_from_config_records_the_workload_without_building():
     with mock.patch.object(ImageWAMTorchFrontendThor, "__init__", lambda self, **kw: None):
         fe = ImageWAMTorchFrontendThor.from_config(resolved, workload=WORKLOAD)
     assert fe._workload is WORKLOAD
+    assert fe.resolved_config is resolved
     with mock.patch.object(ImageWAMTorchFrontendThor, "__init__", lambda self, **kw: None):
         fe = ImageWAMTorchFrontendThor.from_config(resolved)
     assert fe._workload is None
+    assert fe.resolved_config is resolved
 
 
 def test_workload_identity_names_the_served_workload():

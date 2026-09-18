@@ -632,6 +632,23 @@ class ImageWAMTorchFrontendThor:
         # name. The runtime identity reports it as `workload.<field>`
         # (`runtime_surface.workload_identity`); nothing else reads it.
         self._workload: ImageWAMWorkload | None = None
+        # The `ResolvedConfig` this frontend was built from, on the same
+        # construction path (`resolved_config`). `None` for a caller that
+        # passed dims by hand.
+        self._resolved: ResolvedConfig | None = None
+
+    @property
+    def resolved_config(self) -> ResolvedConfig | None:
+        """The `ResolvedConfig` this frontend was built from, or `None` when
+        it was built by the constructor with hand-passed dims.
+
+        It is the resolved configuration, not a re-read of the frontend's
+        attributes: `config_resolver.format_effective_config` on
+        `resolved_config.options`, with the runtime-resolved `use_fa4`,
+        `use_fa4_mot` and `fa4_fallback_reason`, is the same line the
+        resolver produced for this run.
+        """
+        return self._resolved
 
     @classmethod
     def from_config(cls, resolved: ResolvedConfig, *, workload: ImageWAMWorkload | None = None,
@@ -650,10 +667,12 @@ class ImageWAMTorchFrontendThor:
         `workload`: the workload `resolved` was resolved for. It is recorded
         on the frontend (`runtime_surface()` reports it as the
         `workload.<field>` identity entries) and is not re-derived from
-        `dims`.
+        `dims`. Both it and `resolved` are readable back as
+        `self._workload` and `resolved_config`.
         """
         fe = cls(**frontend_kwargs_from_config(resolved, **kwargs))
         fe._workload = workload
+        fe._resolved = resolved
         return fe
 
     @staticmethod
