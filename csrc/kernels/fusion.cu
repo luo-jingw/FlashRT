@@ -240,3 +240,114 @@ void gate_residual_ada_norm_int8(__nv_bfloat16* residual, const __nv_bfloat16* x
     gate_residual_ada_norm_int8_kernel<__nv_bfloat16><<<seq_len, 256, 256 * sizeof(float), stream>>>(
         residual, x, gate, weight, style, out, gate_out, dim, eps, d_scales);
 }
+
+// ── Fused gated residual + next AdaLayerNorm (ImageWAM / FLUX.2 DiT) ──
+// One block per row. Same math, bit for bit, as the unfused pair
+//   gate_res_{bf16res,fp16}(proj, gate_rows, residual)       (decoder_fused.cu)
+//   ada_layer_norm_{bf16in_fp16out,fp16}(residual, scale, shift, out)  (norm.cu)
+// with the FP16 modulation vectors those kernels take:
+//   residual[r,c] = RES(float(residual[r,c]) + float(proj[r,c]) * h(gate[c]))
+//   out[r,:]      = fp16(LN_no_affine(residual[r,:]) * (1 + h(scale)) + h(shift))
+// where h(x) = float(fp16(x)). gate/scale/shift are the (dim,) FP32 rows of
+// the AdaLN modulation output; rounding them to FP16 here reproduces the
+// fp32->fp16 cast the unfused path does before its kernels. The LayerNorm
+// statistics use the STORED (rounded) residual and the same thread-strided
+// accumulation and block reduction as ada_layer_norm_*, so the result is
+// identical. `dim` must be even; launch with 256 threads.
+// `out == nullptr`: residual update only (no AdaLN follows, e.g. the
+// backbone's last layer); `scale`/`shift` are then not read.
+__device__ __forceinline__ float round_through_fp16(float x) {
+    return __half2float(__float2half(x));
+}
+
+template<typename ResT>
+__global__ void gate_res_ada_layer_norm_kernel(
+    const __half* __restrict__ proj,
+    const float* __restrict__ gate,
+    ResT* __restrict__ residual,
+    const float* __restrict__ scale,
+    const float* __restrict__ shift,
+    __half* __restrict__ out,
+    int dim, float eps) {
+    using R2 = typename packed2<ResT>::type;
+    int row = blockIdx.x;
+    R2* res2 = reinterpret_cast<R2*>(residual + (size_t)row * dim);
+    const __half2* p2 = reinterpret_cast<const __half2*>(proj + (size_t)row * dim);
+    __half2* out2 = reinterpret_cast<__half2*>(out + (size_t)row * dim);
+    int dim2 = dim >> 1;
+
+    extern __shared__ float shared[];
+
+    // Pass 1: residual update, row sum of the stored residual.
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
+        R2 rv = res2[i];
+        __half2 pv = p2[i];
+        float g0 = round_through_fp16(gate[2 * i]);
+        float g1 = round_through_fp16(gate[2 * i + 1]);
+        float r0 = to_f32(rv.x) + __half2float(pv.x) * g0;
+        float r1 = to_f32(rv.y) + __half2float(pv.y) * g1;
+        ResT s0 = from_f32<ResT>(r0);
+        ResT s1 = from_f32<ResT>(r1);
+        res2[i] = make_packed2<ResT>(s0, s1);
+        local_sum += to_f32(s0) + to_f32(s1);
+    }
+    if (out == nullptr) return;  // uniform across the block
+    float val = local_sum;
+    for (int o = 16; o > 0; o >>= 1) val += __shfl_xor_sync(0xffffffff, val, o);
+    int lane = threadIdx.x & 31, wid = threadIdx.x >> 5;
+    if (!lane) shared[wid] = val;
+    __syncthreads();
+    if (!wid) { val = (lane < (blockDim.x >> 5)) ? shared[lane] : 0;
+                for (int o = 16; o > 0; o >>= 1) val += __shfl_xor_sync(0xffffffff, val, o); }
+    __syncthreads(); if (!threadIdx.x) shared[0] = val; __syncthreads();
+    float mean = shared[0] / dim;
+    __syncthreads();  // every thread has read `mean` before shared[] is reused
+
+    // Pass 2: variance (each thread re-reads only the elements it wrote).
+    float local_var = 0.0f;
+    for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
+        R2 v = res2[i];
+        float d0 = to_f32(v.x) - mean, d1 = to_f32(v.y) - mean;
+        local_var += d0 * d0 + d1 * d1;
+    }
+    val = local_var;
+    for (int o = 16; o > 0; o >>= 1) val += __shfl_xor_sync(0xffffffff, val, o);
+    if (!lane) shared[wid] = val;
+    __syncthreads();
+    if (!wid) { val = (lane < (blockDim.x >> 5)) ? shared[lane] : 0;
+                for (int o = 16; o > 0; o >>= 1) val += __shfl_xor_sync(0xffffffff, val, o); }
+    __syncthreads(); if (!threadIdx.x) shared[0] = val; __syncthreads();
+    float inv_std = rsqrtf(shared[0] / dim + eps);
+
+    // Pass 3: normalize + modulate.
+    for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
+        R2 xv = res2[i];
+        float n0 = (to_f32(xv.x) - mean) * inv_std;
+        float n1 = (to_f32(xv.y) - mean) * inv_std;
+        float v0 = n0 * (1.0f + round_through_fp16(scale[2 * i])) + round_through_fp16(shift[2 * i]);
+        float v1 = n1 * (1.0f + round_through_fp16(scale[2 * i + 1])) + round_through_fp16(shift[2 * i + 1]);
+        out2[i] = __halves2half2(__float2half(v0), __float2half(v1));
+    }
+}
+
+FVK_KERNEL_INSTANTIATE(__global__ void gate_res_ada_layer_norm_kernel<__half>(
+    const __half*, const float*, __half*, const float*, const float*, __half*, int, float))
+FVK_KERNEL_INSTANTIATE(__global__ void gate_res_ada_layer_norm_kernel<__nv_bfloat16>(
+    const __half*, const float*, __nv_bfloat16*, const float*, const float*, __half*, int, float))
+
+void gate_res_ada_layer_norm_bf16res(const __half* proj, const float* gate,
+                                     __nv_bfloat16* residual,
+                                     const float* scale, const float* shift, __half* out,
+                                     int rows, int dim, float eps, cudaStream_t stream) {
+    gate_res_ada_layer_norm_kernel<__nv_bfloat16><<<rows, 256, 256 * sizeof(float), stream>>>(
+        proj, gate, residual, scale, shift, out, dim, eps);
+}
+
+void gate_res_ada_layer_norm_fp16(const __half* proj, const float* gate,
+                                  __half* residual,
+                                  const float* scale, const float* shift, __half* out,
+                                  int rows, int dim, float eps, cudaStream_t stream) {
+    gate_res_ada_layer_norm_kernel<__half><<<rows, 256, 256 * sizeof(float), stream>>>(
+        proj, gate, residual, scale, shift, out, dim, eps);
+}

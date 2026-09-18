@@ -3221,7 +3221,7 @@ Phase Status: completed
 
 ### Phase 4: regression, end to end, local A/B, sm_110 build
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: no regression; indicative local speed; Thor build compiles.
 - Files: `benchmarks/imagewam_fusion_ab.py` (new).
@@ -3232,8 +3232,188 @@ Phase Status: active
 
 ### Phase 5: Thor handoff
 
-Phase Status: pending
+Phase Status: active
 
 - Goal: a self-contained Thor check for `nvfp4` and `fp16`.
 - Files: `opportunities.md` (OPT-016).
 - Observation: commands, expected observations, and what to report.
+
+# Plan: gated-residual + next-AdaLN fusion (roadmap item 3)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+Every sub-block of every layer ends with `fvk.gate_res_bf16res`
+(backbone, BF16 residual, commit 7d0ea38) or `fvk.gate_res_fp16`
+(ActionDiT), `residual += gate * proj`, in `csrc/kernels/decoder_fused.cu`.
+The next sub-block then starts with `ada_layer_norm_bf16in_fp16out` /
+`ada_layer_norm_fp16`, which reads the same residual rows again to
+produce the next normed and modulated activation. Both kernels take
+FP16 modulation vectors, and `gate_res_*` takes the gate broadcast to a
+full `(rows, dim)` FP16 tensor. `_fuse_mod_group` builds these inside
+every layer function: four small torch kernels (shift cast, scale cast,
+gate cast, gate expand-copy) per modulation group, recorded into the
+CUDA graph. Per `infer()`: backbone 5 double layers (4 groups each) and
+20 single layers (1 group each); ActionDiT the same per denoise step, 10
+steps.
+
+The pattern chains across layer boundaries:
+
+- double-stream: `gate_res(attn)` -> AdaLN2 of the same block;
+  `gate_res(mlp)` -> AdaLN1 of the next double block, or the single
+  blocks' AdaLN after the last double block (LayerNorm is per row, so
+  the txt rows and img rows can each be normalized with the single
+  blocks' modulation).
+- single-stream: `gate_res` -> AdaLN of the next single block.
+- ActionDiT last single block: `gate_res` -> the head's AdaLN
+  (`head_modded`, shift/scale only).
+- backbone last single block: no following norm (the prefill ends).
+
+### Problem
+
+Each boundary costs two launches and a second full read of the residual,
+plus the per-layer modulation cast/broadcast kernels and a `(rows, dim)`
+gate read.
+
+### Measurable goal
+
+- One kernel per residual update writes the updated residual and emits
+  the next normed + modulated FP16 activation; the gate, scale and shift
+  are read as `(dim,)` vectors straight from the FP32 modulation output,
+  with no per-layer cast or broadcast kernels on the fused path.
+- Same math as the unfused sequence, bit for bit: locally verified
+  bit-exact at the kernel level and for the whole prefill + denoise pass
+  (backbone residual, action latent) at the real dims.
+- BF16 backbone residual contract unchanged.
+- Thor: `infer()` P50 A/B on `nvfp4` and `fp16`.
+
+## Structure
+
+- `csrc/kernels/fusion.{cu,cuh}` (cross-layer fusion kernels): new
+  `gate_res_ada_layer_norm_bf16res` and `gate_res_ada_layer_norm_fp16`.
+  Owns no state.
+- `csrc/bindings.cpp`: Python bindings.
+- `flash_rt/models/imagewam/pipeline_thor.py`: owns the fused data flow.
+  New `AdaLNTarget` dataclass describes the AdaLN step a layer's last
+  residual update also performs. The per-layer functions gain
+  keyword-only `input_normed` / `next_*` parameters; `imagewam_prefill`
+  and `imagewam_denoise_step` build the cross-layer chain.
+- `flash_rt/frontends/torch/imagewam_thor.py`: owns
+  `dims["fuse_res_norm"]` (default True once verified bit-exact,
+  overridable through `dims_override` for A/B).
+
+State ownership: the flag is set once by the frontend; the pipeline only
+reads it. The FP32 modulation tensors stay owned by the frontend
+(`_compute_*_modulation`); the fused path only reads their pointers.
+
+## Interface
+
+```c++
+// csrc/kernels/fusion.cuh
+// residual[r,c] = RES(float(residual[r,c]) + float(proj[r,c]) * h(gate[c]))
+// out[r,:] = fp16(LN_no_affine(residual[r,:]) * (1 + h(scale)) + h(shift))
+// h(x) = float(fp16(x)): the FP32 modulation vectors are rounded to FP16
+// in-kernel, matching the FP16 contract of gate_res_* / ada_layer_norm_*.
+// out == nullptr: residual update only (no AdaLN follows); scale/shift unread.
+void gate_res_ada_layer_norm_bf16res(const __half* proj, const float* gate,
+    __nv_bfloat16* residual, const float* scale, const float* shift, __half* out,
+    int rows, int dim, float eps, cudaStream_t stream);
+void gate_res_ada_layer_norm_fp16(const __half* proj, const float* gate,
+    __half* residual, const float* scale, const float* shift, __half* out,
+    int rows, int dim, float eps, cudaStream_t stream);
+```
+
+```python
+# flash_rt/models/imagewam/pipeline_thor.py
+@dataclass(frozen=True)
+class AdaLNTarget:
+    shift: torch.Tensor   # (1, 1, dim) fp32, compute_*_modulation output
+    scale: torch.Tensor   # (1, 1, dim) fp32
+    out_ptr: int          # fp16 (rows, dim), row-aligned with the residual rows updated
+
+_double_stream_layer(..., *, input_normed=False, next_txt=None, next_img=None)
+_single_stream_layer(..., *, input_normed=False, next_norm=None)
+_action_double_layer(..., *, input_normed=False, next_norm=None)
+_action_single_layer(..., *, input_normed=False, next_norm=None)
+dims["fuse_res_norm"]: bool
+```
+
+`input_normed=True`: the layer's first AdaLN output is already in the
+modded buffer (written by the previous layer's fused kernel). `next_*`:
+the layer's last residual update also produces that AdaLN. Both require
+`dims["fuse_res_norm"]`; the within-layer fusion (double blocks'
+attn residual + AdaLN2) is governed by the same flag. Existing callers
+that pass neither keep the unfused behavior.
+
+## Flow
+
+`imagewam_prefill` with `fuse_res_norm`:
+
+1. Double layer 0: standalone AdaLN1 (txt, img).
+2. Each double layer: attn proj -> fused(gate1, AdaLN2) per side; MLP ->
+   fused(gate2, next AdaLN1) per side; the last double layer's next
+   AdaLN uses the single blocks' modulation.
+3. Each single layer except the last: fused(gate, next single AdaLN).
+4. Last single layer: the fused kernel in residual-only mode
+   (`out == nullptr`, no following norm).
+
+`imagewam_denoise_step` with `fuse_res_norm`: same chain at ActionDiT
+widths (FP16 residual); the last single layer's fused kernel writes the
+head's AdaLN into `head_modded`, and the standalone head AdaLN is
+skipped.
+
+## Code Mapping
+
+| item | file |
+|---|---|
+| fused kernels | `csrc/kernels/fusion.cu`, `csrc/kernels/fusion.cuh` |
+| bindings | `csrc/bindings.cpp` |
+| chain + per-layer paths, `AdaLNTarget` | `flash_rt/models/imagewam/pipeline_thor.py` |
+| flag default | `flash_rt/frontends/torch/imagewam_thor.py` |
+| kernel test (torch reference + bit-exact vs unfused kernels) | `tests/test_imagewam_residual_norm_fusion.py` |
+| whole-pass bit-exact test (real dims, random weights) | `tests/test_imagewam_residual_norm_fusion.py` |
+| A/B script | `benchmarks/imagewam_fusion_ab.py` (`AB=fuse_res_norm`) |
+
+## Implementation Phases
+
+### Phase 1: fused kernels
+
+Phase Status: completed
+
+- Goal: the two kernels plus bindings.
+- Files: `csrc/kernels/fusion.{cu,cuh}`, `csrc/bindings.cpp`,
+  `tests/test_imagewam_residual_norm_fusion.py`.
+- Observation: at the real shapes (backbone BF16 residual 513 / 392 / 905
+  rows x 3072; ActionDiT FP16 residual 64 x 1024), residual and output
+  bit-exact vs `gate_res_*` + `ada_layer_norm_*`; cosine / max-abs /
+  rel_l2 vs an FP32 torch reference; residual-only mode bit-exact vs
+  `gate_res_bf16res`.
+
+### Phase 2: pipeline chain and flag
+
+Phase Status: completed
+
+- Goal: fused path in all four layer types plus the chain in
+  `imagewam_prefill` / `imagewam_denoise_step`.
+- Files: `pipeline_thor.py`, `imagewam_thor.py`.
+- Observation: whole prefill + 10-step denoise at the real dims (random
+  weights, fp16), fused vs unfused: `backbone_hidden`, every layer's K/V
+  cache, and `action_latent` bit-exact; CUDA kernel count per pass.
+
+### Phase 3: regression, end to end, local A/B, sm_110 build
+
+Phase Status: active
+
+- Observation: `pytest tests/test_imagewam_*.py` count; e2e fp16 numbers
+  vs baseline; `AB=fuse_res_norm` P10/P50/P90 on H100 (indicative);
+  `sm110_check.sh` rc.
+
+### Phase 4: Thor handoff
+
+Phase Status: pending
+
+- Files: `opportunities.md` (OPT-017).
+- Observation: commands, expected observations, what to report.

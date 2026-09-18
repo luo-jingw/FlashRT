@@ -174,6 +174,14 @@ class ImageWAMTorchFrontendThor:
             raise ValueError(
                 f"merge_linear2=True needs merge_qkv_mlp=True (precision={precision!r} keeps "
                 f"the split linear1 path)")
+        # Roadmap item 3 (plan.md "gated-residual + next-AdaLN fusion"):
+        # every gated residual update also emits the AdaLN that follows
+        # it, in one kernel that reads the FP32 modulation directly (no
+        # per-layer modulation cast/broadcast kernels). Bit-identical to
+        # the unfused path, so on for every precision;
+        # `dims_override={"fuse_res_norm": False}` selects the unfused
+        # path for A/B measurement.
+        self.dims.setdefault("fuse_res_norm", True)
         d = self.dims
         if d["action_attn_width"] != d["hidden"]:
             raise ValueError(
