@@ -3037,3 +3037,204 @@ at closure" / "structured multi-variable investigation" -- each of the
 section is only an index; do not treat any item here as approved
 until it gets its own `# Plan: <item>` section with `Plan Status:
 approved`.
+
+# Plan: ABI integration, `frt_model_runtime_v1` Python producer (roadmap item 12)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+`ImageWAMTorchFrontendThor` (`flash_rt/frontends/torch/imagewam_thor.py`)
+is reachable only through its Python methods `set_prompt()` and
+`infer()`. The captured CUDA Graph (`self._graph`), its capture stream,
+and the steady-state buffers the graph reads and writes (`_img_raw`,
+`_context`, `_action_latent`) are private attributes. No
+`frt_runtime_export_v1` or `frt_model_runtime_v1` is produced for
+ImageWAM, so a native host (a C++/Rust robot loop, a capsule/state host)
+cannot drive the model, and the native C++ overlay (roadmap item 14) has
+no declaration to attach verbs to. Pi0.5 already publishes this face
+through `flash_rt/models/pi05/runtime_export.py`.
+
+`infer()` fills the initial action latent with `0.01 * N(0,1)` inside
+the method (ISSUE-002). The noise is not an input a caller can set.
+
+### Problem
+
+There is no ABI surface through which a consumer can supply camera
+frames, proprio, prompt and initial noise, run the captured graph, and
+read the action chunk.
+
+### Measurable goal
+
+`frontend.export_model_runtime(io="python")` returns an
+`frt_model_runtime_v1` whose ports cover every per-tick input and
+output of `infer()`. A ctypes consumer that uses only the C function
+pointers, port descriptors, `frt_buffer_dptr` and the CUDA runtime
+produces actions that are bit-identical to `frontend.infer()` for the
+same frames, proprio, prompt and initial noise:
+
+- H100, fp16, real checkpoint, real VAE, Qwen3 and dataset stats:
+  `max_abs == 0` and `array_equal` on the denormalized `(64, 7)` chunk.
+- Thor, `nvfp4`: the same gate, run by the Thor checklist.
+
+The noise is an explicit SWAP input consumed as written. The `0.01`
+scale stays where it is, inside `infer()` (ISSUE-002 owns that decision).
+
+## Structure
+
+| module | responsibility | owned state |
+|---|---|---|
+| `flash_rt/frontends/torch/imagewam_thor.py` | captures the graph; owns every buffer, weight and encoder; owns the per-tick staging operations (VAE encode into `img_raw`, proprio projection into the context row, action readback and denormalization), used by both `infer()` and the ABI verbs | `_graph`, `_graph_stream`, `_img_raw`, `_context`, `_action_latent`, `_proprio_row` |
+| `flash_rt/models/imagewam/runtime_surface.py` | interface between the frontend and the export: the `ImageWAMRuntimeSurface` dataclass (graph exec handle, stream, the three windows, the deployment facts that enter identity) and the `ImageWAMRuntimeSource` Protocol | none (declarations only) |
+| `flash_rt/models/imagewam/runtime_export.py` | lowers a captured frontend into `frt_model_runtime_v1`: exec context, graph adoption, port/buffer/region/stage declarations, identity, and the Python verbs (`set_input`, `get_output`, `step`) | the exec `Ctx`, the adopted `Graph`, the wrapped `Buffer`s; anchored by the returned `ModelRuntime` |
+| `runtime/`, `exec/` | unchanged generic ABI | builder, fingerprint, lifetime |
+
+The frontend stays the single owner of all device memory. The export
+wraps pointers (`frt_buffer_wrap`), adopts the torch graph exec without
+owning it (`frt_graph_adopt`), and anchors the frontend for the runtime's
+lifetime.
+
+## Interface
+
+```python
+# flash_rt/models/imagewam/runtime_surface.py
+@dataclass(frozen=True)
+class ImageWAMRuntimeSurface:
+    graph_exec: int              # torch CUDAGraph.raw_cuda_graph_exec()
+    stream: torch.cuda.Stream    # the capture stream; ABI replay and staging run here
+    img_raw: torch.Tensor        # (img_len, HD) bf16, VAE tokens
+    context: torch.Tensor        # (x0, joint_attention_dim) bf16, prompt + proprio row
+    action_latent: torch.Tensor  # (num_action, action_dim) f32, noise in / actions out
+    img_len: int; token_dim: int; num_action: int; action_dim: int
+    proprio_dim: int | None
+    has_vae: bool; has_text_encoder: bool; action_denormalized: bool
+    identity: tuple[tuple[str, str], ...]   # precision, dims, flags
+
+class ImageWAMRuntimeSource(Protocol):
+    def runtime_surface(self) -> ImageWAMRuntimeSurface: ...
+    def stage_images(self, view1: torch.Tensor, view2: torch.Tensor | None) -> None: ...
+    def stage_proprio(self, proprio: np.ndarray) -> None: ...
+    def set_prompt(self, prompt_text: str | None = None, *, context=None, context_mask=None) -> None: ...
+    def read_actions(self) -> np.ndarray: ...
+
+# flash_rt/models/imagewam/runtime_export.py
+def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str, str] | None = None,
+                         io: str = "python") -> flash_rt.runtime.export.ModelRuntime
+
+# flash_rt/frontends/torch/imagewam_thor.py (additions)
+def runtime_surface(self) -> ImageWAMRuntimeSurface
+def stage_images(self, view1, view2) -> None        # VAE encode -> img_raw
+def stage_proprio(self, proprio) -> None            # normalize -> proprio_encoder -> context row
+def read_actions(self) -> np.ndarray                # action_latent -> denormalize -> host f32
+def export_model_runtime(self, *, identity=None, io="python") -> ModelRuntime
+```
+
+Port schema, `io="python"` (declaration order is the port index):
+
+| port | dir | update | modality | dtype | shape | window | present when |
+|---|---|---|---|---|---|---|---|
+| `images` | in | STAGED | IMAGE | u8 | (2, 224, 224, 3) | none | VAE loaded |
+| `image_tokens` | in | SWAP | TENSOR | bf16 | (img_len, 128) | `img_raw` | always |
+| `proprio` | in | STAGED | STATE | f32 | (proprio_dim,) | none | `proprio_dim` set |
+| `noise` | in | SWAP | TENSOR | f32 | (num_action, action_dim) | `action_latent` | always |
+| `actions` | out | STAGED | ACTION | f32 | (num_action, action_dim) | none | always |
+| `actions_raw` | out | SWAP | TENSOR | f32 | (num_action, action_dim) | `action_latent` | always |
+| `prompt` | in | SETUP | TEXT | u8 | (-1,) | none | Qwen3 loaded |
+
+- `images`: payload is two `frt_image_view` (RGB8, 224x224), view order
+  `[view1, view2]` (agent view, wrist view). `set_input` runs
+  `stage_images`, which writes `img_raw`.
+- `noise`: the initial action latent, consumed exactly as written and
+  overwritten in place by the output. It must be written before every
+  `step`. `infer()` writes `0.01 * N(0,1)` here (ISSUE-002); the ABI does
+  not scale.
+- `actions`: `get_output` returns what `infer()` returns: the chunk
+  denormalized with `dataset_stats.json` when loaded, else the raw latent.
+  `action_denormalized` is part of identity.
+- `prompt`: SETUP, legal only outside a tick. `set_input` runs
+  `set_prompt(prompt_text)`.
+- Stage plan: one GRAPH stage `infer` (prefill + 10-step denoise).
+- Region: `rollout_boundary` = the `action_latent` window.
+- Status codes: `-4` for a payload whose size or frame geometry does not
+  match the declared shape, `-2` for an unknown port, `-3` for SWAP ports
+  passed to `set_input`/`get_output`.
+
+## Flow
+
+Setup (Python process, once): construct the frontend, `set_prompt()`
+captures the graph on `_graph_stream`, `export_model_runtime()` creates
+an exec `Ctx`, wraps `_graph_stream`, adopts `raw_cuda_graph_exec()`,
+wraps the `img_raw` and `action_latent` windows, and builds the
+runtime through `flash_rt.runtime.export.build_model_runtime`.
+
+Tick (any host thread, through C function pointers):
+
+1. `set_input(images, frt_image_view[2])` → trampoline acquires the GIL →
+   `stage_images` on `_graph_stream`.
+2. `set_input(proprio, f32[8])` → `stage_proprio` on `_graph_stream`.
+3. Host copies noise bytes into `frt_buffer_dptr(noise.buffer) + offset`
+   with a synchronous `cudaMemcpy`.
+4. `step()` → `frt_graph_replay(infer, 0, stream)` on `_graph_stream`.
+5. `get_output(actions)` → `read_actions` on `_graph_stream` (blocks on
+   the stream, denormalizes) → f32 bytes; or the host synchronizes the
+   exported stream and reads `actions_raw` directly.
+
+## Code Mapping
+
+| item | file |
+|---|---|
+| surface dataclass + source Protocol | `flash_rt/models/imagewam/runtime_surface.py` (new) |
+| export, ports, verbs, identity | `flash_rt/models/imagewam/runtime_export.py` (new) |
+| staging methods, `_graph_stream`, `runtime_surface()`, `export_model_runtime()` | `flash_rt/frontends/torch/imagewam_thor.py` |
+| ctypes ABI consumer used by both tests | `tests/_helpers/model_runtime_consumer.py` (new) |
+| schema + parity unit test, small random dims | `tests/test_imagewam_model_runtime_export.py` (new) |
+| real-checkpoint parity gate (H100 fp16, Thor nvfp4) | `tests/gate_imagewam_model_runtime_export.py` (new) |
+| verified interface record | `docs/imagewam_model_runtime.md` (new) |
+| measured results | `opportunities.md` OPT-028 |
+
+## Implementation Phases
+
+### Phase 1 — frontend staging split and surface
+
+Phase Status: pending
+
+Goal: `infer()` delegates to `stage_images`, `stage_proprio` and
+`read_actions`; `_capture_graph` keeps its stream; `runtime_surface()`
+returns the dataclass. Same numerics as before.
+Modified files: `imagewam_thor.py`, new `runtime_surface.py`.
+Observation: `pytest tests/test_imagewam_*.py` count unchanged (68/6).
+
+### Phase 2 — export module and unit test
+
+Phase Status: pending
+
+Goal: `export_model_runtime(io="python")` with the port schema above;
+unit test at small random dims checks the schema, identity sensitivity,
+the STAGED/SWAP guards, and bit-exact parity with `infer()` through the
+ctypes consumer.
+Modified files: new `runtime_export.py`, new
+`tests/_helpers/model_runtime_consumer.py`, new
+`tests/test_imagewam_model_runtime_export.py`, `imagewam_thor.py`
+(`export_model_runtime`).
+Observation: the new test's printed `max_abs` and `array_equal`.
+
+### Phase 3 — real-checkpoint gate on H100
+
+Phase Status: pending
+
+Goal: `tests/gate_imagewam_model_runtime_export.py` with the real
+checkpoint, VAE, Qwen3 and stats at fp16: images STAGED, proprio STAGED,
+noise SWAP, prompt SETUP, actions STAGED and `actions_raw` SWAP, compared
+with `infer()`; plus an indicative A/B latency of `infer()` vs an ABI tick.
+Observation: printed parity table and latency percentiles; recorded in
+OPT-028.
+
+### Phase 4 — Thor handoff and docs
+
+Phase Status: pending
+
+Goal: `docs/imagewam_model_runtime.md` records the verified interface;
+the Thor checklist runs the gate at `nvfp4`.
+Observation: the H100 gate output quoted in OPT-028; Thor result pending.
