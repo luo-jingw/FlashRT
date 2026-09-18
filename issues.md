@@ -284,33 +284,49 @@ Area: merged single-stream `linear2` (roadmap item 4) under `fp8`, `fp8_static`,
 input with one per-tensor absmax scale, and `StaticFp8Linear` with one
 calibrated per-tensor scale, so the merged GEMM quantizes the attention
 output and the SiLU-GLU activation with one shared scale where the split
-path used one scale per half.
+path used one scale per half. The weight side is the same: both classes
+quantize the whole merged `(K, N)` weight with one per-tensor FP8 scale,
+where the split path had one scale for `attn_out_proj` and one for
+`mlp_down`.
 
 ## Impact
 
-If the two halves differ strongly in magnitude, the smaller half loses
-FP8 resolution. None of these precisions is the shipped default
-(`nvfp4`, whose per-16-element block scales make the merged and split
-operands identical). No FP8 numbers exist for the merged path: FP8 GEMMs
-fail on H100 (ISSUE-001).
+Measured negligible at the GEMM level (Evidence). None of these
+precisions is the shipped default (`nvfp4`, whose per-16-element block
+scales make the merged and split operands identical). The end-to-end
+merged vs split comparison for FP8 has not run: FP8 GEMMs fail on H100
+until the ISSUE-001 TN-layout fix lands (calibration stream); after
+that it can run on H100 as well as Thor.
 
 ## Evidence
 
-`quant_linear.py`: `Fp8Linear.__call__` runs `quantize_fp8_device_fp16`
-over the whole `(m, k)` input; `StaticFp8Linear.calibrate` freezes one
-`act_scale`.
+- `quant_linear.py`: `Fp8Linear.__call__` runs `quantize_fp8_device_fp16`
+  over the whole `(m, k)` input and `__init__` over the whole weight;
+  `StaticFp8Linear.calibrate` freezes one `act_scale`.
+- Roadmap verification pass, real checkpoint, real shapes:
+  - activation absmax ratio between the two halves: backbone median 3.6,
+    max 7.1; ActionDiT median 2.2, max 12.5;
+  - weight absmax ratio between the two halves: 1.06-2.15;
+  - FP8 GEMM error, merged / split: median 1.00x, range 0.98-1.03x
+    (dynamic scale); never more than 2% worse (static scale).
+- E4M3 is a floating-point format (3 mantissa bits, per-value
+  exponent), so a smaller shared scale costs the smaller half dynamic
+  range at the bottom of the exponent range, not relative precision;
+  at these ratios (at most 12.5x, about 3.7 binades) the values stay in
+  the normal range.
 
 ## Hypotheses
 
-The effect is small next to the existing FP8 calibration gap (the
-`N(0, 0.1)` placeholder activations), but it is unmeasured.
+The single shared scale does not measurably change FP8 accuracy for
+ImageWAM; the existing FP8 calibration gap (the `N(0, 0.1)` placeholder
+activations) dominates.
 
 ## Next Experiment
 
-On Thor, `AB=merge_linear2 PRECISIONS=fp8,fp8_static` with `CKPT_PATH`
-set (`benchmarks/imagewam_fusion_ab.py`): compare merged vs split action
-cosine; if it is worse than `fp16`'s merged vs split, keep FP8 on the
-split path (`dims_override={"merge_linear2": False}` as the default for
-those precisions).
+`AB=merge_linear2 PRECISIONS=fp8,fp8_static` with `CKPT_PATH` set
+(`benchmarks/imagewam_fusion_ab.py`), on Thor, or on H100 once
+ISSUE-001's TN fix lands: merged vs split action cosine. Close this issue
+if it matches `fp16`'s merged vs split (cos >= 0.9999); otherwise default
+FP8 to the split path (`merge_linear2=False` for those precisions).
 
 ## Resolution

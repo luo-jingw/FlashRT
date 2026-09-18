@@ -5,6 +5,10 @@ modulation, no gated residual, no real merged SiLU-GLU MLP, stale
 768-token image shape), kept only for historical reference. Use
 imagewam_thor_graph_bench.py instead.
 
+`pipeline_thor.py` now runs single-stream `linear2` as one GEMM and fuses each gated
+residual with the next AdaLN (roadmap items 4 and 3); this script keeps the old split
+per-layer path and is not updated for them.
+
 ImageWAM FP8 full-scale steady-state speed benchmark.
 
 Companion to imagewam_thor_fp16_bench.py / imagewam_thor_fp4_bench.py --

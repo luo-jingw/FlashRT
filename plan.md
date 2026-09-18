@@ -3528,7 +3528,9 @@ Blocker: needs the Thor hardware and a copy of the v1 fixture there.
 
 # Plan: single-stream `linear2` merge (roadmap item 4)
 
-Plan Status: completed (locally verified; Thor results pending, opportunities.md OPT-016)
+Plan Status: completed
+
+Verified locally; the Thor results are pending (opportunities.md OPT-016).
 
 ## Problem
 
@@ -3649,9 +3651,10 @@ Precision notes:
   path's. K = 12288 (backbone) and 7168 (ActionDiT) are multiples of 64,
   so the scale-factor layout has no K padding. Only the accumulation
   differs.
-- `fp8` / `fp8_static*`: one per-tensor activation scale now covers both
-  halves. This is a numerics change that can only be checked on Thor
-  (ISSUE-001 blocks FP8 on H100).
+- `fp8` / `fp8_static*`: one per-tensor activation scale and one
+  per-tensor weight scale now cover both halves. Measured negligible at
+  the GEMM level (issues.md ISSUE-011); the end-to-end check runs on
+  Thor, or on H100 once ISSUE-001's TN fix lands.
 - `fp16`: one FP32-accumulated GEMM, rounded once.
 
 ## Code Mapping
@@ -3677,10 +3680,11 @@ Phase Status: completed
   buffer.
 - Files: `csrc/kernels/activation.{cu,cuh}`, `csrc/bindings.cpp`,
   `tests/test_imagewam_real_mlp.py`.
-- Observation: bit-exact vs a torch reference for packed output
-  (existing callers unchanged) and for strided output at the real shape
-  `(905, 9216)` inside a `(905, 12288)` buffer, with the untouched
-  columns still zero.
+- Observation: every strided case bit-exact against the packed-layout
+  kernel call on the same gate/up values (strided input from the
+  `linear1` output; strided output into the `(905, 12288)` backbone and
+  `(64, 7168)` ActionDiT `linear2` inputs), untouched columns still
+  zero, and max-abs vs a torch transcription of the formula reported.
 
 ### Phase 2: loader, frontend, and pipeline wiring
 
@@ -3728,7 +3732,10 @@ Phase Status: completed
 
 # Plan: gated-residual + next-AdaLN fusion (roadmap item 3)
 
-Plan Status: completed (locally verified bit-exact; Thor results pending, opportunities.md OPT-017)
+Plan Status: completed
+
+Verified locally, bit-exact; the Thor results are pending (opportunities.md
+OPT-017).
 
 ## Problem
 
