@@ -274,8 +274,12 @@ class JetsonClockProbe:
         return tuple(warnings)
 
 
+def _print_flushed(line: str) -> None:
+    print(line, flush=True)
+
+
 def report_jetson_clock_state(probe: JetsonClockProbe | None = None,
-                              emit: Callable[[str], None] = print) -> JetsonClockState:
+                              emit: Callable[[str], None] = _print_flushed) -> JetsonClockState:
     """Read the clock state, print it, and return it.
 
     Prints one ``[jetson-clock-state] <json>`` line, then one ``WARNING``
