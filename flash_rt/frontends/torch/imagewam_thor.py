@@ -52,6 +52,7 @@ import numpy as np
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
+from flash_rt.hardware.thor import fa4_backend
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
 from flash_rt.models.imagewam.gemm_variant_timer import CudaGraphVariantTimer
 from flash_rt.models.imagewam.gemm_variant_tuner import GemmVariantTuner, VariantTuneResult
@@ -116,12 +117,13 @@ class ImageWAMTorchFrontendThor:
     """
 
     def __init__(self, checkpoint_dir=None, *, dims_override: dict | None = None,
-                 use_fa4: bool = False, precision: str = "nvfp4",
+                 use_fa4: bool | None = None, precision: str = "nvfp4",
                  ckpt_path: str | None = None,
                  ae_model_path: str | None = None, flux2_src: str | None = None,
                  qwen3_model_spec: str | None = None,
                  dataset_stats_path: str | None = None,
                  gemm_variant_autotune: bool = False,
+                 use_fa4_mot: bool = False,
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
@@ -135,6 +137,10 @@ class ImageWAMTorchFrontendThor:
                 f"got precision={precision!r}")
         self._gemm_tuner: GemmVariantTuner | None = None
         self.gemm_variant_results: tuple[VariantTuneResult, ...] = ()
+        # Roadmap item 6 (opportunities.md OPT-019): resolved attention
+        # kernel choice, fixed for this frontend's lifetime.
+        self.use_fa4: bool = fa4_backend.thor_default_enabled() if use_fa4 is None else bool(use_fa4)
+        self.use_fa4_mot: bool = bool(use_fa4_mot)
         # Real VAE + text-context wiring plan: independent of ckpt_path
         # (OPT-001) -- one loads real transformer weights, this loads a
         # real image encoder. Loaded here (once), used inside infer().
@@ -332,19 +338,18 @@ class ImageWAMTorchFrontendThor:
             # (benchmarks/imagewam_real_checkpoint_validation.py) --
             # this is now the default for this frontend, not opt-in.
             use_perhead_kv=True, use_real_mot_mask=True,
-            # OPT-005: FA4 for the "backbone" site only ("mot" has no
-            # FA4-equivalent mask support, unaffected either way).
-            # Default False, NOT True: this frontend also runs on this
-            # dev machine's own Ada GPU, which has no FA4 runtime at
-            # all -- `ImageWAMAttnBackend`'s own constructor raises if
-            # `use_fa4=True` without one, so a default-True here would
-            # break every local test/construction. Verified correct
-            # AND fast on real Thor hardware for the real per-head
-            # convention this class now always uses (cosine=1.000000,
-            # 3.75x standalone -- opportunities.md OPT-005's own
-            # 2026-09-14 entry); pass `use_fa4=True` explicitly when
-            # constructing this frontend on Thor to get the win.
-            use_fa4=use_fa4,
+            # OPT-005 / OPT-019: FA4 for the "backbone" site. Verified on
+            # Thor for the real per-head convention (cosine=1.000000,
+            # 3.75x per call, -10.5% prefill). `use_fa4=None` (default)
+            # turns it on exactly when `fa4_backend.thor_default_enabled()`
+            # holds (a Thor-family device with an active FA4 runtime) and
+            # keeps the cuBLAS chain everywhere else; an explicit True
+            # still requires the runtime, an explicit False forces the
+            # chain.
+            use_fa4=self.use_fa4,
+            # OPT-019: FA4 for the "mot" site (unmasked real rule).
+            # Opt-in until Thor confirms it.
+            use_fa4_mot=self.use_fa4_mot,
         )
 
         self._graph = None

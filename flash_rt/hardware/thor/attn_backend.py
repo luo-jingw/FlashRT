@@ -695,7 +695,8 @@ class ImageWAMAttnBackend(AttentionBackendBase):
 
     def __init__(self, spec: AttentionSpec, ctx, *,
                  backbone_slots: dict, mot_slots: dict, use_fa4: bool = False,
-                 use_perhead_kv: bool = False, use_real_mot_mask: bool = False):
+                 use_perhead_kv: bool = False, use_real_mot_mask: bool = False,
+                 use_fa4_mot: bool = False):
         """
         Args:
             spec: built by ``make_imagewam_attention_spec``.
@@ -794,6 +795,19 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                 assumption, not a drop-in-safe optimization like
                 ``use_fa4``/``use_perhead_kv``, so it stays opt-in until
                 validated against a real checkpoint.
+            use_fa4_mot: roadmap item 6 (opportunities.md OPT-019).
+                Dispatch the "mot" site through FA4 as plain non-causal
+                attention: the action rows' Q at row offset ``a0``
+                (``(1, q_seq, NH, HD)``) over the full per-head K/V
+                (``(1, kv_seq, NH, HD)``), ``pack_gqa=False``,
+                ``num_splits=1``, output staged in ``logits`` and copied
+                back to the Q rows. This is the same math as the
+                unmasked ``attention_qkv_fp16_perhead`` branch, so it
+                requires ``use_real_mot_mask=True`` and
+                ``use_perhead_kv=True``; the legacy three-region mask
+                has no FA4 form here, and the constructor raises for
+                that combination. Default False. Raises when the FA4
+                runtime is missing, like ``use_fa4``.
         """
         super().__init__(spec)
         expected_sites = {"backbone", "mot"}
@@ -807,15 +821,20 @@ class ImageWAMAttnBackend(AttentionBackendBase):
         self._use_fa4 = bool(use_fa4)
         self._use_perhead_kv = bool(use_perhead_kv)
         self._use_real_mot_mask = bool(use_real_mot_mask)
+        self._use_fa4_mot = bool(use_fa4_mot)
+        if self._use_fa4_mot and not (self._use_real_mot_mask and self._use_perhead_kv):
+            raise ValueError(
+                "ImageWAMAttnBackend use_fa4_mot=True requires use_real_mot_mask=True "
+                "and use_perhead_kv=True (FA4 runs the unmasked per-head rule only)")
         self._fa4_fwd = None
-        if self._use_fa4:
+        if self._use_fa4 or self._use_fa4_mot:
             from flash_rt.hardware.thor import fa4_backend
 
             self._fa4_fwd = fa4_backend.fa4_fwd()
             if self._fa4_fwd is None:
                 raise RuntimeError(
-                    "ImageWAMAttnBackend use_fa4=True requires an active "
-                    f"Thor FA4 runtime: {fa4_backend.status()}")
+                    "ImageWAMAttnBackend use_fa4=True / use_fa4_mot=True requires an "
+                    f"active Thor FA4 runtime: {fa4_backend.status()}")
         self._slots = {"backbone": dict(backbone_slots), "mot": dict(mot_slots)}
         for site_name in ("backbone", "mot"):
             slot = self._slots[site_name]
@@ -1036,6 +1055,21 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                 # mask needs NO exclusion at all -- see this flag's own
                 # docstring. Dispatch through the same plain kernels
                 # "backbone" already uses.
+                if self._use_fa4_mot:
+                    q_tensor = _fp16_tensor_from_ptr(
+                        q_out_ptr, (1, num_action, site_spec.num_q_heads, site_spec.head_dim))
+                    k_tensor = _fp16_tensor_from_ptr(
+                        K_ptr, (1, kv_seq, site_spec.num_q_heads, site_spec.head_dim))
+                    v_tensor = _fp16_tensor_from_ptr(
+                        V_ptr, (1, kv_seq, site_spec.num_q_heads, site_spec.head_dim))
+                    output = _fp16_tensor_from_ptr(
+                        int(s["logits"]), (1, num_action, site_spec.num_q_heads, site_spec.head_dim))
+                    with self._fa4_stream_context(stream):
+                        self._fa4_fwd(
+                            q_tensor, k_tensor, v_tensor, softmax_scale=float(s["scale"]),
+                            causal=False, num_splits=1, pack_gqa=False, out=output)
+                        q_tensor.copy_(output)
+                    return q_out_ptr
                 if self._use_perhead_kv:
                     fvk.attention_qkv_fp16_perhead(
                         self._ctx_cpp,

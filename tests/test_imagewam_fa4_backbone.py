@@ -31,9 +31,10 @@ own docstring for the full account). Both cases are written and ready,
 but this dev machine can only confirm they SKIP cleanly, not that
 either passes.
 
-Only covers the "backbone" site (plain self-attention, no mask) --
-FA4's plain causal/non-causal API has no evaluated equivalent for the
-"mot" site's three-region mask, not attempted here.
+`test_fa4_matches_cublas_both_sites_real_shapes` (OPT-019) also covers
+the "mot" site at its real shape. The frontend runs "mot" with the real
+unmasked rule (`use_real_mot_mask=True`), which FA4 expresses as plain
+non-causal attention; the legacy three-region mask has no FA4 path.
 """
 import torch
 
@@ -151,6 +152,59 @@ def test_fa4_matches_cublas_backbone_attention_perhead():
     assert cos.item() > 0.999, f"cosine too low: {cos.item()}"
 
 
+def _real_shape_backend(*, use_fa4: bool, use_fa4_mot: bool, total: int, a0: int, NH: int, HD: int):
+    """Real per-head K/V + unmasked real "mot" rule, as the frontend builds it."""
+    gen = torch.Generator(device="cuda").manual_seed(3)
+    hidden, num_layers = NH * HD, 2
+    spec = make_imagewam_attention_spec(max_prefix_seq=a0, max_total_seq=total,
+                                         num_layers=num_layers, num_heads=NH, head_dim=HD)
+    q_o = torch.randn(total, hidden, generator=gen, device="cuda").to(torch.float16)
+    k = torch.randn(num_layers, total, hidden, generator=gen, device="cuda").to(torch.float16)
+    v = torch.randn(num_layers, total, hidden, generator=gen, device="cuda").to(torch.float16)
+    logits = torch.zeros(total * NH, total + total % 2, dtype=torch.float16, device="cuda")
+    slots = {"Q_O": q_o.data_ptr(), "K": k.data_ptr(), "V": v.data_ptr(),
+             "logits": logits.data_ptr(), "scale": 1.0 / (HD ** 0.5)}
+    backend = ImageWAMAttnBackend(
+        spec, fvk.FvkContext(), backbone_slots=dict(slots),
+        mot_slots=dict(slots, layer_stride=k[0].numel() * 2),
+        use_fa4=use_fa4, use_perhead_kv=True, use_real_mot_mask=True, use_fa4_mot=use_fa4_mot)
+    return backend, (q_o, k, v, logits)
+
+
+def _cos_rel(a: torch.Tensor, b: torch.Tensor) -> tuple[float, float, float]:
+    a, b = a.float().flatten(), b.float().flatten()
+    cos = torch.dot(a, b) / (a.norm() * b.norm() + 1e-12)
+    return cos.item(), (b - a).abs().max().item(), ((b - a).norm() / (a.norm() + 1e-12)).item()
+
+
+def test_fa4_matches_cublas_both_sites_real_shapes():
+    """OPT-019: FA4 against the cuBLAS chain at the REAL shapes of both
+    sites -- "backbone" q=kv=a0=905 (odd) and "mot" q=64 action rows at
+    row offset a0 over kv=total=969 -- with real per-head K/V and the
+    unmasked real "mot" rule the frontend uses."""
+    if not _FA4_AVAILABLE:
+        import pytest
+        pytest.skip(f"FA4 runtime not available on this machine: {fa4_backend.status()}")
+    NH, HD, a0, total, num_action = 24, 128, 905, 969, 64
+    ref, ref_bufs = _real_shape_backend(use_fa4=False, use_fa4_mot=False, total=total, a0=a0, NH=NH, HD=HD)
+    fa4, fa4_bufs = _real_shape_backend(use_fa4=True, use_fa4_mot=True, total=total, a0=a0, NH=NH, HD=HD)
+    ref.run("backbone", 1, q_seq=a0, kv_seq=a0, stream=0)
+    fa4.run("backbone", 1, q_seq=a0, kv_seq=a0, stream=0)
+    torch.cuda.synchronize()
+    cos, mx, rel = _cos_rel(ref_bufs[0][:a0], fa4_bufs[0][:a0])
+    print(f"FA4 vs cuBLAS backbone q=kv={a0}: cosine={cos:.6f} max_abs={mx:.3e} rel_l2={rel:.6f}")
+    assert cos > 0.999, f"backbone cosine too low: {cos}"
+    before = fa4_bufs[0][:a0].clone()
+    ref.run("mot", 1, q_seq=num_action, kv_seq=total, stream=0, x0=513, a0=a0)
+    fa4.run("mot", 1, q_seq=num_action, kv_seq=total, stream=0, x0=513, a0=a0)
+    torch.cuda.synchronize()
+    rows = slice(a0, a0 + num_action)
+    cos, mx, rel = _cos_rel(ref_bufs[0][rows], fa4_bufs[0][rows])
+    print(f"FA4 vs cuBLAS mot q={num_action} kv={total}: cosine={cos:.6f} max_abs={mx:.3e} rel_l2={rel:.6f}")
+    assert cos > 0.999, f"mot cosine too low: {cos}"
+    assert torch.equal(fa4_bufs[0][:a0], before), "mot FA4 wrote outside the action rows"
+
+
 if __name__ == "__main__":
     if not _FA4_AVAILABLE:
         print(f"SKIPPED: FA4 not available on this machine "
@@ -158,4 +212,5 @@ if __name__ == "__main__":
     else:
         test_fa4_matches_cublas_backbone_attention()
         test_fa4_matches_cublas_backbone_attention_perhead()
+        test_fa4_matches_cublas_both_sites_real_shapes()
         print("PASS")

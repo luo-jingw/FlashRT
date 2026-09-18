@@ -3457,7 +3457,7 @@ denoise:  attn.run("mot", ...)      -> FA4 if use_fa4_mot else attention_qkv_fp1
 
 ### Phase 1: measurement
 
-Phase Status: pending
+Phase Status: completed
 
 - Goal: attention share (H100) and per-call chain vs fused kernels at
   real shapes.
@@ -3468,7 +3468,7 @@ Phase Status: pending
 
 ### Phase 2: FA4 default on Thor, opt-in FA4 for `mot`
 
-Phase Status: pending
+Phase Status: completed
 
 - Goal: `use_fa4=None` auto-resolution, `use_fa4_mot`.
 - Files: `fa4_backend.py`, `attn_backend.py`, `imagewam_thor.py`,
@@ -3482,7 +3482,7 @@ Phase Status: pending
 
 ### Phase 3: recommendation and Thor handoff
 
-Phase Status: pending
+Phase Status: active
 
 - Goal: OPT-019 with evidence, recommendation, and Thor checks.
 - Files: `opportunities.md`.

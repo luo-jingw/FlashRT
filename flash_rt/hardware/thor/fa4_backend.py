@@ -115,3 +115,23 @@ def fa4_fwd():
     """The internal ``_flash_attn_fwd`` (exposes ``seqused_k``), or ``None``."""
     _load()
     return _FWD
+
+
+def thor_default_enabled() -> bool:
+    """Whether a caller that has no explicit preference should use FA4.
+
+    True only on a Thor-family device (compute capability 11.x, the target
+    this vendored SM100 forward kernel is compiled for through the sm_101a
+    alias) whose FA4 runtime imported. Any other device, or a missing or
+    broken runtime, gives False without raising, so the caller keeps its
+    non-FA4 kernel. The device check runs first: off Thor, FA4 is never
+    imported.
+    """
+    import torch
+
+    if not torch.cuda.is_available():
+        return False
+    major, _ = torch.cuda.get_device_capability()
+    if major != 11:
+        return False
+    return is_available()
