@@ -4007,3 +4007,24 @@ bit-exact for `nvfp4`; for `fp16` bit-exact unless the two frontends'
 The combined run gives the total of items 3 and 4 against the
 pre-roadmap per-layer path. Report every printed line. Add `USE_FA4=1`
 if the production configuration uses FA4.
+
+## Remaining per-pass launches after items 3 and 4 (H100 profiler, real dims, `fp16`)
+
+Prefill: 478 CUDA kernels. 10-step denoise: 4490, of which:
+
+| kernel | launches | source |
+|---|---:|---|
+| torch elementwise copy | 950 | 750 Q/K/V column-slice copies (`_copy_slice`, 3 per layer) + 200 attention-output copies into the merged `linear2` input |
+| `rms_norm_kernel` | 500 | QK-Norm, 2 per layer |
+| `rope_apply_fp16_perhead_kernel` | 500 | RoPE on Q and K, 2 per layer |
+| GEMM kernels (cuBLASLt, incl. 310 split-K reduces) | ~1100 | weight GEMMs + attention QK^T / PV |
+| `gate_res_ada_layer_norm_kernel` | 300 | this entry |
+| `fill_neginf_strided_kernel` | 250 | odd `kv_seq` (969) logits pad column |
+| `softmax_fp16_kernel`, `silu_glu_merged_kernel` | 250 each | |
+
+Candidates by launch count (not planned): one kernel doing the Q/K/V
+split + QK-Norm + RoPE from the `qkv`/`linear1` output would replace
+7 launches per layer with 1 (about 1500 per `infer()` in the denoise
+loop alone); an even-padded K/V length or a pad-aware softmax would
+drop the 250 pad fills; the attention-output copy is OPT-016's
+follow-up.
