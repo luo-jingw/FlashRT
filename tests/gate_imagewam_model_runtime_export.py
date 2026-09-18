@@ -5,17 +5,25 @@ runtime's C function pointers, its port descriptors, `frt_buffer_dptr` and
 the CUDA runtime. For the same camera frames, proprio, prompt and initial
 noise it must reproduce `ImageWAMTorchFrontendThor.infer()` bit for bit:
 
-  1. images STAGED + proprio STAGED + noise SWAP -> actions STAGED and
-     actions_raw SWAP, vs infer()
+  1. images STAGED + proprio STAGED + noise SWAP -> actions STAGED,
+     actions_raw SWAP and the VAE tokens, vs infer()
   2. image_tokens SWAP (the tokens infer() staged) instead of images; with
      `--vae-graph-input` (VAE inside the graph) the raw frames written to
      the image_views SWAP window instead
   3. prompt SETUP (a second task string), vs set_prompt() + infer()
 
+Before every ABI tick, every buffer the tick must write or refresh is
+NaN-filled (`img_raw` or the in-graph uint8 views, the proprio row or the
+whole context, K/V caches, `Q_O`, backbone residual, action latent), so a
+row cannot pass on what the reference `infer()` left behind. Unless
+`--no-mutants`, each row is then re-run with the verb it exercises made a
+no-op (images, proprio, prompt, step); every mutant must make its row
+fail, which shows the row can detect a verb that stages nothing.
+
 The initial noise is explicit on both sides: `infer(..., action_noise=)`
 and the `noise` SWAP window get the same 0.01 * N(0,1) latent.
 
-plus a determinism control (infer() twice, same seed) and an indicative,
+Also a determinism control (infer() twice, same noise) and an indicative,
 alternating latency A/B of infer() vs one ABI tick.
 
 Build exec/ and runtime/ first (see docs/imagewam_model_runtime.md), then:
@@ -41,6 +49,7 @@ import time
 import numpy as np
 import torch
 
+from _helpers.imagewam_abi_checks import bits, poison_tick_state, python_step_noop, python_verb_noop
 from _helpers.model_runtime_consumer import ModelRuntimeConsumer, exec_library_path, make_image_views
 
 HORIZON, STEPS, SHIFT = 64, 10, 5.0
@@ -98,7 +107,7 @@ def _compare(label: str, a: np.ndarray, b: np.ndarray) -> dict:
     cos = float(a64 @ b64 / (np.linalg.norm(a64) * np.linalg.norm(b64) + 1e-30))
     row = {"check": label, "array_equal": bool(np.array_equal(a, b)),
            "max_abs": float(np.max(np.abs(a64 - b64))), "cos": cos}
-    print(f"  {label:<44} array_equal={row['array_equal']!s:<5} max_abs={row['max_abs']:.3g} cos={cos:.8f}")
+    print(f"  {label:<56} array_equal={row['array_equal']!s:<5} max_abs={row['max_abs']:.3g} cos={cos:.8f}")
     return row
 
 
@@ -113,6 +122,7 @@ def main() -> int:
     ap.add_argument("--use-fa4", action="store_true")
     ap.add_argument("--vae-graph-input", type=int, nargs=2, metavar=("H", "W"), default=None,
                     help="run the VAE inside the graph for two H x W views (frames must match)")
+    ap.add_argument("--no-mutants", action="store_true", help="skip the no-op verb mutants")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--bench-iters", type=int, default=20)
     ap.add_argument("--json-out", default=None)
@@ -141,77 +151,118 @@ def main() -> int:
     views = make_image_views(frames, FrtImageView)
     chunk = (HORIZON, 7)
 
+    def draw_noise(seed: int) -> torch.Tensor:
+        torch.manual_seed(seed)
+        return torch.empty_like(fe._action_latent).normal_().mul_(0.01)
+
+    noise = draw_noise(args.seed)
+
+    def reference() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        actions = fe.infer(obs, action_noise=noise)["actions"]
+        return actions, fe._action_latent.detach().cpu().numpy().copy(), bits(fe._img_raw)
+
+    def restore_prompt_a() -> None:
+        fe._current_prompt = None
+        fe.set_prompt(PROMPT_A)
+
+    # Rows: each poisons the tick's buffers, drives one ABI tick, and
+    # returns (label, abi value, reference value) triples.
+    def staged_row(c: ModelRuntimeConsumer) -> list:
+        poison_tick_state(fe)
+        c.set_input("images", views)
+        c.set_input("proprio", state.tobytes())
+        c.write_swap("noise", noise.cpu().numpy())
+        c.step()
+        actions = c.get_output("actions", np.float32, chunk)
+        raw = c.read_swap("actions_raw", np.float32, chunk)
+        return [("images STAGED + proprio STAGED: actions (denormalized)", actions, ref_a),
+                ("images STAGED + proprio STAGED: actions_raw", raw, ref_raw),
+                ("images STAGED -> VAE tokens (img_raw bits)", bits(fe._img_raw), ref_tokens)]
+
+    def swap_row(c: ModelRuntimeConsumer) -> list:
+        poison_tick_state(fe)
+        if in_graph:
+            c.write_swap("image_views", np.stack(frames))
+        else:
+            c.write_swap("image_tokens", ref_tokens)
+        c.set_input("proprio", state.tobytes())
+        c.write_swap("noise", noise.cpu().numpy())
+        c.step()
+        label = "image_views SWAP: actions" if in_graph else "image_tokens SWAP: actions"
+        return [(label, c.get_output("actions", np.float32, chunk), ref_a)]
+
+    def prompt_row(c: ModelRuntimeConsumer) -> list:
+        poison_tick_state(fe, whole_context=True)
+        c.set_input("prompt", PROMPT_B.encode())
+        c.set_input("images", views)
+        c.set_input("proprio", state.tobytes())
+        c.write_swap("noise", noise.cpu().numpy())
+        c.step()
+        result = [("prompt SETUP (task B): actions", c.get_output("actions", np.float32, chunk), ref_b)]
+        restore_prompt_a()
+        return result
+
+    def compare_rows(triples: list) -> list:
+        return [_compare(label, a, b) for label, a, b in triples]
+
     mr = fe.export_model_runtime(identity={"gate": "imagewam_model_runtime_export"})
     consumer = ModelRuntimeConsumer(mr.ptr, exec_library_path())
-    rows = []
+    rows, mutants = [], []
     try:
         names = [p.name for p in consumer.ports]
         print(f"runtime: ports={names} stages={consumer.n_stages} fingerprint=0x{consumer.fingerprint:016x}")
         if names != (EXPECTED_PORTS_VAE_IN_GRAPH if in_graph else EXPECTED_PORTS) or consumer.n_stages != 1:
             raise AssertionError(f"unexpected schema: {names}, stages={consumer.n_stages}")
 
-        def draw_noise(seed: int) -> torch.Tensor:
-            torch.manual_seed(seed)
-            return torch.empty_like(fe._action_latent).normal_().mul_(0.01)
-
-        def python_ref(seed: int) -> tuple[np.ndarray, np.ndarray, torch.Tensor]:
-            actions = fe.infer(obs, action_noise=draw_noise(seed))["actions"]
-            return actions, fe._action_latent.detach().cpu().numpy().copy(), fe._img_raw.detach().clone()
-
-        def abi_tick(noise: torch.Tensor, tokens: torch.Tensor | None) -> tuple[np.ndarray, np.ndarray]:
-            if tokens is None:
-                consumer.set_input("images", views)
-            elif in_graph:
-                consumer.write_swap("image_views", np.stack(frames))
-            else:
-                consumer.write_swap("image_tokens", tokens.contiguous().view(torch.int16).cpu().numpy())
-            consumer.set_input("proprio", state.tobytes())
-            consumer.write_swap("noise", noise.cpu().numpy())
-            consumer.step()
-            return (consumer.get_output("actions", np.float32, chunk),
-                    consumer.read_swap("actions_raw", np.float32, chunk))
-
-        print("parity (ABI consumer vs frontend.infer()):")
-        ref_a, ref_raw, ref_tokens = python_ref(args.seed)
-        again, _, _ = python_ref(args.seed)
-        rows.append(_compare("control: infer() vs infer(), same seed", again, ref_a))
-
-        abi_a, abi_raw = abi_tick(draw_noise(args.seed), None)
-        if in_graph:  # the graph wrote img_raw from the staged uint8 views
-            abi_tokens = fe._img_raw.detach().view(torch.int16).cpu().numpy()
-        else:
-            abi_tokens = consumer.read_swap("image_tokens", np.int16, tuple(ref_tokens.shape))
-        rows.append(_compare("images STAGED -> VAE tokens (img_raw)", abi_tokens,
-                             ref_tokens.view(torch.int16).cpu().numpy()))
-        rows.append(_compare("images STAGED: actions (denormalized)", abi_a, ref_a))
-        rows.append(_compare("images STAGED: actions_raw (normalized)", abi_raw, ref_raw))
-
-        swap_a, _ = abi_tick(draw_noise(args.seed), ref_tokens)
-        rows.append(_compare("image_views SWAP: actions" if in_graph else "image_tokens SWAP: actions",
-                             swap_a, ref_a))
-
         fe._current_prompt = None
         fe.set_prompt(PROMPT_B)
-        ref_b, _, _ = python_ref(args.seed)
-        fe.set_prompt(PROMPT_A)
-        consumer.set_input("prompt", PROMPT_B.encode())
-        abi_b, _ = abi_tick(draw_noise(args.seed), None)
-        rows.append(_compare("prompt SETUP (task B): actions", abi_b, ref_b))
+        ref_b = fe.infer(obs, action_noise=noise)["actions"]
+        restore_prompt_a()
+        ref_a, ref_raw, ref_tokens = reference()
+        again, _, _ = reference()
         prompt_effect = float(np.max(np.abs(ref_b - ref_a)))
-        print(f"  prompt changes the chunk: max_abs(task B - task A) = {prompt_effect:.4f}")
-        consumer.set_input("prompt", PROMPT_A.encode())
 
-        finite = bool(np.isfinite(ref_a).all() and np.isfinite(abi_a).all())
+        print("parity (ABI consumer vs frontend.infer(), tick buffers NaN-poisoned before every tick):")
+        rows.append(_compare("control: infer() vs infer(), same noise", again, ref_a))
+        rows += compare_rows(staged_row(consumer))
+        rows += compare_rows(swap_row(consumer))
+        rows += compare_rows(prompt_row(consumer))
+        print(f"  prompt changes the chunk: max_abs(task B - task A) = {prompt_effect:.4f}")
+        finite = bool(np.isfinite(ref_a).all())
         ok = all(r["array_equal"] for r in rows) and finite and prompt_effect > 0
 
-        if args.bench_iters > 0:
-            noise = draw_noise(args.seed)
+        if not args.no_mutants:
+            print("mutants (the verb returns success and does nothing; the row must fail):")
+            cases = [("images verb no-op", python_verb_noop("images"), staged_row),
+                     ("proprio verb no-op", python_verb_noop("proprio"), staged_row),
+                     ("proprio verb no-op, SWAP image path", python_verb_noop("proprio"), swap_row),
+                     ("prompt verb no-op", python_verb_noop("prompt"), prompt_row),
+                     ("step no-op", python_step_noop(), staged_row)]
+            for label, patch, row_fn in cases:
+                with patch:
+                    mr_m = fe.export_model_runtime()
+                c_m = ModelRuntimeConsumer(mr_m.ptr, exec_library_path())
+                try:
+                    triples = row_fn(c_m)
+                finally:
+                    c_m.close()
+                    mr_m.release()
+                    restore_prompt_a()
+                detected = not all(np.array_equal(a, b) for _, a, b in triples)
+                mutants.append({"mutant": label, "detected": detected})
+                print(f"  {label:<56} detected={detected}")
+            ok = ok and all(m["detected"] for m in mutants)
 
+        if args.bench_iters > 0:
             def tick_python() -> None:
                 fe.infer(obs, action_noise=noise)
 
             def tick_abi() -> None:
-                abi_tick(noise, None)
+                consumer.set_input("images", views)
+                consumer.set_input("proprio", state.tobytes())
+                consumer.write_swap("noise", noise.cpu().numpy())
+                consumer.step()
+                consumer.get_output("actions", np.float32, chunk)
 
             for _ in range(3):
                 tick_python()
@@ -232,7 +283,8 @@ def main() -> int:
         print(f"peak GPU mem: {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB; finite={finite}")
         if args.json_out:
             with open(args.json_out, "w") as f:
-                json.dump({"precision": args.precision, "observation": obs_label, "rows": rows}, f, indent=1)
+                json.dump({"precision": args.precision, "observation": obs_label, "vae_in_graph": in_graph,
+                           "rows": rows, "mutants": mutants}, f, indent=1)
         print("PASS" if ok else "FAIL", "- ImageWAM model runtime (io=python) vs infer()")
         return 0 if ok else 1
     finally:

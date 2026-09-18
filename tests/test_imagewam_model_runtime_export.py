@@ -4,8 +4,10 @@ Small random-weight dims (`imagewam_thor._DEFAULT_DIMS` plus proprio and
 dataset stats), fp16. A ctypes consumer drives the runtime only through
 the C ABI (tests/_helpers/model_runtime_consumer.py) and must reproduce
 `frontend.infer()` bit for bit for the same image tokens, proprio and
-initial noise. Skips when the exec/ and runtime/ native modules are not
-built (see docs/imagewam_model_runtime.md).
+initial noise, with every buffer the tick writes NaN-poisoned first; each
+verb made a no-op (or a SWAP window left unwritten) must make that check
+fail. Skips when the exec/ and runtime/ native modules are not built (see
+docs/imagewam_model_runtime.md).
 """
 import json
 
@@ -17,6 +19,7 @@ pytest.importorskip("flash_rt.runtime.exec", exc_type=ImportError)
 pytest.importorskip("flash_rt.runtime.export", exc_type=ImportError)
 
 from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor  # noqa: E402
+from _helpers.imagewam_abi_checks import poison_tick_state, python_step_noop, python_verb_noop  # noqa: E402
 from _helpers.model_runtime_consumer import (  # noqa: E402
     ModelRuntimeConsumer,
     exec_library_path,
@@ -101,41 +104,73 @@ def test_unknown_io_face_rejected(frontend):
         frontend.export_model_runtime(io="native")
 
 
-def test_abi_tick_matches_infer_bit_exact(frontend, runtime):
-    _, consumer = runtime
-    d = frontend.dims
-    chunk = (d["num_action"], d["action_dim"])
-    proprio = np.linspace(-0.7, 0.9, PROPRIO_DIM, dtype=np.float32)
+PROPRIO = np.linspace(-0.7, 0.9, PROPRIO_DIM, dtype=np.float32)
 
+
+@pytest.fixture(scope="module")
+def reference(frontend):
+    """infer() with fixed image tokens (its own img_raw.normal_() draw) and
+    explicit noise; returns (tokens, noise, actions, raw latent)."""
     torch.manual_seed(SEED)
-    ref_actions = frontend.infer({"proprio": proprio})["actions"]
+    ref_actions = frontend.infer({"proprio": PROPRIO})["actions"]
     ref_raw = frontend._action_latent.detach().cpu().numpy().copy()
     ref_tokens = frontend._img_raw.detach().clone()
     torch.manual_seed(SEED)
-    again = frontend.infer({"proprio": proprio})["actions"]
+    again = frontend.infer({"proprio": PROPRIO})["actions"]
     assert np.array_equal(again, ref_actions), "infer() is not deterministic; parity check is meaningless"
-
     # Reproduce infer()'s own draws in the same order: img_raw.normal_(),
     # then action_latent.normal_().mul_(0.01).
     torch.manual_seed(SEED)
     tokens = torch.empty_like(frontend._img_raw).normal_()
     noise = torch.empty_like(frontend._action_latent).normal_().mul_(0.01)
     assert torch.equal(tokens, ref_tokens)
+    return tokens, noise, ref_actions, ref_raw
 
-    consumer.write_swap("image_tokens", _bf16_bytes(tokens))
-    consumer.set_input("proprio", proprio.tobytes())
+
+def _poisoned_tick(frontend, consumer, tokens, noise, *, write_tokens=True, stage_proprio=True):
+    chunk = (frontend.dims["num_action"], frontend.dims["action_dim"])
+    poison_tick_state(frontend)
+    if write_tokens:
+        consumer.write_swap("image_tokens", _bf16_bytes(tokens))
+    if stage_proprio:
+        consumer.set_input("proprio", PROPRIO.tobytes())
     consumer.write_swap("noise", noise.cpu().numpy())
     consumer.step()
-    abi_actions = consumer.get_output("actions", np.float32, chunk)
-    abi_raw = consumer.read_swap("actions_raw", np.float32, chunk)
+    return consumer.get_output("actions", np.float32, chunk), consumer.read_swap("actions_raw", np.float32, chunk)
 
+
+def test_abi_tick_matches_infer_bit_exact(frontend, runtime, reference):
+    _, consumer = runtime
+    tokens, noise, ref_actions, ref_raw = reference
+    abi_actions, abi_raw = _poisoned_tick(frontend, consumer, tokens, noise)
     max_abs = float(np.max(np.abs(abi_actions - ref_actions)))
     raw_max_abs = float(np.max(np.abs(abi_raw - ref_raw)))
-    print(f"actions: shape={abi_actions.shape} array_equal={np.array_equal(abi_actions, ref_actions)} "
+    print(f"poisoned tick: actions shape={abi_actions.shape} array_equal={np.array_equal(abi_actions, ref_actions)} "
           f"max_abs={max_abs:.3g}; actions_raw: array_equal={np.array_equal(abi_raw, ref_raw)} "
           f"max_abs={raw_max_abs:.3g}; |actions|_max={np.abs(ref_actions).max():.4f}")
     assert np.array_equal(abi_actions, ref_actions)
     assert np.array_equal(abi_raw, ref_raw)
+
+
+@pytest.mark.parametrize("mutant", ["proprio verb no-op", "step no-op", "image_tokens not written"])
+def test_mutants_fail_the_tick(frontend, reference, mutant):
+    tokens, noise, ref_actions, _ = reference
+    patch = {"proprio verb no-op": python_verb_noop("proprio"), "step no-op": python_step_noop()}.get(mutant)
+    if patch is not None:
+        with patch:
+            mr = frontend.export_model_runtime()
+    else:
+        mr = frontend.export_model_runtime()
+    consumer = ModelRuntimeConsumer(mr.ptr, exec_library_path())
+    try:
+        actions, _ = _poisoned_tick(frontend, consumer, tokens, noise,
+                                    write_tokens=mutant != "image_tokens not written")
+    finally:
+        consumer.close()
+        mr.release()
+    print(f"mutant {mutant!r}: actions array_equal={np.array_equal(actions, ref_actions)} "
+          f"finite={bool(np.isfinite(actions).all())}")
+    assert not np.array_equal(actions, ref_actions)
 
 
 def test_staged_and_swap_guards(frontend, runtime):
