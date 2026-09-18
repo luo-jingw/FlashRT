@@ -1,0 +1,6 @@
+{
+  global:
+    frt_imagewam_native_*;
+  local:
+    *;
+};

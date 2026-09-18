@@ -802,6 +802,13 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
             self.autotune_fp16_nn(to_ptr(A), to_ptr(B), to_ptr(D), M, N, K, num_algos);
         }, py::arg("A"), py::arg("B"), py::arg("D"),
            py::arg("M"), py::arg("N"), py::arg("K"), py::arg("num_algos") = 16)
+        .def("cached_algo", [](const GemmRunner& self, int kind, int M, int N, int K) -> py::object {
+            std::string algo(GemmRunner::kAlgoBytes, '\0');
+            if (!self.get_cached_algo(kind, M, N, K, algo.data())) return py::none();
+            return py::bytes(algo);
+        }, py::arg("kind"), py::arg("M"), py::arg("N"), py::arg("K"),
+           "Cached cuBLASLt algorithm bytes of one bf16_nn (kind=0) / fp16_nn (kind=1) "
+           "shape, or None; the hand-off for a second runner in the same process.")
         .def("autotune_fp8_nn_dev", [](GemmRunner& self,
                                         uintptr_t A, uintptr_t B, uintptr_t D,
                                         int M, int N, int K,

@@ -1,5 +1,7 @@
 #include "gemm_runner.h"
+#include <cstring>
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 
 // ================================================================
@@ -224,6 +226,30 @@ void GemmRunner::autotune_cached(CachedGemm& entry, void* A, void* B, void* D,
     entry.algo = heuristics[best_idx].algo;
     std::cout << "  autotune: tested " << returned_results << " algos, best="
               << best_idx << " (" << best_ms * 1000.0f << " us)" << std::endl;
+}
+
+// ================================================================
+// Algorithm hand-off: copy one cached algorithm out of / into the cache
+// ================================================================
+namespace {
+int handoff_gemm_type(int kind) {
+    if (kind == 0) return 0;  // BF16_NN
+    if (kind == 1) return 4;  // FP16_NN
+    throw std::invalid_argument("GemmRunner algo hand-off: kind must be 0 (bf16_nn) or 1 (fp16_nn)");
+}
+}  // namespace
+
+bool GemmRunner::get_cached_algo(int kind, int M, int N, int K, void* algo) const {
+    GemmKey key{handoff_gemm_type(kind), M, N, K};
+    auto it = gemm_cache_.find(key);
+    if (it == gemm_cache_.end()) return false;
+    std::memcpy(algo, &it->second.algo, sizeof(cublasLtMatmulAlgo_t));
+    return true;
+}
+
+void GemmRunner::set_cached_algo(int kind, int M, int N, int K, const void* algo) {
+    auto& entry = get_or_create_cached(static_cast<GemmType>(handoff_gemm_type(kind)), M, N, K);
+    std::memcpy(&entry.algo, algo, sizeof(cublasLtMatmulAlgo_t));
 }
 
 void GemmRunner::autotune_bf16_nn(void* A, void* B, void* D,

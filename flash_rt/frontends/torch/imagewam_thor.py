@@ -51,11 +51,13 @@ sums to a fixed 128, so every default/override dims dict below keeps
 from __future__ import annotations
 
 import gc
+import hashlib
 import logging
 import os
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Mapping
 
 import numpy as np
 import torch
@@ -65,7 +67,25 @@ from flash_rt.hardware.thor import fa4_backend
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
 from flash_rt.models.imagewam.gemm_variant_timer import CudaGraphVariantTimer
 from flash_rt.models.imagewam.gemm_variant_tuner import GemmVariantTuner, VariantTuneResult
-from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
+from flash_rt.models.imagewam.pipeline_resources import (
+    ActionDoubleLayerResource,
+    ActionStepResource,
+    AdaLNResource,
+    AttentionResource,
+    DoubleLayerResource,
+    ImageWAMPipelineResources,
+    LinearResource,
+    PipelineBuffers,
+    PipelineDims,
+    SingleLayerResource,
+    linear_resource,
+)
+from flash_rt.models.imagewam.pipeline_thor import (
+    fp16_adaln_operands,
+    fp16_adaln_shift_scale,
+    imagewam_denoise_loop,
+    imagewam_prefill,
+)
 from flash_rt.models.imagewam.pipeline_real import (
     compute_action_head_modulation,
     compute_action_modulation,
@@ -84,8 +104,15 @@ from flash_rt.models.imagewam.quant_linear import (
 )
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 from flash_rt.models.imagewam.text_context import pack_trimmed_context, trimmed_sequence_dims
+from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSurface
 from flash_rt.models.imagewam.vae_preprocess import RESIZE_MODES, VaePreprocessor
 from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeStageSpec
+
+if TYPE_CHECKING:
+    # Type-only: `runtime.export` loads the built runtime module on import,
+    # and the frontend works without it.
+    from flash_rt.models.imagewam.native_runtime import ImageWAMNativeRuntime
+    from flash_rt.runtime.export import ModelRuntime
 
 _PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass", "e0m3_hadamard",
                "nvfp4_sim")
@@ -218,6 +245,9 @@ class ImageWAMTorchFrontendThor:
         self._vae_encoder = None
         self._vae_pre = None
         self._vae_stage = None
+        # Recorded for the runtime export's identity (image -> token numerics).
+        self._vae_setup = (("vae_resize", vae_resize), ("vae_encoder", vae_encoder),
+                           ("vae_graph_input", str(vae_graph_input)))
         if vae_resize not in RESIZE_MODES:
             raise ValueError(f"vae_resize={vae_resize!r} -- must be one of {RESIZE_MODES}")
         if vae_encoder not in _VAE_ENCODERS:
@@ -338,6 +368,9 @@ class ImageWAMTorchFrontendThor:
                 raise ValueError("nvfp4_awq needs calibration_path (per-channel activation "
                                  "statistics) and ckpt_path")
         self._calibration = None
+        # First 16 hex chars of the calibration file's SHA-256, for the
+        # runtime identity ("none" without a file).
+        self._calibration_digest = "none"
         if calibration_path is not None:
             if precision not in _STATIC_FP8_PRECISIONS and not nvfp4_awq:
                 raise ValueError(f"calibration_path is used by {_STATIC_FP8_PRECISIONS} and by "
@@ -348,6 +381,8 @@ class ImageWAMTorchFrontendThor:
             from flash_rt.models.imagewam.calibration_file import load_calibration
             self._calibration = load_calibration(calibration_path)
             self._calibration.validate_for(checkpoint_path=ckpt_path, dims=d, text_trim=self._text_trim)
+            with open(calibration_path, "rb") as f:
+                self._calibration_digest = hashlib.sha256(f.read()).hexdigest()[:16]
 
         self._ctx = fvk.FvkContext()
         # `gemm_runner`: an already-autotuned `fvk.GemmRunner` from another
@@ -515,7 +550,9 @@ class ImageWAMTorchFrontendThor:
         self._fp8_calibrated = False
         # Capture stream and CUDA-graph memory pool shared by every capture
         # of this frontend (created at the first capture, `_capture_graph`).
-        self._capture_stream: torch.cuda.Stream | None = None
+        # The runtime export also runs ABI replay and staging verbs on the
+        # stream (see runtime_export.py).
+        self._graph_stream: torch.cuda.Stream | None = None
         self._graph_pool: tuple[int, int] | None = None
         # Cache key of the live-Qwen3 and random `set_prompt` paths; a
         # precomputed `context` is always applied (issues.md ISSUE-060).
@@ -1227,10 +1264,10 @@ class ImageWAMTorchFrontendThor:
         captures new lengths while the process serves, so a collection
         can fall inside a capture at any time."""
         dims = self._active_dims
-        if self._capture_stream is None:
-            self._capture_stream = torch.cuda.Stream()
+        if self._graph_stream is None:
+            self._graph_stream = torch.cuda.Stream()
             self._graph_pool = torch.cuda.graph_pool_handle()
-        s = self._capture_stream
+        s = self._graph_stream
         s.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(s):
             if self._text_trim and not self._scratch_reserved:
@@ -1605,10 +1642,7 @@ class ImageWAMTorchFrontendThor:
         self.stage_inputs(observation, noise=action_noise)
         self._graph.replay()
         torch.cuda.synchronize()
-        actions = self._action_latent.detach()
-        if self._action_norm is not None:
-            actions = self._action_norm.backward(actions)
-        return {"actions": actions.cpu().numpy()}
+        return {"actions": self.read_actions()}
 
     @property
     def weights(self) -> dict:
@@ -1636,15 +1670,9 @@ class ImageWAMTorchFrontendThor:
             if "view1" not in observation:
                 raise ValueError("with vae_graph_input (VAE in the graph) infer()/stage_inputs() need "
                                  "observation['view1'] (and 'view2' for 2 views) every call")
-            views = [observation["view1"]] + ([observation["view2"]] if "view2" in observation else [])
-            self._vae_stage.stage([torch.as_tensor(v) for v in views])
+            self.stage_images(*self._observation_views(observation))
         elif self._ae is not None and "view1" in observation:
-            from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
-            view2 = observation.get("view2")
-            tokens = encode_to_tokens(self._ae, torch.as_tensor(observation["view1"]),
-                                      None if view2 is None else torch.as_tensor(view2),
-                                      preprocessor=self._vae_pre, encoder=self._vae_encoder)
-            self._img_raw.copy_(tokens[0].to(dtype=BF16))
+            self.stage_images(*self._observation_views(observation))
         else:
             self._img_raw.normal_()
         if self._proprio_dim is not None:
@@ -1654,12 +1682,7 @@ class ImageWAMTorchFrontendThor:
                     "infer(observation=...) requires observation['proprio'] when "
                     "dims['proprio_dim'] is set (matches imagewam.py's own "
                     "_append_proprio_to_context_if_enabled)")
-            proprio_t = torch.as_tensor(proprio, dtype=torch.float32, device=DEV).reshape(1, self._proprio_dim)
-            if self._state_norm is not None:
-                proprio_t = self._state_norm.forward(proprio_t)
-            proprio_tok = torch.nn.functional.linear(
-                proprio_t.to(dtype=BF16), self._proprio_w, self._proprio_b)
-            self._context[self._proprio_row].copy_(proprio_tok[0])
+            self.stage_proprio(proprio)
         if noise is None:
             self._action_latent.normal_()
             self._action_latent.mul_(0.01)
@@ -1698,3 +1721,226 @@ class ImageWAMTorchFrontendThor:
                               attn=self._attn, action_mods=self._action_mods, head_mods=self._head_mods,
                               action_rope_table=self._action_rope_table.data_ptr(),
                               deltas=self._deltas)
+
+    # -- per-tick staging operations ------------------------------------
+    # Shared by infer() and the model-runtime verbs
+    # (flash_rt/models/imagewam/runtime_export.py). Each runs its torch
+    # ops on the caller's current stream.
+
+    @staticmethod
+    def _observation_views(observation: dict) -> list:
+        """`[view1]` or `[view1, view2]` from an `infer()` observation."""
+        return [observation["view1"]] + ([observation["view2"]] if "view2" in observation else [])
+
+    def stage_images(self, *views: torch.Tensor) -> None:
+        """Stage one or two `(H,W,3)` uint8 camera views. With the VAE
+        inside the graph (`vae_graph_input`) the views are copied into the
+        stage's fixed uint8 buffer and the next replay encodes them;
+        otherwise the configured preprocessing kernel and VAE encoder run
+        now (outside the graph) and the tokens are written into `img_raw`."""
+        if self._ae is None:
+            raise RuntimeError("stage_images requires ae_model_path/flux2_src at construction")
+        if self._vae_stage is not None:
+            self._vae_stage.stage([torch.as_tensor(v) for v in views])
+            return
+        if not 1 <= len(views) <= 2:
+            raise ValueError(f"stage_images takes one or two views, got {len(views)}")
+        from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
+        view2 = views[1] if len(views) > 1 else None
+        tokens = encode_to_tokens(self._ae, torch.as_tensor(views[0]),
+                                  None if view2 is None else torch.as_tensor(view2),
+                                  preprocessor=self._vae_pre, encoder=self._vae_encoder)
+        self._img_raw.copy_(tokens[0].to(dtype=BF16))
+
+    def stage_proprio(self, proprio: np.ndarray) -> None:
+        """Normalize raw robot state with the dataset `state` min/max (when
+        loaded), project it through the real `proprio_encoder` (outside the
+        graph), and write it into the context row `set_prompt()` reserved."""
+        if self._proprio_dim is None:
+            raise RuntimeError("stage_proprio requires dims['proprio_dim'] at construction")
+        proprio_t = torch.as_tensor(proprio, dtype=torch.float32, device=DEV).reshape(1, self._proprio_dim)
+        if self._state_norm is not None:
+            proprio_t = self._state_norm.forward(proprio_t)
+        proprio_tok = torch.nn.functional.linear(
+            proprio_t.to(dtype=BF16), self._proprio_w, self._proprio_b)
+        self._context[self._proprio_row].copy_(proprio_tok[0])
+
+    def read_actions(self) -> np.ndarray:
+        """The `(num_action, action_dim)` f32 chunk after replay: denormalized
+        with the dataset `action` min/max when loaded, else the raw latent.
+        Blocks on the current stream (device-to-host copy)."""
+        actions = self._action_latent.detach()
+        if self._action_norm is not None:
+            actions = self._action_norm.backward(actions)
+        return actions.cpu().numpy()
+
+    # -- runtime export ---------------------------------------------------
+
+    def runtime_surface(self) -> ImageWAMRuntimeSurface:
+        """The captured graph and its device windows, for the runtime export."""
+        if self._graph is None:
+            raise RuntimeError("call set_prompt() before runtime_surface()")
+        d = self.dims
+        setup = [("pipeline", type(self).__name__), ("precision", self._precision),
+                 ("use_fa4", str(self.use_fa4)), ("use_fa4_mot", str(self.use_fa4_mot)),
+                 ("calibration", self._calibration_digest), ("nvfp4_awq", str(self._nvfp4_awq))]
+        if self._nvfp4_awq:
+            setup.extend((("awq_alpha", str(self._awq_alpha)), ("awq_scope", self._awq_scope)))
+        setup.extend(self._vae_setup)
+        setup.extend((f"dims.{k}", str(d[k])) for k in sorted(d))
+        return ImageWAMRuntimeSurface(
+            graph_exec=int(self._graph.raw_cuda_graph_exec()),
+            stream=self._graph_stream,
+            img_raw=self._img_raw,
+            context=self._context,
+            action_latent=self._action_latent,
+            img_len=d["a0"] - d["x0"],
+            token_dim=d["HD"],
+            num_action=d["num_action"],
+            action_dim=d["action_dim"],
+            proprio_dim=self._proprio_dim,
+            has_vae=self._ae is not None,
+            has_text_encoder=self._qwen3 is not None,
+            action_denormalized=self._action_norm is not None,
+            setup_identity=tuple(setup),
+            context_rows=d["x0"],
+            context_width=d["joint_attention_dim"],
+            proprio_row=self._proprio_row,
+            proprio_weight=self._proprio_w,
+            proprio_bias=self._proprio_b,
+            state_scale=None if self._state_norm is None else self._state_norm.scale,
+            state_offset=None if self._state_norm is None else self._state_norm.offset,
+            action_scale=None if self._action_norm is None else self._action_norm.scale,
+            action_offset=None if self._action_norm is None else self._action_norm.offset,
+            view_shape=((2, 224, 224) if self._vae_stage is None else
+                        (self._vae_stage.spec.num_views, self._vae_stage.spec.in_h, self._vae_stage.spec.in_w)),
+            views_u8=None if self._vae_stage is None else self._vae_stage.views_u8,
+            owner=self,
+        )
+
+    def pipeline_resources(self) -> ImageWAMPipelineResources:
+        """Everything the native C++ pipeline needs to record the same
+        prefill and denoise loop as `pipeline_thor.py` over this frontend's
+        buffers and weights (`flash_rt/models/imagewam/pipeline_resources.py`).
+        Every AdaLN site carries the fp16 form `pipeline_thor`'s
+        `fp16_adaln_operands` / `fp16_adaln_shift_scale` build (the unfused path and the
+        standalone AdaLN that starts each chain) and the FP32 modulation
+        chunks the fused gated residual + next AdaLN kernel reads
+        (`dims["fuse_res_norm"]`)."""
+        if self._graph is None:
+            raise RuntimeError("call set_prompt() before pipeline_resources()")
+        if self.use_fa4 or self.use_fa4_mot:
+            raise ValueError("the native pipeline has no FA4 attention; use_fa4/use_fa4_mot must be off")
+        if self._vae_stage is not None:
+            raise ValueError("the native pipeline has no VAE stage; construct with vae_graph_input=None "
+                             "(the VAE then runs outside the graph and feeds image_tokens)")
+        if self._nvfp4_awq:
+            raise ValueError("the native pipeline has no AWQ input-scale fold; construct with nvfp4_awq=False")
+        d = self.dims
+        if not d.get("merge_qkv_mlp"):
+            raise ValueError("the native pipeline records the merged single-stream linear1 only "
+                             f"(precision {self._precision!r} uses the split path)")
+        img_len = d["a0"] - d["x0"]
+        hidden, ahd, na = d["hidden"], d["action_hidden_dim"], d["num_action"]
+
+        def adaln(group: tuple[torch.Tensor, torch.Tensor, torch.Tensor], rows: int,
+                  dim: int) -> AdaLNResource:
+            shift, scale, gate = group
+            return AdaLNResource(*fp16_adaln_operands(shift, scale, gate, rows, dim),
+                                 shift_f32=shift, scale_f32=scale, gate_f32=gate)
+
+        def head_adaln(pair: tuple[torch.Tensor, torch.Tensor]) -> AdaLNResource:
+            shift, scale = pair
+            return AdaLNResource(*fp16_adaln_shift_scale(shift, scale), None,
+                                 shift_f32=shift, scale_f32=scale, gate_f32=None)
+
+        def single_layer(stack: str, L: int) -> SingleLayerResource:
+            merged = bool(d.get("merge_linear2"))
+            return SingleLayerResource(
+                linear1=lin(stack, "single", L, "linear1.weight"),
+                attn_out_proj=None if merged else lin(stack, "single", L, "attn_out_proj.weight"),
+                mlp_down=None if merged else lin(stack, "single", L, "mlp_down.weight"),
+                linear2=lin(stack, "single", L, "linear2.weight") if merged else None,
+                query_norm=int(weight(stack, "single", L, "query_norm")),
+                key_norm=int(weight(stack, "single", L, "key_norm")))
+
+        def weight(stack: str, block: str, layer: int, slot: str) -> object:
+            """One `self._weights` entry: a linear op, or a norm/bias pointer."""
+            return self._weights[(stack, block, layer, slot)]
+
+        def lin(stack: str, block: str, layer: int, slot: str) -> LinearResource:
+            return linear_resource(weight(stack, block, layer, slot))
+
+        steps = []
+        for step in range(d["num_denoise_steps"]):
+            mod_double, mod_single = self._action_mods[step]
+            steps.append(ActionStepResource(
+                double1=adaln(mod_double[0], na, ahd), double2=adaln(mod_double[1], na, ahd),
+                single=adaln(mod_single, na, ahd),
+                head=head_adaln(self._head_mods[step]),
+                delta=float(d["dt"] if self._deltas is None else self._deltas[step])))
+        return ImageWAMPipelineResources(
+            dims=PipelineDims(
+                hidden=hidden, head_dim=d["HD"], num_heads=d["NH"], mlp_hidden=d["mlp_hidden"],
+                joint_attention_dim=d["joint_attention_dim"], x0=d["x0"], a0=d["a0"], total=d["total"],
+                num_action=na, action_dim=d["action_dim"], action_hidden_dim=ahd,
+                action_attn_width=d["action_attn_width"], action_mlp_hidden=d["action_mlp_hidden"],
+                num_double=d["num_layers_double"], num_single=d["num_layers_single"],
+                action_num_double=d["action_num_layers_double"],
+                action_num_single=d["action_num_layers_single"],
+                num_steps=d["num_denoise_steps"], merge_linear2=bool(d.get("merge_linear2")),
+                fuse_res_norm=bool(d.get("fuse_res_norm")), eps=1e-6),
+            buffers=PipelineBuffers(**{name: int(self._bufs[name])
+                                       for name in PipelineBuffers.__dataclass_fields__}),
+            attention=AttentionResource(
+                q_o=self._Q_O.data_ptr(), k_cache=self._K_cache.data_ptr(),
+                v_cache=self._V_cache.data_ptr(), logits=self._logits.data_ptr(),
+                kv_layer_stride_bytes=self._K_cache[0].numel() * self._K_cache.element_size(),
+                scale=1.0 / (d["HD"] ** 0.5), rope_table=self._rope_table.data_ptr(),
+                action_rope_table=self._action_rope_table.data_ptr()),
+            txt_in=lin("backbone", "double", 0, "txt_in.weight"),
+            img_in=lin("backbone", "double", 0, "img_in.weight"),
+            action_encoder=lin("action_dit", "shared", 0, "action_encoder.weight"),
+            head_linear=lin("action_dit", "shared", 0, "head.linear.weight"),
+            action_encoder_bias=int(weight("action_dit", "shared", 0, "action_encoder.bias")),
+            txt_mod1=adaln(self._mod_txt[0], d["x0"], hidden),
+            txt_mod2=adaln(self._mod_txt[1], d["x0"], hidden),
+            img_mod1=adaln(self._mod_img[0], img_len, hidden),
+            img_mod2=adaln(self._mod_img[1], img_len, hidden),
+            single_mod=adaln(self._mod_single, d["a0"], hidden),
+            double_layers=tuple(DoubleLayerResource(
+                **{slot: lin("backbone", "double", L, f"{slot}.weight")
+                   for slot in ("txt_qkv", "img_qkv", "txt_proj", "img_proj",
+                                "txt_mlp0", "img_mlp0", "txt_mlp2", "img_mlp2")},
+                **{slot: int(weight("backbone", "double", L, slot))
+                   for slot in ("txt_query_norm", "txt_key_norm", "img_query_norm", "img_key_norm")})
+                for L in range(d["num_layers_double"])),
+            single_layers=tuple(single_layer("backbone", L) for L in range(d["num_layers_single"])),
+            action_double_layers=tuple(ActionDoubleLayerResource(
+                qkv=lin("action_dit", "double", L, "qkv.weight"),
+                proj=lin("action_dit", "double", L, "proj.weight"),
+                mlp0=lin("action_dit", "double", L, "mlp0.weight"),
+                mlp2=lin("action_dit", "double", L, "mlp2.weight"),
+                query_norm=int(weight("action_dit", "double", L, "query_norm")),
+                key_norm=int(weight("action_dit", "double", L, "key_norm")))
+                for L in range(d["action_num_layers_double"])),
+            action_single_layers=tuple(single_layer("action_dit", L)
+                                       for L in range(d["action_num_layers_single"])),
+            steps=tuple(steps),
+        )
+
+    def gemm_algo(self, kind: int, m: int, n: int, k: int) -> bytes | None:
+        """The cuBLASLt algorithm this frontend's GemmRunner uses for one
+        `bf16_nn` (kind 0) / `fp16_nn` (kind 1) shape, or None if that shape
+        has not been planned; the native pipeline installs it so both run the
+        same kernel."""
+        return self._gemm.cached_algo(kind, m, n, k)
+
+    def export_model_runtime(self, *, identity: Mapping[str, str] | None = None, io: str = "python",
+                             native: ImageWAMNativeRuntime | None = None) -> ModelRuntime:
+        """Package the captured graph as an `frt_model_runtime_v1`. See
+        `flash_rt.models.imagewam.runtime_export.export_model_runtime`.
+        Needs the exec/ and runtime/ native modules (built separately);
+        `io="native"` also needs `native` (an `ImageWAMNativeRuntime`)."""
+        from flash_rt.models.imagewam.runtime_export import export_model_runtime
+        return export_model_runtime(self, identity=identity, io=io, native=native)

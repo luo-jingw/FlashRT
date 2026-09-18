@@ -216,7 +216,7 @@ def _pool_poison_graph(fe: ImageWAMTorchFrontendThor) -> tuple[torch.cuda.CUDAGr
     that pool with 0xFF when replayed."""
     sizes = _free_pool_block_sizes(fe._graph_pool)
     graph = torch.cuda.CUDAGraph()
-    s = fe._capture_stream
+    s = fe._graph_stream
     s.wait_stream(torch.cuda.current_stream())
     with torch.cuda.graph(graph, pool=fe._graph_pool, stream=s):
         held = [torch.empty(size, dtype=torch.uint8, device=DEV) for size in sizes]
@@ -237,7 +237,7 @@ def _poison_regular_cache(fe: ImageWAMTorchFrontendThor) -> list[torch.Tensor]:
     torch.cuda.empty_cache()
     held = []
     per_stream = POISON_MIB // 2
-    for stream in (torch.cuda.current_stream(), fe._capture_stream):
+    for stream in (torch.cuda.current_stream(), fe._graph_stream):
         with torch.cuda.stream(stream):
             sizes = [64 << 20] * (per_stream // 64) + [512 * k for k in range(1, 513)]
             for size in sizes:

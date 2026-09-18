@@ -16,6 +16,7 @@ Build the native modules first (standalone, like exec/):
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import sys
@@ -87,6 +88,19 @@ GENERIC_EXECUTOR = {
     "graph": int(_c.GENERIC_STAGE_GRAPH),
     "opaque": int(_c.GENERIC_STAGE_OPAQUE),
 }
+
+
+class VerbStatusError(Exception):
+    """Raised by a Python verb callable to fail with a specific model-runtime
+    status instead of -1: -1 invalid, -2 not found, -3 unsupported, -4 shape
+    mismatch, -5 insufficient storage, -6 backend. The message becomes the
+    runtime's `last_error`."""
+
+    def __init__(self, status: int, message: str):
+        if not -6 <= int(status) <= -1:
+            raise ValueError(f"VerbStatusError status must be in [-6, -1], got {status}")
+        super().__init__(message)
+        self.frt_status = int(status)
 
 
 def _enum(table: Mapping[str, int], value: int | str) -> int:
@@ -310,8 +324,10 @@ def build_model_runtime(
       ``get_output(port, stream) -> bytes``,
       ``prepare(graph, key) -> int``, ``step() -> int``.
     They run under GIL-acquiring trampolines, so a native consumer may call
-    them from any thread. SWAP ports need no callable — hosts write the
-    declared buffer window directly.
+    them from any thread. An exception becomes status -1, or its
+    ``frt_status`` (``VerbStatusError``), with its message as ``last_error``.
+    SWAP ports need no callable — hosts write the declared buffer window
+    directly.
     """
     staged_inputs = any(
         _enum(UPDATE, port.update) == UPDATE["staged"] and
@@ -426,6 +442,49 @@ def build_metadata_model_runtime(
         _anchor=anchor)
 
 
+def _runtime_c_library() -> ctypes.CDLL:
+    """The `libflashrt_runtime` the loaded `_flashrt_runtime` module links."""
+    lib = ctypes.CDLL(os.path.join(os.path.dirname(os.path.abspath(_c.__file__)),
+                                   "libflashrt_runtime.so"))
+    fn = lib.frt_model_runtime_override_verbs
+    fn.argtypes = [ctypes.c_void_p] * 6
+    fn.restype = ctypes.c_void_p
+    return lib
+
+
+def override_model_runtime_verbs(
+    declaration: ModelRuntime,
+    *,
+    verbs: int,
+    verbs_self: int,
+    owner: int,
+    retain_owner: int,
+    release_owner: int,
+    anchor: Any = None,
+) -> ModelRuntime:
+    """Construction path 3 (`frt_model_runtime_override_verbs`) for a native
+    verb table: the result inherits the declaration's ports, stages,
+    identity and fingerprint and dispatches to `verbs` with `verbs_self`.
+    The override retains the declaration and calls `retain_owner(owner)`,
+    so the caller may release its own declaration reference afterwards.
+    All arguments are C addresses (`frt_model_runtime_verbs*`, the verb
+    `self`, the owner and its retain/release functions). `anchor` keeps
+    Python objects behind those addresses alive with the returned object.
+    """
+    ptr = _runtime_c_library().frt_model_runtime_override_verbs(
+        declaration.ptr, verbs, verbs_self, owner, retain_owner, release_owner)
+    if not ptr:
+        raise RuntimeError("frt_model_runtime_override_verbs rejected the verb table")
+    return ModelRuntime(
+        ptr=int(ptr),
+        export_ptr=declaration.export_ptr,
+        fingerprint=declaration.fingerprint,
+        identity=declaration.identity,
+        manifest=declaration.manifest,
+        _anchor=(declaration._anchor, anchor),
+    )
+
+
 def _assemble(ctx, *, streams, graphs, buffers, regions, ports, stages,
               generic_stages,
               identity, manifest_extra, owner):
@@ -513,6 +572,7 @@ __all__ = [
     "StreamSpec", "GraphSpec", "BufferSpec", "RegionSpec", "PortSpec",
     "StageSpec", "GenericStageSpec",
     "build_export", "build_model_runtime", "build_metadata_model_runtime",
+    "override_model_runtime_verbs",
     "ROLE_INPUT", "ROLE_OUTPUT", "ROLE_STATE", "ROLE_SCRATCH",
     "REGION_SNAPSHOT", "REGION_RESTORE", "REGION_DEFAULT",
     "MODALITY", "DTYPE", "LAYOUT", "DIRECTION", "UPDATE",

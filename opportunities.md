@@ -5152,6 +5152,220 @@ check.
   multiply-and-quantize of the attention output would be needed to
   scale them, for at most ~1% per-layer gain.
 
+# OPT-028: ImageWAM through `frt_model_runtime_v1` (Python producer)
+
+Status: implemented and verified on H100 (fp16, real checkpoint,
+bit-exact). Thor `nvfp4` parity pending on the Thor checklist.
+
+Area: deployment engineering, roadmap item 12 (`plan.md` "Plan: ABI
+integration, `frt_model_runtime_v1` Python producer").
+
+## Observation
+
+The ImageWAM Thor frontend was reachable only through `set_prompt()` /
+`infer()`. No runtime export existed, and the initial action noise was
+drawn inside `infer()` (`0.01 * N(0,1)`, ISSUE-002) rather than being
+an input.
+
+## Opportunity
+
+`ImageWAMTorchFrontendThor.export_model_runtime(io="python")`
+publishes the captured graph and its buffers through the generic ABI,
+with the same Python-producer construction path Pi0.5 uses
+(`flash_rt.runtime.export.build_model_runtime`). Port schema and
+ownership: `docs/imagewam_model_runtime.md`. The noise is an explicit
+SWAP input consumed as written; the `0.01` factor stays inside `infer()`.
+
+## Expected Mechanism
+
+No numerics change: the verbs call the frontend's own staging methods
+(`stage_images`, `stage_proprio`, `read_actions`, `set_prompt`), which
+`infer()` now also calls, and `step` replays the same instantiated graph
+exec through `frt_graph_replay`. Parity is bit-exact by construction and
+measured, not assumed.
+
+## Required Evidence
+
+H100 (shared GPU), `tests/gate_imagewam_model_runtime_export.py
+--precision fp16`, real checkpoint + VAE + Qwen3 + dataset stats,
+LIBERO spatial episode 0 frame 0, ctypes consumer vs `infer()`, same
+seed:
+
+| check | array_equal | max_abs |
+|---|---|---:|
+| control: `infer()` vs `infer()` | True | 0 |
+| `images` STAGED → `image_tokens` window | True | 0 |
+| `actions` (denormalized, STAGED) | True | 0 |
+| `actions_raw` (normalized, SWAP) | True | 0 |
+| `image_tokens` SWAP path → `actions` | True | 0 |
+| `prompt` SETUP (second task) → `actions` | True | 0 |
+
+The second task string moves the chunk by `max_abs = 0.0821`, so the
+prompt check is not vacuous. Peak GPU memory 17.2 GiB.
+
+Latency, H100 shared with a co-tenant at 100% utilization, indicative
+only, alternating A/B, 20 iterations each, wall time including VAE,
+proprio staging and host readback:
+
+| path | P10 | P50 | P90 |
+|---|---:|---:|---:|
+| `infer()` | 133.7 ms | 142.5 ms | 152.8 ms |
+| ABI tick (`images` + `proprio` + `noise` + `step` + `actions`) | 127.8 ms | 138.5 ms | 153.1 ms |
+
+Small random-weight dims (`tests/test_imagewam_model_runtime_export.py`,
+5 tests): schema, identity sensitivity, guards (`-3`, `-1`, `-5`) and an
+`array_equal` tick. Regression: `pytest tests/test_imagewam_*.py` 73
+passed, 6 skipped (baseline 68/6 plus these 5).
+
+Thor, `nvfp4`: pending (Thor checklist).
+
+After merging the fusion and VAE streams (served layer structure,
+preprocessing kernel, optional in-graph VAE), re-run on H100 at fp16 with
+the real checkpoint: every parity row still `array_equal`, with the VAE
+outside the graph and inside it (`--vae-graph-input 224 224`, where the
+`image_views` SWAP window replaces `image_tokens`).
+`tests/test_imagewam_model_runtime_vae.py` adds both placements at the
+real token count.
+
+Review follow-up (2026-09-18). The parity rows above compared an ABI
+tick with the `infer()` that ran just before it over the same buffers,
+so a verb that staged nothing could still pass. The gate and tests now
+NaN-fill every buffer a tick must write before each ABI tick, and re-run
+each row with the verb it exercises made a no-op. Re-run on H100, fp16,
+real checkpoint, after merging the calibration stream: every row above is
+still `array_equal` (`max_abs = 0`) with the VAE outside and inside the
+graph, and all five mutants (images, proprio on each image path, prompt,
+step) make their rows fail in both placements. Invalid calls now return
+the same statuses as the `io="native"` face (`-2` unknown port, `-3`
+SWAP port, `-4` payload size, `-5` short buffer, `-1` other); the
+runtime's pybind trampolines honor a `VerbStatusError`'s status. The
+identity also carries the calibration file digest and `nvfp4_awq`.
+
+Regression, `pytest tests/test_imagewam_*.py` on the merged tree (H100):
+362 passed, 31 skipped with `exec/build`, `runtime/build` and the native
+target built; 326 / 33 without the native target (its two test modules
+skip); 316 / 35 without any of the three (the two model-runtime modules
+also skip). Every skip in the full build needs Thor, FA4 or an FP8
+cuBLASLt layout this GPU lacks.
+
+## Promotion Condition
+
+Thor gate at `nvfp4` reports every parity row `array_equal=True`. The
+export is additive and opt-in; `infer()` behavior is unchanged.
+
+# OPT-029: ImageWAM native C++ overlay (`io="native"`)
+
+Status: implemented and verified bit-exact on H100 (fp16, small dims and
+real checkpoint); NVFP4 wiring compiles and links for sm_110; Thor
+`nvfp4` parity and speed pending on the Thor checklist.
+
+Area: deployment engineering, roadmap item 14 (`plan.md` "Plan: Native
+C++ overlay, `io="native"`"); interface record
+`docs/imagewam_native_cpp.md`.
+
+## Observation
+
+After OPT-028 every ImageWAM tick through the ABI still entered Python
+(GIL-acquiring trampolines for proprio, actions and `step`), and the
+graph was recorded from Python, carrying per-replay torch kernels for
+the AdaLN modulation casts and gate expansions.
+
+## Opportunity
+
+`libflashrt_imagewam_native.so`: C verbs (proprio, actions, step) over a
+declaration the Python producer builds, and a C++ `NativePipeline` that
+records prefill + denoise against the existing `csrc` kernels from a
+borrowed resource table, with the frontend's autotuned cuBLASLt
+algorithms handed off (`GemmRunner.get/set_cached_algo`, additive) and
+the modulation precomputed once. VAE and Qwen3 stay in Python.
+
+## Expected Mechanism
+
+Same kernels, same algorithms, same inputs: bit-exact to the Python
+pipeline, with fewer graph nodes (no in-graph modulation casts/copies)
+and no Python in the tick.
+
+## Required Evidence
+
+H100 (shared GPU), fp16:
+
+| check | result |
+|---|---|
+| backbone double-stream block 0, native vs Python (small dims) | every state buffer `array_equal` |
+| backbone single-stream block 0 | `array_equal` |
+| full prefill (backbone_hidden, all K/V) | `array_equal` |
+| full denoise loop (action_latent, action K/V rows) | `array_equal` |
+| native graph vs Python eager / Python graph | `array_equal` |
+| `io="native"` tick on the native graph vs `infer()` | `array_equal` |
+| Python frames entered by `set_input(proprio)` + `step` | io=native 0, io=python 57 |
+| schema records at real dims: Python declaration, C++, golden | identical (7 records) |
+| real checkpoint: actions / actions_raw / native proprio token / native vs Python graph action latent and K cache | all `array_equal`, `max_abs = 0` |
+| GEMM shapes handed off (real dims) | 20 of 20 |
+| graph nodes (real dims) | native 5732, Python 7112 |
+| exported symbols of the library (sm_90 and sm_110) | 18, all `frt_imagewam_native_*` |
+
+Latency, H100 shared with a co-tenant at 100% utilization, indicative
+only, real checkpoint, fp16, alternating A/B, 50 iterations each:
+
+| path | P10 | P50 | P90 |
+|---|---:|---:|---:|
+| `io="python"` tick (SWAP tokens, proprio, noise, step, actions) | 104.33 ms | 107.10 ms | 110.22 ms |
+| `io="native"` tick, native graph | 102.26 ms | 103.16 ms | 104.28 ms |
+| Python graph replay only (CUDA events) | 95.86 ms | 101.94 ms | 102.40 ms |
+| native graph replay only (CUDA events) | 100.58 ms | 100.97 ms | 101.56 ms |
+
+The rows above were measured before the fusion stream landed. With the
+served layer structure it introduced (merged `linear2`, gated residual
+fused with the next AdaLN, which also removed the per-layer modulation
+casts from the Python graph), re-run on the merged tree, H100, fp16, real
+checkpoint, 50 alternating iterations:
+
+| check | result |
+|---|---|
+| step-by-step parity, both layer structures (small dims) | every state buffer `array_equal` at every step |
+| real checkpoint: actions / actions_raw / native proprio token / native vs Python graph | all `array_equal` |
+| graph nodes (real dims) | native 4974, Python 4998 |
+| `io="python"` tick P10 / P50 / P90 | 85.54 / 98.26 / 100.99 ms |
+| `io="native"` tick P10 / P50 / P90 | 96.26 / 98.95 / 99.25 ms |
+| Python graph replay P10 / P50 / P90 | 93.14 / 96.04 / 96.87 ms |
+| native graph replay P10 / P50 / P90 | 85.94 / 96.92 / 97.90 ms |
+
+With the served structure the two graphs differ by 24 nodes (the fp16
+casts for the standalone AdaLN at each chain start), so no replay speed
+difference is expected; the native path's value is a tick with no
+Python and no GIL, not a faster graph.
+
+Thor, `nvfp4`: pending (Thor checklist).
+
+Review follow-up (2026-09-18), H100, fp16, merged tree (calibration
+stream included):
+
+| check | result |
+|---|---|
+| real checkpoint, NaN-poisoned tick buffers: actions, actions_raw, native proprio token, backbone residual, K/V caches, proprio staged by the frontend or the native verb | all `array_equal` |
+| poisoned native-graph vs Python-graph replay: action latent, backbone residual, K/V caches | all `array_equal` |
+| mutants: proprio verb or `step` skipped; native pipelines with no backbone block, last single-stream block dropped, last denoise step dropped, one block fed another's `linear1` weight | all 6 detected (also as small-dims tests) |
+| `set_pipeline` after `capture` | destroys the captured graph, frees the old resources; refused while an export is live (before: replayed freed memory) |
+| native handle alone, frontend dropped | frontend kept alive, replay `array_equal` (before: illegal address) |
+| status codes | same table as `io="python"` |
+| exported symbols (sm_90 and sm_110) | 20, all `frt_imagewam_native_*` |
+| `sm110_check.sh` (`flash_rt_kernels`, `flash_rt_fp4`, `flashrt_imagewam_native`) | rc 0 |
+
+ISSUE-071 (a Python-graph `backbone_hidden` mismatch) was a race between
+a test snapshot on the torch stream and the native warm-up on the
+non-blocking native stream; `run` / `capture` now wait for prior device
+work, and the native pipeline test compares `backbone_hidden` between
+the two graphs again. The native pipeline refuses `nvfp4_awq` (no AWQ
+fold).
+
+## Promotion Condition
+
+Thor reports every parity row `array_equal` at `nvfp4`, and the
+replay-only A/B shows the native graph not slower than the Python graph.
+Remaining native work beyond this entry: VAE encoding in the graph
+(roadmap item 5, then an `images` STAGED native port), proprio projection
+inside the graph, and a native checkpoint loader (`native_v2`).
+
 # OPT-030: text context trimmed to the prompt's valid length (issues.md ISSUE-020)
 
 Status: implemented behind `ImageWAMTorchFrontendThor(text_trim=True)`
@@ -5294,7 +5508,7 @@ re-records the frontend's forward must:
   the context holds `active_dims["x0"]` rows, and the backbone RoPE
   table (`_rope_table`) has `active_dims["a0"]` rows. A setup identity
   that describes the graph includes `text_trim` and the active dims.
-  The capture stream (`_capture_stream`) is the same for every length;
+  The capture stream (`_graph_stream`) is the same for every length;
 - when it records its own graph of the forward (a native pipeline),
   record it from the active dims, one graph per length, or pack the
   context the same way (`text_context.pack_trimmed_context`);
