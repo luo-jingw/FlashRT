@@ -48,6 +48,8 @@ sums to a fixed 128, so every default/override dims dict below keeps
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import torch
 
@@ -82,6 +84,13 @@ _STATIC_FP8_PRECISIONS = ("fp8_static", "fp8_static_cutlass")
 # plan.md "Plan: ActionDiT small-M CUTLASS tile selection"): the only ones
 # `gemm_variant_autotune=True` applies to.
 _VARIANT_TUNED_PRECISIONS = ("nvfp4", "fp8_static_cutlass")
+# FA4 at the "backbone" site stays opt-in until Thor confirms it at the served
+# shapes, inside the captured graph, end to end (opportunities.md OPT-019).
+# `use_fa4=None` resolves to False unless this environment variable is "1"
+# (then FA4 is used exactly when `fa4_backend.thor_default_enabled()` holds).
+# Making FA4 the default is a one-line change: the "0" below becomes "1".
+_FA4_OPT_IN_ENV = "FLASHRT_THOR_FA4"
+_FA4_OPT_IN_DEFAULT = "0"
 # Stage 3 default precision decision (opportunities.md, real Thor
 # checklist against real checkpoint weights + real open-loop LIBERO
 # data): nvfp4 is the fastest AND closest to fp16/GT (actions
@@ -139,7 +148,7 @@ class ImageWAMTorchFrontendThor:
         self.gemm_variant_results: tuple[VariantTuneResult, ...] = ()
         # Roadmap item 6 (opportunities.md OPT-019): resolved attention
         # kernel choice, fixed for this frontend's lifetime.
-        self.use_fa4: bool = fa4_backend.thor_default_enabled() if use_fa4 is None else bool(use_fa4)
+        self.use_fa4: bool = self._resolve_use_fa4(use_fa4)
         self.use_fa4_mot: bool = bool(use_fa4_mot)
         # Real VAE + text-context wiring plan: independent of ckpt_path
         # (OPT-001) -- one loads real transformer weights, this loads a
@@ -338,14 +347,8 @@ class ImageWAMTorchFrontendThor:
             # (benchmarks/imagewam_real_checkpoint_validation.py) --
             # this is now the default for this frontend, not opt-in.
             use_perhead_kv=True, use_real_mot_mask=True,
-            # OPT-005 / OPT-019: FA4 for the "backbone" site. Verified on
-            # Thor for the real per-head convention (cosine=1.000000,
-            # 3.75x per call, -10.5% prefill). `use_fa4=None` (default)
-            # turns it on exactly when `fa4_backend.thor_default_enabled()`
-            # holds (a Thor-family device with an active FA4 runtime) and
-            # keeps the cuBLAS chain everywhere else; an explicit True
-            # still requires the runtime, an explicit False forces the
-            # chain.
+            # OPT-005 / OPT-019: FA4 for the "backbone" site, resolved by
+            # `_resolve_use_fa4` (opt-in; see `_FA4_OPT_IN_ENV`).
             use_fa4=self.use_fa4,
             # OPT-019: FA4 for the "mot" site (unmasked real rule).
             # Opt-in until Thor confirms it.
@@ -359,6 +362,25 @@ class ImageWAMTorchFrontendThor:
         # set_prompt() (depends on that prompt's own real token count),
         # reused by every infer() call until the next set_prompt().
         self._proprio_row = None
+
+    @staticmethod
+    def _resolve_use_fa4(use_fa4: bool | None) -> bool:
+        """`use_fa4` constructor argument -> the backbone-site FA4 choice.
+
+        - `True`: FA4; `ImageWAMAttnBackend` raises if the runtime is missing.
+        - `False`: the cuBLAS chain.
+        - `None` (default): opt-in. False unless `FLASHRT_THOR_FA4=1`; with
+          it, FA4 exactly when `fa4_backend.thor_default_enabled()` holds
+          (compute capability 11.x and an importable FA4 runtime), so it
+          never raises for a missing runtime. FA4 has been measured on Thor
+          at `a0=896` in the per-layer bench (OPT-005), not yet at the
+          served shapes or end to end (OPT-019).
+        """
+        if use_fa4 is not None:
+            return bool(use_fa4)
+        if os.environ.get(_FA4_OPT_IN_ENV, _FA4_OPT_IN_DEFAULT) != "1":
+            return False
+        return fa4_backend.thor_default_enabled()
 
     def _own(self, t: torch.Tensor) -> torch.Tensor:
         """Keep a buffer tensor alive for the frontend's own lifetime.

@@ -135,16 +135,34 @@ def _frontend(**kw):
     return ImageWAMTorchFrontendThor(precision="fp16", dims_override=dict(num_action=16, total=24), **kw)
 
 
-def test_frontend_default_resolves_through_thor_default_enabled(monkeypatch, fa4_calls):
-    monkeypatch.setattr(fa4_backend, "thor_default_enabled", lambda: False)
-    fe = _frontend()
-    assert fe.use_fa4 is False and fe._attn._use_fa4 is False
+@pytest.mark.parametrize("env,runtime,arg,expected", [
+    (None, True, None, False),    # default: opt-in, off even where FA4 would work
+    ("0", True, None, False),
+    ("1", True, None, True),      # FLASHRT_THOR_FA4=1 opts in where FA4 works
+    ("1", False, None, False),    # ... and never raises where it does not
+    (None, True, True, True),     # explicit argument wins over the environment
+    ("1", True, False, False),
+])
+def test_frontend_fa4_resolution(monkeypatch, fa4_calls, env, runtime, arg, expected):
+    from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
+
+    if env is None:
+        monkeypatch.delenv("FLASHRT_THOR_FA4", raising=False)
+    else:
+        monkeypatch.setenv("FLASHRT_THOR_FA4", env)
+    monkeypatch.setattr(fa4_backend, "thor_default_enabled", lambda: runtime)
+    assert ImageWAMTorchFrontendThor._resolve_use_fa4(arg) is expected
+
+
+def test_frontend_default_is_the_cublas_chain(monkeypatch, fa4_calls):
+    monkeypatch.delenv("FLASHRT_THOR_FA4", raising=False)
     monkeypatch.setattr(fa4_backend, "thor_default_enabled", lambda: True)
     fe = _frontend()
-    assert fe.use_fa4 is True and fe._attn._use_fa4 is True
-    fe = _frontend(use_fa4=False)
     assert fe.use_fa4 is False and fe._attn._use_fa4 is False
     assert fe.use_fa4_mot is False and fe._attn._use_fa4_mot is False
+    monkeypatch.setenv("FLASHRT_THOR_FA4", "1")
+    fe = _frontend()
+    assert fe.use_fa4 is True and fe._attn._use_fa4 is True
 
 
 def test_frontend_end_to_end_with_fa4_on_both_sites(fa4_calls):

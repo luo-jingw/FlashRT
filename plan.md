@@ -3366,9 +3366,10 @@ evaluated.
   SDPA flash / cuDNN / mem-efficient) at both sites' shapes, with
   cosine against the cuBLAS chain.
 - Recommendation with evidence per site.
-- If cheap: FA4 on by default on Thor for `"backbone"`, with automatic
-  fallback to the cuBLAS chain when the FA4 runtime is missing or the
-  device is not Thor, and an opt-in FA4 path for `"mot"`. Dispatch
+- If cheap: a Thor FA4 switch for `"backbone"` that resolves to the
+  cuBLAS chain when the FA4 runtime is missing or the device is not
+  Thor. It stays opt-in (`FLASHRT_THOR_FA4=1`) until Thor confirms FA4
+  at the served shapes. Also an opt-in FA4 path for `"mot"`. Dispatch
   logic verified locally against the cuBLAS chain with a
   reference-backed FA4 stand-in. FA4 itself goes on the Thor
   checklist.
@@ -3388,8 +3389,9 @@ evaluated.
   gains `thor_default_enabled() -> bool`, true only on an sm_11x
   device with an active FA4 runtime.
 - `flash_rt/frontends/torch/imagewam_thor.py`: owns the default.
-  `use_fa4: bool | None = None` resolves to
-  `fa4_backend.thor_default_enabled()`. An explicit `True` still
+  `use_fa4: bool | None = None` resolves, through `_resolve_use_fa4`, to
+  False unless `FLASHRT_THOR_FA4=1`. With the variable set, it resolves
+  to `fa4_backend.thor_default_enabled()`. An explicit `True` still
   requires the runtime, and an explicit `False` forces the cuBLAS
   chain. It also gains `use_fa4_mot: bool = False`, passed through.
 - Tests: `tests/test_imagewam_fa4_dispatch.py` (new) checks the
@@ -3404,7 +3406,7 @@ State ownership:
 | state | owner |
 |---|---|
 | FA4 on/off per site | `ImageWAMAttnBackend` instance (`_use_fa4`, `_use_fa4_mot`) |
-| default resolution | frontend constructor, via `fa4_backend.thor_default_enabled()` |
+| default resolution | frontend `_resolve_use_fa4` (`FLASHRT_THOR_FA4`, then `fa4_backend.thor_default_enabled()`) |
 | FA4 runtime availability | `fa4_backend` module |
 
 ## Interface
@@ -3436,7 +3438,7 @@ back to the Q rows. This is the same pattern as the verified
 
 ```
 frontend __init__(use_fa4=None)
-  -> use_fa4 = fa4_backend.thor_default_enabled()      # False on sm_90 / missing runtime
+  -> use_fa4 = FLASHRT_THOR_FA4 == "1" and fa4_backend.thor_default_enabled()   # opt-in
   -> ImageWAMAttnBackend(..., use_fa4=use_fa4, use_fa4_mot=use_fa4_mot)
 prefill:  attn.run("backbone", ...) -> FA4 if use_fa4 else attention_qkv_fp16_perhead
 denoise:  attn.run("mot", ...)      -> FA4 if use_fa4_mot else attention_qkv_fp16_perhead
@@ -3466,11 +3468,12 @@ Phase Status: completed
   attention, per stage. Per-call medians for each kernel, with cosine
   against the cuBLAS chain.
 
-### Phase 2: FA4 default on Thor, opt-in FA4 for `mot`
+### Phase 2: Thor FA4 switch (opt-in), opt-in FA4 for `mot`
 
 Phase Status: completed
 
-- Goal: `use_fa4=None` auto-resolution, `use_fa4_mot`.
+- Goal: `use_fa4=None` resolution (opt-in through `FLASHRT_THOR_FA4=1`),
+  `use_fa4_mot`.
 - Files: `fa4_backend.py`, `attn_backend.py`, `imagewam_thor.py`,
   tests.
 - Observation: dispatch tests show the FA4 branches, with an SDPA

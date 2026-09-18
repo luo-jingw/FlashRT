@@ -3971,14 +3971,20 @@ attempted.
 # OPT-019: attention-chain fusion recheck at ImageWAM's real shapes (roadmap item 6)
 
 Status: analysis done. The H100 numbers are indicative only, because a
-co-tenant training job shares the GPU. Two changes are implemented:
+co-tenant training job shares the GPU. Two changes are implemented, and
+both are opt-in:
 
-- FA4 at the backbone site is on by default on Thor, with automatic
-  fallback. It was verified on Thor earlier (OPT-005).
-- FA4 at the `mot` site is opt-in (`use_fa4_mot=True`).
+- FA4 at the backbone site: `use_fa4=True`, or `FLASHRT_THOR_FA4=1`
+  with the default `use_fa4=None`.
+- FA4 at the `mot` site: `use_fa4_mot=True`.
 
-Neither has been run on Thor in this form. Plan: plan.md "Plan:
-attention-chain fusion recheck at ImageWAM's real shapes".
+FA4 has run on Thor only at `a0 = 896` in the per-layer bench
+(OPT-005). It has not run at the served backbone shape (q = kv = 905,
+a partial last tile), at the `mot` shape (q = 64, kv = 969), inside the
+full captured graph with the real checkpoint, or end to end. The
+shipped `nvfp4` baseline of 231.6 ms was measured with FA4 off. Plan:
+plan.md "Plan: attention-chain fusion recheck at ImageWAM's real
+shapes".
 
 ## Finding 1: the real `mot` rule is plain attention
 
@@ -4065,12 +4071,16 @@ On Thor, FA4 at the backbone site already measured 3.75x per call and
 - `fa4_backend.thor_default_enabled()` returns True only on a
   compute-capability-11.x device whose FA4 runtime imports. It checks
   the device first, so FA4 is never imported off Thor.
-- `ImageWAMTorchFrontendThor(use_fa4=None)` is the new default. It
-  resolves through `thor_default_enabled()`: FA4 at the backbone site
-  on Thor with a working FA4 runtime, and the cuBLAS chain otherwise
-  (missing runtime, sm_90, and so on). `use_fa4=True` still raises
-  without a runtime, and `use_fa4=False` forces the chain. The resolved
-  value is `frontend.use_fa4`.
+- `ImageWAMTorchFrontendThor(use_fa4=None)` is the default and
+  resolves to the cuBLAS chain. `FLASHRT_THOR_FA4=1` opts in: FA4 at
+  the backbone site exactly when `thor_default_enabled()` holds, and
+  the chain otherwise, with no error for a missing runtime.
+  `use_fa4=True` forces FA4 and raises without a runtime, and
+  `use_fa4=False` forces the chain regardless of the environment. The
+  resolved value is `frontend.use_fa4`. Making FA4 the default is a
+  one-line change: `_FA4_OPT_IN_DEFAULT` in `imagewam_thor.py` goes
+  from `"0"` to `"1"`. `FLASHRT_THOR_FA4=0` also stops `fa4_backend`
+  from importing FA4 at all, for every model.
 - `ImageWAMAttnBackend(use_fa4_mot=True)` and
   `ImageWAMTorchFrontendThor(use_fa4_mot=True)` run the `mot` site
   through FA4. Q is the action rows at row offset `a0`, K/V are the
@@ -4094,9 +4104,11 @@ On Thor, FA4 at the backbone site already measured 3.75x per call and
 
 ## Recommendation
 
-1. Backbone: FA4 by default on Thor, as implemented. Confirm on Thor
-   that `frontend.use_fa4` resolves to True, then run the real-shape
-   test and the end-to-end check.
+1. Backbone: make FA4 the Thor default (`_FA4_OPT_IN_DEFAULT = "1"`)
+   once Thor passes three checks, each run with FA4 opted in:
+   - the real-shape test at q = kv = 905 and at 64 over 969;
+   - an nvfp4 end-to-end official compare with FA4 on vs off;
+   - an `infer()` A/B with FA4 on vs off.
 2. `mot`: FA4 is the strongest remaining attention lever. It is the
    same unmasked math, and on H100 an sm_90 fused kernel took the
    bigger share of the in-pipeline gain. Flip `use_fa4_mot` to default
