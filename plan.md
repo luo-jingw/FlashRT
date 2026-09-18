@@ -3213,7 +3213,7 @@ CUDA graph.
 
 ### Phase 1 — Reference math and unit tests
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: a PyTorch reference that reproduces the repository's NVFP4 and
   E0M3 quantizers, the H16 rotation, and the packed/SF byte layout.
@@ -3227,7 +3227,7 @@ Phase Status: active
 
 ### Phase 2 — Accuracy study on H100 (decision gate)
 
-Phase Status: pending
+Phase Status: active
 
 - Goal: per-GEMM and whole-pipeline simulated accuracy of `nvfp4`,
   `nvfp4` with MSE weights, E0M3 weights with E2M1 activations, E0M3
