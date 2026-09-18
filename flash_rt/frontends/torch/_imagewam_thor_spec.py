@@ -35,13 +35,22 @@ own fused `qkv` tensor directly (a real checkpoint's `img_attn.qkv`/
 splitting needed, unlike an earlier version of this file that
 deliberately kept Q/K/V separate for pointer-code simplicity — that
 turned out to cost both a real GEMM launch and checkpoint-native-ness
-for no benefit). `proj`/`attn_out_proj` (the OUTPUT projection) and
-`mlp0`/`mlp2` (or `mlp_in`/`mlp_down`) remain separate GEMMs — only the
-QKV *input* projection fuses, since `pipeline_thor.py`'s own
+for no benefit). In double-stream blocks `proj` (the OUTPUT projection)
+and `mlp0`/`mlp2` remain separate GEMMs, since `pipeline_thor.py`'s own
 `_double_stream_layer`/etc. need Q and K to land in two DIFFERENT
 persistent buffers (`Q_O`/`K_cache`) afterward regardless (one GEMM
-into a wide scratch buffer, then 3 slice-copies), while `proj`'s single
-output has nowhere else fusing could help.
+into a wide scratch buffer, then 3 slice-copies).
+
+Single-stream blocks: the `*_SINGLE_LAYER_SHAPES` tables below list the
+split layout (`qkv` + `mlp_in`, `attn_out_proj` + `mlp_down`), which only
+`precision="fp16_cutlass"` loads. Every other precision loads the real
+checkpoint's two fused tensors unsplit (`dims["merge_qkv_mlp"]`,
+`dims["merge_linear2"]`), in the same (K,N) GEMM convention:
+`linear1.weight` `(width_in, 3*attn_width + 2*mlp_hidden)` and
+`linear2.weight` `(attn_width + mlp_hidden, width_out)` -- backbone
+`(3072, 27648)` / `(12288, 3072)`, ActionDiT `(1024, 20480)` /
+`(7168, 1024)`. `tests/test_imagewam_thor_precision_routing.py` holds
+the per-precision slot contract.
 
 Real checkpoint loading (when it exists) will go through ImageWAM's
 own Python model classes plus `benchmarks/imagewam_real_checkpoint_validation.py`'s
@@ -137,9 +146,10 @@ BACKBONE_DOUBLE_LAYER_SHAPES: dict[str, tuple[int, ...]] = {
     "txt_key_norm": (SPEC.backbone_head_dim,),
 }
 
-# Single-stream blocks: img+txt merged into one stream. Real fused
-# linear1(QKV+MLP-up)/linear2(attn-out+MLP-down) represented as
-# separate GEMMs, except QKV itself which fuses -- see module docstring.
+# Single-stream blocks: img+txt merged into one stream. Split layout of
+# the real fused linear1(QKV+MLP-up)/linear2(attn-out+MLP-down), loaded
+# only under fp16_cutlass; every other precision loads linear1.weight /
+# linear2.weight unsplit -- see module docstring.
 BACKBONE_SINGLE_LAYER_SHAPES: dict[str, tuple[int, ...]] = {
     "qkv.weight": (SPEC.backbone_hidden, 3 * SPEC.backbone_hidden),
     "attn_out_proj.weight": (SPEC.backbone_hidden, SPEC.backbone_hidden),

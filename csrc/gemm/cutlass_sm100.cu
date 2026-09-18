@@ -7,6 +7,8 @@
 //   - WideGemm (256×128×128): Down projection
 //   - PlainGemm (256×128×64): General fallback
 //   - GeluGemm (256×128×64 + GELU): SigLIP FFN Up
+//   - sm100_small_m (128×{64,128,256}×{128,256}, 1-SM, cluster 1×1×1):
+//     small-M GEMMs (ImageWAM ActionDiT, M = 64)
 //
 // All use FP8 E4M3 inputs → FP16 output (matching Thor pipeline).
 // Weight B is ColumnMajor (stored as [K, N] row-major in memory).
@@ -95,6 +97,27 @@ int cutlass_fp8_plain(void* A, void* B, void* D, int M, int N, int K,
 int cutlass_fp8_gelu(void* A, void* B, void* D, int M, int N, int K,
                       float alpha, float beta, cudaStream_t stream) {
     return cutlass_run_impl<sm100_gelu::Gemm>(A, B, D, M, N, K, alpha, beta, stream);
+}
+
+// Small-M 1-SM tiles, cluster 1x1x1 (gemm_types_sm100.h, sm100_small_m).
+int cutlass_fp8_t128x64x256(void* A, void* B, void* D, int M, int N, int K,
+                             float alpha, float beta, cudaStream_t stream) {
+    return cutlass_run_impl<sm100_small_m::T128x64x256::Gemm>(A, B, D, M, N, K, alpha, beta, stream);
+}
+
+int cutlass_fp8_t128x64x128(void* A, void* B, void* D, int M, int N, int K,
+                             float alpha, float beta, cudaStream_t stream) {
+    return cutlass_run_impl<sm100_small_m::T128x64x128::Gemm>(A, B, D, M, N, K, alpha, beta, stream);
+}
+
+int cutlass_fp8_t128x128x128(void* A, void* B, void* D, int M, int N, int K,
+                              float alpha, float beta, cudaStream_t stream) {
+    return cutlass_run_impl<sm100_small_m::T128x128x128::Gemm>(A, B, D, M, N, K, alpha, beta, stream);
+}
+
+int cutlass_fp8_t128x256x128(void* A, void* B, void* D, int M, int N, int K,
+                              float alpha, float beta, cudaStream_t stream) {
+    return cutlass_run_impl<sm100_small_m::T128x256x128::Gemm>(A, B, D, M, N, K, alpha, beta, stream);
 }
 
 // FP32 output variants — for models with activations exceeding FP16 range

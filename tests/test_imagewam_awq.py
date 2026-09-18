@@ -12,8 +12,10 @@ Pipeline: at toy dims, the served pipeline with every AWQ weight
 transformed (rows x s, up columns x 1/s) and the fold-A hook active, but
 NO quantization (plain fp16 GEMMs), must reproduce the untransformed
 pipeline up to fp16 rounding -- the end-to-end check that every fold is
-wired to the right GEMM.
+wired to the right GEMM, with the gated residual + AdaLN fusion on and
+off and with the merged and split single-stream linear2.
 """
+import pytest
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
@@ -138,9 +140,14 @@ def _view(ptr: int, k: int, n: int) -> torch.Tensor:
     return torch.as_tensor(type("_V", (), {"__cuda_array_interface__": interface})(), device=DEV)
 
 
-def test_pipeline_with_awq_folds_matches_unscaled_fp16():
+@pytest.mark.parametrize("dims_override", [
+    None,                                                  # served: fused residual+AdaLN, merged linear2
+    {"fuse_res_norm": False},                              # standalone AdaLN kernels
+    {"fuse_res_norm": False, "merge_linear2": False},      # split attn_out_proj / mlp_down
+])
+def test_pipeline_with_awq_folds_matches_unscaled_fp16(dims_override):
     torch.manual_seed(2)
-    fe = ImageWAMTorchFrontendThor(precision="fp16")
+    fe = ImageWAMTorchFrontendThor(precision="fp16", dims_override=dims_override)
     fe.set_prompt()
     noise = torch.randn(fe.dims["num_action"], fe.dims["action_dim"], device=DEV)
     fe.stage_inputs({}, noise=noise)
@@ -172,7 +179,7 @@ def test_pipeline_with_awq_folds_matches_unscaled_fp16():
         c_a = torch.nn.functional.cosine_similarity(fe._action_latent.flatten(), ref_latent.flatten(),
                                                     dim=0).item()
         _, rl_a, _ = _errors(fe._action_latent, ref_latent)
-        print(f"scope={scope}: {n_fold_a} fold-A weights, {n_fold_b} fold-B weights; "
+        print(f"{dims_override} scope={scope}: {n_fold_a} fold-A weights, {n_fold_b} fold-B weights; "
               f"backbone_hidden cos={c_h:.7f} action_latent cos={c_a:.7f} rel_l2={rl_a:.2e}")
         assert n_fold_a > 0 and (scope == "adaln" or n_fold_b > 0)
         assert c_h > 0.9999 and c_a > 0.9999

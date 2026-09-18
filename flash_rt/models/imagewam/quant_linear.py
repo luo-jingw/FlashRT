@@ -360,6 +360,16 @@ def _pick_fp8_cutlass_variant(n: int, k: int) -> str:
     return "sq"
 
 
+# Every `cutlass_fp8_*` FP16-output GEMM tile a `StaticFp8Linear(use_cutlass=True)`
+# can switch to (`gemm_variant_tuner.VariantTunableGemm`). The first four are
+# the 256-row / clustered tiles `csrc/gemm/cutlass_sm100.cu` has always had;
+# the `t128x*` tiles are the 1-SM, cluster 1x1x1 small-M tiles
+# (`gemm_types_sm100.h`, `sm100_small_m`), `t128x64x256` being Pi0.5's v10
+# decoder tile shape.
+FP8_CUTLASS_VARIANTS = ("sq", "wide", "t1", "plain",
+                        "t128x64x256", "t128x64x128", "t128x128x128", "t128x256x128")
+
+
 class StaticFp8Linear:
     """`out[M,N]` (fp16) `= x[M,K]` (fp16, quantized to fp8 with a
     FROZEN static scale) `@ W[K,N]` (fp8, quantized ONCE at
@@ -409,12 +419,25 @@ class StaticFp8Linear:
     `__call__` also raises, since that ordering bug is just as real
     (silently producing a captured graph whose replay never matches
     what was verified before capture) and just as cheap to catch here.
+
+    **Tile variant (`use_cutlass=True` only)**: implements
+    `gemm_variant_tuner.VariantTunableGemm` with `family="fp8_cutlass"`.
+    `default_variant` is `_pick_fp8_cutlass_variant`'s pick and is what
+    `__call__` runs until `set_variant` changes it; a CUDA graph captures
+    the variant current at capture time. The tuning methods stage their
+    own activation copy and scale and never touch `act_scale` or the
+    calibrate/call ordering state. With `use_cutlass=False` (cuBLASLt)
+    there is one GEMM path: `family="fp8_cublaslt"`, `variant="cublaslt"`,
+    and the tuning methods raise.
     """
 
     def __init__(self, weight_fp16_ptr: int, n: int, k: int, *, use_cutlass: bool = False,
                  layout: str | None = None):
         self.n, self.k = int(n), int(k)
         self.use_cutlass = use_cutlass
+        self.family = "fp8_cutlass" if use_cutlass else "fp8_cublaslt"
+        self.default_variant = "cublaslt"
+        self.variant = "cublaslt"
         self._calibrated = False
         self._called = False
 
@@ -430,7 +453,8 @@ class StaticFp8Linear:
             if layout is not None:
                 raise ValueError("layout= selects the cuBLASLt layout; the CUTLASS path "
                                  "always stores the weight (N,K)")
-            self._variant = _pick_fp8_cutlass_variant(self.n, self.k)
+            self.default_variant = _pick_fp8_cutlass_variant(self.n, self.k)
+            self.variant = self.default_variant
             # (N,K), CUTLASS's own out-major convention -- same storage as
             # the cuBLASLt "tn" layout.
             self.layout = None
@@ -445,6 +469,9 @@ class StaticFp8Linear:
         self.act_scale = torch.zeros(1, dtype=torch.float32, device=DEV)
         self.act_f8 = None
         self._max_m = 0
+        self._tune_act_f8 = None
+        self._tune_scale = None
+        self._tune_alpha = 1.0
 
     def set_activation_scale(self, scale: float) -> None:
         """Freeze the activation scale to a precomputed value (a real
@@ -495,15 +522,64 @@ class StaticFp8Linear:
         fvk.quantize_fp8_static_fp16(x_ptr, self.act_f8.data_ptr(), self.act_scale.data_ptr(),
                                       m * self.k, stream)
         if self.use_cutlass:
-            cutlass_fn = getattr(fvk, f"cutlass_fp8_{self._variant}")
+            cutlass_fn = getattr(fvk, f"cutlass_fp8_{self.variant}")
             rc = cutlass_fn(self.act_f8.data_ptr(), self.w_f8.data_ptr(), out_ptr,
                              m, self.n, self.k, self._alpha_host, 0.0, stream)
             if rc != 0:
-                raise RuntimeError(f"cutlass_fp8_{self._variant} failed rc={rc}")
+                raise RuntimeError(f"cutlass_fp8_{self.variant} failed rc={rc}")
         else:
             self._gemm_fn(self.act_f8.data_ptr(), self.w_f8.data_ptr(), out_ptr,
                           m, self.n, self.k, self.act_scale.data_ptr(), self.w_scale.data_ptr(),
                           stream)
+
+    def _require_cutlass(self) -> None:
+        if not self.use_cutlass:
+            raise RuntimeError("tile variants exist only for StaticFp8Linear(use_cutlass=True)")
+
+    def candidate_variants(self) -> tuple[str, ...]:
+        self._require_cutlass()
+        return FP8_CUTLASS_VARIANTS
+
+    def set_variant(self, variant: str) -> None:
+        self._require_cutlass()
+        if variant not in FP8_CUTLASS_VARIANTS:
+            raise ValueError(f"unknown FP8 CUTLASS variant {variant!r}; known: {FP8_CUTLASS_VARIANTS}")
+        self.variant = variant
+
+    def prepare_tuning_input(self, x_ptr: int, m: int, stream: int = 0) -> None:
+        """Quantize `x` into this op's own tuning buffer with its own
+        dynamic scale (not `act_scale`, which `calibrate()` owns)."""
+        self._require_cutlass()
+        self._tune_act_f8 = torch.empty(m, self.k, dtype=F8, device=DEV)
+        self._tune_scale = torch.zeros(1, dtype=torch.float32, device=DEV)
+        fvk.quantize_fp8_device_fp16(x_ptr, self._tune_act_f8.data_ptr(), self._tune_scale.data_ptr(),
+                                      m * self.k, stream)
+        torch.cuda.synchronize()
+        self._tune_alpha = float(np.float32(self._tune_scale.item()) * np.float32(self.w_scale.item()))
+
+    def launch_variant(self, variant: str, out_ptr: int, m: int, stream: int = 0) -> int:
+        self._require_cutlass()
+        if self._tune_act_f8 is None:
+            raise RuntimeError("launch_variant() before prepare_tuning_input()")
+        cutlass_fn = getattr(fvk, f"cutlass_fp8_{variant}")
+        return int(cutlass_fn(self._tune_act_f8.data_ptr(), self.w_f8.data_ptr(), out_ptr,
+                              m, self.n, self.k, self._tune_alpha, 0.0, stream))
+
+
+# `cutlass_fp4_gemm_variant` indices (csrc/gemm/fp4/cutlass_fp4_gemm_variants.cu)
+# an `Nvfp4Linear` can switch to: every cluster-1x1x1 tile. v4 128x128x128,
+# v5 128x64x128, v6 128x256x128, v7 128x128x256, v8 128x256x256, v10
+# 128x64x256 (Pi0.5's decoder tile). The clustered tiles (v0-v3, v9) are left
+# out: Pi0.5 measured cluster tiles winning in isolation and losing in the
+# pipeline on Thor (docs/pi05_thor_decoder_fp4_e2e.md). The default pick
+# (`fp4_utils.pick_variant`) is always a candidate too.
+NVFP4_VARIANTS = ("v4", "v5", "v6", "v7", "v8", "v10")
+
+
+def _nvfp4_variant_index(variant: str) -> int:
+    if not variant.startswith("v") or not variant[1:].isdigit():
+        raise ValueError(f"NVFP4 variant must look like 'v<index>', got {variant!r}")
+    return int(variant[1:])
 
 
 class Nvfp4Linear(AwqScaledLinear):
@@ -526,14 +602,28 @@ class Nvfp4Linear(AwqScaledLinear):
     (`.t().contiguous()`) handles this; every OTHER call site in this
     module and in `pipeline_thor.py` itself stays in the usual `(K,N)`
     convention, only this class's own constructor differs internally.
+
+    **Tile variant**: implements `gemm_variant_tuner.VariantTunableGemm`
+    with `family="nvfp4"`. `default_variant` is `fp4_utils.pick_variant`'s
+    pick (what `fp4_gemm` has always selected here) and is what
+    `__call__` runs until `set_variant` changes it; a CUDA graph captures
+    the variant current at capture time.
     """
+
+    family = "nvfp4"
 
     def __init__(self, weight_fp16_ptr: int, n: int, k: int, *, awq_inv_s: torch.Tensor | None = None):
         super().__init__()
         self._awq_inv_s = awq_inv_s
         try:
-            import flash_rt.flash_rt_fp4  # noqa: F401 -- import-time availability check
-            from flash_rt.executors.fp4_utils import FP4ActScratch, fp4_gemm, quant_act_nvfp4, quant_weight_nvfp4
+            import flash_rt.flash_rt_fp4 as fvk_fp4
+            from flash_rt.executors.fp4_utils import (
+                FP4ActScratch,
+                fp4_gemm,
+                pick_variant,
+                quant_act_nvfp4,
+                quant_weight_nvfp4,
+            )
         except ImportError as e:
             raise RuntimeError(
                 "Nvfp4Linear requires a Blackwell/Thor NVFP4 build "
@@ -543,10 +633,13 @@ class Nvfp4Linear(AwqScaledLinear):
             ) from e
         if k % 16 != 0:
             raise ValueError(f"NVFP4 requires K divisible by 16, got K={k}")
+        self._fvk_fp4 = fvk_fp4
         self._fp4_act_scratch_cls = FP4ActScratch
         self._fp4_gemm = fp4_gemm
         self._quant_act = quant_act_nvfp4
         self.n, self.k = int(n), int(k)
+        self.default_variant = f"v{pick_variant(self.n, self.k)}"
+        self.variant = self.default_variant
 
         w_kn = _wrap_fp16(weight_fp16_ptr, self.k, self.n)  # (K,N), this project's own convention
         w_nk = w_kn.t().contiguous()  # (N,K), NVFP4's own convention -- one-time real copy
@@ -557,13 +650,42 @@ class Nvfp4Linear(AwqScaledLinear):
     def awq_inv_s(self) -> torch.Tensor | None:
         return self._awq_inv_s
 
-    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
-        if self.scratch is None:
+    def _ensure_scratch(self, m: int) -> None:
+        if self.scratch is None or m > self.scratch.max_M:
             self.scratch = self._fp4_act_scratch_cls(m, self.k, device=DEV)
+
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
+        self._ensure_scratch(m)
         x = _wrap_fp16(x_ptr, m, self.k)
         out = _wrap_fp16(out_ptr, m, self.n)
         self._quant_act(x, self.scratch, m, stream)
-        self._fp4_gemm(self.scratch, self.w_quant, out, m, self.n, self.k, stream=stream)
+        self._fp4_gemm(self.scratch, self.w_quant, out, m, self.n, self.k,
+                       variant_idx=_nvfp4_variant_index(self.variant), stream=stream)
+
+    def candidate_variants(self) -> tuple[str, ...]:
+        return NVFP4_VARIANTS
+
+    def set_variant(self, variant: str) -> None:
+        idx = _nvfp4_variant_index(variant)
+        count = int(self._fvk_fp4.cutlass_fp4_gemm_num_variants())
+        if not 0 <= idx < count:
+            raise ValueError(f"NVFP4 variant {variant!r} out of range [0, {count})")
+        self.variant = variant
+
+    def prepare_tuning_input(self, x_ptr: int, m: int, stream: int = 0) -> None:
+        """Quantize `x` into this op's own activation scratch (the same
+        buffer `__call__` uses; the next `__call__` overwrites it)."""
+        self._ensure_scratch(m)
+        self._quant_act(_wrap_fp16(x_ptr, m, self.k), self.scratch, m, stream)
+
+    def launch_variant(self, variant: str, out_ptr: int, m: int, stream: int = 0) -> int:
+        if self.scratch is None:
+            raise RuntimeError("launch_variant() before prepare_tuning_input()")
+        return int(self._fvk_fp4.cutlass_fp4_gemm_variant(
+            _nvfp4_variant_index(variant),
+            self.scratch.packed.data_ptr(), self.scratch.sfa.data_ptr(),
+            self.w_quant['packed'].data_ptr(), self.w_quant['sfb'].data_ptr(),
+            out_ptr, m, self.n, self.k, 1.0, 0.0, stream))
 
 
 class Nvfp4SwiGluMlp:

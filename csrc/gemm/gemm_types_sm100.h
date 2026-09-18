@@ -189,6 +189,50 @@ using Gemm = cutlass::gemm::device::GemmUniversalAdapter<
 }  // namespace sm100_t2
 
 // ============================================================
+//  Small-M 1-SM tiles, Cluster 1×1×1
+//  Every tile above is 256 rows or pairs two SMs through a cluster,
+//  so at small M (ImageWAM ActionDiT, M = 64) most of each MMA is
+//  padding and an N = 1024 GEMM launches only 4 useful CTAs. These
+//  tiles give one CTA per 128-row x N-tile block, no cluster pairing.
+//  Template: Pi0.5's NVFP4 decoder tile v10 (128×64×256, cluster
+//  1×1×1, csrc/gemm/fp4/cutlass_fp4_gemm_variants.cu). With cluster
+//  1×1×1, KernelScheduleAuto selects the 1-SM MMA.
+// ============================================================
+namespace sm100_small_m {
+template <class Tile>
+struct Fp8Fp16OutGemm {
+  using Cluster = Shape<_1, _1, _1>;
+  using Fusion = cutlass::epilogue::fusion::LinCombEltAct<
+      cutlass::epilogue::thread::Identity, cutlass_fp16, float>;
+  using Epi = typename cutlass::epilogue::collective::CollectiveBuilder<
+      cutlass::arch::Sm100, cutlass::arch::OpClassTensorOp,
+      Tile, Cluster, cutlass::epilogue::collective::EpilogueTileAuto,
+      float, float, cutlass_fp16, cutlass::layout::RowMajor, 8,
+      cutlass_fp16, cutlass::layout::RowMajor, 8,
+      cutlass::epilogue::collective::EpilogueScheduleAuto, Fusion>::CollectiveOp;
+  using Main = typename cutlass::gemm::collective::CollectiveBuilder<
+      cutlass::arch::Sm100, cutlass::arch::OpClassTensorOp,
+      cutlass_fp8, cutlass::layout::RowMajor, 16,
+      cutlass_fp8, cutlass::layout::ColumnMajor, 16,
+      float, Tile, Cluster,
+      cutlass::gemm::collective::StageCountAutoCarveout<
+          static_cast<int>(sizeof(typename Epi::SharedStorage))>,
+      cutlass::gemm::collective::KernelScheduleAuto>::CollectiveOp;
+  using Gemm = cutlass::gemm::device::GemmUniversalAdapter<
+      cutlass::gemm::kernel::GemmUniversal<Shape<int,int,int,int>, Main, Epi>>;
+};
+
+// v10 shape: narrow N + wide K.
+using T128x64x256  = Fp8Fp16OutGemm<Shape<_128, _64, _256>>;
+// v5 shape: narrow N, deeper pipeline.
+using T128x64x128  = Fp8Fp16OutGemm<Shape<_128, _64, _128>>;
+// v4 shape.
+using T128x128x128 = Fp8Fp16OutGemm<Shape<_128, _128, _128>>;
+// v6 shape: wide N for the wide QKV / linear1 GEMMs.
+using T128x256x128 = Fp8Fp16OutGemm<Shape<_128, _256, _128>>;
+}  // namespace sm100_small_m
+
+// ============================================================
 //  FP32 Output Variants — for models with activations > FP16 range
 //  (e.g., Pi0-FAST Gemma 2B deep layers where residual > 65504)
 //  Same tile configs, only output dtype changed: cutlass_fp16 → float

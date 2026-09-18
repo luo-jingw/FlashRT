@@ -695,7 +695,8 @@ class ImageWAMAttnBackend(AttentionBackendBase):
 
     def __init__(self, spec: AttentionSpec, ctx, *,
                  backbone_slots: dict, mot_slots: dict, use_fa4: bool = False,
-                 use_perhead_kv: bool = False, use_real_mot_mask: bool = False):
+                 use_perhead_kv: bool = False, use_real_mot_mask: bool = False,
+                 use_fa4_mot: bool = False):
         """
         Args:
             spec: built by ``make_imagewam_attention_spec``.
@@ -709,6 +710,14 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                 ``"layer_stride"`` (bytes between consecutive layers'
                 K/V, used to derive per-layer pointers exactly like
                 ``ThorFlashAttnBackend`` does for encoder/decoder).
+                A site that runs FA4 (``use_fa4`` for "backbone",
+                ``use_fa4_mot`` for "mot") also needs ``"fa4_out"``
+                (fp16 device pointer) and ``"fa4_out_numel"`` (its
+                capacity in elements, at least ``max_q_seq * num_q_heads
+                * head_dim`` of that site): FA4 cannot write its output
+                over its own Q input, so it writes here and the result is
+                copied back to the Q rows. Both sites may share one
+                buffer. Checked at construction and on every call.
             use_fa4: OPT-005 (opportunities.md). Dispatch the "backbone"
                 site's plain self-attention through FA4 instead of the
                 cuBLAS-composed ``attention_qkv_fp16``/``_perhead``
@@ -794,6 +803,19 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                 assumption, not a drop-in-safe optimization like
                 ``use_fa4``/``use_perhead_kv``, so it stays opt-in until
                 validated against a real checkpoint.
+            use_fa4_mot: roadmap item 6 (opportunities.md OPT-019).
+                Dispatch the "mot" site through FA4 as plain non-causal
+                attention: the action rows' Q at row offset ``a0``
+                (``(1, q_seq, NH, HD)``) over the full per-head K/V
+                (``(1, kv_seq, NH, HD)``), ``pack_gqa=False``,
+                ``num_splits=1``, output staged in ``fa4_out`` and
+                copied back to the Q rows. This is the same math as the
+                unmasked ``attention_qkv_fp16_perhead`` branch, so it
+                requires ``use_real_mot_mask=True`` and
+                ``use_perhead_kv=True``; the legacy three-region mask
+                has no FA4 form here, and the constructor raises for
+                that combination. Default False. Raises when the FA4
+                runtime is missing, like ``use_fa4``.
         """
         super().__init__(spec)
         expected_sites = {"backbone", "mot"}
@@ -807,15 +829,20 @@ class ImageWAMAttnBackend(AttentionBackendBase):
         self._use_fa4 = bool(use_fa4)
         self._use_perhead_kv = bool(use_perhead_kv)
         self._use_real_mot_mask = bool(use_real_mot_mask)
+        self._use_fa4_mot = bool(use_fa4_mot)
+        if self._use_fa4_mot and not (self._use_real_mot_mask and self._use_perhead_kv):
+            raise ValueError(
+                "ImageWAMAttnBackend use_fa4_mot=True requires use_real_mot_mask=True "
+                "and use_perhead_kv=True (FA4 runs the unmasked per-head rule only)")
         self._fa4_fwd = None
-        if self._use_fa4:
+        if self._use_fa4 or self._use_fa4_mot:
             from flash_rt.hardware.thor import fa4_backend
 
             self._fa4_fwd = fa4_backend.fa4_fwd()
             if self._fa4_fwd is None:
                 raise RuntimeError(
-                    "ImageWAMAttnBackend use_fa4=True requires an active "
-                    f"Thor FA4 runtime: {fa4_backend.status()}")
+                    "ImageWAMAttnBackend use_fa4=True / use_fa4_mot=True requires an "
+                    f"active Thor FA4 runtime: {fa4_backend.status()}")
         self._slots = {"backbone": dict(backbone_slots), "mot": dict(mot_slots)}
         for site_name in ("backbone", "mot"):
             slot = self._slots[site_name]
@@ -824,6 +851,19 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                     raise ValueError(f"{site_name}_slots missing required key {key!r}")
                 if int(slot[key]) == 0:
                     raise ValueError(f"{site_name}_slots[{key!r}] is a null device pointer")
+
+        for site_name, enabled in (("backbone", self._use_fa4), ("mot", self._use_fa4_mot)):
+            if not enabled:
+                continue
+            slot = self._slots[site_name]
+            site_spec = spec.site(site_name)
+            need = site_spec.max_q_seq * site_spec.num_q_heads * site_spec.head_dim
+            if int(slot.get("fa4_out", 0)) == 0:
+                raise ValueError(f"{site_name}_slots needs a non-null 'fa4_out' pointer when that site runs FA4")
+            if int(slot.get("fa4_out_numel", 0)) < need:
+                raise ValueError(
+                    f"{site_name}_slots['fa4_out_numel']={int(slot.get('fa4_out_numel', 0))} < "
+                    f"max_q_seq*num_q_heads*head_dim={need}")
 
         # Both sites index into the same per-layer K/V buffers -- one
         # cache, not two. layer_stride comes from "mot" (the site with
@@ -864,6 +904,14 @@ class ImageWAMAttnBackend(AttentionBackendBase):
         if stream == 0:
             return torch.cuda.stream(torch.cuda.default_stream())
         return torch.cuda.stream(torch.cuda.ExternalStream(target))
+
+    def _fa4_output(self, slot: dict, q_seq: int, num_heads: int, head_dim: int):
+        """FA4 output view `(1, q_seq, num_heads, head_dim)` over the
+        site's dedicated `fa4_out` buffer, bounds-checked."""
+        numel = q_seq * num_heads * head_dim
+        if numel > int(slot["fa4_out_numel"]):
+            raise ValueError(f"FA4 output of {numel} elements exceeds fa4_out_numel={int(slot['fa4_out_numel'])}")
+        return _fp16_tensor_from_ptr(int(slot["fa4_out"]), (1, q_seq, num_heads, head_dim))
 
     def get_slot_ptrs(self, site: str, layer_idx: int) -> dict[str, int]:
         if site not in self._slots:
@@ -948,14 +996,14 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                     v_tensor = _fp16_tensor_from_ptr(
                         V_ptr, (1, kv_seq, 1, site_spec.head_dim))
                     pack_gqa = True
-                # `logits` is reused as FA4's own output scratch (FA4
-                # cannot alias its Q input as output); the result is
-                # then copied into Q_O, matching Pi0.5's own pattern
-                # and this class's own pointer-stability contract
-                # (callers read the attention result from Q_O, not
-                # from `logits`).
-                output = _fp16_tensor_from_ptr(
-                    int(s["logits"]), (1, q_seq, site_spec.num_q_heads, site_spec.head_dim))
+                # FA4 cannot alias its Q input as output: it writes the
+                # dedicated `fa4_out` buffer and the result is copied
+                # into Q_O, matching Pi0.5's own pattern and this class's
+                # pointer-stability contract (callers read the attention
+                # result from Q_O). `logits` is sized for the cuBLAS
+                # chain's score matrix, not for q_seq*NH*HD, and is not
+                # used here (OPT-019).
+                output = self._fa4_output(s, q_seq, site_spec.num_q_heads, site_spec.head_dim)
                 with self._fa4_stream_context(stream):
                     self._fa4_fwd(
                         q_tensor, k_tensor, v_tensor, causal=False,
@@ -1036,6 +1084,20 @@ class ImageWAMAttnBackend(AttentionBackendBase):
                 # mask needs NO exclusion at all -- see this flag's own
                 # docstring. Dispatch through the same plain kernels
                 # "backbone" already uses.
+                if self._use_fa4_mot:
+                    q_tensor = _fp16_tensor_from_ptr(
+                        q_out_ptr, (1, num_action, site_spec.num_q_heads, site_spec.head_dim))
+                    k_tensor = _fp16_tensor_from_ptr(
+                        K_ptr, (1, kv_seq, site_spec.num_q_heads, site_spec.head_dim))
+                    v_tensor = _fp16_tensor_from_ptr(
+                        V_ptr, (1, kv_seq, site_spec.num_q_heads, site_spec.head_dim))
+                    output = self._fa4_output(s, num_action, site_spec.num_q_heads, site_spec.head_dim)
+                    with self._fa4_stream_context(stream):
+                        self._fa4_fwd(
+                            q_tensor, k_tensor, v_tensor, softmax_scale=float(s["scale"]),
+                            causal=False, num_splits=1, pack_gqa=False, out=output)
+                        q_tensor.copy_(output)
+                    return q_out_ptr
                 if self._use_perhead_kv:
                     fvk.attention_qkv_fp16_perhead(
                         self._ctx_cpp,

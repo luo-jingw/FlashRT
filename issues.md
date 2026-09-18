@@ -263,6 +263,478 @@ turn the latency verdict into `blocked` is open.
 
 ## Resolution
 
+# ISSUE-020
+
+Status: open
+
+Area: text-token key padding in every attention call
+(`flash_rt/hardware/thor/attn_backend.py` `ImageWAMAttnBackend`, both
+sites; `flash_rt/models/imagewam/pipeline_thor.py`)
+
+## Observation
+
+The served pipeline attends to every one of the `x0` context rows. The
+Qwen3 context is tokenized to a fixed 512 tokens with
+`padding="max_length"` (`flash_rt/models/imagewam/text_encoder.py`).
+LIBERO prompts have 16-31 valid tokens, so about 490 of the 512 text
+rows are padding.
+
+Official `_build_mot_attention_mask_flux2` in
+`imagewam/models/backbones/imagewam.py` excludes the padded text keys
+for every query row:
+
+```python
+mask[:, :, t0:r0] &= text_valid[:, None, :]
+```
+
+`infer_action_flux2` passes `text_attention_mask` to both of its calls,
+the backbone prefill (`action_len=0`) and the action site
+(`action_len>0`). `target_len=0` removes only the region mask.
+FlashRT's `set_prompt()` reads `context_mask` only to place the
+proprio row. At both attention sites FlashRT attends to the padded
+keys and official does not.
+
+## Impact
+
+This one difference accounts for almost all of FlashRT's deviation
+from official, and on some frames it is larger than official's own
+seed-to-seed spread.
+
+Measurement setup:
+
+- 60 LIBERO frames: `libero_spatial`, `libero_goal` and `libero_10`,
+  10 tasks x frames {0, 60} each.
+- FlashRT fp16 against official bf16, seed 0, the same N(0,1) initial
+  noise on both sides, H100.
+- The official variants patch `_build_mot_attention_mask_flux2` to drop
+  `text_attention_mask` at both calls, at the prefill call only, or at
+  the action call only.
+
+Action cosine:
+
+| comparison | median | min | mean |
+|---|---:|---:|---:|
+| FlashRT vs official (masked, as shipped) | 0.99809 | 0.92997 | 0.99543 |
+| FlashRT vs official with the text mask removed at both calls | 0.999979 | 0.99758 | 0.99990 |
+| official masked vs official unmasked | 0.99812 | 0.92807 | 0.99557 |
+| official, mask dropped at the prefill call only, vs masked | 0.99918 | 0.93622 | 0.99631 |
+| official, mask dropped at the action call only, vs masked | 0.99825 | 0.98264 | 0.99794 |
+| official seed 0 vs seed 1 (masked) | 0.99656 | 0.77926 | 0.98782 |
+
+Per suite:
+
+| suite | valid text tokens | FlashRT vs official median / min | FlashRT vs unmasked official median / min | official masked vs unmasked median / min |
+|---|---|---|---|---|
+| libero_spatial | 26-31 | 0.99840 / 0.99567 | 0.99998 / 0.99994 | 0.99839 / 0.99585 |
+| libero_goal | 16-21 | 0.99681 / 0.92997 | 0.99998 / 0.99971 | 0.99690 / 0.92807 |
+| libero_10 | 20-31 | 0.99860 / 0.96642 | 0.99998 / 0.99758 | 0.99860 / 0.97533 |
+
+Four of 60 frames fall below 0.99 against official:
+
+| frame | valid tokens | FlashRT vs official | FlashRT vs unmasked official | official masked vs unmasked | official seed 0 vs 1 |
+|---|---:|---:|---:|---:|---:|
+| libero_goal ep 0, frame 0 | 19 | 0.92997 | 0.99996 | 0.92807 | 0.99756 |
+| libero_10 ep 0, frame 60 | 24 | 0.96642 | 0.99758 | 0.97533 | 0.77926 |
+| libero_goal ep 300, frame 0 | 19 | 0.98105 | 0.99998 | 0.98091 | 0.99554 |
+| libero_goal ep 338, frame 0 | 21 | 0.98137 | 0.99997 | 0.98133 | 0.98854 |
+
+On libero_goal ep 0 frame 0, official's own seed spread is 0.99756, but
+the mask alone moves official to 0.928.
+
+Mean MAE of the 64-step chunk against ground truth barely moves:
+
+| path | mean MAE |
+|---|---:|
+| official masked | 0.15873 |
+| official unmasked | 0.15855 |
+| FlashRT | 0.15868 |
+
+The correlation between the valid-token count and the masked-vs-unmasked
+cosine is 0.258.
+
+## Evidence
+
+- The upstream mask builder and both of its call sites, as quoted above.
+- `ImageWAMAttnBackend.run()` has no key-mask input. With
+  `use_real_mot_mask=True` both sites call unmasked
+  `attention_qkv_fp16_perhead`.
+- The measurements above. Removing the mask from official moves
+  FlashRT's agreement from median 0.99809 / min 0.92997 to median
+  0.999979 / min 0.99758.
+- With proprio packing, padded keys form one contiguous row range,
+  `[valid_count + 1, x0)`, between the proprio row and the image rows.
+
+## Hypotheses
+
+Under the official mask, padded text tokens are inert: no query reads
+them. Their own queries still run, but nothing reads their outputs,
+because the text rows' outputs do not feed the action path except
+through K/V, and padded K/V are masked. If so, dropping the padded rows
+from the sequence is exactly equivalent to the official mask, with no
+mask kernel needed.
+
+Supporting measurement, fp16, H100, 4 libero_goal frames including
+ep 0 frame 0:
+
+- FlashRT built with `x0 = n_valid + 1` (a0 and total adjusted:
+  `a0 = x0 + 392`, `total = a0 + 64`).
+- `set_prompt(context=context[:n_valid], context_mask=mask[:n_valid])`.
+- Cosine against official masked: 0.999976-0.999989, including the
+  frame where the full-length build gives 0.930.
+- The shorter sequence also makes `infer()` faster.
+
+## Next Experiment
+
+Serve with the padded tokens dropped: size `x0` from the prompt's
+valid-token count (`n_valid + 1` with proprio), so `a0` and `total`
+follow, and capture per prompt length. The served frontend fixes `x0`
+at construction today, so this needs either per-prompt construction or
+buffers sized for the maximum length with a capture per length. Then
+run `benchmarks/imagewam_e2e_official_compare.py` on
+`libero_spatial`, `libero_goal` and `libero_10`, and compare
+`fr_vs_off` against the table above; the expected median is
+0.99998-level. Then re-measure `infer()` on Thor.
+
+## Resolution
+
+# ISSUE-021
+
+Status: open
+
+Area: `ImageWAMTorchFrontendThor._autotune_gemm`
+(`flash_rt/frontends/torch/imagewam_thor.py`), `precision="fp16"` only
+
+## Observation
+
+`_autotune_gemm` autotunes cuBLASLt for a fixed list of `(M, N, K)`
+shapes. For single-stream blocks the list still has the split shapes,
+`(a0, 3*hidden, hidden)` and `(a0, 2*mlp_hidden, hidden)`, and their
+ActionDiT counterparts. Since the `linear1` merge (opportunities.md
+OPT-015, finding 1), every precision except `fp16_cutlass` runs one
+merged GEMM of width `3*hidden + 2*mlp_hidden` instead. At the real
+dims that is `(905, 27648, 3072)` for the backbone and
+`(64, 17408, 1024)` for the ActionDiT, and neither shape is in the
+autotune list.
+
+## Impact
+
+With `precision="fp16"`, the 20 backbone and 20 ActionDiT `linear1`
+GEMMs run on cuBLASLt's top-1 heuristic algorithm, not the autotuned
+one. The size of the loss is unmeasured. It can only match or lose
+against autotuning. `nvfp4` is unaffected, because only its two K=7 /
+N=7 fallback GEMMs go through `fp16_nn`.
+
+## Evidence
+
+Code reading: the `shapes` set in `_autotune_gemm`, compared with
+`_alloc_random_weights` / `build_real_weights(merge_qkv_mlp=True)`,
+which create `linear1.weight` with `n = 3*hidden + 2*mlp_hidden`.
+
+## Hypotheses
+
+The list was not updated when the merge landed.
+
+## Next Experiment
+
+Add both merged shapes to the list when `dims["merge_qkv_mlp"]` is set.
+Then A/B the fp16 `infer()` on Thor, or on H100 as an indicative
+check, with the same-process alternating method.
+
+## Resolution
+
+# ISSUE-022
+
+Status: open
+
+Area: `ImageWAMTorchFrontendThor.__init__` dims validation
+(`flash_rt/frontends/torch/imagewam_thor.py`)
+
+## Observation
+
+The constructor accepts a `dims_override` in which `total != a0 +
+num_action`. The K/V caches, `Q_O`, and `logits` are sized from
+`total`, while the `mot` site writes action Q/K/V rows
+`[a0, a0 + num_action)` and reads `kv_seq = total`. With
+`dims_override=dict(num_action=16)` on the default dims (`a0 = 8`,
+`total = 12`), construction, graph capture, and `infer()` all complete
+without an error, even though the action rows lie past the end of
+those buffers.
+
+## Impact
+
+A caller that changes `num_action` without changing `total` gets
+out-of-bounds reads and writes and finite-looking output instead of an
+error. The real dims (`a0 = 905`, `num_action = 64`, `total = 969`)
+are consistent, so the served path is unaffected.
+
+## Evidence
+
+`tests/test_imagewam_gemm_variant_routing.py` first ran with
+`dims_override=dict(num_action=16)`, and every test passed. The same
+tests with `total=24` also pass.
+
+## Hypotheses
+
+The existing checks, `action_attn_width == hidden`, `HD == 128`, and
+`ref_h * ref_w == a0 - x0`, never included the joint-sequence length.
+
+## Next Experiment
+
+Raise `ValueError` in `__init__` when `total != a0 + num_action`, then
+run the regression suite. No current test or benchmark passes
+inconsistent dims.
+
+## Resolution
+
+# ISSUE-023
+
+Status: open
+
+Area: Thor confirmation of roadmap items 1 and 6 (plan.md, Phase 7 of
+"Plan: ActionDiT small-M CUTLASS tile selection" and of "Plan:
+attention-chain fusion recheck at ImageWAM's real shapes")
+
+## Observation
+
+Neither item's kernels run on the dev box (H100, sm_90). The item 1
+kernels are the SM100 CUTLASS FP8 tiles, including the four new
+`cutlass_fp8_t128x*`, and the NVFP4 GEMM variants. The item 6 kernel is
+FA4, which has no runtime on the box (`ModuleNotFoundError: No module
+named 'cutlass'`) and is SM100/SM110 only. Locally, the new tiles only
+compile and link, through `sm110_check.sh`. Selection, dispatch,
+buffer bounds, and fallback are tested with stand-ins for the kernels.
+
+## Impact
+
+Both plans stay `approved`, with a `blocked` Thor phase:
+
+- `gemm_variant_autotune` stays default-off.
+- FA4 stays opt-in (`FLASHRT_THOR_FA4=1`, `use_fa4=True`,
+  `use_fa4_mot=True`).
+
+## Evidence
+
+The H100 runs of the checklist scripts print `SKIP` for every NVFP4,
+FP8 CUTLASS, and FA4 row. `tests/test_imagewam_fa4_backbone.py` skips
+all three real-FA4 tests.
+
+## Hypotheses
+
+## Next Experiment
+
+Run the Thor checklists in opportunities.md OPT-018 ("Thor check") and
+OPT-019 ("Thor check").
+
+## Resolution
+
+# ISSUE-010
+
+Status: open
+
+Area: `ImageWAMTorchFrontendThor._autotune_gemm` (`flash_rt/frontends/torch/imagewam_thor.py`), `fp16` precision only
+
+## Observation
+
+The merged single-stream `linear1` GEMM shapes, `(a0, 3*hidden +
+2*mlp_hidden, hidden)` and `(num_action, 3*action_attn_width +
+2*action_mlp_hidden, action_hidden_dim)`, are not in the autotune shape
+set. Every other `fp16` weight GEMM shape is, including the merged
+`linear2` shapes added by roadmap item 4. With `merge_qkv_mlp` on (the
+default for `fp16`), `GemmRunner.fp16_nn` runs `linear1` with the
+cuBLASLt heuristic's first pick.
+
+## Impact
+
+`fp16` only (quantized precisions do not use `fp16_nn` for these GEMMs).
+Size unknown: autotune can only match or beat the heuristic pick.
+
+## Evidence
+
+`_autotune_gemm`'s `shapes` set lists the split `qkv` and `mlp_in` shapes
+but no `3*hidden + 2*mlp_hidden` entry; commit 4e9f7d7 added the merged
+GEMM without adding its shape.
+
+## Hypotheses
+
+An omission in the `linear1` merge, not a deliberate choice.
+
+## Next Experiment
+
+Add both shapes, then A/B `fp16` `infer()` P50 on Thor with and without
+them in the same process.
+
+## Resolution
+
+# ISSUE-011
+
+Status: open
+
+Area: merged single-stream `linear2` (roadmap item 4) under `fp8`, `fp8_static`, `fp8_static_cutlass`
+
+## Observation
+
+`merge_linear2` is on for the FP8 precisions. `Fp8Linear` quantizes its
+input with one per-tensor absmax scale, and `StaticFp8Linear` with one
+calibrated per-tensor scale, so the merged GEMM quantizes the attention
+output and the SiLU-GLU activation with one shared scale where the split
+path used one scale per half. The weight side is the same: both classes
+quantize the whole merged `(K, N)` weight with one per-tensor FP8 scale,
+where the split path had one scale for `attn_out_proj` and one for
+`mlp_down`.
+
+## Impact
+
+Measured negligible at the GEMM level (Evidence). None of these
+precisions is the shipped default (`nvfp4`, whose per-16-element block
+scales make the merged and split operands identical). The end-to-end
+merged vs split comparison for FP8 has not run: FP8 GEMMs fail on H100
+until the ISSUE-001 TN-layout fix lands (calibration stream); after
+that it can run on H100 as well as Thor.
+
+## Evidence
+
+- `quant_linear.py`: `Fp8Linear.__call__` runs `quantize_fp8_device_fp16`
+  over the whole `(m, k)` input and `__init__` over the whole weight;
+  `StaticFp8Linear.calibrate` freezes one `act_scale`.
+- Roadmap verification pass, real checkpoint, real shapes:
+  - activation absmax ratio between the two halves: backbone median 3.6,
+    max 7.1; ActionDiT median 2.2, max 12.5;
+  - weight absmax ratio between the two halves: 1.06-2.15;
+  - FP8 GEMM error, merged / split: median 1.00x, range 0.98-1.03x
+    (dynamic scale); never more than 2% worse (static scale).
+- E4M3 is a floating-point format (3 mantissa bits, per-value
+  exponent), so a smaller shared scale costs the smaller half dynamic
+  range at the bottom of the exponent range, not relative precision;
+  at these ratios (at most 12.5x, about 3.7 binades) the values stay in
+  the normal range.
+
+## Hypotheses
+
+The single shared scale does not measurably change FP8 accuracy for
+ImageWAM; the existing FP8 calibration gap (the `N(0, 0.1)` placeholder
+activations) dominates.
+
+## Next Experiment
+
+`AB=merge_linear2 PRECISIONS=fp8,fp8_static` with `CKPT_PATH` set
+(`benchmarks/imagewam_fusion_ab.py`), on Thor, or on H100 once
+ISSUE-001's TN fix lands: merged vs split action cosine. Close this issue
+if it matches `fp16`'s merged vs split (cos >= 0.9999); otherwise default
+FP8 to the split path (`merge_linear2=False` for those precisions).
+
+## Resolution
+
+# ISSUE-030
+
+Status: open (decision needed: served resize filter)
+
+Area: VAE input resize in the served path
+(`vae_encoder._prep_view`, and `VaePreprocessor(resize="area")`, the
+frontend default `vae_resize="area"`), against the official LIBERO eval
+(`ImageWAM/experiments/libero/eval_libero_single._obs_to_model_input` and
+`_center_crop_resize`) and training (`torchvision.transforms.Resize([224,
+224])` per camera, `config.yaml` `processor.val_transforms` /
+`train_transforms`)
+
+## Observation
+
+Three different preprocessing chains feed the same model:
+
+| chain | resize to 224x224 per camera | normalization |
+|---|---|---|
+| served (`vae_resize="area"`) | torch `F.interpolate(mode="area")` | float32 `x*2/255-1`, then BF16 (256-entry table) |
+| official LIBERO eval | PIL `Image.resize(BILINEAR)` + center crop | `x*(2/255)-1` in BF16 arithmetic |
+| training | float32 `x/255`, torchvision `Resize` (bilinear, antialias) | `Normalize(0.5, 0.5)` in float32, then BF16 |
+
+The official eval renders the simulator at 256x256
+(`LIBERO_ENV_RESOLUTION = 256`, `experiments/libero/libero_utils.py:16`,
+passed to `get_libero_env` at `eval_libero_single.py:753`), so its resize
+is 256 -> 224; the LIBERO-fastwam dataset frames are 512x512. The center
+crop is a no-op for square frames.
+
+`vae_resize="pil_bilinear"` makes the served resize bit-exact to the
+official eval's resize (`tests/test_imagewam_vae_preprocess.py`); its
+normalization stays the served table, so it is not bit-exact to the
+official eval as a whole. `benchmarks/imagewam_e2e_official_compare.py`
+feeds the same PIL-resized views to both sides by default, so its
+baseline does not see the resize difference.
+
+## Impact
+
+With raw camera frames the served policy sees a different image than
+the official eval and than training. The measured open-loop action
+effect is small at 512x512 and larger at 256x256, the resolution the
+official eval runs at, but stays inside the official model's own
+seed-to-seed spread. Closed-loop effect is unmeasured.
+
+## Evidence
+
+Resize filters on real 512x512 LIBERO frames (episode 0, frame 0, both
+cameras), uint8 levels: torchvision `Resize` vs PIL mean |diff| 0.07,
+max 1; area vs PIL mean |diff| 0.66-0.80, max 31-34.
+
+VAE token cosine, `benchmarks/imagewam_vae_resize_compare.py` (torch
+BF16 VAE, H100), 20 frame pairs (libero_spatial, 10 tasks x frames
+{0,60}), median (min):
+
+| pair | 512x512 frames | 256x256 proxy (`--proxy-size 256`) |
+|---|---:|---:|
+| served area vs `pil_bilinear` | 0.98933 (0.98757) | 0.97369 (0.96405) |
+| `pil_bilinear` vs official eval chain (normalization only) | 0.99989 (0.99977) | 0.99989 (0.99980) |
+| `pil_bilinear` vs training transform | 0.99631 (0.99540) | 0.99566 (0.99483) |
+| official eval chain vs training transform | 0.99631 (0.99513) | 0.99567 (0.99465) |
+| served area vs training transform | 0.99263 (0.98985) | 0.97925 (0.96790) |
+
+The 256x256 proxy PIL-downscales the 512x512 frames (BILINEAR); a real
+256x256 simulator render is not identical to it. At 256x256 the
+area-vs-PIL token gap (1 - cosine, median) is about 2.5x the 512x512 gap.
+
+End to end, `imagewam_e2e_official_compare.py`, fp16, the same 20
+frames, seeds {0,1}; the official side always gets its PIL resize of
+the same frames:
+
+| FlashRT input | `fr_vs_off` median | min | mean | mean `mae_fr_vs_gt` |
+|---|---:|---:|---:|---:|
+| 512x512 frames PIL-resized to 224 (baseline) | 0.99840 | 0.99567 | 0.99803 | 0.18359 |
+| raw 512x512, `vae_resize="area"` (served) | 0.99830 | 0.99531 | 0.99806 | 0.18375 |
+| raw 512x512, `vae_resize="pil_bilinear"` | 0.99840 | 0.99567 | 0.99803 | 0.18359 |
+| raw 256x256 proxy (`RAW_SIZE=256`), `vae_resize="area"` | 0.99827 | 0.99371 | 0.99786 | 0.18470 |
+| raw 256x256 proxy, `vae_resize="pil_bilinear"` | 0.99842 | 0.99558 | 0.99806 | 0.18394 |
+
+Official seed 0 vs seed 1: median 0.99630, min 0.97154 (512x512);
+median 0.99612, min 0.97035 (256x256 proxy). Official mean MAE vs ground
+truth: 0.18538 (512), 0.18557 (256 proxy). The `pil_bilinear` rows equal
+what FlashRT gets from pre-resized views because the resize is
+bit-exact; the harness normalizes both sides in float32, so the
+normalization difference is not in these rows.
+
+Normalization: the official eval's BF16 arithmetic,
+`bf16(bf16(v * (2/255)) - 1)`, differs from the served float32-derived
+table in 127 of 256 entries, by at most 0.0039; on tokens this is the
+`pil_bilinear` vs official eval chain row above (median 0.99989).
+
+## Hypotheses
+
+The VAE amplifies the resize-filter difference, more at 256 -> 224 than
+at 512 -> 224, and the policy is robust to it in open loop at both
+sizes. `pil_bilinear` is closer to the training transform than area
+(token cosine 0.9963 vs 0.9926 at 512, 0.9957 vs 0.9793 at 256), but
+neither reproduces training exactly: training resizes in float32 without
+uint8 rounding. The official eval chain is as far from training as
+`pil_bilinear` is.
+
+## Next Experiment
+
+Owner decision: make `vae_resize="pil_bilinear"` the served default
+(same kernel cost; resize bit-exact to the official eval, token cosine
+0.9999 to the official chain including its normalization). A training-
+transform mode (float32 bilinear antialias) would be closer to training
+still, but no reference eval uses it. A closed-loop LIBERO success-rate
+A/B of `area` vs `pil_bilinear` at the eval's 256x256 rendering on Thor
+would settle whether the difference matters beyond open loop.
+
+## Resolution
+
 # ISSUE-040
 
 Status: open

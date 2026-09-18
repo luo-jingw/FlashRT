@@ -93,6 +93,34 @@ def test_shapes_match_confirmed_real_dims():
     print(f"PASS: {len(weights)} real weight tensors, all shapes match confirmed real dims")
 
 
+def test_merged_linear2_equals_split_slots():
+    """Roadmap item 4: `merge_linear2=True` returns the real unsplit
+    `linear2.weight` in the (K,N) GEMM convention -- exactly the split
+    path's `attn_out_proj.weight` and `mlp_down.weight` stacked along K,
+    for the first and last backbone and ActionDiT single-stream blocks."""
+    if not _CKPT_AVAILABLE:
+        import pytest
+        pytest.skip(f"real checkpoint not present at {_CKPT_PATH} on this machine")
+
+    from flash_rt.models.imagewam.checkpoint_loader import _extract_single_block, load_real_imagewam_state_dict
+
+    sd = load_real_imagewam_state_dict(_CKPT_PATH)
+    blocks = [(f"mixtures.video.transformer.single_blocks.{L}", HIDDEN, HIDDEN, MLP_HIDDEN)
+              for L in (0, NUM_SINGLE - 1)]
+    blocks += [(f"mixtures.action.single_blocks.{L}", ACTION_ATTN_WIDTH, ACTION_HIDDEN_DIM, ACTION_MLP_HIDDEN)
+               for L in (0, NUM_SINGLE - 1)]
+    for prefix, attn_dim, out_dim, mlp_hidden in blocks:
+        split = _extract_single_block(sd, prefix, attn_dim=attn_dim, merge_qkv_mlp=True)
+        merged = _extract_single_block(sd, prefix, attn_dim=attn_dim, merge_qkv_mlp=True, merge_linear2=True)
+        l2 = merged["linear2.weight"]
+        assert "attn_out_proj.weight" not in merged and "mlp_down.weight" not in merged
+        assert tuple(l2.shape) == (attn_dim + mlp_hidden, out_dim), f"{prefix}: {tuple(l2.shape)}"
+        stacked = torch.cat([split["attn_out_proj.weight"], split["mlp_down.weight"]], dim=0)
+        assert torch.equal(l2, stacked), f"{prefix}: merged linear2 != cat(attn_out_proj, mlp_down)"
+        assert torch.equal(merged["linear1.weight"], split["linear1.weight"])
+        print(f"PASS: {prefix} linear2.weight {tuple(l2.shape)} == cat(attn_out_proj, mlp_down)")
+
+
 def test_real_double_stream_layer_forward_finite():
     if not _CKPT_AVAILABLE:
         import pytest
@@ -291,6 +319,7 @@ if __name__ == "__main__":
         print(f"SKIPPED: real checkpoint not present at {_CKPT_PATH}")
     else:
         test_shapes_match_confirmed_real_dims()
+        test_merged_linear2_equals_split_slots()
         test_real_double_stream_layer_forward_finite()
         test_full_frontend_with_real_checkpoint()
         if not _VAE_AVAILABLE:

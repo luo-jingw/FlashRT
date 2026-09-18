@@ -2,6 +2,10 @@
 """ImageWAM FP16 full-scale steady-state benchmark, WITH GemmRunner
 autotuning (OPT-004 step 4).
 
+`pipeline_thor.py` now runs single-stream `linear2` as one GEMM and fuses each gated
+residual with the next AdaLN (roadmap items 4 and 3); this script keeps the old split
+per-layer path and is not updated for them.
+
 Companion to imagewam_thor_fp16_bench.py -- identical structure and
 dims, the only difference is `_Fp16Linear` calls
 `GemmRunner.autotune_fp16_nn` once per distinct (M,N,K) shape (using

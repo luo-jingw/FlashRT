@@ -24,6 +24,7 @@ except ImportError:
     _FA4_AVAILABLE = False
 
 WARMUP, ITERS = 20, 100
+_KEEP: list = []
 NH, HD, A0 = 24, 128, 896  # real ImageWAM backbone dims, see plan.md
 
 
@@ -36,11 +37,15 @@ def _build(use_fa4: bool):
     K = torch.randn(1, A0, HD, dtype=torch.float16, device=device)
     V = torch.randn(1, A0, HD, dtype=torch.float16, device=device)
     logits = torch.zeros(A0 * NH, A0, dtype=torch.float16, device=device)
+    fa4_out = torch.zeros(A0 * NH, HD, dtype=torch.float16, device=device)
+    # The backend holds raw pointers only; keep every buffer it reads alive.
+    _KEEP.extend((K, V, logits, fa4_out))
     backend = ImageWAMAttnBackend(
         spec, ctx,
         backbone_slots={
             "Q_O": Q_O.data_ptr(), "K": K.data_ptr(), "V": V.data_ptr(),
             "logits": logits.data_ptr(), "scale": 1.0 / (HD ** 0.5),
+            "fa4_out": fa4_out.data_ptr(), "fa4_out_numel": fa4_out.numel(),
         },
         mot_slots={
             "Q_O": Q_O.data_ptr(), "K": K.data_ptr(), "V": V.data_ptr(),

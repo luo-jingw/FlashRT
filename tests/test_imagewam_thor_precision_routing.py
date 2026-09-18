@@ -65,9 +65,10 @@ QUANT_LINEAR_MODULE = "flash_rt.models.imagewam.quant_linear"
 #
 # action_encoder (K=action_dim=7) and head.linear (N=7) are the alignment
 # fallbacks: every precision routes them to f16. Single-stream blocks use
-# one merged linear1 GEMM (dims["merge_qkv_mlp"]) except under
-# fp16_cutlass, which keeps qkv + mlp_in so the SwiGLU slot can use
-# CutlassFp16SwiGluMlp.
+# one merged linear1 GEMM (dims["merge_qkv_mlp"]) and one merged linear2
+# GEMM (dims["merge_linear2"]) except under fp16_cutlass, which keeps
+# qkv + mlp_in (so the SwiGLU slot can use CutlassFp16SwiGluMlp) and
+# attn_out_proj + mlp_down.
 
 PRECISION_COLUMNS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass", "nvfp4_sim")
 ABSENT = "-"
@@ -91,8 +92,9 @@ EXPECTED_ROUTING: dict[tuple[str, str, str], tuple[str, ...]] = {
     ("backbone", "single", "linear1.weight"):           ("f16",     ABSENT,      "fp8",     "nvfp4",   "sfp8",    "sfp8c", "nvfp4sim"),
     ("backbone", "single", "qkv.weight"):               (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
     ("backbone", "single", "mlp_in.weight"):            (ABSENT,    "swiglu16",  ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
-    ("backbone", "single", "attn_out_proj.weight"):     ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "nvfp4sim"),
-    ("backbone", "single", "mlp_down.weight"):          ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "nvfp4sim"),
+    ("backbone", "single", "linear2.weight"):           ("f16",     ABSENT,      "fp8",     "nvfp4",   "sfp8",    "sfp8c", "nvfp4sim"),
+    ("backbone", "single", "attn_out_proj.weight"):     (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
+    ("backbone", "single", "mlp_down.weight"):          (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
     ("backbone", "single", "query_norm"):               ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
     ("backbone", "single", "key_norm"):                 ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
     ("action_dit", "shared", "action_encoder.weight"):  ("f16",     "f16",       "f16",     "f16",     "f16",     "f16", "f16"),
@@ -107,8 +109,9 @@ EXPECTED_ROUTING: dict[tuple[str, str, str], tuple[str, ...]] = {
     ("action_dit", "single", "linear1.weight"):         ("f16",     ABSENT,      "fp8",     "nvfp4",   "sfp8",    "sfp8c", "nvfp4sim"),
     ("action_dit", "single", "qkv.weight"):             (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
     ("action_dit", "single", "mlp_in.weight"):          (ABSENT,    "swiglu16",  ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
-    ("action_dit", "single", "attn_out_proj.weight"):   ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "nvfp4sim"),
-    ("action_dit", "single", "mlp_down.weight"):        ("f16",     "cutlass16", "fp8",     "nvfp4",   "sfp8",    "sfp8c", "nvfp4sim"),
+    ("action_dit", "single", "linear2.weight"):         ("f16",     ABSENT,      "fp8",     "nvfp4",   "sfp8",    "sfp8c", "nvfp4sim"),
+    ("action_dit", "single", "attn_out_proj.weight"):   (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
+    ("action_dit", "single", "mlp_down.weight"):        (ABSENT,    "cutlass16", ABSENT,    ABSENT,    ABSENT,    ABSENT, ABSENT),
     ("action_dit", "single", "query_norm"):             ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
     ("action_dit", "single", "key_norm"):               ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr"),
 }
@@ -379,6 +382,8 @@ def test_constructor_merge_decision_matches_contract(frontend_module, precision)
     column = PRECISION_COLUMNS.index(precision)
     expect_merged = EXPECTED_ROUTING[("backbone", "single", "linear1.weight")][column] != ABSENT
     assert frontend.dims["merge_qkv_mlp"] is expect_merged
+    expect_merged2 = EXPECTED_ROUTING[("backbone", "single", "linear2.weight")][column] != ABSENT
+    assert frontend.dims["merge_linear2"] is expect_merged2
     assert frontend._precision == precision
 
 
@@ -431,6 +436,27 @@ def test_merged_linear1_width_is_qkv_plus_gate_up(frontend_module):
     weights = frontend._load_real_weights(frontend.dims, fake_real_state_dict(frontend.dims))
     assert weights[("backbone", "single", 0, "linear1.weight")].shape == (3 * 3072 + 2 * 9216, 3072)
     assert weights[("action_dit", "single", 0, "linear1.weight")].shape == (3 * 3072 + 2 * 4096, 1024)
+
+
+def test_merged_linear2_width_is_attn_plus_mlp(frontend_module):
+    """(n, k) of the merged linear2: N = residual width, K = attn width + mlp_hidden."""
+    frontend = construct_until_gpu(frontend_module, "nvfp4", REAL_DIMS)
+    weights = frontend._load_real_weights(frontend.dims, fake_real_state_dict(frontend.dims))
+    assert weights[("backbone", "single", 0, "linear2.weight")].shape == (3072, 3072 + 9216)
+    assert weights[("action_dit", "single", 0, "linear2.weight")].shape == (1024, 3072 + 4096)
+
+
+def test_linear2_merge_can_be_turned_off_for_ab(frontend_module):
+    """dims_override={"merge_linear2": False} restores the split slots (A/B path);
+    requesting the merge under fp16_cutlass (split linear1) is rejected."""
+    frontend = construct_until_gpu(frontend_module, "nvfp4", dict(REAL_DIMS, merge_linear2=False))
+    weights = frontend._alloc_random_weights(frontend.dims)
+    keys = {slot for (site, block, _, slot) in weights if block == "single"}
+    assert {"attn_out_proj.weight", "mlp_down.weight", "linear1.weight"} <= keys
+    assert "linear2.weight" not in keys
+    cls = frontend_module.ImageWAMTorchFrontendThor
+    with pytest.raises(ValueError, match="merge_linear2"):
+        cls(dims_override=dict(REAL_DIMS, merge_linear2=True), precision="fp16_cutlass")
 
 
 def test_cutlass_swiglu_split_slots_carry_mlp_hidden(frontend_module):
