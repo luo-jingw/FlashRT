@@ -5661,12 +5661,13 @@ Port schema, `io="python"` (declaration order is the port index):
   `set_prompt(prompt_text)`.
 - Stage plan: one GRAPH stage `infer` (prefill + 10-step denoise).
 - Region: `rollout_boundary` = the `action_latent` window.
-- Status codes: `-2` for an unknown port index, `-3` for `set_input` on a
-  SWAP port, `-5` (with `written` = needed bytes) for a short
-  `get_output` buffer. A malformed payload (size, frame geometry, pixel
-  format) and `get_output` on a SWAP port return `-1` with the reason in
-  `last_error`: the Python trampoline reports every raised exception as
-  `-1`.
+- Status codes, the same as the `io="native"` face: `-2` unknown port
+  index, `-3` `set_input` / `get_output` on a SWAP port, `-4` payload size
+  or frame geometry, `-5` (with `written` = needed bytes) short
+  `get_output` buffer, `-1` anything else invalid (stream, malformed
+  view); the reason is in `last_error`. The verbs raise
+  `flash_rt.runtime.export.VerbStatusError`, whose status the runtime's
+  pybind trampolines return (any other exception is `-1`).
 
 ## Flow
 
@@ -5833,6 +5834,8 @@ typedef struct frt_imagewam_io_config {                   /* Phase 2 */
 int  frt_imagewam_native_create(const frt_imagewam_io_config*, frt_imagewam_native** out);
 void frt_imagewam_native_retain(void* h);
 void frt_imagewam_native_release(void* h);
+void frt_imagewam_native_declaration_retain(void* h);   /* owner callbacks: count live exports; */
+void frt_imagewam_native_declaration_release(void* h);  /* use_graph/set_pipeline/capture refused meanwhile */
 const char* frt_imagewam_native_last_error(const frt_imagewam_native*);
 void* frt_imagewam_native_stream(frt_imagewam_native*);          /* its cudaStream_t */
 int  frt_imagewam_native_use_graph(frt_imagewam_native*, void* graph_exec); /* Phase 2: adopt the Python graph */

@@ -5227,6 +5227,27 @@ outside the graph and inside it (`--vae-graph-input 224 224`, where the
 `tests/test_imagewam_model_runtime_vae.py` adds both placements at the
 real token count.
 
+Review follow-up (2026-09-18). The parity rows above compared an ABI
+tick with the `infer()` that ran just before it over the same buffers,
+so a verb that staged nothing could still pass. The gate and tests now
+NaN-fill every buffer a tick must write before each ABI tick, and re-run
+each row with the verb it exercises made a no-op. Re-run on H100, fp16,
+real checkpoint, after merging the calibration stream: every row above is
+still `array_equal` (`max_abs = 0`) with the VAE outside and inside the
+graph, and all five mutants (images, proprio on each image path, prompt,
+step) make their rows fail in both placements. Invalid calls now return
+the same statuses as the `io="native"` face (`-2` unknown port, `-3`
+SWAP port, `-4` payload size, `-5` short buffer, `-1` other); the
+runtime's pybind trampolines honor a `VerbStatusError`'s status. The
+identity also carries the calibration file digest and `nvfp4_awq`.
+
+Regression, `pytest tests/test_imagewam_*.py` on the merged tree (H100):
+362 passed, 31 skipped with `exec/build`, `runtime/build` and the native
+target built; 326 / 33 without the native target (its two test modules
+skip); 316 / 35 without any of the three (the two model-runtime modules
+also skip). Every skip in the full build needs Thor, FA4 or an FP8
+cuBLASLt layout this GPU lacks.
+
 ## Promotion Condition
 
 Thor gate at `nvfp4` reports every parity row `array_equal=True`. The
@@ -5315,6 +5336,27 @@ difference is expected; the native path's value is a tick with no
 Python and no GIL, not a faster graph.
 
 Thor, `nvfp4`: pending (Thor checklist).
+
+Review follow-up (2026-09-18), H100, fp16, merged tree (calibration
+stream included):
+
+| check | result |
+|---|---|
+| real checkpoint, NaN-poisoned tick buffers: actions, actions_raw, native proprio token, backbone residual, K/V caches, proprio staged by the frontend or the native verb | all `array_equal` |
+| poisoned native-graph vs Python-graph replay: action latent, backbone residual, K/V caches | all `array_equal` |
+| mutants: proprio verb or `step` skipped; native pipelines with no backbone block, last single-stream block dropped, last denoise step dropped, one block fed another's `linear1` weight | all 6 detected (also as small-dims tests) |
+| `set_pipeline` after `capture` | destroys the captured graph, frees the old resources; refused while an export is live (before: replayed freed memory) |
+| native handle alone, frontend dropped | frontend kept alive, replay `array_equal` (before: illegal address) |
+| status codes | same table as `io="python"` |
+| exported symbols (sm_90 and sm_110) | 20, all `frt_imagewam_native_*` |
+| `sm110_check.sh` (`flash_rt_kernels`, `flash_rt_fp4`, `flashrt_imagewam_native`) | rc 0 |
+
+ISSUE-071 (a Python-graph `backbone_hidden` mismatch) was a race between
+a test snapshot on the torch stream and the native warm-up on the
+non-blocking native stream; `run` / `capture` now wait for prior device
+work, and the native pipeline test compares `backbone_hidden` between
+the two graphs again. The native pipeline refuses `nvfp4_awq` (no AWQ
+fold).
 
 ## Promotion Condition
 
