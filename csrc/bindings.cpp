@@ -224,6 +224,8 @@ extern "C" void flash_rt_awq_quant_fp8_static_fp16(
 #endif
 #include "kernels/qwen3_qkv_post_proc.cuh"
 #include "kernels/imagewam_vae_preprocess.cuh"
+#include "kernels/imagewam_vae_groupnorm.cuh"
+#include "kernels/imagewam_vae_residual.cuh"
 #if defined(FLASHRT_HAVE_HYVLA_THOR) || defined(FLASHRT_HAVE_HYVLA_ORIN)
 #include "kernels/hyvla_fused_thor.cuh"
 #include "kernels/hyvla_vit_fuse.cuh"
@@ -1644,6 +1646,42 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
           py::arg("h_bounds"), py::arg("h_coeffs"), py::arg("h_ksize"), py::arg("crop_left"),
           py::arg("v_bounds"), py::arg("v_coeffs"), py::arg("v_ksize"), py::arg("crop_top"),
           py::arg("inv255"), py::arg("stream") = 0);
+
+    // ImageWAM VAE: NHWC BF16 GroupNorm with optional fused SiLU.
+    m.def("imagewam_groupnorm_nhwc_workspace_bytes",
+          [](int N, int HW, int C, int G) -> size_t {
+              return imagewam_groupnorm_nhwc_workspace_bytes(N, HW, C, G);
+          },
+          py::arg("N"), py::arg("HW"), py::arg("C"), py::arg("G"));
+    m.def("imagewam_groupnorm_nhwc_bf16",
+          [](uintptr_t x, uintptr_t bias, uintptr_t gamma, uintptr_t beta, uintptr_t y,
+             uintptr_t workspace, size_t workspace_bytes,
+             int N, int HW, int C, int G, float eps, int apply_silu, uintptr_t stream) -> int {
+              return imagewam_groupnorm_nhwc_bf16(
+                  reinterpret_cast<const __nv_bfloat16*>(x),
+                  reinterpret_cast<const __nv_bfloat16*>(bias),
+                  reinterpret_cast<const __nv_bfloat16*>(gamma),
+                  reinterpret_cast<const __nv_bfloat16*>(beta),
+                  reinterpret_cast<__nv_bfloat16*>(y),
+                  reinterpret_cast<void*>(workspace), workspace_bytes,
+                  N, HW, C, G, eps, apply_silu, to_stream(stream));
+          },
+          py::arg("x"), py::arg("bias"), py::arg("gamma"), py::arg("beta"), py::arg("y"),
+          py::arg("workspace"), py::arg("workspace_bytes"),
+          py::arg("N"), py::arg("HW"), py::arg("C"), py::arg("G"),
+          py::arg("eps"), py::arg("apply_silu"), py::arg("stream") = 0);
+
+    // ImageWAM VAE: ResnetBlock tail (conv biases + residual), NHWC BF16.
+    m.def("imagewam_bias_residual_nhwc_bf16",
+          [](uintptr_t h, uintptr_t h_bias, uintptr_t res, uintptr_t res_bias, uintptr_t y,
+             long long rows, int C, uintptr_t stream) -> int {
+              return imagewam_bias_residual_nhwc_bf16(
+                  reinterpret_cast<const __nv_bfloat16*>(h), reinterpret_cast<const __nv_bfloat16*>(h_bias),
+                  reinterpret_cast<const __nv_bfloat16*>(res), reinterpret_cast<const __nv_bfloat16*>(res_bias),
+                  reinterpret_cast<__nv_bfloat16*>(y), rows, C, to_stream(stream));
+          },
+          py::arg("h"), py::arg("h_bias"), py::arg("res"), py::arg("res_bias"), py::arg("y"),
+          py::arg("rows"), py::arg("C"), py::arg("stream") = 0);
 
     m.def("patch_embed_bias_pos", [](uintptr_t output, uintptr_t bias, uintptr_t pos_emb,
                                       int S, int D, int S_per_view, uintptr_t stream) {

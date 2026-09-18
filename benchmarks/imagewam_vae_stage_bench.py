@@ -11,8 +11,10 @@ Sections (`--section`, default `all`):
               pre-resized 224x224 views, CPU and GPU uint8 inputs.
   encode      whole VAE stage (views -> tokens in a fixed img_raw):
               legacy torch path, kernel preprocessing, the fixed-address
-              `ImageWAMVaeStage` eager, and the same stage replayed as a
-              standalone CUDA graph. Token bit-equality is printed.
+              `ImageWAMVaeStage` eager and replayed as a standalone CUDA
+              graph, each with the torch encoder and with
+              `NativeFlux2Encoder` (NHWC + FlashRT GroupNorm). Token
+              equality / cosine against the legacy path is printed.
 
 Each A/B also prints, per variant, the kernels per call, the summed GPU
 kernel time (torch profiler) and the host enqueue time per call.
@@ -38,6 +40,7 @@ import torch
 from PIL import Image
 
 from flash_rt.models.imagewam.vae_encoder import _prep_view, encode_to_tokens, load_real_ae
+from flash_rt.models.imagewam.vae_native_encoder import NativeFlux2Encoder
 from flash_rt.models.imagewam.vae_preprocess import VaePreprocessor
 from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeEncoder, VaeStageSpec
 
@@ -147,6 +150,21 @@ def section_profile(ae: torch.nn.Module, v1: np.ndarray, v2: np.ndarray) -> None
     total_us = sum(e.device_time for e in kernels) / n
     print(f"CUDA kernels per encode: {len(kernels) / n:.0f}; GPU time per encode: {total_us / 1e3:.3f} ms")
     print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=30, max_name_column_width=90))
+
+    native = NativeFlux2Encoder(ae)
+    print(f"\n=== profile: NativeFlux2Encoder.encode, input {tuple(x.shape)} {x.dtype} ===")
+    with torch.no_grad():
+        for _ in range(5):
+            native.encode(x)
+        torch.cuda.synchronize()
+        with profile(activities=[ProfilerActivity.CUDA]) as prof:
+            for _ in range(n):
+                native.encode(x)
+            torch.cuda.synchronize()
+    kernels = [e for e in prof.events() if e.device_type.name == "CUDA"]
+    total_us = sum(e.device_time for e in kernels) / n
+    print(f"CUDA kernels per encode: {len(kernels) / n:.0f}; GPU time per encode: {total_us / 1e3:.3f} ms")
+    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20, max_name_column_width=90))
 
 
 def section_preprocess(ae: torch.nn.Module, v1: np.ndarray, v2: np.ndarray, iters: int) -> None:
@@ -261,7 +279,7 @@ def build_stage_variants(ae: torch.nn.Module, encoders: dict[str, VaeEncoder], v
 
 def section_encode(ae: torch.nn.Module, v1: np.ndarray, v2: np.ndarray, iters: int) -> None:
     pre = VaePreprocessor(resize="area")
-    encoders: dict[str, VaeEncoder] = {"torch": ae}
+    encoders: dict[str, VaeEncoder] = {"torch": ae, "native": NativeFlux2Encoder(ae)}
     for label, views in {
         "raw 512x512 CPU": [torch.from_numpy(v1), torch.from_numpy(v2)],
         "pre-resized 224x224 CPU": [torch.from_numpy(center_crop_resize(v1, 224, 224)),
