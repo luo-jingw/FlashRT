@@ -640,3 +640,28 @@ def test_run_eager_equals_the_replay_at_each_trimmed_length():
         eager = fe._action_latent.clone()
         print(f"\n  x0={fe.active_dims['x0']}: " + _fmt("run_eager vs graph replay", eager, replay))
         assert torch.equal(eager, replay)
+
+
+@needs_gpu
+def test_cyclic_gc_does_not_run_during_a_capture(monkeypatch):
+    """A collection inside a capture could destroy a dead cycle's CUDA
+    graph mid-capture, which invalidates the capture. The frontend collects
+    just before capturing and keeps the collector off until the capture
+    ends; the collector's state is restored afterwards."""
+    import gc
+
+    fe = _frontend(text_trim=True)
+    seen: list[bool] = []
+    real_run = fe._attn.run
+
+    def run(*args, **kwargs):
+        if torch.cuda.is_current_stream_capturing():
+            seen.append(gc.isenabled())
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(fe._attn, "run", run)
+    assert gc.isenabled()
+    _run(fe, _context(), 5)
+    print(f"\nattention calls during capture: {len(seen)}, collector enabled in any: {any(seen)}")
+    assert seen and not any(seen)
+    assert gc.isenabled()

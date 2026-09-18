@@ -50,6 +50,7 @@ sums to a fixed 128, so every default/override dims dict below keeps
 """
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import warnings
@@ -1215,7 +1216,16 @@ class ImageWAMTorchFrontendThor:
         activations, about 200 MB at 224x448, are the large ones). This
         is safe because `infer()` replays one graph at a time, to
         completion, and every value that outlives a replay lives in the
-        frontend's own buffers, not in the pool."""
+        frontend's own buffers, not in the pool.
+
+        Python's cyclic garbage collector does not run during the capture:
+        it runs once just before it, and is disabled until the capture
+        ends. A dead reference cycle holding a CUDA graph (another
+        frontend, for example) would otherwise be destroyed whenever an
+        allocation triggers a collection, and destroying a CUDA graph
+        while a stream captures invalidates the capture. `text_trim`
+        captures new lengths while the process serves, so a collection
+        can fall inside a capture at any time."""
         dims = self._active_dims
         if self._capture_stream is None:
             self._capture_stream = torch.cuda.Stream()
@@ -1239,6 +1249,19 @@ class ImageWAMTorchFrontendThor:
                                        deltas=self._deltas)
         torch.cuda.current_stream().wait_stream(s)
         graph = torch.cuda.CUDAGraph()
+        gc.collect()
+        gc_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            self._record_graph(graph, dims, s)
+        finally:
+            if gc_enabled:
+                gc.enable()
+        self._graph = graph
+
+    def _record_graph(self, graph: torch.cuda.CUDAGraph, dims: dict, s: torch.cuda.Stream) -> None:
+        """The capture itself (`_capture_graph`): VAE stage, prefill and
+        denoise loop for `dims` on stream `s`, into the shared pool."""
         with torch.cuda.graph(graph, pool=self._graph_pool, stream=s):
             if self._vae_stage is not None:
                 self._vae_stage.run()
@@ -1251,7 +1274,6 @@ class ImageWAMTorchFrontendThor:
                                    action_mods=self._action_mods, head_mods=self._head_mods,
                                    action_rope_table=self._action_rope_table.data_ptr(),
                                    deltas=self._deltas)
-        self._graph = graph
 
     def _reserve_scratch_at_max_dims(self, stream: int) -> None:
         """`text_trim`, before the first capture: one eager prefill at the
