@@ -164,3 +164,15 @@ def test_pack_scales_places_every_byte():
     off = sf_offsets(rows, k, device=DEV)
     assert torch.equal(buf[off.reshape(-1)].reshape(rows, k // BLOCK), sb)
     assert int((buf != 0).sum()) == rows * (k // BLOCK)
+
+
+def test_scale_rule_division_semantics():
+    """E0M3 divides by 7 exactly (`__fdiv_rn`): amax = 175/128 gives the
+    exact tie 25/128, which rounds to the even UE4M3 value 0.1875. NVFP4
+    multiplies by fp32(1/6) (fast-math lowering of `amax / 6.f`)."""
+    x = torch.zeros(1, 16, device=DEV)
+    x[0, 0] = 1.3671875
+    assert float(quantize_blocks(x, "e0m3").scales[0, 0]) == 0.1875
+    x6 = torch.full((1, 16), 0.1, device=DEV)
+    want = ue4m3_round(torch.tensor([0.1], device=DEV) * torch.tensor(1.0 / 6.0, device=DEV))
+    assert float(quantize_blocks(x6, "e2m1").scales[0, 0]) == float(want[0])

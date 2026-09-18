@@ -12,7 +12,9 @@ write for the tcgen05 block-scaled GEMMs (`cutlass_fp4_gemm_variant`,
 - One UE4M3 scale per 16 consecutive K elements, round-to-nearest-even,
   saturating at 448. Scale rules:
   - `"amax"`: `amax / qmax` (qmax 6 for E2M1, 7 for E0M3), floored at
-    1e-12 before rounding.
+    1e-12 before rounding. E2M1 multiplies by the fp32 reciprocal of 6
+    (the kernels' `--use_fast_math` lowering); E0M3 divides exactly
+    (`__fdiv_rn`).
   - `"mse"` (E2M1 only): the 9-candidate search of
     `kernel_quantize_fp4_sfa_mse`.
   Elements are multiplied by the fp32 reciprocal of the decoded scale.
@@ -23,9 +25,12 @@ write for the tcgen05 block-scaled GEMMs (`cutlass_fp4_gemm_variant`,
   the CUTLASS `Sm1xxBlockScaledConfig<16>` scale-factor layout used for
   both SFA (rows = M) and SFB (rows = N).
 
-Known deviation: the NVFP4 kernels build with `--use_fast_math`, so
-their `amax / 6` and `1 / scale` may differ from IEEE division by one
-ulp. This changes a code only at an exact rounding tie.
+Measured against the CUDA kernels compiled for sm_90 from the same
+sources and flags (real ImageWAM weights, 65M weight elements, and
+activations with outliers): NVFP4 amax and E0M3 (plain and rotated)
+match byte for byte; the NVFP4 MSE search differs on about 2 codes per
+million, where its sequential fp32 error sum ties differently from
+`torch.sum`.
 """
 from __future__ import annotations
 
@@ -141,13 +146,24 @@ def quantize_blocks(x: torch.Tensor, fmt: str, scale_rule: str = "amax") -> Bloc
     amax = xb.abs().amax(dim=-1)
     qmax = E2M1_MAX if fmt == "e2m1" else E0M3_MAX
     if scale_rule == "amax":
-        scale_bytes = ue4m3_bytes(torch.clamp(amax / qmax, min=1e-12))
+        scale_bytes = ue4m3_bytes(torch.clamp(_desired_scale(amax, fmt), min=1e-12))
     else:
         scale_bytes = _mse_scale_bytes(xb, amax)
     scales = scale_bytes.view(torch.float8_e4m3fn).float()
     inv = torch.reciprocal(scales).unsqueeze(-1)
     codes = _encode(xb * inv, fmt).reshape(rows, k)
     return BlockQuantized(codes=codes, scale_bytes=scale_bytes, scales=scales, fmt=fmt)
+
+
+def _desired_scale(amax: torch.Tensor, fmt: str) -> torch.Tensor:
+    """Unrounded block scale. The NVFP4 kernels build with
+    `--use_fast_math`, which turns `amax / 6.f` into a multiplication by
+    the fp32 reciprocal of 6; the E0M3 kernels use `__fdiv_rn`, an IEEE
+    division (it differs exactly at the ties `amax / 7` hits often, e.g.
+    amax = 1.3671875 gives exactly 25/128)."""
+    if fmt == "e2m1":
+        return amax * torch.tensor(1.0 / E2M1_MAX, dtype=torch.float32, device=amax.device)
+    return torch.div(amax, torch.full_like(amax, E0M3_MAX))
 
 
 def _mse_scale_bytes(xb: torch.Tensor, amax: torch.Tensor) -> torch.Tensor:
