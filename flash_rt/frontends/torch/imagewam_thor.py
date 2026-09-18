@@ -157,9 +157,7 @@ class ImageWAMTorchFrontendThor:
         # standalone tensor, not a slice of a wider linear1 buffer (that
         # would need a stride-aware weight-loading path this class
         # doesn't have -- not attempted, `fp16_cutlass` keeps the old
-        # split unchanged). `linear2` (attn_out_proj+mlp_down) is
-        # UNCHANGED regardless -- a separate, larger, not-yet-attempted
-        # merge (this audit's own "sub-problem 3").
+        # split unchanged). `linear2` is governed by `merge_linear2` below.
         self.dims["merge_qkv_mlp"] = precision != "fp16_cutlass"
         # Roadmap item 4 (plan.md "single-stream linear2 merge"): run the
         # single-stream blocks' real `linear2` (attn_out_proj+mlp_down)
