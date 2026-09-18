@@ -468,6 +468,51 @@ def test_cutlass_swiglu_split_slots_carry_mlp_hidden(frontend_module):
     assert weights[("backbone", "single", 0, "qkv.weight")].shape == (3 * 3072, 3072)
 
 
+# AWQ fold A slots (flash_rt/models/imagewam/awq.py): the GEMMs whose input
+# is an AdaLN output carry awq_inv_s; every other NVFP4 GEMM does not (the
+# down projections get their 1/s through the preceding up columns).
+AWQ_FOLD_A_SLOTS = {
+    ("backbone", "double"): {"txt_qkv.weight", "img_qkv.weight", "txt_mlp0.weight", "img_mlp0.weight"},
+    ("backbone", "single"): {"linear1.weight"},
+    ("action_dit", "double"): {"qkv.weight", "mlp0.weight"},
+    ("action_dit", "single"): {"linear1.weight"},
+}
+
+
+@pytest.mark.parametrize("precision", ("nvfp4", "nvfp4_sim"))
+def test_nvfp4_awq_routing(frontend_module, precision):
+    """`nvfp4_awq=True` keeps every route of the precision column and adds
+    `awq_inv_s` exactly on the fold-A slots (synthetic per-channel
+    statistics; the constructor's calibration-file check is bypassed by
+    setting the parsed file directly)."""
+    import types as _types
+
+    import numpy as np
+
+    from flash_rt.models.imagewam.checkpoint_loader import build_real_weights
+
+    frontend = construct_until_gpu(frontend_module, precision, REAL_DIMS)
+    d = frontend.dims
+    sd = fake_real_state_dict(d)
+    raw = build_real_weights(
+        sd, num_double=d["num_layers_double"], num_single=d["num_layers_single"],
+        action_num_double=d["action_num_layers_double"], action_num_single=d["action_num_layers_single"],
+        action_attn_width=d["action_attn_width"], merge_qkv_mlp=d["merge_qkv_mlp"],
+        merge_linear2=d["merge_linear2"])
+    rng = np.random.default_rng(0)
+    sites = {".".join(str(p) for p in key): _types.SimpleNamespace(
+                 channel_amax=rng.random(t.shape[0]).astype(np.float32) + 0.1)
+             for key, t in raw.items() if t.ndim == 2}
+    frontend._calibration = _types.SimpleNamespace(sites=sites)
+    frontend._nvfp4_awq, frontend._awq_alpha, frontend._awq_scope = True, 0.5, "adaln+down"
+    weights = frontend._load_real_weights(d, sd)
+    assert not routing_mismatches(weights, d, precision)
+    with_inv_s = {key for key, v in weights.items()
+                  if getattr(v, "arguments", {}).get("awq_inv_s") is not None}
+    expected = {key for key in weights if key[3] in AWQ_FOLD_A_SLOTS.get(key[:2], set())}
+    assert with_inv_s == expected, sorted(with_inv_s ^ expected)[:5]
+
+
 @pytest.mark.parametrize("precision", PRECISION_COLUMNS)
 def test_real_entry_projections_are_shared_across_double_layers(frontend_module, precision):
     """One txt_in / img_in wrapper serves every double layer (FLUX.2 has one of each)."""
