@@ -3037,3 +3037,219 @@ at closure" / "structured multi-variable investigation" -- each of the
 section is only an index; do not treat any item here as approved
 until it gets its own `# Plan: <item>` section with `Plan Status:
 approved`.
+
+# Plan: Real calibration data pipeline for `fp8_static*` (roadmap item 7)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+- `imagewam_thor.py::_calibrate_fp8()` freezes every `StaticFp8Linear`
+  activation scale from `N(0, 0.1)` noise of the site's shape. The
+  `img_in` special case in `_REAL_CALIB_STATS` is dead code: `img_in`
+  and `txt_in` are always `Bf16OutLinear`, never `StaticFp8Linear`.
+- Real Thor result (`opportunities.md` OPT-014, result 1): against
+  `fp16` on the same real frame, `fp8_static` gives `backbone_hidden`
+  cosine 0.467 and `actions` 0.697; `fp8_static_cutlass` gives 0.461 and
+  0.897. Open-loop MAE is 1.43x `fp16`. CUTLASS and cuBLASLt degrade
+  the same way, so the cause is the activation scales.
+- `fp8_gemm_descale_fp16`/`_f32out` request an NN cuBLASLt FP8 layout
+  (`issues.md` ISSUE-001). cuBLASLt supports FP8 on sm_89/sm_90 only
+  in the TN layout, so `fp8` and `fp8_static` cannot run on the H100
+  dev machine, and no FP8 accuracy can be checked end to end off Thor.
+
+### Problem
+
+No real per-layer activation statistics exist for ImageWAM, so every
+static FP8 scale is a guess. The house calibration method
+(`docs/calibration.md` §2, §10; `flash_rt/core/calibration.py`) needs
+per-site absmax from real forward passes, reduced across samples by a
+percentile.
+
+### Measurable goal
+
+- `fp8` and `fp8_static` run end to end on H100 with the real
+  checkpoint (ISSUE-001 resolved).
+- A versioned calibration file, keyed by weight name and checkpoint
+  identity, is built from real LIBERO observations disjoint from the
+  evaluation frames, and `_calibrate_fp8()` loads it.
+- On H100, `fp8_static` with the real file versus the placeholder is
+  measured against `fp16` (`backbone_hidden`, `action_latent`,
+  `actions` cosine, open-loop MAE) and against official
+  (`benchmarks/imagewam_e2e_official_compare.py`).
+
+## Structure
+
+- `csrc/kernels/decoder_fused.cu` / `.cuh`, `csrc/bindings.cpp`: new
+  TN variants `fp8_gemm_descale_fp16_tn` / `fp8_gemm_descale_f32out_tn`
+  (weight stored `(N,K)` row-major, `TRANSA=T`). The existing NN
+  functions are unchanged. Owner of the TN cuBLASLt descriptor cache.
+- `flash_rt/models/imagewam/quant_linear.py`: `Fp8Linear` and
+  `StaticFp8Linear(use_cutlass=False)` pick the layout per GPU
+  (`nn` on compute capability >= 10, `tn` below) and store the weight
+  in the matching layout. `StaticFp8Linear` gains
+  `set_activation_scale()`. Owner of each weight's layout and scales.
+- `flash_rt/models/imagewam/libero_frames.py` (new): LIBERO
+  LeRobot-v2.1 frame loading with the official eval preprocessing, and
+  stratified calibration-frame selection. Owner of which frames are
+  calibration frames.
+- `flash_rt/models/imagewam/activation_recorder.py` (new): wraps
+  weight callables and records per-call input statistics (absmax,
+  |x| percentiles, per-channel absmax), reduced per sample by max over
+  calls. Owner of per-sample statistics.
+- `flash_rt/models/imagewam/calibration_file.py` (new): the versioned
+  calibration file (safetensors + JSON metadata): build from
+  per-sample statistics with the house percentile reducer, save, load,
+  validate identity. Owner of the persisted scales.
+- `flash_rt/frontends/torch/imagewam_thor.py`: `calibration_path=`
+  constructor argument; `_calibrate_fp8()` applies the file's scales,
+  or the `N(0, 0.1)` placeholder with a warning when no file is given.
+  New `stage_inputs()` (the pre-replay half of `infer()`) and
+  `run_eager()` (prefill + denoise without a graph) so a recorder can
+  observe a real forward pass. Owner of the calibration lifecycle.
+- `benchmarks/imagewam_build_calibration.py` (new): builds the file.
+- `benchmarks/imagewam_precision_fidelity.py` (new): a precision's
+  `backbone_hidden` / `action_latent` / `actions` cosine against `fp16`
+  and open-loop MAE on held-out frames. Also the Thor check.
+- `benchmarks/imagewam_e2e_official_compare.py`: `CALIBRATION` env var
+  passes `calibration_path=` to the frontend.
+
+## Interface
+
+```python
+# csrc (bindings)
+fp8_gemm_descale_fp16_tn(A_act_MK, B_weight_NK, C_MN, M, N, K, act_descale, w_descale, stream=0)
+fp8_gemm_descale_f32out_tn(A_act_MK, B_weight_NK, C_MN, M, N, K, act_descale, w_descale, stream=0)
+
+# quant_linear.py
+def fp8_cublaslt_layout() -> str                     # "nn" (cc >= 10) or "tn"
+class Fp8Linear:        __init__(weight_fp16_ptr, n, k, *, layout: str | None = None)
+class StaticFp8Linear:  __init__(weight_fp16_ptr, n, k, *, use_cutlass=False, layout: str | None = None)
+                        set_activation_scale(scale: float) -> None   # same ordering contract as calibrate()
+
+# libero_frames.py
+@dataclass class FrameRef: suite: str; episode: int; frame: int
+@dataclass class LiberoFrame: ref, task, view1, view2 (224x224x3 uint8), state (8,), gt (T,7)
+def select_calibration_frames(data_root, suites, n, *, exclude) -> list[FrameRef]
+def load_frame(data_root, ref, horizon) -> LiberoFrame
+
+# activation_recorder.py
+class ActivationRecorder:
+    def wrap(self, weights: dict) -> dict            # same keys, recording callables
+    def begin_sample(self) -> None
+    def end_sample(self) -> SampleStats              # per site: absmax, p99/p99.9/p99.99, channel_amax
+
+# calibration_file.py
+@dataclass class ImageWAMCalibration: version, checkpoint_id, dims, percentile, frames, sites
+def build_calibration(samples: list[SampleStats], *, percentile, checkpoint_id, dims, frames) -> ImageWAMCalibration
+def save_calibration(cal, path) / load_calibration(path) -> ImageWAMCalibration
+def site_name(key: tuple) -> str                     # ("backbone","single",3,"linear1.weight") -> "backbone.single.3.linear1.weight"
+
+# imagewam_thor.py
+ImageWAMTorchFrontendThor(..., calibration_path: str | None = None)
+def stage_inputs(self, observation: dict, noise: torch.Tensor | None = None) -> None
+def run_eager(self, weights: dict | None = None) -> None
+```
+
+State transitions: `StaticFp8Linear.act_scale` is written once, by
+`calibrate()` or `set_activation_scale()`, before the first
+`__call__`, and never after. The calibration file is read-only after
+`save_calibration()`.
+
+## Flow
+
+Build (once per checkpoint and dims):
+1. `select_calibration_frames()` picks N frames from suites other than
+   the evaluation suite (`libero_object`, `libero_goal`, `libero_10`),
+   stratified by episode x frame position (house rule).
+2. An `fp16` frontend with the real checkpoint, VAE, Qwen3, proprio and
+   shift schedule runs, per frame: `set_prompt(context=...)` for the
+   task prompt, `stage_inputs(obs, noise=N(0,1) seeded)`, then
+   `run_eager(recorder.wrap(weights))`.
+3. The recorder reduces each site by max over the calls in one sample
+   (all 10 denoise steps for ActionDiT sites).
+4. `build_calibration()` reduces across samples with
+   `flash_rt.core.calibration.accumulate_amax(percentile=99.9)`; scale =
+   amax / 448 in float32. The file is saved with the checkpoint
+   identity (`_checkpoint_hash`: first 64KB + size) and the dims.
+
+Serve:
+1. `ImageWAMTorchFrontendThor(precision="fp8_static", calibration_path=...)`
+   loads and validates the file at construction.
+2. `set_prompt()` -> `_calibrate_fp8()` sets each `StaticFp8Linear`
+   scale from the file, then captures the graph.
+
+## Code Mapping
+
+| Module / interface / state | File |
+|---|---|
+| TN FP8 cuBLASLt GEMM | `csrc/kernels/decoder_fused.cu`, `.cuh`, `csrc/bindings.cpp` |
+| FP8 layout choice, weight layout, `set_activation_scale` | `flash_rt/models/imagewam/quant_linear.py` |
+| LIBERO frame loading and selection | `flash_rt/models/imagewam/libero_frames.py` |
+| Per-sample activation statistics | `flash_rt/models/imagewam/activation_recorder.py` |
+| Calibration file and scale derivation | `flash_rt/models/imagewam/calibration_file.py` |
+| Calibration lifecycle, `stage_inputs`, `run_eager` | `flash_rt/frontends/torch/imagewam_thor.py` |
+| Build script | `benchmarks/imagewam_build_calibration.py` |
+| Fidelity check (H100 and Thor) | `benchmarks/imagewam_precision_fidelity.py` |
+| End-to-end harness option | `benchmarks/imagewam_e2e_official_compare.py` |
+| Tests | `tests/test_imagewam_quant_linear.py`, `tests/test_imagewam_calibration_file.py` |
+
+## Implementation Phases
+
+### Phase 1: TN FP8 cuBLASLt path (ISSUE-001)
+
+Phase Status: active
+
+- Goal: `Fp8Linear` / `StaticFp8Linear(use_cutlass=False)` run on
+  sm_89/sm_90; Thor keeps the NN path unchanged.
+- Files: `csrc/kernels/decoder_fused.cu`, `.cuh`, `csrc/bindings.cpp`,
+  `quant_linear.py`, `tests/test_imagewam_quant_linear.py`.
+- Observation: FP8 tests run on H100 (no skip); cosine, max-abs,
+  rel_l2 vs `Fp16Linear` at the real shapes; `sm110_check.sh`;
+  `fp8`/`fp8_static` end to end on H100.
+
+### Phase 2: frontend eager-run hooks
+
+Phase Status: pending
+
+- Goal: `stage_inputs()` and `run_eager()`; `infer()` uses
+  `stage_inputs()` with unchanged behavior.
+- Files: `imagewam_thor.py`.
+- Observation: eager run equals graph replay bit-for-bit on the real
+  checkpoint; regression suite count.
+
+### Phase 3: recorder, frame selection, calibration file, build script
+
+Phase Status: pending
+
+- Goal: a real calibration file on disk.
+- Files: `libero_frames.py`, `activation_recorder.py`,
+  `calibration_file.py`, `benchmarks/imagewam_build_calibration.py`,
+  `tests/test_imagewam_calibration_file.py`.
+- Observation: recorder statistics equal a torch reference on toy
+  dims; file round trip; per-site amax/percentile summary of the real
+  build; build time.
+
+### Phase 4: `_calibrate_fp8()` loads the file
+
+Phase Status: pending
+
+- Goal: real scales applied before capture; placeholder only without a
+  file, with a warning.
+- Files: `imagewam_thor.py`, `quant_linear.py`,
+  `benchmarks/imagewam_e2e_official_compare.py`.
+- Observation: applied scales equal the file's scales; missing-site
+  and identity-mismatch errors.
+
+### Phase 5: H100 validation and Thor handoff
+
+Phase Status: pending
+
+- Goal: measured `fp8_static` accuracy with placeholder vs real
+  calibration, against `fp16` and official; Thor checklist.
+- Files: `benchmarks/imagewam_precision_fidelity.py`,
+  `opportunities.md` (OPT-022), `issues.md` (ISSUE-001 resolution).
+- Observation: fidelity table next to OPT-014's; e2e numbers next to
+  the fp16 baseline (median 0.99840, min 0.99567, MAE 0.18359).
