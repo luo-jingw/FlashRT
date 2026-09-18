@@ -26,6 +26,14 @@ graph integrates it in place, so the same window holds the normalized
 chunk (`actions_raw`) after `step`. It must be rewritten before every
 `step`. `infer()` writes `0.01 * N(0,1)` there (issues.md ISSUE-002); the
 ABI applies no scale.
+
+`io="native"` keeps `image_tokens`, `proprio`, `noise`, `actions` and
+`actions_raw` (same windows, `image_tokens` always required) and drops
+`images` and `prompt`, whose transforms (VAE, Qwen3) stay in Python.
+Its verbs are the C functions of `libflashrt_imagewam_native.so`
+(docs/imagewam_native_cpp.md), installed over the declaration with
+`frt_model_runtime_override_verbs`; the declaration's stream and graph are
+the native handle's.
 """
 from __future__ import annotations
 
@@ -36,6 +44,7 @@ from typing import Mapping
 import numpy as np
 import torch
 
+from flash_rt.models.imagewam.native_runtime import ImageWAMNativeRuntime
 from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSource, ImageWAMRuntimeSurface
 from flash_rt.runtime import exec as frt_exec
 from flash_rt.runtime import export as frt_export
@@ -159,16 +168,17 @@ class ImageWAMPythonVerbs:
         return int(self._graph.replay(0, self._stream_id))
 
 
-def _ports(surface: ImageWAMRuntimeSurface,
-           windows: Mapping[str, frt_exec.Buffer]) -> list[frt_export.PortSpec]:
+def _ports(surface: ImageWAMRuntimeSurface, windows: Mapping[str, frt_exec.Buffer],
+           io: str) -> list[frt_export.PortSpec]:
     chunk = (surface.num_action, surface.action_dim)
+    staged_images = io == "python" and surface.has_vae
     ports = []
-    if surface.has_vae:
+    if staged_images:
         ports.append(frt_export.PortSpec(
             "images", "image", "u8", "nhwc", "in", "staged", required=True,
             shape=(len(VIEW_NAMES), VIEW_HEIGHT, VIEW_WIDTH, 3)))
     ports.append(frt_export.PortSpec(
-        "image_tokens", "tensor", "bf16", "flat", "in", "swap", required=not surface.has_vae,
+        "image_tokens", "tensor", "bf16", "flat", "in", "swap", required=not staged_images,
         shape=(surface.img_len, surface.token_dim), buffer=windows["img_raw"]))
     if surface.proprio_dim is not None:
         ports.append(frt_export.PortSpec(
@@ -183,18 +193,19 @@ def _ports(surface: ImageWAMRuntimeSurface,
     ports.append(frt_export.PortSpec(
         "actions_raw", "tensor", "f32", "flat", "out", "swap",
         shape=chunk, buffer=windows["action_latent"]))
-    if surface.has_text_encoder:
+    if io == "python" and surface.has_text_encoder:
         ports.append(frt_export.PortSpec(
             "prompt", "text", "u8", "flat", "in", "setup", shape=(-1,)))
     return ports
 
 
-def _identity(surface: ImageWAMRuntimeSurface, io: str,
+def _identity(surface: ImageWAMRuntimeSurface, io: str, graph_producer: str,
               extra: Mapping[str, str] | None) -> dict[str, str]:
     ident = {"model": "imagewam"}
     ident.update(surface.setup_identity)
     ident.update({
         "io": io,
+        "graph_producer": graph_producer,
         "views": ",".join(VIEW_NAMES) if surface.has_vae else "",
         "has_vae": str(surface.has_vae),
         "has_text_encoder": str(surface.has_text_encoder),
@@ -206,21 +217,34 @@ def _identity(surface: ImageWAMRuntimeSurface, io: str,
 
 
 def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str, str] | None = None,
-                         io: str = "python") -> frt_export.ModelRuntime:
+                         io: str = "python",
+                         native: ImageWAMNativeRuntime | None = None) -> frt_export.ModelRuntime:
     """Package a captured ImageWAM frontend as an `frt_model_runtime_v1`.
 
     Requires `set_prompt()` first (the graph must be captured). `identity`
     adds canonical identity pairs; production deployments pass a weights
     digest. Returns a `ModelRuntime` whose `ptr` a native consumer adopts;
     the runtime anchors the frontend for its lifetime.
+
+    `io="python"`: Python verbs over the frontend's own graph and stream.
+    `io="native"`: `native` (an `ImageWAMNativeRuntime` with a graph, from
+    `use_graph` or `capture`) supplies the stream, the graph and the C
+    verbs; the declaration is checked by `native.bind_declaration` and
+    never published with placeholder verbs.
     """
-    if io != "python":
-        raise ValueError(f"unknown ImageWAM model-runtime io face {io!r} (supported: 'python')")
+    if io not in ("python", "native"):
+        raise ValueError(f"unknown ImageWAM model-runtime io face {io!r} (supported: 'python', 'native')")
+    if io == "native" and (native is None or not native.graph_exec):
+        raise ValueError("io='native' requires native=ImageWAMNativeRuntime with a graph "
+                         "(use_graph or capture first)")
     surface = source.runtime_surface()
     ctx = frt_exec.Ctx()
-    stream_id = ctx.wrap_stream(int(surface.stream.cuda_stream))
+    stream_handle = int(surface.stream.cuda_stream) if io == "python" else native.stream
+    graph_exec = surface.graph_exec if io == "python" else native.graph_exec
+    graph_producer = "python" if io == "python" else native.graph_producer
+    stream_id = ctx.wrap_stream(stream_handle)
     graph = ctx.graph("imagewam_infer", 1)
-    graph.adopt(0, surface.graph_exec)
+    graph.adopt(0, graph_exec)
 
     def wrap(name: str, tensor: torch.Tensor) -> frt_exec.Buffer:
         return ctx.wrap(name, tensor.data_ptr(), tensor.numel() * tensor.element_size())
@@ -230,13 +254,12 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
         "context": wrap("context", surface.context),
         "action_latent": wrap("action_latent", surface.action_latent),
     }
-    ports = _ports(surface, windows)
-    layout = ImageWAMPortLayout(tuple(p.name for p in ports))
-    verbs = ImageWAMPythonVerbs(source, surface, layout, graph, stream_id)
+    ports = _ports(surface, windows, io)
     manifest = {
         "io": io,
+        "graph_producer": graph_producer,
         "stage_plan": {"name": "full", "stages": [{"name": "infer", "graph": "infer", "after": []}]},
-        "image_views": list(VIEW_NAMES) if surface.has_vae else [],
+        "image_views": list(VIEW_NAMES) if (io == "python" and surface.has_vae) else [],
         "noise": {
             "window": "action_latent",
             "consumed_as_written": True,
@@ -246,9 +269,10 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
         },
         "actions": {"denormalized": surface.action_denormalized},
     }
-    return frt_export.build_model_runtime(
-        ctx,
-        streams=[frt_export.StreamSpec("main", stream_id, native_handle=int(surface.stream.cuda_stream))],
+    if io == "native":
+        manifest["prompt"] = "set through the setup producer; set_proprio_row after a prompt change"
+    common = dict(
+        streams=[frt_export.StreamSpec("main", stream_id, native_handle=stream_handle)],
         graphs=[frt_export.GraphSpec("infer", graph, 0, (0,))],
         buffers=[
             frt_export.BufferSpec("img_raw", windows["img_raw"], "input"),
@@ -258,10 +282,27 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
         regions=[frt_export.RegionSpec("rollout_boundary", windows["action_latent"])],
         ports=ports,
         stages=[frt_export.StageSpec("infer")],
-        identity=_identity(surface, io, identity),
+        identity=_identity(surface, io, graph_producer, identity),
         manifest_extra=manifest,
-        owner=(source, surface, windows, verbs),
-        set_input=verbs.set_input,
-        get_output=verbs.get_output,
-        step=verbs.step,
     )
+    if io == "python":
+        layout = ImageWAMPortLayout(tuple(p.name for p in ports))
+        verbs = ImageWAMPythonVerbs(source, surface, layout, graph, stream_id)
+        return frt_export.build_model_runtime(
+            ctx, owner=(source, surface, windows, verbs),
+            set_input=verbs.set_input, get_output=verbs.get_output, step=verbs.step, **common)
+
+    # The declaration exists only inside this call: placeholder callables
+    # satisfy the builder's STAGED check until the native verbs replace them.
+    declaration = frt_export.build_model_runtime(
+        ctx, owner=(source, surface, windows, native),
+        set_input=lambda _port, _payload, _stream: STATUS_UNSUPPORTED,
+        get_output=lambda _port, _stream: b"",
+        step=lambda: STATUS_UNSUPPORTED, **common)
+    try:
+        native.bind_declaration(declaration.ptr)
+        return frt_export.override_model_runtime_verbs(
+            declaration, verbs=native.verbs, verbs_self=native.handle, owner=native.handle,
+            retain_owner=native.retain_fn, release_owner=native.release_fn, anchor=native)
+    finally:
+        declaration.release()

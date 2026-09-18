@@ -3403,6 +3403,9 @@ or read `actions_raw` after synchronizing the stream.
 | GEMM algo hand-off | `csrc/gemm/gemm_runner.{h,cu}`, `csrc/bindings.cpp` |
 | ctypes binding | `flash_rt/models/imagewam/native_library.py` |
 | handoff builder | `flash_rt/models/imagewam/native_resources.py` |
+| Python owner of a native handle (setup calls) | `flash_rt/models/imagewam/native_runtime.py` |
+| construction path 3 from Python (`frt_model_runtime_override_verbs`) | `flash_rt/runtime/export.py` (`override_model_runtime_verbs`, additive) |
+| build of the native target | `cpp/models/imagewam/imagewam_native.cmake`, included from the root `CMakeLists.txt` |
 | `io="native"` face | `flash_rt/models/imagewam/runtime_export.py` |
 | schema golden + gate | `tests/data/imagewam_native_schema.records`, `tests/gate_imagewam_native_schema_parity.py` |
 | step-by-step parity (small dims) | `tests/test_imagewam_native_pipeline.py` |
@@ -3419,7 +3422,7 @@ Goal: this section.
 
 ### Phase 2 — native verb overlay over the Python graph, schema parity
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `libflashrt_imagewam_native.so` with the Phase 2 C ABI; the
 `io="native"` face adopting the Python graph; schema-parity gate; a
@@ -3435,7 +3438,7 @@ Python; the native proprio token vs torch `F.linear` reported as
 
 ### Phase 3 — native fp16 pipeline: block, prefill, denoise, graph
 
-Phase Status: pending
+Phase Status: active
 
 Goal: GEMM algo hand-off; `NativePipeline` recording one backbone
 single-stream block, then the full prefill, then the denoise loop, each

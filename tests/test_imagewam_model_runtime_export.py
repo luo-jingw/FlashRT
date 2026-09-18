@@ -96,6 +96,8 @@ def test_identity_sensitivity(frontend, runtime):
 
 def test_unknown_io_face_rejected(frontend):
     with pytest.raises(ValueError, match="io face"):
+        frontend.export_model_runtime(io="bogus")
+    with pytest.raises(ValueError, match="requires native="):
         frontend.export_model_runtime(io="native")
 
 

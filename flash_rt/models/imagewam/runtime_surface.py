@@ -31,6 +31,13 @@ class ImageWAMRuntimeSurface:
       entry, the normalized action chunk after replay (in place).
     - `setup_identity`: ordered `(key, value)` pairs describing the setup
       (precision, dimensions, flags) that the captured graph depends on.
+    - `proprio_row`: the context row the proprio token goes to for the
+      current prompt (`None` without proprio); changes with the prompt.
+    - `proprio_weight` / `proprio_bias`: the real `proprio_encoder`,
+      `(joint_attention_dim, proprio_dim)` / `(joint_attention_dim,)` bf16.
+    - `state_scale` / `state_offset` / `action_scale` / `action_offset`:
+      f32 min/max normalization constants from `dataset_stats.json`
+      (`None` when not loaded).
     """
 
     graph_exec: int
@@ -47,6 +54,15 @@ class ImageWAMRuntimeSurface:
     has_text_encoder: bool
     action_denormalized: bool
     setup_identity: tuple[tuple[str, str], ...]
+    context_rows: int
+    context_width: int
+    proprio_row: int | None
+    proprio_weight: torch.Tensor | None
+    proprio_bias: torch.Tensor | None
+    state_scale: torch.Tensor | None
+    state_offset: torch.Tensor | None
+    action_scale: torch.Tensor | None
+    action_offset: torch.Tensor | None
 
 
 class ImageWAMRuntimeSource(Protocol):

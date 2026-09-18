@@ -1115,11 +1115,21 @@ class ImageWAMTorchFrontendThor:
             has_text_encoder=self._qwen3 is not None,
             action_denormalized=self._action_norm is not None,
             setup_identity=tuple(setup),
+            context_rows=d["x0"],
+            context_width=d["joint_attention_dim"],
+            proprio_row=self._proprio_row,
+            proprio_weight=self._proprio_w,
+            proprio_bias=self._proprio_b,
+            state_scale=None if self._state_norm is None else self._state_norm.scale,
+            state_offset=None if self._state_norm is None else self._state_norm.offset,
+            action_scale=None if self._action_norm is None else self._action_norm.scale,
+            action_offset=None if self._action_norm is None else self._action_norm.offset,
         )
 
-    def export_model_runtime(self, *, identity: dict | None = None, io: str = "python"):
+    def export_model_runtime(self, *, identity: dict | None = None, io: str = "python", native=None):
         """Package the captured graph as an `frt_model_runtime_v1`. See
         `flash_rt.models.imagewam.runtime_export.export_model_runtime`.
-        Needs the exec/ and runtime/ native modules (built separately)."""
+        Needs the exec/ and runtime/ native modules (built separately);
+        `io="native"` also needs `native` (an `ImageWAMNativeRuntime`)."""
         from flash_rt.models.imagewam.runtime_export import export_model_runtime
-        return export_model_runtime(self, identity=identity, io=io)
+        return export_model_runtime(self, identity=identity, io=io, native=native)
