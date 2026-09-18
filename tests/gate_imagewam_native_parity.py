@@ -6,15 +6,25 @@ with `ImageWAMTorchFrontendThor.infer()` on the same observation, prompt
 and initial noise (`infer(..., action_noise=)` and the `noise` window get the
 same latent):
 
-  1. image_tokens SWAP (the tokens infer() staged) + noise SWAP with the
-     proprio token infer() staged -> actions / actions_raw vs infer()
-  2. the native proprio verb (C++ normalization + cuBLASLt projection):
-     context-row token vs torch F.linear, and actions vs infer()
-  3. `--graph native`: the same checks on the graph the C++ pipeline
-     recorded and captured, plus Python-graph vs native-graph replay
+  1. image_tokens SWAP (the tokens infer() staged) + noise SWAP, proprio
+     staged by the frontend -> actions, actions_raw, and the backbone
+     residual and K/V caches the graph leaves behind, vs infer()
+  2. the same with the native proprio verb (C++ normalization + cuBLASLt
+     projection): also the context-row token vs torch F.linear
+  3. `--graph native`: the graph the C++ pipeline recorded and captured,
+     plus native-graph vs Python-graph replay from identical inputs
 
-and an indicative, alternating latency A/B of one `io="python"` tick vs
-one `io="native"` tick (both SWAP image tokens, same graph).
+Before every tick or replay, every buffer it must write is NaN-filled
+(`img_raw`, the proprio row, K/V caches, `Q_O`, backbone residual, action
+latent), so nothing can pass on what the reference `infer()` left behind.
+Unless `--no-mutants`, the rows are re-run against mutants that must make
+them fail: the proprio verb or `step` not called, and (`--graph native`)
+native pipelines whose resource table runs no backbone block, skips the
+last single-stream block, skips the last denoise step, or feeds one block
+another block's weight.
+
+Also an indicative, alternating latency A/B of one `io="python"` tick vs
+one `io="native"` tick (both SWAP image tokens) and of the two graphs.
 
     python tests/gate_imagewam_native_parity.py --precision fp16 [--graph native]   # H100
     python tests/gate_imagewam_native_parity.py --precision nvfp4 --graph native    # Thor
@@ -35,6 +45,7 @@ import time
 import numpy as np
 import torch
 
+from _helpers.imagewam_abi_checks import PIPELINE_MUTATIONS, MutatedPipelineSource, bits, poison_tick_state
 from _helpers.model_runtime_consumer import ModelRuntimeConsumer, exec_library_path
 
 HORIZON, STEPS, SHIFT = 64, 10, 5.0
@@ -56,7 +67,15 @@ def _compare(label: str, a: np.ndarray, b: np.ndarray) -> dict:
     cos = float(a64 @ b64 / (np.linalg.norm(a64) * np.linalg.norm(b64) + 1e-30))
     row = {"check": label, "array_equal": bool(np.array_equal(a, b)),
            "max_abs": float(np.max(np.abs(a64 - b64))), "cos": cos}
-    print(f"  {label:<52} array_equal={row['array_equal']!s:<5} max_abs={row['max_abs']:.3g} cos={cos:.8f}")
+    print(f"  {label:<56} array_equal={row['array_equal']!s:<5} max_abs={row['max_abs']:.3g} cos={cos:.8f}")
+    return row
+
+
+def _compare_bits(label: str, a: np.ndarray, b: np.ndarray) -> dict:
+    """Exact comparison of raw bit patterns (large buffers, NaN-safe)."""
+    n_diff = int(np.count_nonzero(a != b))
+    row = {"check": label, "array_equal": n_diff == 0, "elements_differing": n_diff}
+    print(f"  {label:<56} array_equal={row['array_equal']!s:<5} elements_differing={n_diff}")
     return row
 
 
@@ -97,6 +116,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--precision", default="fp16")
     ap.add_argument("--graph", choices=("python", "native"), default="python")
+    ap.add_argument("--no-mutants", action="store_true", help="skip the mutants")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--bench-iters", type=int, default=20)
     ap.add_argument("--json-out", default=None)
@@ -122,13 +142,20 @@ def main() -> int:
     print(f"frontend ({args.precision}) ready in {time.time() - t0:.1f}s")
 
     surface = fe.runtime_surface()
-    native = ImageWAMNativeRuntime.create(surface)
-    if args.graph == "python":
-        native.use_graph(surface.graph_exec)
-    else:
-        t0 = time.time()
-        native.set_pipeline(fe)
-        native.capture()
+    row = surface.proprio_row
+
+    def build_native(source) -> ImageWAMNativeRuntime:
+        native = ImageWAMNativeRuntime.create(surface)
+        if args.graph == "python":
+            native.use_graph(surface.graph_exec)
+        else:
+            native.set_pipeline(source)
+            native.capture()
+        return native
+
+    t0 = time.time()
+    native = build_native(fe)
+    if args.graph == "native":
         print(f"native pipeline: {len(native.gemm_shapes)} GEMM shapes, {native.gemm_algos_installed} "
               f"algorithms handed off, graph captured in {time.time() - t0:.1f}s, "
               f"{native.graph_nodes} nodes (Python graph: {_python_graph_nodes(fe)} nodes)")
@@ -136,65 +163,102 @@ def main() -> int:
     consumer = ModelRuntimeConsumer(mr.ptr, exec_library_path())
     python_face = fe.export_model_runtime(io="python")
     python_consumer = ModelRuntimeConsumer(python_face.ptr, exec_library_path())
-    rows = []
+    rows, mutants = [], []
     try:
         print(f"io=native runtime: ports={[p.name for p in consumer.ports]} graph={native.graph_producer} "
               f"fingerprint=0x{consumer.fingerprint:016x}")
 
-        def draw_noise(seed: int) -> torch.Tensor:
-            torch.manual_seed(seed)
-            return torch.empty_like(fe._action_latent).normal_().mul_(0.01)
-
-        noise_t = draw_noise(args.seed)
-        ref = fe.infer(obs, action_noise=noise_t)["actions"]
-        ref_raw = fe._action_latent.detach().cpu().numpy().copy()
-        tokens = fe._img_raw.detach().view(torch.int16).cpu().numpy().copy()
-        row = surface.proprio_row
-        ref_token = fe._context[row].detach().clone()
+        torch.manual_seed(args.seed)
+        noise_t = torch.empty_like(fe._action_latent).normal_().mul_(0.01)
         noise = noise_t.cpu().numpy()
-
-        print("parity (io=native consumer vs frontend.infer()):")
-        consumer.write_swap("image_tokens", tokens)
-        consumer.write_swap("noise", noise)
-        consumer.step()
-        rows.append(_compare("proprio staged by infer(): actions", consumer.get_output("actions", np.float32, CHUNK), ref))
-        rows.append(_compare("proprio staged by infer(): actions_raw",
-                             consumer.read_swap("actions_raw", np.float32, CHUNK), ref_raw))
-
-        fe._context[row].zero_()
+        ref = fe.infer(obs, action_noise=noise_t)["actions"]
         torch.cuda.synchronize()
-        consumer.set_input("proprio", state.tobytes())
-        consumer.sync()
-        rows.append(_compare("native proprio verb: context-row token (bf16 bits)",
-                             fe._context[row].detach().view(torch.int16).cpu().numpy(),
-                             ref_token.view(torch.int16).cpu().numpy()))
-        consumer.write_swap("noise", noise)
-        consumer.step()
-        rows.append(_compare("native proprio verb: actions", consumer.get_output("actions", np.float32, CHUNK), ref))
+        ref_raw = fe._action_latent.detach().cpu().numpy().copy()
+        tokens = bits(fe._img_raw)
+        ref_token = bits(fe._context[row])
+        ref_state = {"backbone_hidden": bits(fe._backbone_hidden), "K_cache": bits(fe._K_cache),
+                     "V_cache": bits(fe._V_cache)}
+
+        def tick(c: ModelRuntimeConsumer, *, proprio: str, step: bool = True) -> dict:
+            """One NaN-poisoned native tick; proprio staged by the frontend
+            ("python"), by the native verb ("native"), or not at all ("skip")."""
+            poison_tick_state(fe)
+            if proprio == "python":
+                fe.stage_proprio(state)
+                torch.cuda.synchronize()
+            c.write_swap("image_tokens", tokens)
+            c.write_swap("noise", noise)
+            if proprio == "native":
+                c.set_input("proprio", state.tobytes())
+            if step:
+                c.step()
+            out = {"actions": c.get_output("actions", np.float32, CHUNK),
+                   "actions_raw": c.read_swap("actions_raw", np.float32, CHUNK)}
+            torch.cuda.synchronize()
+            out["token"] = bits(fe._context[row])
+            out.update({k: bits(getattr(fe, "_" + k)) for k in ref_state})
+            return out
+
+        def compare_tick(prefix: str, out: dict, *, token: bool) -> list:
+            result = [_compare(f"{prefix}: actions", out["actions"], ref),
+                      _compare(f"{prefix}: actions_raw", out["actions_raw"], ref_raw)]
+            if token:
+                result.append(_compare_bits(f"{prefix}: proprio token (bf16 bits)", out["token"], ref_token))
+            result += [_compare_bits(f"{prefix}: {k} (bits)", out[k], v) for k, v in ref_state.items()]
+            return result
+
+        def detected(out: dict) -> bool:
+            return not (np.array_equal(out["actions"], ref) and np.array_equal(out["token"], ref_token)
+                        and all(np.array_equal(out[k], v) for k, v in ref_state.items()))
+
+        print("parity (io=native consumer vs frontend.infer(), buffers NaN-poisoned before every tick):")
+        rows += compare_tick("proprio staged by the frontend", tick(consumer, proprio="python"), token=False)
+        rows += compare_tick("native proprio verb", tick(consumer, proprio="native"), token=True)
 
         cudart = _cudart()
         stream = native.stream
         graphs = {"python graph": surface.graph_exec, "native graph": native.graph_exec}
         if args.graph == "native":
-            # the two captured graphs replayed from identical inputs on one stream
             finals = {}
             for label, exec_ in graphs.items():
-                fe._context[row].copy_(ref_token)
+                poison_tick_state(fe)
+                fe._context[row].copy_(torch.from_numpy(ref_token).cuda().view(torch.bfloat16))
                 fe._img_raw.copy_(torch.from_numpy(tokens).cuda().view(torch.bfloat16))
-                fe._action_latent.copy_(torch.from_numpy(noise).cuda())
+                fe._action_latent.copy_(noise_t)
                 torch.cuda.synchronize()
                 cudart.cudaGraphLaunch(exec_, stream)
                 cudart.cudaStreamSynchronize(stream)
-                finals[label] = (fe._action_latent.detach().cpu().numpy().copy(),
-                                 fe._K_cache.detach().view(torch.int16).cpu().numpy())
-            rows.append(_compare("native graph vs python graph: action latent",
-                                 finals["native graph"][0], finals["python graph"][0]))
-            rows.append(_compare("native graph vs python graph: K cache (fp16 bits)",
-                                 finals["native graph"][1], finals["python graph"][1]))
+                finals[label] = {"action_latent": bits(fe._action_latent), "backbone_hidden": bits(fe._backbone_hidden),
+                                 "K_cache": bits(fe._K_cache), "V_cache": bits(fe._V_cache)}
+            for k in finals["native graph"]:
+                rows.append(_compare_bits(f"native graph vs python graph: {k}", finals["native graph"][k],
+                                          finals["python graph"][k]))
         ok = all(r["array_equal"] for r in rows)
 
+        if not args.no_mutants:
+            print("mutants (each must make the native-proprio row fail):")
+            for label, kwargs in (("proprio verb not called", {"proprio": "skip"}),
+                                  ("step not called", {"proprio": "native", "step": False})):
+                hit = detected(tick(consumer, **kwargs))
+                mutants.append({"mutant": label, "detected": hit})
+                print(f"  {label:<56} detected={hit}")
+            if args.graph == "native":
+                for mutation in PIPELINE_MUTATIONS:
+                    native_m = build_native(MutatedPipelineSource(fe, mutation))
+                    mr_m = fe.export_model_runtime(io="native", native=native_m)
+                    c_m = ModelRuntimeConsumer(mr_m.ptr, exec_library_path())
+                    try:
+                        hit = detected(tick(c_m, proprio="native"))
+                    finally:
+                        c_m.close()
+                        mr_m.release()
+                        native_m.close()
+                    mutants.append({"mutant": f"native pipeline: {mutation}", "detected": hit})
+                    print(f"  {'native pipeline: ' + mutation:<56} detected={hit}")
+            ok = ok and all(m["detected"] for m in mutants)
+
         if args.bench_iters > 0:
-            def tick(c: ModelRuntimeConsumer) -> None:
+            def bench_tick(c: ModelRuntimeConsumer) -> None:
                 c.write_swap("image_tokens", tokens)
                 c.set_input("proprio", state.tobytes())
                 c.write_swap("noise", noise)
@@ -202,14 +266,14 @@ def main() -> int:
                 c.get_output("actions", np.float32, CHUNK)
 
             for _ in range(3):
-                tick(python_consumer)
-                tick(consumer)
+                bench_tick(python_consumer)
+                bench_tick(consumer)
             ms = {"io=python tick": [], "io=native tick": []}
             for _ in range(args.bench_iters):
                 for label, c in (("io=python tick", python_consumer), ("io=native tick", consumer)):
                     torch.cuda.synchronize()
                     t = time.perf_counter()
-                    tick(c)
+                    bench_tick(c)
                     ms[label].append((time.perf_counter() - t) * 1e3)
             print(f"latency, alternating A/B, SWAP image tokens, {native.graph_producer} graph in the native "
                   "face (indicative only):")
@@ -236,7 +300,8 @@ def main() -> int:
 
         if args.json_out:
             with open(args.json_out, "w") as f:
-                json.dump({"precision": args.precision, "graph": args.graph, "rows": rows}, f, indent=1)
+                json.dump({"precision": args.precision, "graph": args.graph, "rows": rows, "mutants": mutants},
+                          f, indent=1)
         print("PASS" if ok else "FAIL", f"- ImageWAM io=native ({native.graph_producer} graph) vs infer()")
         return 0 if ok else 1
     finally:

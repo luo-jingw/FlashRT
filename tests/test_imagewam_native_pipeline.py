@@ -9,9 +9,12 @@ Each check restores one input state, runs the Python function eagerly,
 restores again, runs the native segment, and compares every state buffer
 bit for bit: one backbone block of each type, the full prefill, the full
 denoise loop, then the captured native graph against the Python graph
-and through the `io="native"` model runtime against `infer()`. Runs the
-served layer structure (merged single-stream `linear2`, gated residual
-fused with the next AdaLN) and the split/unfused one.
+and through the `io="native"` model runtime against `infer()`, with every
+buffer the tick writes NaN-filled first. Native pipelines built from a
+mutated resource table (no backbone block, last single-stream block or
+denoise step dropped, one block fed another block's weight) must fail that
+tick. Runs the served layer structure (merged single-stream `linear2`,
+gated residual fused with the next AdaLN) and the split/unfused one.
 Skips when exec/, runtime/ or the native library is not built.
 """
 import os
@@ -28,6 +31,8 @@ from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor  # 
 from flash_rt.models.imagewam import native_library as nl  # noqa: E402
 from flash_rt.models.imagewam import pipeline_thor  # noqa: E402
 from flash_rt.models.imagewam.native_runtime import ImageWAMNativeRuntime  # noqa: E402
+from _helpers.imagewam_abi_checks import (  # noqa: E402
+    PIPELINE_MUTATIONS, MutatedPipelineSource, bits, poison_tick_state)
 from _helpers.model_runtime_consumer import ModelRuntimeConsumer, exec_library_path  # noqa: E402
 
 try:
@@ -39,6 +44,8 @@ PROPRIO_DIM = 8
 # fp16 locally; the Thor checklist sets IMAGEWAM_NATIVE_PRECISION=nvfp4.
 PRECISION = os.environ.get("IMAGEWAM_NATIVE_PRECISION", "fp16")
 STATE_NAMES = ("backbone_hidden", "K_cache", "V_cache", "Q_O", "context", "img_raw", "action_latent")
+# Buffers a tick leaves behind besides the actions.
+TICK_STATE = ("backbone_hidden", "K_cache", "V_cache")
 # (name, dims_override): the frontend default, and the path with both
 # layer-structure fusions off.
 LAYER_STRUCTURES = (
@@ -181,29 +188,65 @@ def test_native_graph(h):
                    names=("K_cache", "V_cache", "Q_O", "action_latent"))
 
 
+def _infer_reference(fe) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray]:
+    """infer() on fixed proprio and noise: the reference outputs, and the
+    image tokens, noise and proprio a consumer must send to reproduce it."""
+    proprio = np.linspace(-0.4, 0.5, PROPRIO_DIM, dtype=np.float32)
+    torch.manual_seed(3)
+    noise = torch.empty_like(fe._action_latent).normal_().mul_(0.01)
+    actions = fe.infer({"proprio": proprio}, action_noise=noise)["actions"]
+    torch.cuda.synchronize()
+    ref = {"actions": actions, **{k: bits(getattr(fe, f"_{k}")) for k in TICK_STATE}}
+    return ref, bits(fe._img_raw), noise.cpu().numpy(), proprio
+
+
+def _poisoned_native_tick(fe, native, tokens, noise, proprio) -> dict:
+    """One io="native" tick after NaN-filling every buffer it must write."""
+    rt = fe.export_model_runtime(io="native", native=native)
+    consumer = ModelRuntimeConsumer(rt.ptr, exec_library_path())
+    try:
+        assert "graph_producer=native" in rt.identity
+        poison_tick_state(fe)
+        consumer.write_swap("image_tokens", tokens)
+        consumer.set_input("proprio", proprio.tobytes())
+        consumer.write_swap("noise", noise)
+        consumer.step()
+        out = {"actions": consumer.get_output("actions", np.float32, (fe.dims["num_action"], fe.dims["action_dim"]))}
+        torch.cuda.synchronize()
+        out.update({k: bits(getattr(fe, f"_{k}")) for k in TICK_STATE})
+        return out
+    finally:
+        consumer.close()
+        rt.release()
+
+
+def _differing(out: dict, ref: dict) -> list[str]:
+    return [k for k in ref if not np.array_equal(out[k], ref[k])]
+
+
 def test_native_face_tick_matches_infer(h):
     fe = h.fe
     if h.native.graph_producer != "native":
         h.native.capture()
-    rt = fe.export_model_runtime(io="native", native=h.native)
-    consumer = ModelRuntimeConsumer(rt.ptr, exec_library_path())
+    ref, tokens, noise, proprio = _infer_reference(fe)
+    out = _poisoned_native_tick(fe, h.native, tokens, noise, proprio)
+    differing = _differing(out, ref)
+    print(f"poisoned io=native tick on the native graph vs infer(): differing={differing} "
+          f"actions max_abs={np.abs(out['actions'] - ref['actions']).max():.3g}")
+    assert differing == []
+
+
+@pytest.mark.parametrize("mutation", PIPELINE_MUTATIONS)
+def test_pipeline_mutant_fails_the_tick(h, mutation):
+    fe = h.fe
+    ref, tokens, noise, proprio = _infer_reference(fe)
+    mutant = ImageWAMNativeRuntime.create(fe.runtime_surface(), LIBRARY)
     try:
-        assert "graph_producer=native" in rt.identity
-        chunk = (fe.dims["num_action"], fe.dims["action_dim"])
-        proprio = np.linspace(-0.4, 0.5, PROPRIO_DIM, dtype=np.float32)
-        torch.manual_seed(3)
-        ref = fe.infer({"proprio": proprio})["actions"]
-        torch.manual_seed(3)
-        tokens = torch.empty_like(fe._img_raw).normal_()
-        noise = torch.empty_like(fe._action_latent).normal_().mul_(0.01)
-        consumer.write_swap("image_tokens", tokens.view(torch.int16).cpu().numpy())
-        consumer.set_input("proprio", proprio.tobytes())
-        consumer.write_swap("noise", noise.cpu().numpy())
-        consumer.step()
-        actions = consumer.get_output("actions", np.float32, chunk)
-        print(f"io=native tick on the native graph vs infer(): array_equal={np.array_equal(actions, ref)} "
-              f"max_abs={np.abs(actions - ref).max():.3g}")
-        assert np.array_equal(actions, ref)
+        mutant.set_pipeline(MutatedPipelineSource(fe, mutation))
+        mutant.capture()
+        out = _poisoned_native_tick(fe, mutant, tokens, noise, proprio)
     finally:
-        consumer.close()
-        rt.release()
+        mutant.close()
+    differing = _differing(out, ref)
+    print(f"native pipeline mutant {mutation}: differing={differing}")
+    assert differing, f"mutant {mutation} passed the tick"

@@ -3,8 +3,9 @@
 Small random-weight dims (fp16, or IMAGEWAM_NATIVE_PRECISION; proprio +
 dataset stats). Covers the schema (Python declaration records == C++
 records), the native verbs over
-the Python-captured graph, a tick that enters no Python frame, and the
-status codes. Skips when exec/, runtime/ or the native library is not
+the Python-captured graph (every buffer a tick writes NaN-filled first;
+the tick must fail when the consumer skips the proprio verb or `step`), a
+tick that enters no Python frame, and the status codes. Skips when exec/, runtime/ or the native library is not
 built (docs/imagewam_native_cpp.md).
 """
 import json
@@ -21,6 +22,7 @@ pytest.importorskip("flash_rt.runtime.export", exc_type=ImportError)
 from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor  # noqa: E402
 from flash_rt.models.imagewam.native_library import ImageWAMNativeLibrary  # noqa: E402
 from flash_rt.models.imagewam.native_runtime import ImageWAMNativeError, ImageWAMNativeRuntime  # noqa: E402
+from _helpers.imagewam_abi_checks import bits, poison_tick_state  # noqa: E402
 from _helpers.model_runtime_consumer import ModelRuntimeConsumer, exec_library_path  # noqa: E402
 
 try:
@@ -32,6 +34,8 @@ PROPRIO_DIM = 8
 # fp16 locally; the Thor checklist sets IMAGEWAM_NATIVE_PRECISION=nvfp4.
 PRECISION = os.environ.get("IMAGEWAM_NATIVE_PRECISION", "fp16")
 SEED = 99
+# Buffers a tick leaves behind besides the actions.
+TICK_STATE = ("backbone_hidden", "K_cache", "V_cache")
 
 
 @pytest.fixture(scope="module")
@@ -69,7 +73,7 @@ def _records(identity: str) -> list[str]:
 
 
 def _draw(frontend, seed):
-    """infer()'s own draws, in order: img_raw.normal_(), then 0.01 * noise."""
+    """Seeded image tokens and 0.01-scaled noise for a tick."""
     torch.manual_seed(seed)
     tokens = torch.empty_like(frontend._img_raw).normal_()
     noise = torch.empty_like(frontend._action_latent).normal_().mul_(0.01)
@@ -87,43 +91,72 @@ def test_schema_records_match(native_runtime):
     assert consumer.stream_handle == native.stream
 
 
-def test_native_tick_matches_infer(frontend, native_runtime):
-    _, _, consumer = native_runtime
-    d = frontend.dims
-    chunk = (d["num_action"], d["action_dim"])
+@pytest.fixture(scope="module")
+def reference(frontend):
+    """infer() on fixed proprio and noise, and what a consumer sends to
+    reproduce it (image tokens, noise, proprio)."""
     proprio = np.linspace(-0.6, 0.8, PROPRIO_DIM, dtype=np.float32)
     torch.manual_seed(SEED)
-    ref = frontend.infer({"proprio": proprio})["actions"]
-    ref_raw = frontend._action_latent.detach().cpu().numpy().copy()
-    row = frontend.runtime_surface().proprio_row
-    ref_token = frontend._context[row].detach().clone()
-    tokens, noise = _draw(frontend, SEED)
-
-    # 1. the proprio token infer() staged is still in the context row
-    consumer.write_swap("image_tokens", tokens.view(torch.int16).cpu().numpy())
-    consumer.write_swap("noise", noise.cpu().numpy())
-    consumer.step()
-    a1 = consumer.get_output("actions", np.float32, chunk)
-    raw1 = consumer.read_swap("actions_raw", np.float32, chunk)
-
-    # 2. the native verb stages proprio (C++ normalization + cuBLASLt projection)
-    frontend._context[row].zero_()
+    noise = torch.empty_like(frontend._action_latent).normal_().mul_(0.01)
+    actions = frontend.infer({"proprio": proprio}, action_noise=noise)["actions"]
     torch.cuda.synchronize()
-    consumer.set_input("proprio", proprio.tobytes())
-    consumer.sync()
-    native_token = frontend._context[row].detach().clone()
-    consumer.write_swap("noise", noise.cpu().numpy())
-    consumer.step()
-    a2 = consumer.get_output("actions", np.float32, chunk)
+    row = frontend.runtime_surface().proprio_row
+    ref = {"actions": actions, "actions_raw": frontend._action_latent.cpu().numpy().copy(),
+           "token": bits(frontend._context[row]), **{k: bits(getattr(frontend, f"_{k}")) for k in TICK_STATE}}
+    return ref, bits(frontend._img_raw), noise.cpu().numpy(), proprio
 
-    token_max = (native_token.float() - ref_token.float()).abs().max().item()
-    print(f"python-staged proprio: actions array_equal={np.array_equal(a1, ref)} "
-          f"actions_raw array_equal={np.array_equal(raw1, ref_raw)}")
-    print(f"native proprio token: array_equal={torch.equal(native_token, ref_token)} max_abs={token_max:.3g}; "
-          f"actions array_equal={np.array_equal(a2, ref)} max_abs={np.abs(a2 - ref).max():.3g}")
-    assert np.array_equal(a1, ref) and np.array_equal(raw1, ref_raw)
-    assert torch.equal(native_token, ref_token)
-    assert np.array_equal(a2, ref)
+
+def _tick(frontend, consumer, reference, *, proprio_by: str, step: bool = True) -> dict:
+    """One tick after NaN-filling every buffer it must write; proprio is
+    staged by the frontend ("python"), the native verb ("native") or not
+    at all ("none")."""
+    ref, tokens, noise, proprio = reference
+    poison_tick_state(frontend)
+    if proprio_by == "python":
+        frontend.stage_proprio(proprio)
+        torch.cuda.synchronize()
+    consumer.write_swap("image_tokens", tokens)
+    if proprio_by == "native":
+        consumer.set_input("proprio", proprio.tobytes())
+    consumer.write_swap("noise", noise)
+    if step:
+        consumer.step()
+    chunk = ref["actions"].shape
+    out = {"actions": consumer.get_output("actions", np.float32, chunk),
+           "actions_raw": consumer.read_swap("actions_raw", np.float32, chunk)}
+    torch.cuda.synchronize()
+    out["token"] = bits(frontend._context[frontend.runtime_surface().proprio_row])
+    out.update({k: bits(getattr(frontend, f"_{k}")) for k in TICK_STATE})
+    return out
+
+
+def _differing(out: dict, ref: dict) -> list[str]:
+    return [k for k in ref if not np.array_equal(out[k], ref[k])]
+
+
+@pytest.mark.parametrize("proprio_by", ["python", "native"])
+def test_native_tick_matches_infer(frontend, native_runtime, reference, proprio_by):
+    """proprio staged by the frontend (the token infer() stages), or by the
+    native verb (C++ normalization + cuBLASLt projection)."""
+    _, _, consumer = native_runtime
+    ref = reference[0]
+    out = _tick(frontend, consumer, reference, proprio_by=proprio_by)
+    differing = _differing(out, ref)
+    print(f"poisoned tick, proprio staged by {proprio_by}: differing={differing} "
+          f"actions max_abs={np.abs(out['actions'] - ref['actions']).max():.3g}")
+    assert differing == []
+
+
+@pytest.mark.parametrize("mutant", ["proprio verb not called", "step not called"])
+def test_skipped_verb_fails_the_tick(frontend, native_runtime, reference, mutant):
+    _, _, consumer = native_runtime
+    if mutant == "proprio verb not called":
+        out = _tick(frontend, consumer, reference, proprio_by="none")
+    else:
+        out = _tick(frontend, consumer, reference, proprio_by="native", step=False)
+    differing = _differing(out, reference[0])
+    print(f"mutant {mutant}: differing={differing}")
+    assert differing
 
 
 def _python_frames_during_tick(consumer: ModelRuntimeConsumer, proprio: np.ndarray) -> list[str]:
