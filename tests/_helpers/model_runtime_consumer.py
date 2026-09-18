@@ -154,15 +154,18 @@ class ModelRuntimeConsumer:
     def last_error(self) -> str:
         return (self._m.verbs.last_error(self._m.self_) or b"").decode(errors="replace")
 
-    def set_input_status(self, name: str, payload: bytes | ctypes.Array) -> int:
-        """Raw `set_input` status (for negative tests)."""
-        p = self.port(name)
+    def _index(self, port: str | int) -> int:
+        return port if isinstance(port, int) else self.port(port).index
+
+    def set_input_status(self, port: str | int, payload: bytes | ctypes.Array, stream: int = -1) -> int:
+        """Raw `set_input` status (for negative tests); `port` is a name or an index."""
+        index = self._index(port)
         if isinstance(payload, bytes):
             buf = ctypes.create_string_buffer(payload, len(payload))
-            return self._m.verbs.set_input(self._m.self_, p.index, ctypes.cast(buf, ctypes.c_void_p),
-                                           len(payload), -1)
-        return self._m.verbs.set_input(self._m.self_, p.index, ctypes.cast(payload, ctypes.c_void_p),
-                                       ctypes.sizeof(payload), -1)
+            return self._m.verbs.set_input(self._m.self_, index, ctypes.cast(buf, ctypes.c_void_p),
+                                           len(payload), stream)
+        return self._m.verbs.set_input(self._m.self_, index, ctypes.cast(payload, ctypes.c_void_p),
+                                       ctypes.sizeof(payload), stream)
 
     def set_input(self, name: str, payload: bytes | ctypes.Array) -> None:
         rc = self.set_input_status(name, payload)
@@ -210,12 +213,11 @@ class ModelRuntimeConsumer:
         if rc != 0:
             raise ModelRuntimeError("step", rc, self.last_error())
 
-    def get_output_status(self, name: str, capacity: int) -> tuple[int, bytes, int]:
-        p = self.port(name)
+    def get_output_status(self, port: str | int, capacity: int, stream: int = -1) -> tuple[int, bytes, int]:
         buf = ctypes.create_string_buffer(max(capacity, 1))
         written = ctypes.c_uint64(0)
-        rc = self._m.verbs.get_output(self._m.self_, p.index, ctypes.cast(buf, ctypes.c_void_p),
-                                      capacity, ctypes.byref(written), -1)
+        rc = self._m.verbs.get_output(self._m.self_, self._index(port), ctypes.cast(buf, ctypes.c_void_p),
+                                      capacity, ctypes.byref(written), stream)
         return rc, buf.raw[:int(written.value)] if rc == 0 else b"", int(written.value)
 
     def get_output(self, name: str, dtype: np.dtype, shape: tuple[int, ...]) -> np.ndarray:

@@ -9,6 +9,8 @@
   context.
 - `MutatedPipelineSource`: an `ImageWAMPipelineSource` whose resource
   table drops or misroutes work, for mutants of the native pipeline.
+- `verb_statuses`: the status each face returns for the same invalid
+  calls; both faces must match `EXPECTED_STATUSES`.
 
 A gate row is only meaningful if its mutant makes it fail; the gates and
 tests run both.
@@ -25,6 +27,41 @@ from flash_rt.models.imagewam import runtime_export
 from flash_rt.models.imagewam.pipeline_resources import ImageWAMPipelineResources, ImageWAMPipelineSource
 
 PIPELINE_MUTATIONS = ("no_backbone", "skip_last_single", "skip_last_step", "swap_single_weight")
+
+# Status of each invalid call, identical for io="python" and io="native".
+EXPECTED_STATUSES = {
+    "set_input(unknown port)": -2,
+    "get_output(unknown port)": -2,
+    "set_input(noise, SWAP port)": -3,
+    "get_output(actions_raw, SWAP port)": -3,
+    "set_input(proprio, 12 bytes)": -4,
+    "set_input(proprio, stream not exported)": -1,
+    "get_output(actions, short buffer)": -5,
+}
+
+
+def verb_statuses(consumer) -> dict:
+    """Run the invalid calls of `EXPECTED_STATUSES` through a
+    `ModelRuntimeConsumer`; {call: (status, last_error first line)}."""
+    unknown = len(consumer.ports)
+    proprio = b"\0" * consumer.port("proprio").nbytes
+    bad_stream = consumer.stream_id + 7
+    calls = {
+        "set_input(unknown port)": lambda: consumer.set_input_status(unknown, proprio),
+        "get_output(unknown port)": lambda: consumer.get_output_status(unknown, 64)[0],
+        "set_input(noise, SWAP port)": lambda: consumer.set_input_status("noise", b"\0" * 16),
+        "get_output(actions_raw, SWAP port)": lambda: consumer.get_output_status("actions_raw", 1024)[0],
+        "set_input(proprio, 12 bytes)": lambda: consumer.set_input_status("proprio", b"\0" * 12),
+        "set_input(proprio, stream not exported)": lambda: consumer.set_input_status("proprio", proprio,
+                                                                                    stream=bad_stream),
+        "get_output(actions, short buffer)": lambda: consumer.get_output_status(
+            "actions", consumer.port("actions").nbytes - 4)[0],
+    }
+    out = {}
+    for name, call in calls.items():
+        rc = call()
+        out[name] = (rc, ((consumer.last_error() or "").splitlines() or [""])[0])
+    return out
 
 
 def poison_tick_state(fe, *, whole_context: bool = False) -> None:

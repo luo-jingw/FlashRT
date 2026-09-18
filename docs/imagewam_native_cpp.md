@@ -82,9 +82,12 @@ Verbs:
 - `get_output(actions)`: device-to-host copy on the native stream,
   synchronize, host `(x - offset) / scale`.
 - `step`: `cudaGraphLaunch` on the native stream.
-- Status codes: `-3` for SWAP ports passed to `set_input` / `get_output`,
-  `-4` for a wrong proprio payload size, `-5` for a short output buffer,
-  `-2` for an unknown port; the message is in `last_error`.
+- Status codes, the same as on the `io="python"` face: `-2` unknown
+  port, `-3` SWAP port passed to `set_input` / `get_output`, `-4` wrong
+  proprio payload size, `-5` short output buffer, `-1` a stream that is
+  not the native stream or a proprio write before `set_proprio_row`; the
+  message is in `last_error`. `tests/_helpers/imagewam_abi_checks.py`
+  (`EXPECTED_STATUSES`) pins the table for both faces.
 
 ## Native pipeline
 

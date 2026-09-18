@@ -92,10 +92,12 @@ builder's GIL-acquiring trampolines, callable from any host thread.
 STAGED verbs and `step` run on the exported stream (`streams[0]`, the
 capture stream). A host that writes or reads a SWAP window enqueues the
 copy on that stream (`native_handle`) or synchronizes it first. Status
-codes: `-2` unknown port index, `-3` `set_input` on a SWAP port, `-5`
-short `get_output` buffer (`written` = needed bytes); a malformed payload
-and `get_output` on a SWAP port return `-1` with the reason in
-`last_error`.
+codes, the same on the `io="native"` face: `-2` unknown port index, `-3`
+`set_input` or `get_output` on a SWAP port, `-4` wrong payload size (or
+image geometry), `-5` short `get_output` buffer (`written` = needed
+bytes), `-1` any other invalid call (a stream that is not the exported
+one, a malformed image view); the reason is in `last_error`. The verbs
+raise `VerbStatusError` to set these codes.
 
 ## Build and use
 

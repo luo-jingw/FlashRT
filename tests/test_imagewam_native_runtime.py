@@ -23,7 +23,7 @@ pytest.importorskip("flash_rt.runtime.export", exc_type=ImportError)
 from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor  # noqa: E402
 from flash_rt.models.imagewam.native_library import ImageWAMNativeLibrary  # noqa: E402
 from flash_rt.models.imagewam.native_runtime import ImageWAMNativeError, ImageWAMNativeRuntime  # noqa: E402
-from _helpers.imagewam_abi_checks import bits, poison_tick_state  # noqa: E402
+from _helpers.imagewam_abi_checks import EXPECTED_STATUSES, bits, poison_tick_state, verb_statuses  # noqa: E402
 from _helpers.model_runtime_consumer import ModelRuntimeConsumer, exec_library_path  # noqa: E402
 
 try:
@@ -205,19 +205,14 @@ def test_native_tick_enters_no_python(frontend, native_runtime):
 
 
 def test_status_codes(native_runtime):
+    """Invalid calls return the same statuses as the io="python" face."""
     native, _, consumer = native_runtime
-    rc = consumer.set_input_status("noise", b"\0" * 16)
-    print(f"set_input(noise SWAP) rc={rc}: {consumer.last_error()}")
-    assert rc == -3
-    rc = consumer.set_input_status("proprio", b"\0" * 12)
-    print(f"set_input(proprio, 12 bytes) rc={rc}: {consumer.last_error()}")
-    assert rc == -4
-    rc, _, _ = consumer.get_output_status("actions_raw", 1024)
-    print(f"get_output(actions_raw SWAP) rc={rc}: {consumer.last_error()}")
-    assert rc == -3
+    statuses = verb_statuses(consumer)
+    for call, (rc, err) in statuses.items():
+        print(f"{call}: rc={rc} last_error={err!r}")
+    assert {call: rc for call, (rc, _) in statuses.items()} == EXPECTED_STATUSES
     need = consumer.port("actions").nbytes
     rc, _, written = consumer.get_output_status("actions", need - 4)
-    print(f"get_output(actions, short) rc={rc} written={written}")
     assert rc == -5 and written == need
     with pytest.raises(ImageWAMNativeError) as exc:
         native.set_proprio_row(10_000)

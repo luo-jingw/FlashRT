@@ -55,12 +55,15 @@ from flash_rt.models.imagewam.native_runtime import ImageWAMNativeRuntime
 from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSource, ImageWAMRuntimeSurface
 from flash_rt.runtime import exec as frt_exec
 from flash_rt.runtime import export as frt_export
+from flash_rt.runtime.export import VerbStatusError
 
 PIXEL_RGB8 = 0
 
 STATUS_OK = 0
+STATUS_INVALID = -1
 STATUS_NOT_FOUND = -2
 STATUS_UNSUPPORTED = -3
+STATUS_SHAPE = -4
 
 
 class FrtImageView(ctypes.Structure):
@@ -97,29 +100,33 @@ def view_names(num_views: int) -> list[str]:
 def decode_image_views(payload: bytes, view_shape: tuple[int, int, int]) -> list[torch.Tensor]:
     """Decode an `frt_image_view[views]` payload into `views` `(H, W, 3)`
     uint8 CPU tensors (host pixels are copied), `view_shape = (views, H, W)`.
-    Raises `ValueError` on any geometry, format or size mismatch with the
-    declared `images` port."""
+    Raises `VerbStatusError`: -4 when the view count or a view's geometry
+    differs from the declared `images` port, -1 for a malformed view
+    (struct size, pixel format, stride, missing or short pixel data)."""
     num_views, height, width = view_shape
     view_size = ctypes.sizeof(FrtImageView)
     if len(payload) != num_views * view_size:
-        raise ValueError(
-            f"images payload must be {num_views} frt_image_view "
-            f"({num_views * view_size} bytes), got {len(payload)} bytes")
+        raise VerbStatusError(STATUS_SHAPE,
+                              f"images payload must be {num_views} frt_image_view "
+                              f"({num_views * view_size} bytes), got {len(payload)} bytes")
     views = (FrtImageView * num_views).from_buffer_copy(payload)
     row_bytes = width * 3
     frames = []
     for i, view in enumerate(views):
         if view.struct_size != view_size:
-            raise ValueError(f"images[{i}].struct_size={view.struct_size}, expected {view_size}")
+            raise VerbStatusError(STATUS_INVALID, f"images[{i}].struct_size={view.struct_size}, "
+                                                  f"expected {view_size}")
         if view.pixel_format != PIXEL_RGB8:
-            raise ValueError(f"images[{i}].pixel_format={view.pixel_format}, expected RGB8 ({PIXEL_RGB8})")
+            raise VerbStatusError(STATUS_INVALID, f"images[{i}].pixel_format={view.pixel_format}, "
+                                                  f"expected RGB8 ({PIXEL_RGB8})")
         if (view.width, view.height) != (width, height):
-            raise ValueError(f"images[{i}] is {view.width}x{view.height}, expected {width}x{height}")
+            raise VerbStatusError(STATUS_SHAPE, f"images[{i}] is {view.width}x{view.height}, "
+                                                f"expected {width}x{height}")
         if view.stride_bytes < row_bytes:
-            raise ValueError(f"images[{i}].stride_bytes={view.stride_bytes} < {row_bytes}")
+            raise VerbStatusError(STATUS_INVALID, f"images[{i}].stride_bytes={view.stride_bytes} < {row_bytes}")
         needed = view.stride_bytes * (height - 1) + row_bytes
         if view.bytes < needed or not view.data:
-            raise ValueError(f"images[{i}] holds {view.bytes} bytes, needs {needed}")
+            raise VerbStatusError(STATUS_INVALID, f"images[{i}] holds {view.bytes} bytes, needs {needed}")
         raw = np.frombuffer(ctypes.string_at(view.data, needed), dtype=np.uint8)
         rows = np.lib.stride_tricks.as_strided(raw, shape=(height, row_bytes), strides=(view.stride_bytes, 1))
         frames.append(torch.from_numpy(rows.copy().reshape(height, width, 3)))
@@ -128,7 +135,11 @@ def decode_image_views(payload: bytes, view_shape: tuple[int, int, int]) -> list
 
 class ImageWAMPythonVerbs:
     """The `io="python"` verbs. Each STAGED verb calls one frontend staging
-    operation on the capture stream; `step` replays the adopted graph."""
+    operation on the capture stream; `step` replays the adopted graph.
+    Failures raise `VerbStatusError` with the status the `io="native"` verbs
+    return for the same case: -2 unknown port, -3 SWAP port, -4 payload
+    size or geometry, -1 anything else invalid (including a stream that is
+    not the exported one)."""
 
     def __init__(self, source: ImageWAMRuntimeSource, surface: ImageWAMRuntimeSurface,
                  layout: ImageWAMPortLayout, graph: frt_exec.Graph, stream_id: int):
@@ -138,15 +149,16 @@ class ImageWAMPythonVerbs:
         self._graph = graph
         self._stream_id = stream_id
 
-    def _check_stream(self, stream: int) -> None:
+    def _port_name(self, verb: str, port: int, stream: int) -> str:
+        if not 0 <= port < len(self._layout.names):
+            raise VerbStatusError(STATUS_NOT_FOUND, f"{verb}: unknown port index {port}")
         if stream not in (-1, self._stream_id):
-            raise ValueError(f"stream {stream} is not an exported stream (use -1 or {self._stream_id})")
+            raise VerbStatusError(STATUS_INVALID, f"{verb}: stream {stream} is not an exported stream "
+                                                  f"(use -1 or {self._stream_id})")
+        return self._layout.names[port]
 
     def set_input(self, port: int, payload: bytes, stream: int) -> int:
-        if not 0 <= port < len(self._layout.names):
-            return STATUS_NOT_FOUND
-        self._check_stream(stream)
-        name = self._layout.names[port]
+        name = self._port_name("set_input", port, stream)
         with torch.cuda.stream(self._surface.stream):
             if name == "images":
                 frames = decode_image_views(payload, self._surface.view_shape)
@@ -155,20 +167,20 @@ class ImageWAMPythonVerbs:
             if name == "proprio":
                 expected = self._surface.proprio_dim * 4
                 if len(payload) != expected:
-                    raise ValueError(f"proprio payload must be {expected} bytes (f32), got {len(payload)}")
+                    raise VerbStatusError(STATUS_SHAPE, f"set_input(proprio): payload must be {expected} "
+                                                        f"bytes (f32), got {len(payload)}")
                 self._source.stage_proprio(np.frombuffer(payload, dtype=np.float32).copy())
                 return STATUS_OK
             if name == "prompt":
                 self._source.set_prompt(payload.decode("utf-8"))
                 return STATUS_OK
-        return STATUS_UNSUPPORTED
+        raise VerbStatusError(STATUS_UNSUPPORTED, f"set_input: {name!r} is a SWAP port, write its buffer window")
 
     def get_output(self, port: int, stream: int) -> bytes:
-        if not 0 <= port < len(self._layout.names):
-            raise ValueError(f"unknown port index {port}")
-        self._check_stream(stream)
-        if self._layout.names[port] != "actions":
-            raise ValueError(f"port {self._layout.names[port]!r} has no staged output; read its SWAP window")
+        name = self._port_name("get_output", port, stream)
+        if name != "actions":
+            raise VerbStatusError(STATUS_UNSUPPORTED, f"get_output: {name!r} is a SWAP port, read its "
+                                                      "buffer window")
         with torch.cuda.stream(self._surface.stream):
             actions = self._source.read_actions()
         return np.ascontiguousarray(actions, dtype=np.float32).tobytes()

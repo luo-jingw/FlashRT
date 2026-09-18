@@ -90,6 +90,19 @@ GENERIC_EXECUTOR = {
 }
 
 
+class VerbStatusError(Exception):
+    """Raised by a Python verb callable to fail with a specific model-runtime
+    status instead of -1: -1 invalid, -2 not found, -3 unsupported, -4 shape
+    mismatch, -5 insufficient storage, -6 backend. The message becomes the
+    runtime's `last_error`."""
+
+    def __init__(self, status: int, message: str):
+        if not -6 <= int(status) <= -1:
+            raise ValueError(f"VerbStatusError status must be in [-6, -1], got {status}")
+        super().__init__(message)
+        self.frt_status = int(status)
+
+
 def _enum(table: Mapping[str, int], value: int | str) -> int:
     return value if isinstance(value, int) else table[value]
 
@@ -311,8 +324,10 @@ def build_model_runtime(
       ``get_output(port, stream) -> bytes``,
       ``prepare(graph, key) -> int``, ``step() -> int``.
     They run under GIL-acquiring trampolines, so a native consumer may call
-    them from any thread. SWAP ports need no callable — hosts write the
-    declared buffer window directly.
+    them from any thread. An exception becomes status -1, or its
+    ``frt_status`` (``VerbStatusError``), with its message as ``last_error``.
+    SWAP ports need no callable — hosts write the declared buffer window
+    directly.
     """
     staged_inputs = any(
         _enum(UPDATE, port.update) == UPDATE["staged"] and

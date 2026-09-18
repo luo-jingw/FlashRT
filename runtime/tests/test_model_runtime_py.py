@@ -25,7 +25,7 @@ import _flashrt_runtime as rt
 import flash_rt.runtime.export as export_mod
 from flash_rt.runtime.export import (
     BufferSpec, GenericStageSpec, GraphSpec, PortSpec, RegionSpec, StageSpec,
-    StreamSpec, build_metadata_model_runtime, build_model_runtime,
+    StreamSpec, VerbStatusError, build_metadata_model_runtime, build_model_runtime,
     DTYPE, LAYOUT, MODALITY, UPDATE,
 )
 from flash_rt.subgraphs.stage_plan import (
@@ -503,6 +503,8 @@ def main():
         return 0
 
     def py_get_output(port, stream):
+        if port == 1:
+            raise VerbStatusError(-3, "port 1 is a SWAP port")
         if port != 2:
             raise ValueError("only the actions port is decodable")
         return b"\x01\x02\x03\x04"
@@ -566,6 +568,9 @@ def main():
     rc, _, _ = rt.model_get_output(mr.ptr, 0, 16, -1)
     check("producer exceptions become status + last_error",
           rc == -1 and "actions port" in rt.model_last_error(mr.ptr))
+    rc, _, _ = rt.model_get_output(mr.ptr, 1, 16, -1)
+    check("VerbStatusError sets the status",
+          rc == -3 and "SWAP port" in rt.model_last_error(mr.ptr))
     check("step replays through the producer",
           rt.model_step(mr.ptr) == 0 and calls["step"] == 1)
 

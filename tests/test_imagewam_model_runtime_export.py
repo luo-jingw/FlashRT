@@ -19,7 +19,8 @@ pytest.importorskip("flash_rt.runtime.exec", exc_type=ImportError)
 pytest.importorskip("flash_rt.runtime.export", exc_type=ImportError)
 
 from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor  # noqa: E402
-from _helpers.imagewam_abi_checks import poison_tick_state, python_step_noop, python_verb_noop  # noqa: E402
+from _helpers.imagewam_abi_checks import (  # noqa: E402
+    EXPECTED_STATUSES, poison_tick_state, python_step_noop, python_verb_noop, verb_statuses)
 from _helpers.model_runtime_consumer import (  # noqa: E402
     ModelRuntimeConsumer,
     exec_library_path,
@@ -174,21 +175,13 @@ def test_mutants_fail_the_tick(frontend, reference, mutant):
 
 
 def test_staged_and_swap_guards(frontend, runtime):
+    """Invalid calls return the same statuses as the io="native" face."""
     _, consumer = runtime
-    rc = consumer.set_input_status("noise", b"\0" * 16)
-    print(f"set_input(noise SWAP) rc={rc}")
-    assert rc == -3
-
-    rc = consumer.set_input_status("proprio", b"\0" * 12)
-    err = consumer.last_error()
-    print(f"set_input(proprio, 12 bytes) rc={rc} last_error={err.splitlines()[0]!r}")
-    assert rc == -1 and "proprio payload must be 32 bytes" in err
-
-    rc, _, _ = consumer.get_output_status("actions_raw", 1024)
-    print(f"get_output(actions_raw SWAP) rc={rc} last_error={consumer.last_error().splitlines()[0]!r}")
-    assert rc == -1
-
+    statuses = verb_statuses(consumer)
+    for call, (rc, err) in statuses.items():
+        print(f"{call}: rc={rc} last_error={err!r}")
+    assert {call: rc for call, (rc, _) in statuses.items()} == EXPECTED_STATUSES
+    assert "payload must be 32 bytes" in statuses["set_input(proprio, 12 bytes)"][1]
     need = consumer.port("actions").nbytes
     rc, _, written = consumer.get_output_status("actions", need - 4)
-    print(f"get_output(actions, capacity={need - 4}) rc={rc} written={written}")
     assert rc == -5 and written == need

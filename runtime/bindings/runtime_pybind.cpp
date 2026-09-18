@@ -56,6 +56,21 @@ void release_py_verbs(void* p) {
     delete static_cast<PyVerbs*>(p);
 }
 
+/* Status for an exception raised by a Python verb: its `frt_status`
+ * attribute when that is a status code in [-6, -1]
+ * (flash_rt.runtime.export.VerbStatusError), else -1. GIL held. */
+int raised_status(const py::error_already_set& e) {
+    try {
+        const py::object value = e.value();
+        if (value && py::hasattr(value, "frt_status")) {
+            const int status = py::cast<int>(value.attr("frt_status"));
+            if (status >= -6 && status <= -1) return status;
+        }
+    } catch (...) {
+    }
+    return -1;
+}
+
 int verb_set_input(void* self, uint32_t port, const void* data,
                    uint64_t bytes, int stream) {
     auto* v = static_cast<PyVerbs*>(self);
@@ -68,6 +83,9 @@ int verb_set_input(void* self, uint32_t port, const void* data,
         py::bytes payload(static_cast<const char*>(data),
                           static_cast<size_t>(bytes));
         return py::cast<int>(v->set_input(port, payload, stream));
+    } catch (const py::error_already_set& e) {
+        v->last_error = e.what();
+        return raised_status(e);
     } catch (const std::exception& e) {
         v->last_error = e.what();
         return -1;
@@ -92,6 +110,9 @@ int verb_get_output(void* self, uint32_t port, void* out, uint64_t capacity,
         }
         std::memcpy(out, s.data(), s.size());
         return 0;
+    } catch (const py::error_already_set& e) {
+        v->last_error = e.what();
+        return raised_status(e);
     } catch (const std::exception& e) {
         v->last_error = e.what();
         return -1;
@@ -107,6 +128,9 @@ int verb_prepare(void* self, uint32_t graph, frt_shape_key key) {
     }
     try {
         return py::cast<int>(v->prepare(graph, (std::uint64_t)key));
+    } catch (const py::error_already_set& e) {
+        v->last_error = e.what();
+        return raised_status(e);
     } catch (const std::exception& e) {
         v->last_error = e.what();
         return -1;
@@ -122,6 +146,9 @@ int verb_step(void* self) {
     }
     try {
         return py::cast<int>(v->step());
+    } catch (const py::error_already_set& e) {
+        v->last_error = e.what();
+        return raised_status(e);
     } catch (const std::exception& e) {
         v->last_error = e.what();
         return -1;
