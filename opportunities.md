@@ -2527,9 +2527,15 @@ bugs touched ActionDiT's own code path.
 
 # OPT-009: real closed-loop robot-state (proprio) conditioning
 
-Status: implemented and locally verified (wiring correct, real weights
-load correctly); NOT yet Thor-tested; normalization stat choice
-confirmed exact from this release's own `config.yaml`, not guessed
+Status: RESOLVED -- real Thor confirmation same day (see "Thor
+confirmation, same day" below: `proprio_row=31` correct, `infer()`
+finite, real denormalized actions); normalization stat choice
+confirmed exact from this release's own `config.yaml`, not guessed.
+The out-of-range action values this Thor run first found were later
+root-caused to the uniform-dt schedule (OPT-010) and the official-
+model comparison this entry's own "Not yet done" flagged was completed
+in OPT-011 (real open-loop eval, cosine 0.870-0.999 across 50 real
+frames, proprio included) -- neither is open any more.
 
 Area: real closed-loop testing readiness -- this project's own current
 priority (Thor steady-state speed + precision tracked vs FlashRT's own
@@ -2659,17 +2665,19 @@ the schedule-alignment entry immediately below for a concrete
 alternative explanation worth checking before assuming it's just
 "this frame's own policy behavior."
 
-**Not yet done**: a real cosine comparison against the official
-model's own proprio-enabled `infer_action_flux2` output (blocked by
-the integration-schedule mismatch -- see the entry immediately below,
-now resolved on the FlashRT side; still needs the official-side
-comparison run); wiring proprio into `_imagewam_thor_spec.py`'s own
-declared shape documentation (not load-bearing for runtime, cosmetic).
+**Done since**: the official-model cosine comparison this entry
+originally flagged as outstanding was completed in OPT-011 (real
+open-loop LIBERO eval, proprio included in every comparison). Still
+genuinely open, low priority: wiring proprio into
+`_imagewam_thor_spec.py`'s own declared shape documentation (not
+load-bearing for runtime, cosmetic).
 
 # OPT-010: real shift-based flow-matching inference schedule
 
-Status: implemented and locally verified (exact match against the
-real scheduler); NOT yet Thor-tested
+Status: RESOLVED -- real Thor confirmation same day (see "CONFIRMED
+on real Thor, same day" below: scheduler bit-exact on Thor too, fixed
+OPT-009's out-of-range action values, real `infer()` P50=289.5ms,
+single-step ActionDiT cosine=0.999978 vs the official model)
 
 Area: ActionDiT denoise loop -- replaces the fixed-uniform-`dt`
 integration schedule (this project's own original simplification) with
