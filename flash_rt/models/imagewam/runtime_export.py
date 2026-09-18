@@ -122,7 +122,7 @@ def decode_image_views(payload: bytes, view_shape: tuple[int, int, int]) -> list
             raise ValueError(f"images[{i}] holds {view.bytes} bytes, needs {needed}")
         raw = np.frombuffer(ctypes.string_at(view.data, needed), dtype=np.uint8)
         rows = np.lib.stride_tricks.as_strided(raw, shape=(height, row_bytes), strides=(view.stride_bytes, 1))
-        frames.append(torch.from_numpy(np.ascontiguousarray(rows).reshape(height, width, 3)))
+        frames.append(torch.from_numpy(rows.copy().reshape(height, width, 3)))
     return frames
 
 

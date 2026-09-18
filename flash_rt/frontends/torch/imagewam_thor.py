@@ -94,6 +94,8 @@ from flash_rt.models.imagewam.quant_linear import (
 )
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSurface
+from flash_rt.models.imagewam.vae_preprocess import RESIZE_MODES, VaePreprocessor
+from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeStageSpec
 
 _PRECISIONS = ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static", "fp8_static_cutlass")
 # OPT-004 step 6 (plan.md): the two `StaticFp8Linear` variants need a
@@ -113,6 +115,16 @@ _FA4_OPT_IN_ENV = "FLASHRT_THOR_FA4"
 _FA4_OPT_IN_DEFAULT = "0"
 
 logger = logging.getLogger(__name__)
+
+# Roadmap item 5 (plan.md): which real VAE encoder runs.
+#   "torch"  -- flux2.autoencoder.AutoEncoder.encode, NCHW (default).
+#   "native" -- NativeFlux2Encoder: NHWC convolutions + the FlashRT
+#               GroupNorm(+SiLU) / bias+residual kernels; same math,
+#               near-exact tokens (vae_native_encoder.py).
+# Where it runs is set by `vae_graph_input`: None -> outside the CUDA
+# graph, once per infer(); (num_views, H, W) -> inside the main graph
+# (`ImageWAMVaeStage` over a fixed uint8 view buffer of that shape).
+_VAE_ENCODERS = ("torch", "native")
 # Stage 3 default precision decision (opportunities.md, real Thor
 # checklist against real checkpoint weights + real open-loop LIBERO
 # data): nvfp4 is the fastest AND closest to fp16/GT (actions
@@ -156,6 +168,9 @@ class ImageWAMTorchFrontendThor:
                  gemm_variant_autotune: bool = False,
                  use_fa4_mot: bool = False,
                  gemm_runner: object | None = None,
+                 vae_resize: str = "area",
+                 vae_encoder: str = "torch",
+                 vae_graph_input: tuple[int, int, int] | None = None,
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
@@ -182,9 +197,37 @@ class ImageWAMTorchFrontendThor:
         if (ae_model_path is None) != (flux2_src is None):
             raise ValueError("ae_model_path and flux2_src must be given together, or not at all")
         self._ae = None
+        self._vae_encoder = None
+        self._vae_pre = None
+        self._vae_stage = None
+        # Recorded for the runtime export's identity (image -> token numerics).
+        self._vae_setup = (("vae_resize", vae_resize), ("vae_encoder", vae_encoder),
+                           ("vae_graph_input", str(vae_graph_input)))
+        if vae_resize not in RESIZE_MODES:
+            raise ValueError(f"vae_resize={vae_resize!r} -- must be one of {RESIZE_MODES}")
+        if vae_encoder not in _VAE_ENCODERS:
+            raise ValueError(f"vae_encoder={vae_encoder!r} -- must be one of {_VAE_ENCODERS}")
+        if vae_graph_input is not None and ae_model_path is None:
+            raise ValueError("vae_graph_input (VAE inside the CUDA graph) needs ae_model_path/flux2_src")
+        if vae_encoder != "torch" and ae_model_path is None:
+            raise ValueError(f"vae_encoder={vae_encoder!r} selects a real VAE encoder and needs "
+                             f"ae_model_path/flux2_src")
+        if vae_resize != "area" and ae_model_path is None:
+            raise ValueError(f"vae_resize={vae_resize!r} configures the real VAE preprocessing and needs "
+                             f"ae_model_path/flux2_src")
         if ae_model_path is not None:
             from flash_rt.models.imagewam.vae_encoder import load_real_ae
             self._ae = load_real_ae(ae_model_path, flux2_src)
+            self._vae_encoder = self._ae
+            if vae_encoder == "native":
+                from flash_rt.models.imagewam.vae_native_encoder import NativeFlux2Encoder
+                self._vae_encoder = NativeFlux2Encoder(self._ae)
+            # Roadmap item 2 (plan.md): fused uint8 -> BF16 preprocessing
+            # kernel. `vae_resize="area"` is bit-identical to the former
+            # `_prep_view` path (the served default); `"pil_bilinear"`
+            # reproduces the official LIBERO eval's PIL center-crop resize
+            # bit-exactly (issues.md ISSUE-030).
+            self._vae_pre = VaePreprocessor(resize=vae_resize)
         # Live Qwen3 text encoding (real VAE + text-context wiring
         # plan's own deferred item, closed once real Qwen3-4B weights
         # were downloaded -- see opportunities.md). Independent of
@@ -342,6 +385,15 @@ class ImageWAMTorchFrontendThor:
             self._state_norm, self._action_norm = load_real_normalizers(dataset_stats_path, device=DEV)
 
         self._bufs = self._alloc_buffers(d)
+        if vae_graph_input is not None:
+            # Roadmap item 5 (plan.md): the VAE stage reads a fixed uint8
+            # view buffer and writes straight into img_raw, so
+            # _capture_graph() records it ahead of prefill and infer()
+            # does one replay.
+            nv, in_h, in_w = (int(v) for v in vae_graph_input)
+            self._vae_stage = ImageWAMVaeStage(
+                self._vae_encoder, self._vae_pre, VaeStageSpec(num_views=nv, in_h=in_h, in_w=in_w),
+                self._img_raw)
         # `ref_h`/`ref_w`: the REAL image RoPE needs the actual 2D patch
         # grid (14x28 for the real confirmed 224x448 input, NOT a flat
         # (img_len, 1) "392x1" placeholder) -- see the ckpt_path check
@@ -1034,6 +1086,8 @@ class ImageWAMTorchFrontendThor:
         s.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(s):
             for _ in range(2):
+                if self._vae_stage is not None:
+                    self._vae_stage.run()
                 imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, self._weights,
                                   self.dims, stream=s.cuda_stream, attn=self._attn,
                                   mod_txt=self._mod_txt, mod_img=self._mod_img,
@@ -1046,6 +1100,8 @@ class ImageWAMTorchFrontendThor:
         torch.cuda.current_stream().wait_stream(s)
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph, stream=s):
+            if self._vae_stage is not None:
+                self._vae_stage.run()
             imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, self._weights,
                               self.dims, stream=s.cuda_stream, attn=self._attn,
                               mod_txt=self._mod_txt, mod_img=self._mod_img,
@@ -1226,11 +1282,26 @@ class ImageWAMTorchFrontendThor:
         and copied into the row `set_prompt()` already reserved for it
         (`self._proprio_row`) -- BEFORE `.replay()`, same pattern as
         `img_raw`.
+
+        `vae_graph_input` given (roadmap item 5, plan.md): the VAE stage
+        (preprocessing kernel, encoder, token write into `img_raw`) is
+        part of the captured graph, so this method only copies
+        `view1`/`view2` (shape fixed by `vae_graph_input`) into the
+        stage's fixed uint8 buffer, stages proprio and noise, and
+        replays once. Views are then required on every call.
+        `vae_encoder` selects the encoder in both placements.
         """
         if self._graph is None:
             raise RuntimeError("call set_prompt() before infer()")
-        if self._ae is not None and "view1" in observation:
-            self.stage_images(observation["view1"], observation.get("view2"))
+        if self._vae_stage is not None:
+            # VAE inside the graph: it encodes whatever the fixed view
+            # buffer holds, so the views are required every call.
+            if "view1" not in observation:
+                raise ValueError("with vae_graph_input (VAE in the graph) infer() needs observation['view1'] "
+                                 "(and 'view2' for 2 views) every call")
+            self.stage_images(*self._observation_views(observation))
+        elif self._ae is not None and "view1" in observation:
+            self.stage_images(*self._observation_views(observation))
         else:
             self._img_raw.normal_()
         if self._proprio_dim is not None:
@@ -1259,13 +1330,29 @@ class ImageWAMTorchFrontendThor:
     # (flash_rt/models/imagewam/runtime_export.py). Each runs its torch
     # ops on the caller's current stream.
 
-    def stage_images(self, view1: torch.Tensor, view2: torch.Tensor | None = None) -> None:
-        """Encode one or two `(H,W,3)` uint8 camera views through the real
-        VAE (outside the graph) and write the tokens into `img_raw`."""
+    @staticmethod
+    def _observation_views(observation: dict) -> list:
+        """`[view1]` or `[view1, view2]` from an `infer()` observation."""
+        return [observation["view1"]] + ([observation["view2"]] if "view2" in observation else [])
+
+    def stage_images(self, *views: torch.Tensor) -> None:
+        """Stage one or two `(H,W,3)` uint8 camera views. With the VAE
+        inside the graph (`vae_graph_input`) the views are copied into the
+        stage's fixed uint8 buffer and the next replay encodes them;
+        otherwise the configured preprocessing kernel and VAE encoder run
+        now (outside the graph) and the tokens are written into `img_raw`."""
         if self._ae is None:
             raise RuntimeError("stage_images requires ae_model_path/flux2_src at construction")
+        if self._vae_stage is not None:
+            self._vae_stage.stage([torch.as_tensor(v) for v in views])
+            return
+        if not 1 <= len(views) <= 2:
+            raise ValueError(f"stage_images takes one or two views, got {len(views)}")
         from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
-        tokens = encode_to_tokens(self._ae, view1, view2)
+        view2 = views[1] if len(views) > 1 else None
+        tokens = encode_to_tokens(self._ae, torch.as_tensor(views[0]),
+                                  None if view2 is None else torch.as_tensor(view2),
+                                  preprocessor=self._vae_pre, encoder=self._vae_encoder)
         self._img_raw.copy_(tokens[0].to(dtype=BF16))
 
     def stage_proprio(self, proprio: np.ndarray) -> None:
@@ -1299,6 +1386,7 @@ class ImageWAMTorchFrontendThor:
         d = self.dims
         setup = [("pipeline", type(self).__name__), ("precision", self._precision),
                  ("use_fa4", str(self.use_fa4)), ("use_fa4_mot", str(self.use_fa4_mot))]
+        setup.extend(self._vae_setup)
         setup.extend((f"dims.{k}", str(d[k])) for k in sorted(d))
         return ImageWAMRuntimeSurface(
             graph_exec=int(self._graph.raw_cuda_graph_exec()),
@@ -1324,8 +1412,9 @@ class ImageWAMTorchFrontendThor:
             state_offset=None if self._state_norm is None else self._state_norm.offset,
             action_scale=None if self._action_norm is None else self._action_norm.scale,
             action_offset=None if self._action_norm is None else self._action_norm.offset,
-            view_shape=(2, 224, 224),
-            views_u8=None,
+            view_shape=((2, 224, 224) if self._vae_stage is None else
+                        (self._vae_stage.spec.num_views, self._vae_stage.spec.in_h, self._vae_stage.spec.in_w)),
+            views_u8=None if self._vae_stage is None else self._vae_stage.views_u8,
         )
 
     def pipeline_resources(self) -> ImageWAMPipelineResources:
@@ -1341,6 +1430,9 @@ class ImageWAMTorchFrontendThor:
             raise RuntimeError("call set_prompt() before pipeline_resources()")
         if self.use_fa4 or self.use_fa4_mot:
             raise ValueError("the native pipeline has no FA4 attention; use_fa4/use_fa4_mot must be off")
+        if self._vae_stage is not None:
+            raise ValueError("the native pipeline has no VAE stage; construct with vae_graph_input=None "
+                             "(the VAE then runs outside the graph and feeds image_tokens)")
         d = self.dims
         if not d.get("merge_qkv_mlp"):
             raise ValueError("the native pipeline records the merged single-stream linear1 only "

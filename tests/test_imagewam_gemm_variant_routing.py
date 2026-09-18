@@ -169,7 +169,10 @@ _SMALL_DIMS = dict(num_action=16, total=24)  # total = a0 (8) + num_action
 
 def _action_shapes(d: dict) -> set[tuple[int, int]]:
     ahd, aaw, amh = d["action_hidden_dim"], d["action_attn_width"], d["action_mlp_hidden"]
-    return {(3 * aaw, ahd), (ahd, aaw), (2 * amh, ahd), (ahd, amh), (3 * aaw + 2 * amh, ahd)}
+    shapes = {(3 * aaw, ahd), (ahd, aaw), (2 * amh, ahd), (ahd, amh), (3 * aaw + 2 * amh, ahd)}
+    if d["merge_linear2"]:
+        shapes.add((ahd, aaw + amh))  # single-stream merged linear2
+    return shapes
 
 
 def _build(monkeypatch, precision: str, calls: list[_GemmCall], prefer: str):
@@ -203,8 +206,13 @@ def test_frontend_tunes_each_action_dit_shape_once(monkeypatch, fake_fp4, fake_f
     members = {(r.shape.n, r.shape.k): r.members for r in results}
     n_double, n_single = d["action_num_layers_double"], d["action_num_layers_single"]
     ahd, aaw, amh = d["action_hidden_dim"], d["action_attn_width"], d["action_mlp_hidden"]
-    assert members[(ahd, aaw)] == n_double + n_single      # proj + attn_out_proj
-    assert members[(ahd, amh)] == n_double + n_single      # mlp2 + mlp_down
+    if d["merge_linear2"]:
+        assert members[(ahd, aaw)] == n_double                 # proj
+        assert members[(ahd, amh)] == n_double                 # mlp2
+        assert members[(ahd, aaw + amh)] == n_single           # merged linear2
+    else:
+        assert members[(ahd, aaw)] == n_double + n_single      # proj + attn_out_proj
+        assert members[(ahd, amh)] == n_double + n_single      # mlp2 + mlp_down
 
     cls = Nvfp4Linear if precision == "nvfp4" else StaticFp8Linear
     for key, lin in fe._weights.items():

@@ -7,8 +7,13 @@ noise it must reproduce `ImageWAMTorchFrontendThor.infer()` bit for bit:
 
   1. images STAGED + proprio STAGED + noise SWAP -> actions STAGED and
      actions_raw SWAP, vs infer()
-  2. image_tokens SWAP (the tokens infer() staged) instead of images
+  2. image_tokens SWAP (the tokens infer() staged) instead of images; with
+     `--vae-graph-input` (VAE inside the graph) the raw frames written to
+     the image_views SWAP window instead
   3. prompt SETUP (a second task string), vs set_prompt() + infer()
+
+The initial noise is explicit on both sides: `infer(..., action_noise=)`
+and the `noise` SWAP window get the same 0.01 * N(0,1) latent.
 
 plus a determinism control (infer() twice, same seed) and an indicative,
 alternating latency A/B of infer() vs one ABI tick.
@@ -16,8 +21,9 @@ alternating latency A/B of infer() vs one ABI tick.
 Build exec/ and runtime/ first (see docs/imagewam_model_runtime.md), then:
 
     PYTHONPATH=.:$IMAGEWAM_SRC:$FLUX2_SRC/src python tests/gate_imagewam_model_runtime_export.py \
-        --precision fp16            # H100
-        --precision nvfp4 --use-fa4 # Thor
+        --precision fp16                              # H100
+        --precision nvfp4                             # Thor
+        --precision nvfp4 --vae-graph-input 224 224   # Thor, VAE inside the graph
 
 Env: CKPT_PATH (dataset_stats.json beside it), FLUX2_AE_MODEL_PATH (or
 AE_MODEL_PATH), FLUX2_SRC, QWEN3_MODEL_SPEC. Optional DATA_ROOT
@@ -48,6 +54,7 @@ REAL_DIMS = dict(
     ref_h=14, ref_w=28, proprio_dim=8, shift=SHIFT, num_train_timesteps=1000,
 )
 EXPECTED_PORTS = ["images", "image_tokens", "proprio", "noise", "actions", "actions_raw", "prompt"]
+EXPECTED_PORTS_VAE_IN_GRAPH = ["images", "image_views", "proprio", "noise", "actions", "actions_raw", "prompt"]
 PROMPT_A = "pick up the black bowl between the plate and the ramekin and place it on the plate"
 PROMPT_B = "pick up the black bowl next to the ramekin and place it on the plate"
 
@@ -104,6 +111,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--precision", default="fp16")
     ap.add_argument("--use-fa4", action="store_true")
+    ap.add_argument("--vae-graph-input", type=int, nargs=2, metavar=("H", "W"), default=None,
+                    help="run the VAE inside the graph for two H x W views (frames must match)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--bench-iters", type=int, default=20)
     ap.add_argument("--json-out", default=None)
@@ -121,10 +130,12 @@ def main() -> int:
     fe = ImageWAMTorchFrontendThor(
         precision=args.precision, use_fa4=args.use_fa4, dims_override=dict(REAL_DIMS), ckpt_path=ckpt,
         ae_model_path=ae_path, flux2_src=flux2_src, qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"],
-        dataset_stats_path=os.path.join(os.path.dirname(ckpt), "dataset_stats.json"))
+        dataset_stats_path=os.path.join(os.path.dirname(ckpt), "dataset_stats.json"),
+        vae_graph_input=None if args.vae_graph_input is None else (2, *args.vae_graph_input))
     fe.set_prompt(PROMPT_A)
-    print(f"frontend ({args.precision}, use_fa4={args.use_fa4}) ready in {time.time() - t0:.1f}s; "
-          f"observation: {obs_label}")
+    in_graph = args.vae_graph_input is not None
+    print(f"frontend ({args.precision}, use_fa4={fe.use_fa4}, vae_in_graph={in_graph}) ready in "
+          f"{time.time() - t0:.1f}s; observation: {obs_label}")
 
     obs = {"view1": torch.from_numpy(frames[0]), "view2": torch.from_numpy(frames[1]), "proprio": state}
     views = make_image_views(frames, FrtImageView)
@@ -136,7 +147,7 @@ def main() -> int:
     try:
         names = [p.name for p in consumer.ports]
         print(f"runtime: ports={names} stages={consumer.n_stages} fingerprint=0x{consumer.fingerprint:016x}")
-        if names != EXPECTED_PORTS or consumer.n_stages != 1:
+        if names != (EXPECTED_PORTS_VAE_IN_GRAPH if in_graph else EXPECTED_PORTS) or consumer.n_stages != 1:
             raise AssertionError(f"unexpected schema: {names}, stages={consumer.n_stages}")
 
         def draw_noise(seed: int) -> torch.Tensor:
@@ -144,13 +155,14 @@ def main() -> int:
             return torch.empty_like(fe._action_latent).normal_().mul_(0.01)
 
         def python_ref(seed: int) -> tuple[np.ndarray, np.ndarray, torch.Tensor]:
-            torch.manual_seed(seed)
-            actions = fe.infer(obs)["actions"]
+            actions = fe.infer(obs, action_noise=draw_noise(seed))["actions"]
             return actions, fe._action_latent.detach().cpu().numpy().copy(), fe._img_raw.detach().clone()
 
         def abi_tick(noise: torch.Tensor, tokens: torch.Tensor | None) -> tuple[np.ndarray, np.ndarray]:
             if tokens is None:
                 consumer.set_input("images", views)
+            elif in_graph:
+                consumer.write_swap("image_views", np.stack(frames))
             else:
                 consumer.write_swap("image_tokens", tokens.contiguous().view(torch.int16).cpu().numpy())
             consumer.set_input("proprio", state.tobytes())
@@ -165,14 +177,18 @@ def main() -> int:
         rows.append(_compare("control: infer() vs infer(), same seed", again, ref_a))
 
         abi_a, abi_raw = abi_tick(draw_noise(args.seed), None)
-        abi_tokens = consumer.read_swap("image_tokens", np.int16, tuple(ref_tokens.shape))
-        rows.append(_compare("images STAGED -> image_tokens window", abi_tokens,
+        if in_graph:  # the graph wrote img_raw from the staged uint8 views
+            abi_tokens = fe._img_raw.detach().view(torch.int16).cpu().numpy()
+        else:
+            abi_tokens = consumer.read_swap("image_tokens", np.int16, tuple(ref_tokens.shape))
+        rows.append(_compare("images STAGED -> VAE tokens (img_raw)", abi_tokens,
                              ref_tokens.view(torch.int16).cpu().numpy()))
         rows.append(_compare("images STAGED: actions (denormalized)", abi_a, ref_a))
         rows.append(_compare("images STAGED: actions_raw (normalized)", abi_raw, ref_raw))
 
         swap_a, _ = abi_tick(draw_noise(args.seed), ref_tokens)
-        rows.append(_compare("image_tokens SWAP: actions", swap_a, ref_a))
+        rows.append(_compare("image_views SWAP: actions" if in_graph else "image_tokens SWAP: actions",
+                             swap_a, ref_a))
 
         fe._current_prompt = None
         fe.set_prompt(PROMPT_B)
@@ -192,7 +208,7 @@ def main() -> int:
             noise = draw_noise(args.seed)
 
             def tick_python() -> None:
-                fe.infer(obs)
+                fe.infer(obs, action_noise=noise)
 
             def tick_abi() -> None:
                 abi_tick(noise, None)

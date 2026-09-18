@@ -3,7 +3,8 @@
 The native face's verbs are the C functions of libflashrt_imagewam_native
 (no Python, no GIL in a tick). A ctypes consumer drives it and is compared
 with `ImageWAMTorchFrontendThor.infer()` on the same observation, prompt
-and initial noise:
+and initial noise (`infer(..., action_noise=)` and the `noise` window get the
+same latent):
 
   1. image_tokens SWAP (the tokens infer() staged) + noise SWAP with the
      proprio token infer() staged -> actions / actions_raw vs infer()
@@ -144,13 +145,13 @@ def main() -> int:
             torch.manual_seed(seed)
             return torch.empty_like(fe._action_latent).normal_().mul_(0.01)
 
-        torch.manual_seed(args.seed)
-        ref = fe.infer(obs)["actions"]
+        noise_t = draw_noise(args.seed)
+        ref = fe.infer(obs, action_noise=noise_t)["actions"]
         ref_raw = fe._action_latent.detach().cpu().numpy().copy()
         tokens = fe._img_raw.detach().view(torch.int16).cpu().numpy().copy()
         row = surface.proprio_row
         ref_token = fe._context[row].detach().clone()
-        noise = draw_noise(args.seed).cpu().numpy()
+        noise = noise_t.cpu().numpy()
 
         print("parity (io=native consumer vs frontend.infer()):")
         consumer.write_swap("image_tokens", tokens)

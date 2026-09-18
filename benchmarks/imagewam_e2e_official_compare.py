@@ -17,6 +17,22 @@ it), FLUX2_MODEL_PATH, FLUX2_AE_MODEL_PATH, QWEN3_MODEL_SPEC, DATA_ROOT
 (LIBERO-fastwam, LeRobot v2.1), and the ImageWAM `src/` on PYTHONPATH.
 Optional env: SUITE (libero_spatial), N_TASKS (10), FRAMES ("0,40"),
 PRECISION (fp16), SEEDS ("0,1").
+
+VAE options (roadmap items 2 and 5, plan.md):
+  VAE_ENCODER torch (default) | native -- frontend vae_encoder.
+  VAE_GRAPH   0 (default): VAE outside the CUDA graph. 1: inside it
+              (frontend vae_graph_input = (2, H, W) of the FlashRT views).
+  VAE_RESIZE  area (default) | pil_bilinear -- frontend vae_resize.
+  RAW_VIEWS   0 (default): FlashRT gets the same PIL-resized 224x224 views
+              as the official side. 1: FlashRT gets the raw 512x512
+              dataset frames and resizes them itself (vae_resize), while
+              the official side keeps its PIL center-crop resize -- this
+              measures the served preprocessing against the official one
+              (issues.md ISSUE-030).
+  RAW_SIZE    0 (default): dataset frames as stored (512x512). S > 0: every
+              frame is first PIL-downscaled (BILINEAR) to SxS for BOTH
+              sides, a stand-in for a simulator rendering at SxS (the
+              official eval renders at 256x256).
 """
 from __future__ import annotations
 
@@ -47,6 +63,11 @@ FRAMES = [int(x) for x in os.environ.get("FRAMES", "0,40").split(",")]
 PRECISION = os.environ.get("PRECISION", "fp16")
 SEEDS = [int(x) for x in os.environ.get("SEEDS", "0,1").split(",")]
 HORIZON, STEPS, SHIFT = 64, 10, 5.0
+VAE_ENCODER = os.environ.get("VAE_ENCODER", "torch")
+VAE_GRAPH = os.environ.get("VAE_GRAPH", "0") == "1"
+VAE_RESIZE = os.environ.get("VAE_RESIZE", "area")
+RAW_VIEWS = os.environ.get("RAW_VIEWS", "0") == "1"
+RAW_SIZE = int(os.environ.get("RAW_SIZE", "0"))
 
 REAL_DIMS = dict(
     hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
@@ -100,6 +121,9 @@ def load_samples():
                 continue
             v1 = read_frame(f"{root}/videos/chunk-000/observation.images.image/episode_{e:06d}.mp4", fr)
             v2 = read_frame(f"{root}/videos/chunk-000/observation.images.wrist_image/episode_{e:06d}.mp4", fr)
+            if RAW_SIZE:
+                v1, v2 = (np.array(Image.fromarray(v).resize((RAW_SIZE, RAW_SIZE), resample=Image.BILINEAR))
+                          for v in (v1, v2))
             state = np.asarray(df["observation.state"].iloc[fr], dtype=np.float32)
             gt = np.stack(df["action"].iloc[fr:fr + HORIZON].to_numpy()).astype(np.float32)
             out.append(dict(ep=e, frame=fr, task=tasks[ti], v1=v1, v2=v2, state=state, gt=gt))
@@ -129,9 +153,13 @@ def build_official():
 
 def flashrt_infer_with_noise(fe, v1, v2, state, noise):
     """frontend.infer() body with the initial action noise injected instead of 0.01*randn."""
-    from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
-    tokens = encode_to_tokens(fe._ae, torch.from_numpy(v1), torch.from_numpy(v2))
-    fe._img_raw.copy_(tokens[0].to(dtype=BF16))
+    if fe._vae_stage is not None:
+        fe._vae_stage.stage([torch.from_numpy(v1), torch.from_numpy(v2)])
+    else:
+        from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
+        tokens = encode_to_tokens(fe._ae, torch.from_numpy(v1), torch.from_numpy(v2), preprocessor=fe._vae_pre,
+                                  encoder=fe._vae_encoder)
+        fe._img_raw.copy_(tokens[0].to(dtype=BF16))
     p = fe._state_norm.forward(torch.as_tensor(state, device=DEV).reshape(1, -1))
     tok = torch.nn.functional.linear(p.to(BF16), fe._proprio_w, fe._proprio_b)
     fe._context[fe._proprio_row].copy_(tok[0])
@@ -145,6 +173,8 @@ def flashrt_infer_with_noise(fe, v1, v2, state, noise):
 def main():
     samples = load_samples()
     print(f"samples: {len(samples)} ({SUITE}, frames {FRAMES})", flush=True)
+    print(f"VAE_ENCODER={VAE_ENCODER} VAE_GRAPH={int(VAE_GRAPH)} VAE_RESIZE={VAE_RESIZE} "
+          f"RAW_VIEWS={int(RAW_VIEWS)} RAW_SIZE={RAW_SIZE}", flush=True)
 
     t = time.time()
     off = build_official()
@@ -155,7 +185,9 @@ def main():
     fe = ImageWAMTorchFrontendThor(
         precision=PRECISION, dims_override=dict(REAL_DIMS), ckpt_path=CKPT,
         ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
-        qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"], dataset_stats_path=STATS)
+        qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"], dataset_stats_path=STATS,
+        vae_encoder=VAE_ENCODER, vae_resize=VAE_RESIZE,
+        vae_graph_input=(2,) + tuple(samples[0]["v1"].shape[:2] if RAW_VIEWS else (224, 224)) if VAE_GRAPH else None)
     print(f"flashrt ({PRECISION}) constructed in {time.time() - t:.1f}s", flush=True)
 
     rows, cur_task = [], None
@@ -175,6 +207,7 @@ def main():
 
         view1 = center_crop_resize(s["v1"], 224, 224)
         view2 = center_crop_resize(s["v2"], 224, 224)
+        fr_v1, fr_v2 = (s["v1"], s["v2"]) if RAW_VIEWS else (view1, view2)
         img = np.concatenate([view1, view2], axis=1)
         x = torch.from_numpy(img).permute(2, 0, 1).float().unsqueeze(0) * (2.0 / 255.0) - 1.0
         p_norm = fe._state_norm.forward(torch.as_tensor(s["state"], device=DEV).reshape(1, -1))
@@ -186,11 +219,11 @@ def main():
                                        sigma_shift=SHIFT, seed=seed)["action"]
             g = torch.Generator(device="cpu").manual_seed(seed)
             noise = torch.randn((1, HORIZON, 7), generator=g, dtype=torch.float32).to(DEV, BF16).float()[0]
-            f = flashrt_infer_with_noise(fe, view1, view2, s["state"], noise).cpu()
-            f_small = flashrt_infer_with_noise(fe, view1, view2, s["state"], noise * 0.01).cpu()
+            f = flashrt_infer_with_noise(fe, fr_v1, fr_v2, s["state"], noise).cpu()
+            f_small = flashrt_infer_with_noise(fe, fr_v1, fr_v2, s["state"], noise * 0.01).cpu()
             outs[seed] = (o, f, f_small)
 
-        served = torch.from_numpy(fe.infer({"view1": torch.from_numpy(view1), "view2": torch.from_numpy(view2),
+        served = torch.from_numpy(fe.infer({"view1": torch.from_numpy(fr_v1), "view2": torch.from_numpy(fr_v2),
                                              "proprio": s["state"]})["actions"])
         o0, f0, fs0 = outs[SEEDS[0]]
         denorm = lambda a: fe._action_norm.backward(a.to(DEV)).cpu()
@@ -221,7 +254,7 @@ def main():
 
     # Steady-state latency (contaminated by co-tenant GPU load on this box; indicative only).
     report_jetson_clock_state()
-    obs = {"view1": torch.from_numpy(view1), "view2": torch.from_numpy(view2), "proprio": s["state"]}
+    obs = {"view1": torch.from_numpy(fr_v1), "view2": torch.from_numpy(fr_v2), "proprio": s["state"]}
     for _ in range(5):
         fe.infer(obs)
     ts = []
