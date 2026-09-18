@@ -142,3 +142,109 @@ Compare the backbone per layer on H100 with the SDPA backend pinned
 divergent layer.
 
 ## Resolution
+
+# ISSUE-020
+
+Status: open
+
+Area: text-token key padding in every attention call
+(`flash_rt/hardware/thor/attn_backend.py` `ImageWAMAttnBackend`, both
+sites; `flash_rt/models/imagewam/pipeline_thor.py`)
+
+## Observation
+
+The served pipeline attends to every one of the `x0` context rows. The
+Qwen3 context is tokenized to a fixed 512 tokens with
+`padding="max_length"` (`flash_rt/models/imagewam/text_encoder.py`).
+The official mask builder `_build_mot_attention_mask_flux2` in
+`imagewam/models/backbones/imagewam.py` removes padded text keys for
+every query:
+
+```python
+mask[:, :, t0:r0] &= text_valid[:, None, :]
+```
+
+The effect reaches the backbone prefill and the ActionDiT `mot` site.
+`set_prompt()` reads `context_mask` only to place the proprio row.
+
+## Impact
+
+FlashRT and official compute different attention whenever the prompt
+is shorter than 512 tokens, which covers every LIBERO prompt. The
+measured end-to-end effect is bounded by ISSUE-002's numbers:
+FlashRT vs official median action cosine is 0.99840 with the same
+noise. A fused attention kernel adopted for either site would need to
+express this key mask before the pipeline could match official exactly.
+
+## Evidence
+
+- Upstream mask builder, as quoted above. Both real call sites in
+  `infer_action_flux2` pass `text_attention_mask=video_pre["text_mask"]`.
+- `ImageWAMAttnBackend.run()` has no key-mask input. With
+  `use_real_mot_mask=True` both sites call unmasked
+  `attention_qkv_fp16_perhead`.
+- With proprio packing, padded keys form one contiguous row range,
+  `[valid_count + 1, x0)`, in the middle of the key sequence, between
+  the proprio row and the image rows.
+
+## Hypotheses
+
+The padded keys are low-information after AdaLN modulation, so they
+shift attention weights only slightly. That would explain why the
+end-to-end cosine against official stays at 0.998.
+
+## Next Experiment
+
+In the fp16 path, set the logits of padded key columns to `-inf`
+before the softmax, at both sites: a masked variant of
+`attention_qkv_fp16_perhead`, or K/V rows reordered so that padding
+becomes a suffix and `kv_seq` shortens. Then rerun
+`benchmarks/imagewam_e2e_official_compare.py` and compare `fr_vs_off`
+against 0.99840.
+
+## Resolution
+
+# ISSUE-021
+
+Status: open
+
+Area: `ImageWAMTorchFrontendThor._autotune_gemm`
+(`flash_rt/frontends/torch/imagewam_thor.py`), `precision="fp16"` only
+
+## Observation
+
+`_autotune_gemm` autotunes cuBLASLt for a fixed list of `(M, N, K)`
+shapes. For single-stream blocks the list still has the split shapes,
+`(a0, 3*hidden, hidden)` and `(a0, 2*mlp_hidden, hidden)`, and their
+ActionDiT counterparts. Since the `linear1` merge (opportunities.md
+OPT-015, finding 1), every precision except `fp16_cutlass` runs one
+merged GEMM of width `3*hidden + 2*mlp_hidden` instead. At the real
+dims that is `(905, 27648, 3072)` for the backbone and
+`(64, 17408, 1024)` for the ActionDiT, and neither shape is in the
+autotune list.
+
+## Impact
+
+With `precision="fp16"`, the 20 backbone and 20 ActionDiT `linear1`
+GEMMs run on cuBLASLt's top-1 heuristic algorithm, not the autotuned
+one. The size of the loss is unmeasured. It can only match or lose
+against autotuning. `nvfp4` is unaffected, because only its two K=7 /
+N=7 fallback GEMMs go through `fp16_nn`.
+
+## Evidence
+
+Code reading: the `shapes` set in `_autotune_gemm`, compared with
+`_alloc_random_weights` / `build_real_weights(merge_qkv_mlp=True)`,
+which create `linear1.weight` with `n = 3*hidden + 2*mlp_hidden`.
+
+## Hypotheses
+
+The list was not updated when the merge landed.
+
+## Next Experiment
+
+Add both merged shapes to the list when `dims["merge_qkv_mlp"]` is set.
+Then A/B the fp16 `infer()` on Thor, or on H100 as an indicative
+check, with the same-process alternating method.
+
+## Resolution
