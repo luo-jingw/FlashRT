@@ -4579,3 +4579,190 @@ split + QK-Norm + RoPE from the `qkv`/`linear1` output would replace
 loop alone); an even-padded K/V length or a pad-aware softmax would
 drop the 250 pad fills; the attention-output copy is OPT-016's
 follow-up.
+
+# OPT-020: VAE input preprocessing kernel with a 256-entry normalization table (roadmap item 2)
+
+Status: implemented and served by default (bit-identical); Thor
+latency pending (Thor checklist in `plan.md`'s item-2 plan section)
+
+Area: `flash_rt/models/imagewam/vae_preprocess.py`,
+`csrc/kernels/imagewam_vae_preprocess.cu`, used by
+`vae_encoder.encode_to_tokens(..., preprocessor=)` and
+`vae_stage.ImageWAMVaeStage`
+
+## Mechanism
+
+One `imagewam_vae_preprocess_bf16` launch per camera view reads the
+`(H,W,3)` uint8 view and writes its column block of the `(1,3,224,448)`
+BF16 VAE input. It replaces `_prep_view` (uint8 -> float32 on the source
+device, `F.interpolate(mode="area")`, three elementwise normalize ops,
+BF16 cast) and `torch.cat`.
+
+- No resize (view already 224x224): a 256-entry BF16 table built on the
+  GPU with the same torch expression as `_prep_view`, Pi0.5's
+  `_infer_uint8_to_fp16` technique.
+- `resize="area"` (served default): reproduces torch's arithmetic, which
+  was measured on H100: area pooling is `sum / kh / kw` (two rounded
+  float32 divisions over exact integer window sums), and `x / 255.0` is
+  `x * (1.0f/255.0f)`. Explicit `_rn` intrinsics keep it exact under
+  `--use_fast_math`.
+- `resize="pil_bilinear"` (opt-in, frontend `vae_resize`): Pillow's
+  `Resample.c` fixed-point bilinear (22-bit coefficients built on the
+  host in double precision, horizontal then vertical pass with uint8
+  rounding between them) plus the official center crop, then the table.
+  Only the resize is bit-exact to the official eval; the eval normalizes
+  in BF16 arithmetic, which differs from the table in 127 of 256 entries
+  (ISSUE-030).
+
+## Result (H100, shared GPU, indicative)
+
+Bit-exactness, `tests/test_imagewam_vae_preprocess.py`: 0 differing
+BF16 elements against `_prep_view` (area) and against the official
+`_center_crop_resize` + served normalization (pil_bilinear), for real
+512x512 LIBERO frames and random 512x512, 256x256, 224x224, 480x640 and
+100x150 inputs. Tokens from `encode_to_tokens` are bit-identical with
+and without the kernel. End to end (`imagewam_e2e_official_compare.py`,
+fp16, 10 tasks x frames {0,60}, seeds {0,1}): `fr_vs_off` median
+0.99840 / min 0.99567, mean `mae_fr_vs_gt` 0.18359, identical to the
+baseline.
+
+Latency, `benchmarks/imagewam_vae_stage_bench.py --section preprocess`
+(two views, alternating in one process):
+
+| input | torch path kernels / GPU time | kernel path kernels / GPU time | host enqueue torch -> kernel |
+|---|---|---|---|
+| raw 512x512, CPU uint8 | 15 / 0.702 ms | 4 / 0.054 ms | 22.2 -> 2.5 ms |
+| raw 512x512, GPU uint8 | 15 / 0.455 ms | 2 / 0.009 ms | 0.31 -> 0.05 ms |
+| 224x224, CPU uint8 | 11 / 0.102 ms | 4 / 0.016 ms | 20.4 -> 2.3 ms |
+
+The CPU-input rows are dominated by the torch path converting uint8 to
+float32 on the host (`.to(device, float32)` of a CPU tensor) and then
+copying 4x the bytes; the kernel path copies uint8 only. The host
+numbers on this box are inflated by CPU contention from the co-tenant
+job and by GPU time-slicing (a synchronized call has a ~2.4 ms floor
+here), so only the direction is meaningful locally. `encode_to_tokens`
+wall P50 with CPU inputs: 36-42 ms -> 12.4 ms.
+
+## Open
+
+Thor latency of the preprocessing step and of `infer()` (checklist).
+The served-vs-official resize difference is ISSUE-030.
+
+# OPT-021: VAE encode inside the CUDA graph and a native NHWC encoder (roadmap item 5)
+
+Status: implemented behind frontend flags (`vae_encoder="native"`,
+`vae_graph_input=(views, H, W)`), verified on H100; defaults unchanged
+(`vae_encoder="torch"`, VAE outside the graph). Thor latency pending
+(Thor checklist in `plan.md`'s item-5 plan section).
+
+Area: `flash_rt/models/imagewam/vae_stage.py`,
+`flash_rt/models/imagewam/vae_native_encoder.py`,
+`csrc/kernels/imagewam_vae_groupnorm.cu`,
+`csrc/kernels/imagewam_vae_residual.cu`,
+`flash_rt/frontends/torch/imagewam_thor.py`
+
+## Profile of the stock encode (H100, 224x448, indicative)
+
+Measured with `benchmarks/imagewam_vae_stage_bench.py --section profile
+--profile-repeats 7`: torch-profiler GPU kernel time per op family, 3
+invocations x 7 captures of 10 encodes. 282 kernels per
+`AutoEncoder.encode`, 9.5-10.2 ms kernel time per encode (per-invocation
+medians; single captures 8.6-10.5 ms). Shares are the per-invocation
+medians over captures, with the single-capture range in parentheses:
+the co-tenant job time-slices the GPU, which stretches individual kernel
+durations, so one capture alone can misstate the split.
+
+| op family | kernels per encode | share of GPU kernel time |
+|---|---:|---:|
+| torch GroupNorm statistics (`RowwiseMoments`, N*G = 32 blocks) | 44 | 35-39% (31-50%) |
+| convolution math | 25 | 18-26% (12-34%) |
+| other elementwise: conv-bias broadcast adds, residual adds, mul, pad, copies | 109 | 16-24% (10-30%) |
+| cuDNN NCHW<->NHWC transforms around each convolution | 72 | 10-17% (8-24%) |
+| sigmoid (swish) | 21 | 2-4% |
+| attention (one 1568-token block), q/k/v and proj GEMMs | 11 | ~2% |
+
+The same command profiles `NativeFlux2Encoder`: 142 kernels, 2.6-3.9 ms
+kernel time per encode (per-invocation medians); convolution math 30-44%
+of it, FlashRT GroupNorm apply 8-21%, GroupNorm statistics + finalize
+8-13%, bias+residual about 2%; the single attention kernel ranges 4-53%
+across captures, the most time-slicing-sensitive entry.
+
+Converting the stock module to `channels_last` removes the transforms
+but makes torch's GroupNorm slower on the strided layout; no net gain.
+
+## Mechanisms
+
+1. `ImageWAMVaeStage`: fixed uint8 view buffer -> preprocessing kernel
+   (OPT-020) -> encoder -> tokens written into the frontend's `img_raw`.
+   `run()` is capture-safe.
+2. `vae_graph_input`: the frontend records `stage.run()` ahead of
+   prefill in its one CUDA graph; `infer()` copies the views into the
+   fixed buffer and replays once. Views of exactly that shape are then
+   required on every call.
+3. `NativeFlux2Encoder` (`vae_encoder="native"`): the same op order as
+   `AutoEncoder.encode`, all activations `channels_last`, and
+   - NHWC GroupNorm(+SiLU): Welford partial statistics per block, a
+     per-(group, sample) Chan merge, one vectorized apply with torch's
+     BF16 rounding points (after the norm, the sigmoid and the product);
+     conv1's bias folded into norm2's reads;
+   - one pass for conv2 bias + nin_shortcut bias + residual add, with
+     torch's BF16 rounding after each add (bit-exact to the three torch
+     ops);
+   - the attention block's q/k/v 1x1 convolutions as one GEMM.
+
+## Result (H100, shared GPU, indicative)
+
+Numerics:
+
+| check | result |
+|---|---|
+| stage eager / graph (torch encoder) vs `encode_to_tokens` | bit-identical tokens |
+| frontend graph vs eager prefill+denoise, same tokens and noise | bit-identical actions (torch and native encoders) |
+| GroupNorm(+SiLU) kernel vs torch, all 22 real encoder inputs | cosine >= 0.9999998, 0.001-0.03% of BF16 elements differ |
+| bias+residual kernel vs torch | bit-identical |
+| native vs torch encoder tokens, real frames | cosine 0.99998, rel_l2 0.0055, max-abs 0.03-0.05 |
+| token stats, native / torch / real Thor | mean -0.0101 / -0.0101 / -0.02, std 0.9705 / 0.9706 / 0.97, absmax 4.78 / 4.78 / 4.91 |
+| rel_l2 vs an FP32 encode, 5 frames | torch BF16 0.0088-0.0096, native BF16 0.0089-0.0097 |
+
+The native encoder is as close to FP32 as the stock BF16 encoder; the
+native-vs-torch gap is smaller than either one's BF16 error.
+
+End to end (`imagewam_e2e_official_compare.py`, fp16, 10 tasks x
+frames {0,60}, seeds {0,1}): `fr_vs_off` median / min and mean
+`mae_fr_vs_gt` are 0.99840 / 0.99567 / 0.18359 for the default path, for
+the torch encoder inside the graph, and 0.99840 / 0.99568 / 0.18359 for
+the native encoder inside the graph (baseline 0.99840 / 0.99567 /
+0.18359).
+
+Speed, VAE stage alone (`--section encode`, two 512x512 CPU views,
+alternating):
+
+| variant | kernels | GPU kernel time | wall P50 |
+|---|---:|---:|---:|
+| legacy `encode_to_tokens` (torch preprocess) | 298 | 7.8-9.5 ms | 38-46 ms |
+| `encode_to_tokens`, kernel preprocess (served now) | 287 | 8.1-9.4 ms | 12.4 ms |
+| stage, torch encoder, CUDA graph | 287 | same | 12.0 ms |
+| stage, native encoder, eager | 147 | 1.9 ms | 4.4 ms |
+| stage, native encoder, CUDA graph | 147 | 1.9 ms | 4.3 ms |
+
+Wall-clock on this box has a ~2.4 ms floor per synchronized call from
+GPU time-slicing with the co-tenant job, and kernel-time totals move
+with that load between runs (stock 7.8-10.5 ms, native 1.9-3.9 ms
+across the runs recorded here); compare variants within one run. Graph
+capture alone is worth ~0.35 ms here, where the host CPU is fast and
+the encode is GPU-bound.
+
+`infer()` at real dims (`--section infer`, fp16, random weights,
+alternating frontends): eager-torch 120.0 ms, graph-torch 119.5 ms,
+graph-native 113.9 ms (224x224 views); eager-torch 119.2 ms vs
+eager-native 114.3 ms (512x512 views).
+
+## Open
+
+- Thor: VAE-stage latency (stock 21.5 ms in OPT-012), `infer()` P50 on
+  `nvfp4` for the four placements/encoders, and the token cosine on
+  sm_110 (checklist).
+- The largest remaining native cost is convolution math (30-44% of its
+  kernel time); the three (0,1,0,1) zero pads before the stride-2
+  convolutions and the conv_in input layout conversion are the next
+  copy-elimination candidates.
