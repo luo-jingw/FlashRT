@@ -3851,6 +3851,187 @@ confirmed). **OPT-007 stays closed** -- this round only aligned the
 measurement tools with reality, it does not reopen the INT8/INT4-on-
 Thor question.
 
+# OPT-025: Jetson clock-state record for ImageWAM benchmarks (roadmap item 10)
+
+Status: implemented and unit-tested on x86; Thor record pending (plan.md
+"Plan: Jetson clock-locking check for the benchmark scripts").
+
+Area: latency measurement provenance on Jetson
+
+## What exists
+
+`flash_rt/hardware/jetson_clock_state.py` reads the nvpmodel mode
+(`nvpmodel -q`), the `jetson_clocks --show` report (root only; never run
+through `sudo`), every GPU and EMC devfreq node under
+`/sys/class/devfreq` (`cur_freq`, `min_freq`, `max_freq`, `governor`),
+and `/sys/kernel/nvpmodel_clk_cap/*`. It returns a `JetsonClockState`
+with a lock verdict (every GPU node `cur == min == max`, no unlocked EMC
+node, MAXN when readable) and warnings, and returns `is_jetson=false`
+on any other machine. `report_jetson_clock_state()` prints the record as
+one `[jetson-clock-state]` JSON line plus warning lines.
+
+Printed before timing by `benchmarks/imagewam_thor_graph_bench.py`,
+`benchmarks/imagewam_thor_int4_bench.py`,
+`benchmarks/imagewam_thor_int8_bench.py`, the timing section of
+`benchmarks/imagewam_e2e_official_compare.py`, and embedded in every
+regression-gate result (`tests/gate_imagewam_libero.py`, OPT-027).
+
+## Measured
+
+| check | machine | result |
+|---|---|---|
+| `tests/test_jetson_clock_state.py` (fake Thor sysfs trees) | H100 box, x86 | 11 passed |
+| record on the real root | H100 box | `is_jetson=false`, no tool run |
+| `imagewam_thor_graph_bench.py` fp16 row | H100 (shared GPU, indicative only) | record printed; P50 107.3 ms |
+
+## Open
+
+The Thor record itself (node names, whether `nvpmodel` exists there,
+EMC visibility) is not yet observed; see ISSUE-061 for why it matters
+to the gate's latency baseline.
+
+# OPT-026: precision-routing contract test for the ImageWAM Thor frontend (roadmap item 11)
+
+Status: done (plan.md "Plan: Precision-routing contract test").
+
+Area: `ImageWAMTorchFrontendThor` weight-slot routing
+(`_wrap_linear`, `_alloc_random_weights`, `_load_real_weights`, the
+constructor's `merge_qkv_mlp` decision)
+
+## What exists
+
+`tests/test_imagewam_thor_precision_routing.py` holds the routing
+contract as one table, `EXPECTED_ROUTING`: 37 slot rows by the 6
+precisions of `_PRECISIONS`. It is checked at the real FLUX.2-4B LIBERO
+dims and at the default dims, for random and real-checkpoint weights,
+and additionally that both weight sources build the same wrapper with
+the same `(n, k)` per key. It covers the `action_encoder` (K=7) and
+`head.linear` (N=7) fallbacks, the merged `linear1` against the
+`fp16_cutlass` `qkv`/`mlp_in` split, the `CutlassFp16SwiGluMlp` slots,
+and `Bf16OutLinear` for `txt_in`/`img_in` (one shared wrapper across
+double layers on the real path). `flash_rt_kernels` and `quant_linear`
+are stubbed at the import boundary and weights are meta tensors, so no
+GPU or compiled extension is needed.
+
+## Measured
+
+| environment | result | time |
+|---|---|---|
+| H100 box, real extension importable | 54 passed | ~16 s |
+| `CUDA_VISIBLE_DEVICES=""`, `flash_rt_kernels` unimportable | 53 passed, 1 skipped (stub-signature check needs the real module) | ~14 s |
+| mutation: `nvfp4` K/N%16 fallback removed | 5 failed, naming both K=7/N=7 slots | |
+| mutation: `fp8_static` loses the `linear1` merge | 5 failed | |
+
+## Maintenance
+
+A stream that changes routing (for example a `linear2` merge) edits the
+table rows in the same commit: add the merged slot's row and mark the
+replaced slots `-` for the precisions that merge.
+
+# OPT-027: fidelity + latency regression gate on a versioned LIBERO fixture (roadmap item 13)
+
+Status: implemented; fp16 gate passing on H100; Thor `nvfp4`/`fp16`
+runs pending (plan.md "Plan: Fidelity and latency regression gate
+harness").
+
+Area: committed CI/regression gate for the served ImageWAM path
+
+## What exists
+
+| piece | file |
+|---|---|
+| model-agnostic gate policy and report schema (v1) | `flash_rt/core/regression_gate.py` |
+| fixture format, `.npz` IO, manifest with per-file and per-array SHA-256 | `flash_rt/datasets/imagewam_gate_fixture.py` |
+| fixture generator (H100: official model, then FlashRT fp16) | `benchmarks/imagewam_gate_fixture_generate.py` |
+| gate runner (any CUDA device; no official model, no Qwen3) | `tests/gate_imagewam_libero.py` |
+| per-precision fidelity thresholds | `tests/fixtures/imagewam_gate/fidelity_thresholds.json` |
+| per-device latency policy (Thor `nvfp4` 231.6 ms, margin 5%; H100 ungated) | `tests/fixtures/imagewam_gate/latency_baselines.json` |
+| committed v1 manifest | `tests/fixtures/imagewam_gate/imagewam_libero_gate_v1.manifest.json` |
+| fixed-noise entry into the served path | `ImageWAMTorchFrontendThor.infer(observation, *, action_noise=None)` |
+
+Fixture v1 (`imagewam_libero_gate_v1`, 81 MiB, stored at
+`/home/user1/workspace/jingwu/artifacts/deploy-gates/imagewam_libero_gate_v1/`,
+not in git): libero_spatial, 10 tasks, frames 0 and 60, seeds 0 and 1,
+so 20 observations and 40 (observation, seed) runs. It holds both
+224x224 views, raw proprio, ground truth, the 10 official Qwen3
+contexts (bfloat16 bits) and masks, the initial noise drawn as the
+official sampler draws it, and the official and FlashRT fp16 action
+chunks in normalized space.
+
+Provenance: v1 was produced by the generator content committed in
+`d03b073` (generator file SHA-256 `d16399e0e6afc3bf...`); that run took
+its git snapshot at the end rather than the start, which does not touch
+the data. Its manifest records `git.commit` `ae3a358` with
+`tracked_changes: false` because the generator was still untracked then.
+Manifests generated from now on also record `generator_sha256` and the
+untracked files (`git.untracked_files`, `git.clean`); v1 is not
+regenerated.
+
+`fp8_static` interface: thresholds mark it `requires_calibration`. The
+runner gates it only when `--fp8-calibration PATH` or
+`$IMAGEWAM_FP8_CALIBRATION` names an existing file, and hands the path to
+`ImageWAMTorchFrontendThor(..., calibration_path=PATH)`, the keyword the
+calibration stream's frontend uses. Without a
+file the verdict is `skipped` (exit 0); with a file but no such
+constructor keyword it is `blocked` (exit 1). It is never gated on the
+`N(0, 0.1)` placeholder calibration.
+
+Noise: fidelity is measured with the fixture's fixed N(0,1) initial
+noise, the official sampler's per-seed draw, passed through
+`infer(obs, action_noise=...)`. It is not the served default draw,
+`0.01 * N(0,1)` (ISSUE-002); the latency loop does use the served draw.
+
+Clock policy: the latency check records the clock state in every result
+but does not refuse unlocked clocks; ISSUE-061 holds that decision.
+
+## Measured (H100, shared GPU)
+
+Fixture generation, FlashRT fp16 against official (normalized space):
+
+| | median | min | mean MAE vs GT |
+|---|---:|---:|---:|
+| seed 0 (end-to-end baseline: 0.99840 / 0.99567 / 0.18359) | 0.99840 | 0.99567 | 0.18359 |
+| seed 1 | 0.99829 | 0.99554 | 0.18369 |
+| official, seed 0 vs seed 1 | 0.99630 | 0.97154 | |
+| official MAE vs GT, seed 0 / seed 1 | | | 0.18538 / 0.18584 |
+
+Peak GPU memory: official phase 17.4 GiB, FlashRT fp16 phase 9.6 GiB.
+
+Initial noise and fidelity, fp16 on fixture v1, 40 runs, cosine against
+official in normalized space:
+
+| initial noise | median | min | mean |
+|---|---:|---:|---:|
+| fixed N(0,1), the official sampler's (what the gate uses) | 0.99836 | 0.99554 | 0.99798 |
+| 0.01 x the same noise | 0.99683 | 0.98613 | 0.99602 |
+| served default draw, 0.01 x N(0,1) on the device | 0.99683 | 0.98591 | 0.99598 |
+
+The served sampler falls below the fp16 bounds (median 0.997, min
+0.993). Resolving ISSUE-002 (dropping the 0.01 factor) would bring the
+served path to the gated configuration.
+
+Gate runs:
+
+| precision | verdict | detail |
+|---|---|---|
+| fp16 | pass | vs official median 0.99836, min 0.99554 over 40 runs; vs fp16 reference 1.0 (max abs difference 0.0, bit-identical across processes); MAE 0.18364 against a limit of 0.18731; latency P50 158.2 ms (P10 142.9, P90 229.1), ungated; peak 9.56 GiB |
+| nvfp4 | blocked | frontend construction: `Nvfp4Linear requires a Blackwell/Thor NVFP4 build` (expected on sm_90) |
+| fp8_static, no calibration file | skipped | exit 0 |
+| fp8_static, file present | blocked | this branch's frontend declares no `calibration_path` keyword; exit 1 |
+| fp8 | blocked | no thresholds configured |
+| fp16, rerun at `77b7bef` | pass | same fidelity values; checkpoint verified by SHA-256 (11.9 s); top-level `latency: "ungated"` with its reason, also named in the verdict reason; P50 159.3 ms; clean worktree recorded |
+| fp16, `--require-latency` | blocked | exit 1; ungated H100 latency |
+| fp16, wrong checkpoint | blocked | SHA-256 mismatch; with `--skip-checkpoint-hash`, byte-size mismatch |
+| any, `--iters 5` | argument error | rejected before any GPU work |
+
+## Open
+
+- Thor runs for `nvfp4` and `fp16` (gate thresholds for `nvfp4` are
+  provisional until then).
+- ISSUE-060 (the `set_prompt(context=...)` cache) is worked around in
+  the generator and runner.
+- ISSUE-061 (the 231.6 ms baseline has no clock or FA4 record).
+
 # OPT-016: single-stream `linear2` merge (roadmap item 4)
 
 Status: implemented and locally verified (H100, `fp16`); default on for

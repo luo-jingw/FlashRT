@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "space": "Cosine per (observation, seed) over the (64, 7) action chunk in normalized action space (dataset_stats.json min/max to [-1, 1]); MAE against ground truth in real action units over the valid ground-truth rows. References: official ImageWAM bf16 and FlashRT fp16, both stored in the fixture. Every run starts from the fixture's fixed N(0,1) initial noise (the official sampler's per-seed draw), not the served 0.01 * N(0,1) draw (issues.md ISSUE-002).",
+  "precisions": {
+    "fp16": {
+      "vs_official_median_min": 0.997,
+      "vs_official_min_min": 0.993,
+      "vs_fp16_reference_median_min": 0.999,
+      "vs_fp16_reference_min_min": 0.995,
+      "mae_vs_gt_ratio_max": 1.02,
+      "requires_calibration": false,
+      "note": "H100 end-to-end baseline for fp16 vs official: median 0.99840, min 0.99567, mean MAE 0.18359 (issues.md ISSUE-002). The fp16 reference is generated on H100; on another device this check measures cross-device drift of the same math."
+    },
+    "nvfp4": {
+      "vs_official_median_min": 0.995,
+      "vs_official_min_min": 0.985,
+      "vs_fp16_reference_median_min": 0.997,
+      "vs_fp16_reference_min_min": 0.99,
+      "mae_vs_gt_ratio_max": 1.05,
+      "requires_calibration": false,
+      "note": "Provisional until the first Thor gate run. Thor evidence: nvfp4 vs fp16 action cosine 0.9998 on one real frame, open-loop MAE 1.01x fp16 over 50 frames (opportunities.md OPT-014)."
+    },
+    "fp8_static": {
+      "vs_official_median_min": 0.995,
+      "vs_official_min_min": 0.985,
+      "vs_fp16_reference_median_min": 0.997,
+      "vs_fp16_reference_min_min": 0.99,
+      "mae_vs_gt_ratio_max": 1.05,
+      "requires_calibration": true,
+      "note": "Gated only with a real activation-calibration file (IMAGEWAM_FP8_CALIBRATION or --fp8-calibration). With the N(0, 0.1) placeholder calibration, fp8_static reached backbone_hidden cosine ~0.46 on Thor (opportunities.md OPT-014), so it is never gated without one. Same bounds as nvfp4, the precision it would replace."
+    }
+  }
+}
