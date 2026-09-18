@@ -3040,7 +3040,7 @@ approved`.
 
 # Plan: ActionDiT small-M CUTLASS tile selection (roadmap item 1)
 
-Plan Status: completed
+Plan Status: approved
 
 ## Problem
 
@@ -3320,9 +3320,37 @@ Phase Status: completed
   table, cuBLASLt fp16 reference timing) run on H100 and print SKIP
   for families this build lacks.
 
+### Phase 6: candidates that raise are rejected
+
+Phase Status: completed
+
+- Goal: a Python exception from a candidate's launch, such as an
+  `AttributeError` for a `cutlass_fp8_t128x*` symbol missing from a
+  stale build, rejects that candidate instead of aborting construction.
+  A batch the timer cannot capture is rejected as `timing_failed`.
+- Files: `gemm_variant_tuner.py`, `gemm_variant_timer.py`, tests, both
+  benchmarks.
+- Observation: stub tests cover a raising candidate, a raising default
+  (still an error), an untimeable candidate, and an untimeable default
+  (kept). The timer test feeds a raising batch and a
+  capture-invalidating batch. A routing test removes the `t128x*`
+  symbols and construction completes.
+
+### Phase 7: Thor confirmation
+
+Phase Status: blocked
+
+- Goal: the Thor checklist in opportunities.md OPT-018. The tile
+  sweep must show correct outputs for every tile, and the
+  `infer()` A/B of heuristic vs tuned tiles must show action cosine
+  >= 0.9999 and a P50 delta.
+- Blocker: no sm_110 device on the dev box. SM100 CUTLASS and NVFP4
+  kernels do not run on sm_90, which only compile-checks them
+  (`sm110_check.sh`). Recorded as issues.md ISSUE-023.
+
 # Plan: attention-chain fusion recheck at ImageWAM's real shapes (roadmap item 6)
 
-Plan Status: completed
+Plan Status: approved
 
 ## Problem
 
@@ -3345,11 +3373,13 @@ the backend with `use_perhead_kv=True, use_real_mot_mask=True`.
 - `"mot"` site: ActionDiT joint attention, 25 layers x 10 steps = 250
   calls per `infer()`, `q = 64` action queries over `kv = total = 969`
   keys. With `use_real_mot_mask=True`, the rule the frontend always
-  uses, the call is plain unmasked attention through the same
+  uses, the call is unmasked attention through the same
   `attention_qkv_fp16_perhead`. Upstream `_build_mot_attention_mask_flux2`
-  with `target_len = 0` lets action rows see every key, and only
-  padded text keys are masked, which `pipeline_thor.py` does not model
-  at any site. FA4 has never been evaluated here.
+  with `target_len = 0` removes only the region mask, but it still
+  excludes padded text keys for every query row, at the prefill call
+  and at the action call. `pipeline_thor.py` models that mask at
+  neither site (issues.md ISSUE-020). FA4 has never been evaluated
+  here.
 - Pi0.5 rejected a fused SIMT attention chain at decoder `M = 10`,
   HD 256, as 5-7x slower (`docs/pi05_thor_decoder_fp4_e2e.md`). At that
   shape the QK^T/PV GEMMs are about 1 us of tensor-core work, and FA4
@@ -3388,8 +3418,9 @@ evaluated.
 - `flash_rt/hardware/thor/attn_backend.py`: `ImageWAMAttnBackend`
   owns per-site kernel dispatch. It gains `use_fa4_mot: bool` for the
   `"mot"` site FA4 branch. That branch is valid only with
-  `use_real_mot_mask=True` and `use_perhead_kv=True`, the unmasked
-  per-head rule, and the constructor rejects any other combination.
+  `use_real_mot_mask=True` and `use_perhead_kv=True`, FlashRT's
+  unmasked per-head rule, and the constructor rejects any other
+  combination.
 - `flash_rt/hardware/thor/fa4_backend.py`: owns FA4 availability. It
   gains `thor_default_enabled() -> bool`, true only on an sm_11x
   device with an active FA4 runtime.
@@ -3406,8 +3437,9 @@ evaluated.
   chain. It also gains `use_fa4_mot: bool = False`, passed through.
 - Tests: `tests/test_imagewam_fa4_dispatch.py` (new) checks the
   backend's FA4 branches for both sites against the cuBLAS chain, with
-  FA4 replaced by a PyTorch-SDPA stand-in that has FA4's
-  `_flash_attn_fwd` signature. It also checks the default resolution.
+  FA4 replaced by a stand-in that has FA4's `_flash_attn_fwd`
+  signature and computes attention as an fp32 matmul-softmax-matmul in
+  PyTorch. It also checks the default resolution.
   `tests/test_imagewam_fa4_backbone.py` gains a real-FA4 `mot` case
   that skips without FA4.
 
@@ -3496,8 +3528,8 @@ Phase Status: completed
   `use_fa4_mot`.
 - Files: `fa4_backend.py`, `attn_backend.py`, `imagewam_thor.py`,
   tests.
-- Observation: dispatch tests show the FA4 branches, with an SDPA
-  stand-in, matching the cuBLAS chain at real shapes (cosine,
+- Observation: dispatch tests show the FA4 branches, with an fp32
+  matmul stand-in, matching the cuBLAS chain at real shapes (cosine,
   max-abs, rel_l2). Resolution resolves to False on H100. The
   regression count is unchanged apart from the new tests. An fp16
   end-to-end quick run matches the baseline, since the default
@@ -3509,3 +3541,51 @@ Phase Status: completed
 
 - Goal: OPT-019 with evidence, recommendation, and Thor checks.
 - Files: `opportunities.md`.
+
+### Phase 4: FA4 back to opt-in
+
+Phase Status: completed
+
+- Goal: `use_fa4=None` resolves to the cuBLAS chain on every device.
+  `FLASHRT_THOR_FA4=1` opts in, and making FA4 the default is a
+  one-line change (`_FA4_OPT_IN_DEFAULT`).
+- Files: `imagewam_thor.py`, `tests/test_imagewam_fa4_dispatch.py`.
+- Observation: resolution tests cover every combination of the
+  environment variable, runtime availability, and explicit argument.
+
+### Phase 5: dedicated FA4 output buffer
+
+Phase Status: completed
+
+- Goal: FA4 output goes to `fa4_out` slots, which the frontend owns as
+  `(total, hidden)`, instead of `logits`, which overruns at small dims.
+- Files: `attn_backend.py`, `imagewam_thor.py`, FA4 tests, FA4 benches.
+- Observation: guard-band tests after `fa4_out`, and on `logits`, at
+  (a0, total) = (8, 12), (8, 24), and (905, 969), plus a frontend range
+  check. Both fail on the old staging. Capacity is checked at
+  construction.
+
+### Phase 6: fall back to the cuBLAS chain when FA4 fails
+
+Phase Status: completed
+
+- Goal: an FA4 failure during `set_prompt()`'s warmup or capture logs,
+  warns, records `fa4_fallback_reason`, rebuilds the backend without
+  FA4, and captures again.
+- Files: `imagewam_thor.py`, `tests/test_imagewam_fa4_dispatch.py`.
+- Observation: stand-ins that fail at first call, inside capture, and
+  by invalidating the capture all recover to the chain's output with
+  the caller's stream restored. A failure with FA4 off still raises.
+
+### Phase 7: Thor confirmation
+
+Phase Status: blocked
+
+- Goal: the Thor checklist in opportunities.md OPT-019, with FA4
+  explicitly opted in:
+  - the real-FA4 real-shape test at 905/905 and 64/969;
+  - kernel timings;
+  - an nvfp4 end-to-end official compare with FA4 on vs off;
+  - an `infer()` A/B with FA4 on vs off.
+- Blocker: no sm_110 device and no FA4 runtime on the dev box (issues.md
+  ISSUE-023).

@@ -292,3 +292,44 @@ run the regression suite. No current test or benchmark passes
 inconsistent dims.
 
 ## Resolution
+
+# ISSUE-023
+
+Status: open
+
+Area: Thor confirmation of roadmap items 1 and 6 (plan.md, Phase 7 of
+"Plan: ActionDiT small-M CUTLASS tile selection" and of "Plan:
+attention-chain fusion recheck at ImageWAM's real shapes")
+
+## Observation
+
+Neither item's kernels run on the dev box (H100, sm_90). The item 1
+kernels are the SM100 CUTLASS FP8 tiles, including the four new
+`cutlass_fp8_t128x*`, and the NVFP4 GEMM variants. The item 6 kernel is
+FA4, which has no runtime on the box (`ModuleNotFoundError: No module
+named 'cutlass'`) and is SM100/SM110 only. Locally, the new tiles only
+compile and link, through `sm110_check.sh`. Selection, dispatch,
+buffer bounds, and fallback are tested with stand-ins for the kernels.
+
+## Impact
+
+Both plans stay `approved`, with a `blocked` Thor phase:
+
+- `gemm_variant_autotune` stays default-off.
+- FA4 stays opt-in (`FLASHRT_THOR_FA4=1`, `use_fa4=True`,
+  `use_fa4_mot=True`).
+
+## Evidence
+
+The H100 runs of the checklist scripts print `SKIP` for every NVFP4,
+FP8 CUTLASS, and FA4 row. `tests/test_imagewam_fa4_backbone.py` skips
+all three real-FA4 tests.
+
+## Hypotheses
+
+## Next Experiment
+
+Run the Thor checklists in opportunities.md OPT-018 ("Thor check") and
+OPT-019 ("Thor check").
+
+## Resolution

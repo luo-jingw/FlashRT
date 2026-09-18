@@ -3997,17 +3997,33 @@ shipped `nvfp4` baseline of 231.6 ms was measured with FA4 off. Plan:
 plan.md "Plan: attention-chain fusion recheck at ImageWAM's real
 shapes".
 
-## Finding 1: the real `mot` rule is plain attention
+## Finding 1: FlashRT's `mot` call is unmasked; official masks padded text keys
 
-The frontend always runs `use_real_mot_mask=True`. Upstream
-`infer_action_flux2` builds its mask with `target_len = 0`, so action
-queries see every key, and the `mot` call is unmasked attention: 64
-queries over 969 keys, 24 heads, HD 128, per-head K/V. Only the
-text-padding key mask differs, and FlashRT does not apply it at any
-site (issues.md ISSUE-020). A plain FlashAttention call covers the
-`mot` site with no custom mask kernel. The three-region
-`attention_qkv_fp16_mot_joint*` kernels serve only the legacy
-`use_real_mot_mask=False` path.
+The frontend always runs `use_real_mot_mask=True`. At the `mot` site
+that dispatches unmasked attention: 64 action queries over all 969
+keys, 24 heads, HD 128, per-head K/V, through the same kernel as the
+backbone site. Official `infer_action_flux2` builds its mask with
+`_build_mot_attention_mask_flux2(target_len=0)`. `target_len = 0`
+removes only the region mask: there is no noisy-target block to
+exclude. The same builder then applies
+`mask[:, :, t0:r0] &= text_valid[:, None, :]`, with
+`text_attention_mask` passed at both the prefill call and the action
+call. So official excludes the padded text keys for every query row
+at both sites, while FlashRT attends to them at both sites (issues.md
+ISSUE-020).
+
+For a fused kernel:
+
+- A plain non-causal FA4 call reproduces what FlashRT computes today
+  at the `mot` site. That is what `use_fa4_mot` runs, and what the
+  dispatch tests compare against. It does not reproduce official.
+- Matching official needs the padded keys removed: a key mask, or,
+  since padded tokens are inert under the official mask, a context of
+  only the valid tokens (ISSUE-020, next experiment). Removing the
+  padding from the sequence keeps plain attention correct, so the
+  fused path stays a plain FA4 call.
+- The three-region `attention_qkv_fp16_mot_joint*` kernels serve only
+  the legacy `use_real_mot_mask=False` path.
 
 ## Finding 2: attention share at the real shapes (H100, fp16, random weights)
 
@@ -4147,14 +4163,16 @@ On Thor, FA4 at the backbone site already measured 3.75x per call and
    - the real-shape test at q = kv = 905 and at 64 over 969;
    - an nvfp4 end-to-end official compare with FA4 on vs off;
    - an `infer()` A/B with FA4 on vs off.
-2. `mot`: FA4 is the strongest remaining attention lever. It is the
-   same unmasked math, and on H100 an sm_90 fused kernel took the
-   bigger share of the in-pipeline gain. Flip `use_fa4_mot` to default
+2. `mot`: FA4 is the strongest remaining attention lever. It computes
+   the same math as FlashRT's current unmasked chain (not official's
+   padded-key-masked rule; Finding 1), and on H100 an sm_90 fused
+   kernel took the bigger share of the in-pipeline gain. Flip `use_fa4_mot` to default
    on (a one-line change) once Thor shows cosine >= 0.999 against the
    chain at the real shape and an `infer()` win. The Thor kernel sweep
    also times `num_splits` 2 and 4 for this shape. If a split wins,
    change the constant in the `mot` branch.
 3. No custom fused attention kernel is needed at either site.
-4. Fixing the text-padding mask (ISSUE-020) would need a key mask in
-   the fused path: FA4 `mask_mod` / block sparsity, or K/V rows
-   reordered so padding becomes a suffix and `kv_seq` shortens.
+4. ISSUE-020 (padded text keys) is fixed most simply by dropping the
+   padded tokens from the context (`x0 = n_valid + 1`), which needs no
+   key mask in any kernel, fused or not. That fix belongs to a separate
+   stream.
