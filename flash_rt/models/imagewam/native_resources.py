@@ -77,15 +77,29 @@ def build_io_config(surface: ImageWAMRuntimeSurface) -> NativeHandoff:
     return NativeHandoff(config=c, keepalive=tuple(keep))
 
 
-def _linear(r: LinearResource) -> ImageWAMLinear:
+def _linear(r: LinearResource | None) -> ImageWAMLinear:
+    if r is None:
+        return ImageWAMLinear()
     return ImageWAMLinear(kind=r.kind, n=r.n, k=r.k, fp4_variant=r.fp4_variant, weight=r.weight,
                           weight_scales=r.weight_scales or None, act_packed=r.act_packed or None,
                           act_scales=r.act_scales or None)
 
 
+def _vec_ptr(t: torch.Tensor | None) -> int | None:
+    """Device pointer of a `(1, 1, dim)` FP32 modulation chunk read as `(dim,)`."""
+    if t is None:
+        return None
+    if t.dtype != torch.float32 or t.stride(-1) != 1 or t.numel() != t.shape[-1]:
+        raise ValueError(f"modulation chunk must be FP32 with contiguous last dim, got "
+                         f"{t.dtype} {tuple(t.shape)} stride={t.stride()}")
+    return t.data_ptr()
+
+
 def _adaln(r: AdaLNResource) -> ImageWAMAdaLN:
     return ImageWAMAdaLN(shift=r.shift.data_ptr(), scale=r.scale.data_ptr(),
-                         gate=None if r.gate is None else r.gate.data_ptr())
+                         gate=None if r.gate is None else r.gate.data_ptr(),
+                         shift_f32=_vec_ptr(r.shift_f32), scale_f32=_vec_ptr(r.scale_f32),
+                         gate_f32=_vec_ptr(r.gate_f32))
 
 
 def build_pipeline_config(resources: ImageWAMPipelineResources) -> NativeHandoff:
@@ -94,7 +108,7 @@ def build_pipeline_config(resources: ImageWAMPipelineResources) -> NativeHandoff
     c = ImageWAMPipelineConfig()
     c.struct_size = ctypes.sizeof(ImageWAMPipelineConfig)
     for name in PIPELINE_DIM_FIELDS:
-        setattr(c, name, int(getattr(resources.dims, name)))
+        setattr(c, name, int(getattr(resources.dims, name)))  # bool flags -> 0/1
     c.eps = resources.dims.eps
     for name in PIPELINE_BUFFER_FIELDS:
         setattr(c, name, int(getattr(resources.buffers, name)))
@@ -119,7 +133,8 @@ def build_pipeline_config(resources: ImageWAMPipelineResources) -> NativeHandoff
     singles = (ImageWAMSingleLayer * max(1, len(resources.single_layers)))()
     for i, L in enumerate(resources.single_layers):
         singles[i] = ImageWAMSingleLayer(_linear(L.linear1), _linear(L.attn_out_proj),
-                                         _linear(L.mlp_down), L.query_norm, L.key_norm)
+                                         _linear(L.mlp_down), _linear(L.linear2), L.query_norm,
+                                         L.key_norm)
     action_doubles = (ImageWAMActionDoubleLayer * max(1, len(resources.action_double_layers)))()
     for i, L in enumerate(resources.action_double_layers):
         action_doubles[i] = ImageWAMActionDoubleLayer(_linear(L.qkv), _linear(L.proj), _linear(L.mlp0),
@@ -127,7 +142,8 @@ def build_pipeline_config(resources: ImageWAMPipelineResources) -> NativeHandoff
     action_singles = (ImageWAMSingleLayer * max(1, len(resources.action_single_layers)))()
     for i, L in enumerate(resources.action_single_layers):
         action_singles[i] = ImageWAMSingleLayer(_linear(L.linear1), _linear(L.attn_out_proj),
-                                                _linear(L.mlp_down), L.query_norm, L.key_norm)
+                                                _linear(L.mlp_down), _linear(L.linear2),
+                                                L.query_norm, L.key_norm)
     steps = (ImageWAMActionStep * len(resources.steps))()
     for i, st in enumerate(resources.steps):
         steps[i] = ImageWAMActionStep(_adaln(st.double1), _adaln(st.double2), _adaln(st.single),

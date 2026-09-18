@@ -9,7 +9,9 @@ Each check restores one input state, runs the Python function eagerly,
 restores again, runs the native segment, and compares every state buffer
 bit for bit: one backbone block of each type, the full prefill, the full
 denoise loop, then the captured native graph against the Python graph
-and through the `io="native"` model runtime against `infer()`.
+and through the `io="native"` model runtime against `infer()`. Runs the
+served layer structure (merged single-stream `linear2`, gated residual
+fused with the next AdaLN) and the split/unfused one.
 Skips when exec/, runtime/ or the native library is not built.
 """
 import os
@@ -37,14 +39,21 @@ PROPRIO_DIM = 8
 # fp16 locally; the Thor checklist sets IMAGEWAM_NATIVE_PRECISION=nvfp4.
 PRECISION = os.environ.get("IMAGEWAM_NATIVE_PRECISION", "fp16")
 STATE_NAMES = ("backbone_hidden", "K_cache", "V_cache", "Q_O", "context", "img_raw", "action_latent")
+# (name, dims_override): the frontend default, and the path with both
+# layer-structure fusions off.
+LAYER_STRUCTURES = (
+    ("served", {}),
+    ("split_unfused", {"merge_linear2": False, "fuse_res_norm": False}),
+)
 
 
 class Harness:
     """One frontend + native pipeline over the same buffers, with a saved
     input state both sides start from."""
 
-    def __init__(self):
-        self.fe = ImageWAMTorchFrontendThor(precision=PRECISION, dims_override={"proprio_dim": PROPRIO_DIM})
+    def __init__(self, dims_override: dict):
+        self.fe = ImageWAMTorchFrontendThor(precision=PRECISION,
+                                            dims_override={"proprio_dim": PROPRIO_DIM, **dims_override})
         self.fe.set_prompt("pick up the red cup")
         self.native = ImageWAMNativeRuntime.create(self.fe.runtime_surface(), LIBRARY)
         self.native.set_pipeline(self.fe)
@@ -92,9 +101,11 @@ def compare(label: str, a: dict, b: dict, names=STATE_NAMES) -> bool:
     return ok
 
 
-@pytest.fixture(scope="module")
-def h():
-    harness = Harness()
+@pytest.fixture(scope="module", params=LAYER_STRUCTURES, ids=[name for name, _ in LAYER_STRUCTURES])
+def h(request):
+    harness = Harness(request.param[1])
+    print(f"layer structure {request.param[0]}: merge_linear2={harness.fe.dims['merge_linear2']} "
+          f"fuse_res_norm={harness.fe.dims['fuse_res_norm']}")
     yield harness
     harness.native.close()
 

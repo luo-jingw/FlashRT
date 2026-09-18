@@ -29,6 +29,7 @@ add_library(flashrt_imagewam_native SHARED EXCLUDE_FROM_ALL
   ${CMAKE_CURRENT_SOURCE_DIR}/csrc/kernels/activation.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/csrc/kernels/decoder_fused.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/csrc/kernels/elementwise.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/csrc/kernels/fusion.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/csrc/kernels/softmax.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/csrc/kernels/attention_cublas.cu
 )

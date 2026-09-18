@@ -291,6 +291,27 @@ def test_single_stream_layer_merged_linear1_matches_real_reference():
     `qkv.weight`/`mlp_in.weight` path above -- same real reference, same
     weight VALUES, just concatenated into one wide tensor the way the
     real checkpoint's own unsplit `linear1.weight` already is."""
+    cos = _single_stream_layer_merged_vs_reference(merge_linear2=False)
+    print(f"single-stream layer (merged linear1): pointer path vs real reference cosine={cos:.6f}")
+    assert cos > 0.999
+
+
+def test_single_stream_layer_merged_linear2_matches_real_reference():
+    """Roadmap item 4: `dims["merge_linear2"]=True` (real unsplit
+    `linear2.weight`, ONE GEMM over `[attn_out | mlp_act]`) on top of the
+    merged `linear1`, against the same tensor-level reference -- the
+    weight VALUES are the split test's `attn_out`/`mlp_out` stacked along
+    K, the way the real checkpoint stores `linear2.weight`."""
+    cos = _single_stream_layer_merged_vs_reference(merge_linear2=True)
+    print(f"single-stream layer (merged linear1+linear2): pointer path vs real reference cosine={cos:.6f}")
+    assert cos > 0.999
+
+
+def _single_stream_layer_merged_vs_reference(*, merge_linear2: bool) -> float:
+    """Backbone single-stream layer with `merge_qkv_mlp=True` (and
+    `merge_linear2` as given) at the small test shape; returns the
+    cosine of the pointer path's output against
+    `real_single_stream_block_forward_fp16`."""
     NH, HD, mlp_hidden = 2, 128, 192
     hidden = NH * HD
     total = 8
@@ -312,11 +333,18 @@ def test_single_stream_layer_merged_linear1_matches_real_reference():
     ptr_w = {
         ("backbone", "single", 0, "linear1.weight"):
             Fp16Linear(gemm, linear1.data_ptr(), 3 * hidden + 2 * mlp_hidden, hidden),
-        ("backbone", "single", 0, "attn_out_proj.weight"): Fp16Linear(gemm, ref_w["attn_out"].data_ptr(), hidden, hidden),
-        ("backbone", "single", 0, "mlp_down.weight"): Fp16Linear(gemm, ref_w["mlp_out"].data_ptr(), hidden, mlp_hidden),
         ("backbone", "single", 0, "query_norm"): ref_w["query_norm"].data_ptr(),
         ("backbone", "single", 0, "key_norm"): ref_w["key_norm"].data_ptr(),
     }
+    if merge_linear2:
+        linear2 = _own(torch.cat([ref_w["attn_out"], ref_w["mlp_out"]], dim=0).contiguous())
+        ptr_w[("backbone", "single", 0, "linear2.weight")] = Fp16Linear(
+            gemm, linear2.data_ptr(), hidden, hidden + mlp_hidden)
+    else:
+        ptr_w[("backbone", "single", 0, "attn_out_proj.weight")] = Fp16Linear(
+            gemm, ref_w["attn_out"].data_ptr(), hidden, hidden)
+        ptr_w[("backbone", "single", 0, "mlp_down.weight")] = Fp16Linear(
+            gemm, ref_w["mlp_out"].data_ptr(), hidden, mlp_hidden)
 
     mod_w = {
         "time_in_w1": torch.randn(hidden, 256, dtype=F32, device=DEV) * 0.02,
@@ -356,17 +384,17 @@ def test_single_stream_layer_merged_linear1_matches_real_reference():
         "modded_scratch": _own(torch.zeros(total, hidden, dtype=FP16, device=DEV)).data_ptr(),
         "single_linear1_merged": _own(
             torch.zeros(total, 3 * hidden + 2 * mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
+        "single_linear2_in": _own(torch.zeros(total, hidden + mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "single_mlp_gated": _own(torch.zeros(total, mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
         "proj_scratch": _own(torch.zeros(total, hidden, dtype=FP16, device=DEV)).data_ptr(),
         "proj_scratch2": _own(torch.zeros(total, hidden, dtype=FP16, device=DEV)).data_ptr(),
     }
-    dims = dict(hidden=hidden, HD=HD, NH=NH, mlp_hidden=mlp_hidden, a0=total, merge_qkv_mlp=True)
+    dims = dict(hidden=hidden, HD=HD, NH=NH, mlp_hidden=mlp_hidden, a0=total, merge_qkv_mlp=True,
+                merge_linear2=merge_linear2)
 
     _single_stream_layer(ctx, fvk, gemm, bufs, ptr_w, dims, 0, 0, 0, attn, mod_single, table.data_ptr())
 
-    cos = _cosine(combined, x_ref)
-    print(f"single-stream layer (merged linear1): pointer path vs real reference cosine={cos:.6f}")
-    assert cos > 0.999
+    return _cosine(combined, x_ref)
 
 
 def _action_common(NH, HD, action_hidden, action_mlp_hidden, backbone_total, device):
@@ -535,10 +563,208 @@ def test_action_double_and_single_layers_match_real_reference():
     print(f"action single layer (merged linear1): pointer path vs real reference cosine={cos3:.6f}")
     assert cos3 > 0.999
 
+    # Roadmap item 4: merged linear2 on top of the merged linear1 --
+    # SAME ref_w2 values (attn_out/mlp_out stacked along K into one
+    # linear2.weight), compared against the SAME action2_ref.
+    linear2_action = _own(torch.cat([ref_w2["attn_out"], ref_w2["mlp_out"]], dim=0).contiguous())
+    ptr_w2_merged2 = {
+        ("action_dit", "single", 0, "linear1.weight"): ptr_w2_merged[("action_dit", "single", 0, "linear1.weight")],
+        ("action_dit", "single", 0, "linear2.weight"):
+            Fp16Linear(gemm, linear2_action.data_ptr(), action_hidden, attn_dim + action_mlp_hidden),
+        ("action_dit", "single", 0, "query_norm"): ref_w2["query_norm"].data_ptr(),
+        ("action_dit", "single", 0, "key_norm"): ref_w2["key_norm"].data_ptr(),
+    }
+    action_x4 = _own(action.clone())
+    dims_merged2 = dict(dims, merge_qkv_mlp=True, merge_linear2=True)
+    bufs4 = dict(bufs3, action_hidden=action_x4.data_ptr(), action_linear2_in=_own(
+        torch.zeros(num_action, attn_dim + action_mlp_hidden, dtype=FP16, device=DEV)).data_ptr())
+    _action_single_layer(ctx, fvk, gemm, bufs4, ptr_w2_merged2, dims_merged2, 0, 1, 0, attn, mod_single,
+                         action_table.data_ptr())
+    cos4 = _cosine(action_x4, action2_ref)
+    print(f"action single layer (merged linear1+linear2): pointer path vs real reference cosine={cos4:.6f}")
+    assert cos4 > 0.999
+
+
+# ──────────────────────────────────────────────────────────────────
+# Real-shape merged vs split `linear2` (roadmap item 4)
+# ──────────────────────────────────────────────────────────────────
+_REAL = dict(NH=24, HD=128, hidden=3072, mlp_hidden=9216, x0=513, a0=905,
+             action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096, num_action=64)
+
+
+def _diff_stats(a: torch.Tensor, b: torch.Tensor) -> dict:
+    """cosine / max-abs / rel_l2 of `a` against `b`, plus whether they
+    are bitwise equal."""
+    a_, b_ = a.float().flatten(), b.float().flatten()
+    return dict(cos=_cosine(a_, b_), max_abs=(a_ - b_).abs().max().item(),
+                rel_l2=((a_ - b_).norm() / (b_.norm() + 1e-12)).item(), bit_exact=torch.equal(a, b))
+
+
+def _fmt(st: dict) -> str:
+    return (f"cos={st['cos']:.7f} max_abs={st['max_abs']:.3e} rel_l2={st['rel_l2']:.3e} "
+            f"bit_exact={st['bit_exact']}")
+
+
+def _real_attn(seq_rows: int, total: int, num_layers: int, ctx, *, prefill_kv: bool):
+    """ImageWAMAttnBackend at the real head geometry. `prefill_kv`
+    fills rows `[0, a0)` of every layer's K/V with random values (the
+    frozen backbone cache the "mot" site attends into)."""
+    NH, HD, hidden, a0 = _REAL["NH"], _REAL["HD"], _REAL["hidden"], _REAL["a0"]
+    scale = 1.0 / (HD ** 0.5)
+    spec = make_imagewam_attention_spec(max_prefix_seq=a0, max_total_seq=total,
+                                         num_layers=num_layers, num_heads=NH, head_dim=HD)
+    K_cache = _own(torch.zeros(num_layers, total, hidden, dtype=FP16, device=DEV))
+    V_cache = _own(torch.zeros(num_layers, total, hidden, dtype=FP16, device=DEV))
+    if prefill_kv:
+        K_cache[:, :a0] = torch.randn(num_layers, a0, hidden, dtype=FP16, device=DEV)
+        V_cache[:, :a0] = torch.randn(num_layers, a0, hidden, dtype=FP16, device=DEV)
+    Q_O = _own(torch.zeros(total, hidden, dtype=FP16, device=DEV))
+    logits = _own(torch.zeros(seq_rows * NH, total + (total % 2), dtype=FP16, device=DEV))
+    slots = {"Q_O": Q_O.data_ptr(), "K": K_cache.data_ptr(), "V": V_cache.data_ptr(),
+             "logits": logits.data_ptr(), "scale": scale}
+    return ImageWAMAttnBackend(spec, ctx, backbone_slots=dict(slots),
+                               mot_slots=dict(slots, layer_stride=K_cache[0].numel() * 2),
+                               use_perhead_kv=True, use_real_mot_mask=True)
+
+
+def test_single_stream_linear2_merged_vs_split_real_shapes():
+    """Roadmap item 4 at the REAL shapes: the same random weights run
+    through `_single_stream_layer` (backbone, a0=905, hidden 3072, mlp
+    9216) and `_action_single_layer` (M=64, 1024/3072/4096) with the
+    split `attn_out_proj`+`mlp_down` path and the merged `linear2` path
+    (both on the merged `linear1`). Reports the projection feeding the
+    gated residual (`proj_scratch`, the only quantity the merge changes)
+    and the layer output."""
+    R = _REAL
+    NH, HD, hidden, mlp_hidden, a0 = R["NH"], R["HD"], R["hidden"], R["mlp_hidden"], R["a0"]
+    torch.manual_seed(5)
+    gemm = fvk.GemmRunner()
+    ctx = fvk.FvkContext()
+
+    # --- backbone single-stream layer ---
+    l1_w = _own((torch.randn(hidden, 3 * hidden + 2 * mlp_hidden, device=DEV) * 0.02).to(FP16))
+    attn_out = _own((torch.randn(hidden, hidden, device=DEV) * 0.02).to(FP16))
+    mlp_down = _own((torch.randn(mlp_hidden, hidden, device=DEV) * 0.02).to(FP16))
+    linear2 = _own(torch.cat([attn_out, mlp_down], dim=0).contiguous())
+    common = {
+        ("backbone", "single", 0, "linear1.weight"): Fp16Linear(gemm, l1_w.data_ptr(), 3 * hidden + 2 * mlp_hidden, hidden),
+        ("backbone", "single", 0, "query_norm"): _norm_scale(HD, DEV).data_ptr(),
+        ("backbone", "single", 0, "key_norm"): _norm_scale(HD, DEV).data_ptr(),
+    }
+    w_split = {**common,
+        ("backbone", "single", 0, "attn_out_proj.weight"): Fp16Linear(gemm, attn_out.data_ptr(), hidden, hidden),
+        ("backbone", "single", 0, "mlp_down.weight"): Fp16Linear(gemm, mlp_down.data_ptr(), hidden, mlp_hidden),
+    }
+    w_merged = {**common,
+        ("backbone", "single", 0, "linear2.weight"): Fp16Linear(gemm, linear2.data_ptr(), hidden, hidden + mlp_hidden),
+    }
+    mod_w = {
+        "time_in_w1": torch.randn(hidden, 256, dtype=F32, device=DEV) * 0.02,
+        "time_in_w2": torch.randn(hidden, hidden, dtype=F32, device=DEV) * 0.02,
+        "mod_double_txt": torch.randn(6 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
+        "mod_double_img": torch.randn(6 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
+        "mod_single": torch.randn(3 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
+    }
+    _, _, mod_single = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, hidden)
+    table = build_backbone_rope_table(R["x0"], 14, 28, axes_dim=AXES_DIM, theta=THETA, device=DEV)
+    attn = _real_attn(a0, a0, 1, ctx, prefill_kv=False)
+    x_in = _own((torch.randn(a0, hidden, device=DEV) * 4.0).to(BF16))
+
+    outs = {}
+    l2_in = _own(torch.zeros(a0, hidden + mlp_hidden, dtype=FP16, device=DEV))
+    for name, w, merged in (("split", w_split, False), ("merged", w_merged, True)):
+        combined = _own(x_in.clone())
+        proj = _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV))
+        bufs = {
+            "backbone_hidden": combined.data_ptr(),
+            "modded_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "single_linear1_merged": _own(torch.zeros(a0, 3 * hidden + 2 * mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "single_linear2_in": l2_in.data_ptr(),
+            "single_mlp_gated": _own(torch.zeros(a0, mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "proj_scratch": proj.data_ptr(),
+            "proj_scratch2": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
+        }
+        dims = dict(hidden=hidden, HD=HD, NH=NH, mlp_hidden=mlp_hidden, a0=a0, merge_qkv_mlp=True,
+                    merge_linear2=merged)
+        _single_stream_layer(ctx, fvk, gemm, bufs, w, dims, 0, 0, 0, attn, mod_single, table.data_ptr())
+        torch.cuda.synchronize()
+        outs[name] = (proj.clone(), combined.clone())
+    proj_st = _diff_stats(outs["merged"][0], outs["split"][0])
+    out_st = _diff_stats(outs["merged"][1], outs["split"][1])
+    # FP32 reference for the projection over the SAME [attn_out | mlp_act]
+    # operands (the merged run's own linear2 input buffer).
+    ref32 = l2_in.float() @ linear2.float()
+    print(f"backbone single (a0={a0}) merged vs split linear2: proj {_fmt(proj_st)}")
+    print(f"backbone single (a0={a0}) merged vs split linear2: layer output {_fmt(out_st)}")
+    print(f"backbone single proj rel_l2 vs fp32 reference: merged={_diff_stats(outs['merged'][0], ref32)['rel_l2']:.3e} "
+          f"split={_diff_stats(outs['split'][0], ref32)['rel_l2']:.3e}")
+    assert proj_st["cos"] > 0.9999 and out_st["cos"] > 0.9999
+
+    # --- ActionDiT single-stream layer ---
+    ahd, aaw, amh, num_action = R["action_hidden_dim"], R["action_attn_width"], R["action_mlp_hidden"], R["num_action"]
+    total = a0 + num_action
+    al1_w = _own((torch.randn(ahd, 3 * aaw + 2 * amh, device=DEV) * 0.02).to(FP16))
+    a_attn_out = _own((torch.randn(aaw, ahd, device=DEV) * 0.02).to(FP16))
+    a_mlp_down = _own((torch.randn(amh, ahd, device=DEV) * 0.02).to(FP16))
+    a_linear2 = _own(torch.cat([a_attn_out, a_mlp_down], dim=0).contiguous())
+    a_common = {
+        ("action_dit", "single", 0, "linear1.weight"): Fp16Linear(gemm, al1_w.data_ptr(), 3 * aaw + 2 * amh, ahd),
+        ("action_dit", "single", 0, "query_norm"): _norm_scale(HD, DEV).data_ptr(),
+        ("action_dit", "single", 0, "key_norm"): _norm_scale(HD, DEV).data_ptr(),
+    }
+    a_split = {**a_common,
+        ("action_dit", "single", 0, "attn_out_proj.weight"): Fp16Linear(gemm, a_attn_out.data_ptr(), ahd, aaw),
+        ("action_dit", "single", 0, "mlp_down.weight"): Fp16Linear(gemm, a_mlp_down.data_ptr(), ahd, amh),
+    }
+    a_merged = {**a_common,
+        ("action_dit", "single", 0, "linear2.weight"): Fp16Linear(gemm, a_linear2.data_ptr(), ahd, aaw + amh),
+    }
+    amod_w = {
+        "time_in_w1": torch.randn(ahd, 256, dtype=F32, device=DEV) * 0.02,
+        "time_in_w2": torch.randn(ahd, ahd, dtype=F32, device=DEV) * 0.02,
+        "mod_double": torch.randn(6 * ahd, ahd, dtype=F32, device=DEV) * 0.02,
+        "mod_single": torch.randn(3 * ahd, ahd, dtype=F32, device=DEV) * 0.02,
+    }
+    _, amod_single = compute_action_modulation(torch.full((1,), 0.5, device=DEV), amod_w, ahd)
+    atable = build_action_rope_table(num_action, axes_dim=AXES_DIM, theta=THETA, device=DEV)
+    aattn = _real_attn(num_action, total, 1, ctx, prefill_kv=True)
+    a_in = _own(torch.randn(num_action, ahd, dtype=FP16, device=DEV))
+
+    aouts = {}
+    a_l2_in = _own(torch.zeros(num_action, aaw + amh, dtype=FP16, device=DEV))
+    for name, w, merged in (("split", a_split, False), ("merged", a_merged, True)):
+        action_x = _own(a_in.clone())
+        proj = _own(torch.zeros(num_action, ahd, dtype=FP16, device=DEV))
+        bufs = {
+            "action_hidden": action_x.data_ptr(),
+            "action_modded": _own(torch.zeros(num_action, ahd, dtype=FP16, device=DEV)).data_ptr(),
+            "action_linear1_merged": _own(torch.zeros(num_action, 3 * aaw + 2 * amh, dtype=FP16, device=DEV)).data_ptr(),
+            "action_linear2_in": a_l2_in.data_ptr(),
+            "action_mlp_gated": _own(torch.zeros(num_action, amh, dtype=FP16, device=DEV)).data_ptr(),
+            "action_proj_scratch": proj.data_ptr(),
+            "action_proj_scratch2": _own(torch.zeros(num_action, ahd, dtype=FP16, device=DEV)).data_ptr(),
+        }
+        dims = dict(action_hidden_dim=ahd, action_attn_width=aaw, HD=HD, NH=NH, action_mlp_hidden=amh,
+                    x0=R["x0"], a0=a0, total=total, num_action=num_action, merge_qkv_mlp=True,
+                    merge_linear2=merged)
+        _action_single_layer(ctx, fvk, gemm, bufs, w, dims, 0, 0, 0, aattn, amod_single, atable.data_ptr())
+        torch.cuda.synchronize()
+        aouts[name] = (proj.clone(), action_x.clone())
+    aproj_st = _diff_stats(aouts["merged"][0], aouts["split"][0])
+    aout_st = _diff_stats(aouts["merged"][1], aouts["split"][1])
+    print(f"action single (M={num_action}) merged vs split linear2: proj {_fmt(aproj_st)}")
+    print(f"action single (M={num_action}) merged vs split linear2: layer output {_fmt(aout_st)}")
+    aref32 = a_l2_in.float() @ a_linear2.float()
+    print(f"action single proj rel_l2 vs fp32 reference: merged={_diff_stats(aouts['merged'][0], aref32)['rel_l2']:.3e} "
+          f"split={_diff_stats(aouts['split'][0], aref32)['rel_l2']:.3e}")
+    assert aproj_st["cos"] > 0.9999 and aout_st["cos"] > 0.9999
+
 
 if __name__ == "__main__":
     test_double_stream_layer_matches_real_reference()
     test_single_stream_layer_matches_real_reference()
     test_single_stream_layer_merged_linear1_matches_real_reference()
+    test_single_stream_layer_merged_linear2_matches_real_reference()
     test_action_double_and_single_layers_match_real_reference()
+    test_single_stream_linear2_merged_vs_split_real_shapes()
     print("PASS")

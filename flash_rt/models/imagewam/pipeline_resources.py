@@ -17,7 +17,12 @@ from typing import Protocol
 
 import torch
 
-from flash_rt.models.imagewam.quant_linear import Bf16OutLinear, Fp16Linear, Nvfp4Linear
+from flash_rt.models.imagewam.quant_linear import (
+    Bf16OutLinear,
+    Fp16Linear,
+    Nvfp4Linear,
+    _nvfp4_variant_index,
+)
 
 LINEAR_FP16 = 0
 LINEAR_BF16 = 1
@@ -45,23 +50,31 @@ def linear_resource(op: object) -> LinearResource:
     if isinstance(op, Bf16OutLinear):
         return LinearResource(LINEAR_BF16, op.n, op.k, op.weight_ptr)
     if isinstance(op, Nvfp4Linear):
-        from flash_rt.executors.fp4_utils import pick_variant
         if op.scratch is None:
             raise RuntimeError("Nvfp4Linear activation scratch is allocated on first call; capture first")
+        # The CUTLASS tile the op launches now (its (N, K) default, or the
+        # one gemm_variant_autotune measured), as the captured graph does.
         return LinearResource(LINEAR_NVFP4, op.n, op.k, op.w_quant["packed"].data_ptr(),
                               op.w_quant["sfb"].data_ptr(), op.scratch.packed.data_ptr(),
-                              op.scratch.sfa.data_ptr(), pick_variant(op.n, op.k))
+                              op.scratch.sfa.data_ptr(), _nvfp4_variant_index(op.variant))
     raise ValueError(f"the native pipeline does not support {type(op).__name__} weights")
 
 
 @dataclass(frozen=True)
 class AdaLNResource:
-    """fp16 shift/scale `(dim,)` and gate materialized to `(rows, dim)`
-    (`None` for the gate-less head), exactly as `_fuse_mod_group` builds them."""
+    """One AdaLN site. `shift`/`scale`: fp16 `(dim,)` and `gate`: fp16
+    materialized to `(rows, dim)`, exactly as `_fuse_mod_group` builds them
+    (unfused path, and the standalone AdaLN that starts each chain).
+    `*_f32`: the `(1, 1, dim)` FP32 modulation chunks the fused gated
+    residual + next AdaLN kernel reads (`dims["fuse_res_norm"]`). Gates are
+    `None` for the gate-less head."""
 
     shift: torch.Tensor
     scale: torch.Tensor
     gate: torch.Tensor | None
+    shift_f32: torch.Tensor
+    scale_f32: torch.Tensor
+    gate_f32: torch.Tensor | None
 
 
 @dataclass(frozen=True)
@@ -82,9 +95,13 @@ class DoubleLayerResource:
 
 @dataclass(frozen=True)
 class SingleLayerResource:
+    """With `dims["merge_linear2"]` only `linear2` is set, otherwise only
+    `attn_out_proj` and `mlp_down`."""
+
     linear1: LinearResource
-    attn_out_proj: LinearResource
-    mlp_down: LinearResource
+    attn_out_proj: LinearResource | None
+    mlp_down: LinearResource | None
+    linear2: LinearResource | None
     query_norm: int
     key_norm: int
 
@@ -128,6 +145,8 @@ class PipelineDims:
     action_num_double: int
     action_num_single: int
     num_steps: int
+    merge_linear2: bool
+    fuse_res_norm: bool
     eps: float
 
 
@@ -162,6 +181,8 @@ class PipelineBuffers:
     action_proj_scratch2: int
     action_mlp_merged: int
     action_mlp_gated: int
+    single_linear2_in: int
+    action_linear2_in: int
 
 
 @dataclass(frozen=True)

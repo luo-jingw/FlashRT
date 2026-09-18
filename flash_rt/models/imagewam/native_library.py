@@ -55,7 +55,9 @@ class ImageWAMLinear(ctypes.Structure):
 class ImageWAMAdaLN(ctypes.Structure):
     """`frt_imagewam_adaln`."""
 
-    _fields_ = [("shift", ctypes.c_void_p), ("scale", ctypes.c_void_p), ("gate", ctypes.c_void_p)]
+    _fields_ = [("shift", ctypes.c_void_p), ("scale", ctypes.c_void_p), ("gate", ctypes.c_void_p),
+                ("shift_f32", ctypes.c_void_p), ("scale_f32", ctypes.c_void_p),
+                ("gate_f32", ctypes.c_void_p)]
 
 
 class ImageWAMDoubleLayer(ctypes.Structure):
@@ -71,8 +73,8 @@ class ImageWAMSingleLayer(ctypes.Structure):
     """`frt_imagewam_single_layer`."""
 
     _fields_ = [("linear1", ImageWAMLinear), ("attn_out_proj", ImageWAMLinear),
-                ("mlp_down", ImageWAMLinear), ("query_norm", ctypes.c_void_p),
-                ("key_norm", ctypes.c_void_p)]
+                ("mlp_down", ImageWAMLinear), ("linear2", ImageWAMLinear),
+                ("query_norm", ctypes.c_void_p), ("key_norm", ctypes.c_void_p)]
 
 
 class ImageWAMActionDoubleLayer(ctypes.Structure):
@@ -95,6 +97,7 @@ PIPELINE_DIM_FIELDS = (
     "x0", "a0", "total", "num_action", "action_dim",
     "action_hidden_dim", "action_attn_width", "action_mlp_hidden",
     "num_double", "num_single", "action_num_double", "action_num_single", "num_steps",
+    "merge_linear2", "fuse_res_norm",
 )
 PIPELINE_BUFFER_FIELDS = (
     "context", "backbone_hidden", "img_raw", "modded_scratch",
@@ -103,6 +106,7 @@ PIPELINE_BUFFER_FIELDS = (
     "txt_mlp_merged", "txt_mlp_gated", "img_mlp_merged", "img_mlp_gated", "single_mlp_gated",
     "proj_scratch", "proj_scratch2", "action_latent", "action_hidden", "action_modded",
     "action_proj_scratch", "action_proj_scratch2", "action_mlp_merged", "action_mlp_gated",
+    "single_linear2_in", "action_linear2_in",
 )
 
 

@@ -13,19 +13,26 @@ ordered before the replay. Interface record: docs/imagewam_model_runtime.md.
 `io="python"` port schema, in port-index order (ports absent from a
 deployment are skipped, the rest keep this relative order):
 
-  images        IN   STAGED  IMAGE   u8    (2, 224, 224, 3)   [VAE loaded]
-  image_tokens  IN   SWAP    TENSOR  bf16  (img_len, HD)       img_raw
+  images        IN   STAGED  IMAGE   u8    (views, H, W, 3)   [VAE loaded]
+  image_tokens  IN   SWAP    TENSOR  bf16  (img_len, HD)       img_raw   [VAE outside the graph]
+  image_views   IN   SWAP    IMAGE   u8    (views, H, W, 3)   views_u8  [VAE inside the graph]
   proprio       IN   STAGED  STATE   f32   (proprio_dim,)      [proprio_dim set]
   noise         IN   SWAP    TENSOR  f32   (num_action, action_dim)  action_latent
   actions       OUT  STAGED  ACTION  f32   (num_action, action_dim)
   actions_raw   OUT  SWAP    TENSOR  f32   (num_action, action_dim)  action_latent
   prompt        IN   SETUP   TEXT    u8    (-1,)               [Qwen3 loaded]
 
+`(views, H, W)` is `(2, 224, 224)` when the VAE runs outside the graph
+and the frontend's `vae_graph_input` when it runs inside it; in that mode
+the graph writes `img_raw` itself, so `image_tokens` is replaced by the
+graph's uint8 view buffer.
+
 `noise` is the initial action latent consumed exactly as written; the
 graph integrates it in place, so the same window holds the normalized
 chunk (`actions_raw`) after `step`. It must be rewritten before every
-`step`. `infer()` writes `0.01 * N(0,1)` there (issues.md ISSUE-002); the
-ABI applies no scale.
+`step`. It is the ABI form of `infer(..., action_noise=...)`; with no
+`action_noise`, `infer()` writes `0.01 * N(0,1)` there (issues.md
+ISSUE-002). The ABI applies no scale.
 
 `io="native"` keeps `image_tokens`, `proprio`, `noise`, `actions` and
 `actions_raw` (same windows, `image_tokens` always required) and drops
@@ -49,9 +56,6 @@ from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSource, Imag
 from flash_rt.runtime import exec as frt_exec
 from flash_rt.runtime import export as frt_export
 
-VIEW_NAMES = ("view1", "view2")
-VIEW_HEIGHT = 224
-VIEW_WIDTH = 224
 PIXEL_RGB8 = 0
 
 STATUS_OK = 0
@@ -85,35 +89,40 @@ class ImageWAMPortLayout:
         return self.names.index(name)
 
 
-def decode_image_views(payload: bytes) -> list[torch.Tensor]:
-    """Decode an `frt_image_view[2]` payload into two `(224, 224, 3)` uint8
-    CPU tensors (host pixels are copied). Raises `ValueError` on any
-    geometry, format or size mismatch with the declared `images` port."""
+def view_names(num_views: int) -> list[str]:
+    """Camera view order of the `images` port: view1 (agent), view2 (wrist), ..."""
+    return [f"view{i + 1}" for i in range(num_views)]
+
+
+def decode_image_views(payload: bytes, view_shape: tuple[int, int, int]) -> list[torch.Tensor]:
+    """Decode an `frt_image_view[views]` payload into `views` `(H, W, 3)`
+    uint8 CPU tensors (host pixels are copied), `view_shape = (views, H, W)`.
+    Raises `ValueError` on any geometry, format or size mismatch with the
+    declared `images` port."""
+    num_views, height, width = view_shape
     view_size = ctypes.sizeof(FrtImageView)
-    if len(payload) != len(VIEW_NAMES) * view_size:
+    if len(payload) != num_views * view_size:
         raise ValueError(
-            f"images payload must be {len(VIEW_NAMES)} frt_image_view "
-            f"({len(VIEW_NAMES) * view_size} bytes), got {len(payload)} bytes")
-    views = (FrtImageView * len(VIEW_NAMES)).from_buffer_copy(payload)
-    row_bytes = VIEW_WIDTH * 3
+            f"images payload must be {num_views} frt_image_view "
+            f"({num_views * view_size} bytes), got {len(payload)} bytes")
+    views = (FrtImageView * num_views).from_buffer_copy(payload)
+    row_bytes = width * 3
     frames = []
     for i, view in enumerate(views):
         if view.struct_size != view_size:
             raise ValueError(f"images[{i}].struct_size={view.struct_size}, expected {view_size}")
         if view.pixel_format != PIXEL_RGB8:
             raise ValueError(f"images[{i}].pixel_format={view.pixel_format}, expected RGB8 ({PIXEL_RGB8})")
-        if (view.width, view.height) != (VIEW_WIDTH, VIEW_HEIGHT):
-            raise ValueError(
-                f"images[{i}] is {view.width}x{view.height}, expected {VIEW_WIDTH}x{VIEW_HEIGHT}")
+        if (view.width, view.height) != (width, height):
+            raise ValueError(f"images[{i}] is {view.width}x{view.height}, expected {width}x{height}")
         if view.stride_bytes < row_bytes:
             raise ValueError(f"images[{i}].stride_bytes={view.stride_bytes} < {row_bytes}")
-        needed = view.stride_bytes * (VIEW_HEIGHT - 1) + row_bytes
+        needed = view.stride_bytes * (height - 1) + row_bytes
         if view.bytes < needed or not view.data:
             raise ValueError(f"images[{i}] holds {view.bytes} bytes, needs {needed}")
         raw = np.frombuffer(ctypes.string_at(view.data, needed), dtype=np.uint8)
-        rows = np.lib.stride_tricks.as_strided(
-            raw, shape=(VIEW_HEIGHT, row_bytes), strides=(view.stride_bytes, 1))
-        frames.append(torch.from_numpy(np.ascontiguousarray(rows).reshape(VIEW_HEIGHT, VIEW_WIDTH, 3)))
+        rows = np.lib.stride_tricks.as_strided(raw, shape=(height, row_bytes), strides=(view.stride_bytes, 1))
+        frames.append(torch.from_numpy(np.ascontiguousarray(rows).reshape(height, width, 3)))
     return frames
 
 
@@ -140,8 +149,8 @@ class ImageWAMPythonVerbs:
         name = self._layout.names[port]
         with torch.cuda.stream(self._surface.stream):
             if name == "images":
-                view1, view2 = decode_image_views(payload)
-                self._source.stage_images(view1, view2)
+                frames = decode_image_views(payload, self._surface.view_shape)
+                self._source.stage_images(*frames)
                 return STATUS_OK
             if name == "proprio":
                 expected = self._surface.proprio_dim * 4
@@ -172,14 +181,19 @@ def _ports(surface: ImageWAMRuntimeSurface, windows: Mapping[str, frt_exec.Buffe
            io: str) -> list[frt_export.PortSpec]:
     chunk = (surface.num_action, surface.action_dim)
     staged_images = io == "python" and surface.has_vae
+    frame_shape = (*surface.view_shape, 3)
     ports = []
     if staged_images:
         ports.append(frt_export.PortSpec(
-            "images", "image", "u8", "nhwc", "in", "staged", required=True,
-            shape=(len(VIEW_NAMES), VIEW_HEIGHT, VIEW_WIDTH, 3)))
-    ports.append(frt_export.PortSpec(
-        "image_tokens", "tensor", "bf16", "flat", "in", "swap", required=not staged_images,
-        shape=(surface.img_len, surface.token_dim), buffer=windows["img_raw"]))
+            "images", "image", "u8", "nhwc", "in", "staged", required=True, shape=frame_shape))
+    if surface.views_u8 is None:
+        ports.append(frt_export.PortSpec(
+            "image_tokens", "tensor", "bf16", "flat", "in", "swap", required=not staged_images,
+            shape=(surface.img_len, surface.token_dim), buffer=windows["img_raw"]))
+    else:
+        ports.append(frt_export.PortSpec(
+            "image_views", "image", "u8", "nhwc", "in", "swap", shape=frame_shape,
+            buffer=windows["views_u8"]))
     if surface.proprio_dim is not None:
         ports.append(frt_export.PortSpec(
             "proprio", "state", "f32", "flat", "in", "staged", required=True,
@@ -206,7 +220,8 @@ def _identity(surface: ImageWAMRuntimeSurface, io: str, graph_producer: str,
     ident.update({
         "io": io,
         "graph_producer": graph_producer,
-        "views": ",".join(VIEW_NAMES) if surface.has_vae else "",
+        "views": ",".join(view_names(surface.view_shape[0])) if surface.has_vae else "",
+        "vae_in_graph": str(surface.views_u8 is not None),
         "has_vae": str(surface.has_vae),
         "has_text_encoder": str(surface.has_text_encoder),
         "proprio_dim": str(surface.proprio_dim),
@@ -238,6 +253,9 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
         raise ValueError("io='native' requires native=ImageWAMNativeRuntime with a graph "
                          "(use_graph or capture first)")
     surface = source.runtime_surface()
+    if io == "native" and surface.views_u8 is not None:
+        raise ValueError("io='native' needs the VAE outside the graph (vae_graph_input=None): the "
+                         "native face takes VAE tokens through image_tokens")
     ctx = frt_exec.Ctx()
     stream_handle = int(surface.stream.cuda_stream) if io == "python" else native.stream
     graph_exec = surface.graph_exec if io == "python" else native.graph_exec
@@ -254,12 +272,15 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
         "context": wrap("context", surface.context),
         "action_latent": wrap("action_latent", surface.action_latent),
     }
+    if surface.views_u8 is not None:
+        windows["views_u8"] = wrap("views_u8", surface.views_u8)
     ports = _ports(surface, windows, io)
     manifest = {
         "io": io,
         "graph_producer": graph_producer,
         "stage_plan": {"name": "full", "stages": [{"name": "infer", "graph": "infer", "after": []}]},
-        "image_views": list(VIEW_NAMES) if (io == "python" and surface.has_vae) else [],
+        "image_views": view_names(surface.view_shape[0]) if (io == "python" and surface.has_vae) else [],
+        "vae_in_graph": surface.views_u8 is not None,
         "noise": {
             "window": "action_latent",
             "consumed_as_written": True,
@@ -278,7 +299,8 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
             frt_export.BufferSpec("img_raw", windows["img_raw"], "input"),
             frt_export.BufferSpec("context", windows["context"], ("input", "state")),
             frt_export.BufferSpec("action_latent", windows["action_latent"], ("input", "output")),
-        ],
+        ] + ([frt_export.BufferSpec("views_u8", windows["views_u8"], "input")]
+             if "views_u8" in windows else []),
         regions=[frt_export.RegionSpec("rollout_boundary", windows["action_latent"])],
         ports=ports,
         stages=[frt_export.StageSpec("infer")],

@@ -8,6 +8,7 @@
 #include "decoder_fused.cuh"
 #include "elementwise.cuh"
 #include "fp4_linear.h"
+#include "fusion.cuh"
 #include "gemm_runner.h"
 #include "norm.cuh"
 #include "rope.cuh"
@@ -47,8 +48,14 @@ bool valid_linear(const frt_imagewam_linear& l) {
            l.act_packed && l.act_scales && l.fp4_variant >= 0;
 }
 
-bool valid_adaln(const frt_imagewam_adaln& a, bool gate) {
-    return a.shift && a.scale && (!gate || a.gate);
+// fp16 shift/scale always (a standalone AdaLN starts each chain); the
+// gate in the form the selected residual kernel reads; fp32 shift/scale
+// when the site is a fused AdaLN target.
+bool valid_adaln(const frt_imagewam_adaln& a, bool gate, bool fused) {
+    if (!a.shift || !a.scale) return false;
+    if (fused && (!a.shift_f32 || !a.scale_f32)) return false;
+    if (gate && !(fused ? static_cast<const void*>(a.gate_f32) : a.gate)) return false;
+    return true;
 }
 
 void check_launch(const char* what) {
@@ -92,10 +99,15 @@ std::unique_ptr<NativePipeline> NativePipeline::create(const frt_imagewam_pipeli
             return nullptr;
         }
     }
+    const bool fused = c.fuse_res_norm != 0;
+    if (c.merge_linear2 && (!c.single_linear2_in || !c.action_linear2_in)) {
+        *error = "merge_linear2 needs single_linear2_in and action_linear2_in";
+        return nullptr;
+    }
     if (!valid_linear(c.txt_in) || !valid_linear(c.img_in) || !valid_linear(c.action_encoder) ||
-        !valid_linear(c.head_linear) || !valid_adaln(c.txt_mod1, true) ||
-        !valid_adaln(c.txt_mod2, true) || !valid_adaln(c.img_mod1, true) ||
-        !valid_adaln(c.img_mod2, true) || !valid_adaln(c.single_mod, true)) {
+        !valid_linear(c.head_linear) || !valid_adaln(c.txt_mod1, true, fused) ||
+        !valid_adaln(c.txt_mod2, true, fused) || !valid_adaln(c.img_mod1, true, fused) ||
+        !valid_adaln(c.img_mod2, true, fused) || !valid_adaln(c.single_mod, true, fused)) {
         *error = "frt_imagewam_pipeline_config has an invalid shared weight or modulation";
         return nullptr;
     }
@@ -134,8 +146,10 @@ std::unique_ptr<NativePipeline> NativePipeline::create(const frt_imagewam_pipeli
     }
     for (const auto* table : {&p->single_layers_, &p->action_single_layers_}) {
         for (const auto& l : *table) {
-            if (!valid_linear(l.linear1) || !valid_linear(l.attn_out_proj) ||
-                !valid_linear(l.mlp_down) || !l.query_norm || !l.key_norm) {
+            const bool outputs = c.merge_linear2
+                                     ? valid_linear(l.linear2)
+                                     : valid_linear(l.attn_out_proj) && valid_linear(l.mlp_down);
+            if (!valid_linear(l.linear1) || !outputs || !l.query_norm || !l.key_norm) {
                 *error = "invalid single-stream layer";
                 return nullptr;
             }
@@ -149,8 +163,8 @@ std::unique_ptr<NativePipeline> NativePipeline::create(const frt_imagewam_pipeli
         }
     }
     for (const auto& s : p->steps_) {
-        if (!valid_adaln(s.double1, true) || !valid_adaln(s.double2, true) ||
-            !valid_adaln(s.single, true) || !valid_adaln(s.head, false)) {
+        if (!valid_adaln(s.double1, true, fused) || !valid_adaln(s.double2, true, fused) ||
+            !valid_adaln(s.single, true, fused) || !valid_adaln(s.head, false, fused)) {
             *error = "invalid action step modulation";
             return nullptr;
         }
@@ -196,8 +210,13 @@ void NativePipeline::collect_gemm_shapes() {
             add_gemm_shape(*w, img_len);
     }
     for (const auto& l : single_layers_) {
-        for (const frt_imagewam_linear* w : {&l.linear1, &l.attn_out_proj, &l.mlp_down})
-            add_gemm_shape(*w, c_.a0);
+        add_gemm_shape(l.linear1, c_.a0);
+        if (c_.merge_linear2) {
+            add_gemm_shape(l.linear2, c_.a0);
+        } else {
+            add_gemm_shape(l.attn_out_proj, c_.a0);
+            add_gemm_shape(l.mlp_down, c_.a0);
+        }
     }
     add_gemm_shape(c_.action_encoder, c_.num_action);
     add_gemm_shape(c_.head_linear, c_.num_action);
@@ -206,8 +225,13 @@ void NativePipeline::collect_gemm_shapes() {
             add_gemm_shape(*w, c_.num_action);
     }
     for (const auto& l : action_single_layers_) {
-        for (const frt_imagewam_linear* w : {&l.linear1, &l.attn_out_proj, &l.mlp_down})
-            add_gemm_shape(*w, c_.num_action);
+        add_gemm_shape(l.linear1, c_.num_action);
+        if (c_.merge_linear2) {
+            add_gemm_shape(l.linear2, c_.num_action);
+        } else {
+            add_gemm_shape(l.attn_out_proj, c_.num_action);
+            add_gemm_shape(l.mlp_down, c_.num_action);
+        }
     }
 }
 
@@ -266,33 +290,86 @@ void NativePipeline::attention(void* q_out, int layer, int q_rows, int kv_rows,
                                c_.head_dim, c_.attn_scale, stream);
 }
 
-void NativePipeline::double_layer(int i, cudaStream_t s) {
+void NativePipeline::gated_residual(const void* proj, const frt_imagewam_adaln& mod,
+                                    void* residual, int rows, int dim, bool bf16_residual,
+                                    const NextNorm& next, cudaStream_t s) {
+    if (c_.fuse_res_norm) {
+        const float* scale = next.out ? next.scale : nullptr;
+        const float* shift = next.out ? next.shift : nullptr;
+        if (bf16_residual) {
+            gate_res_ada_layer_norm_bf16res(h(proj), mod.gate_f32, bm(residual), scale, shift,
+                                            hm(next.out), rows, dim, c_.eps, s);
+        } else {
+            gate_res_ada_layer_norm_fp16(h(proj), mod.gate_f32, hm(residual), scale, shift,
+                                         hm(next.out), rows, dim, c_.eps, s);
+        }
+        return;
+    }
+    if (bf16_residual) {
+        gate_res_bf16res(h(proj), h(mod.gate), bm(residual), rows * dim, s);
+    } else {
+        gate_res_fp16(h(proj), h(mod.gate), hm(residual), rows * dim, s);
+    }
+}
+
+void NativePipeline::single_output(const frt_imagewam_single_layer& w, void* attn_out,
+                                   int attn_width, void* linear2_in, void* mlp_gated,
+                                   int mlp_hidden, void* out, void* out2, int rows, int out_dim,
+                                   cudaStream_t s) {
+    if (c_.merge_linear2) {
+        // pipeline_thor: _copy_slice(linear2_in, attn_out, dst_row_stride=width), then ONE GEMM.
+        const size_t row_bytes = size_t(attn_width) * 2;
+        const cudaError_t rc = cudaMemcpy2DAsync(linear2_in, size_t(attn_width + mlp_hidden) * 2,
+                                                 attn_out, row_bytes, row_bytes, size_t(rows),
+                                                 cudaMemcpyDeviceToDevice, s);
+        if (rc != cudaSuccess) {
+            throw std::runtime_error(std::string("linear2 input copy: ") + cudaGetErrorString(rc));
+        }
+        linear(w.linear2, linear2_in, out, rows, s);
+        return;
+    }
+    linear(w.attn_out_proj, attn_out, out, rows, s);
+    linear(w.mlp_down, mlp_gated, out2, rows, s);
+    residual_add_fp16(hm(out), h(out2), rows * out_dim, s);
+}
+
+void NativePipeline::double_layer(int i, cudaStream_t s) { double_block(i, false, {}, {}, s); }
+
+void NativePipeline::single_layer(int i, cudaStream_t s) { single_block(i, false, {}, s); }
+
+void NativePipeline::double_block(int i, bool input_normed, const NextNorm& next_txt,
+                                  const NextNorm& next_img, cudaStream_t s) {
     const frt_imagewam_double_layer& w = double_layers_.at(i);
     const int hidden = c_.hidden, x0 = c_.x0, a0 = c_.a0, img_len = a0 - x0;
     const int nh = c_.num_heads, hd = c_.head_dim;
     const float eps = c_.eps;
+    const bool fuse = c_.fuse_res_norm != 0;
     void* combined = c_.backbone_hidden;
     void* modded = c_.modded_scratch;
     void* q = c_.q_o;
     void* k = k_layer(i);
     void* v = v_layer(i);
+    void* img_x = row_offset(combined, x0, hidden);
+    void* img_modded = row_offset(modded, x0, hidden);
+    void* img_q = row_offset(q, x0, hidden);
+    void* img_k = row_offset(k, x0, hidden);
+    void* img_v = row_offset(v, x0, hidden);
 
     // text stream: rows [0, x0) of the persistent bf16 residual
-    ada_layer_norm_bf16in_fp16out(bm(combined), h(c_.txt_mod1.scale), h(c_.txt_mod1.shift),
-                                  hm(modded), x0, hidden, eps, s);
+    if (!input_normed) {
+        ada_layer_norm_bf16in_fp16out(bm(combined), h(c_.txt_mod1.scale), h(c_.txt_mod1.shift),
+                                      hm(modded), x0, hidden, eps, s);
+    }
     linear(w.txt_qkv, modded, c_.txt_qkv_merged, x0, s);
     copy_qkv(c_.txt_qkv_merged, 3 * hidden, x0, hidden, q, k, v, s);
     rms_norm_fp16(h(q), h(w.txt_query_norm), hm(q), x0 * nh, hd, eps, s);
     rms_norm_fp16(h(k), h(w.txt_key_norm), hm(k), x0 * nh, hd, eps, s);
 
     // image stream: rows [x0, a0)
-    void* img_x = row_offset(combined, x0, hidden);
-    void* img_modded = row_offset(modded, x0, hidden);
-    void* img_q = row_offset(q, x0, hidden);
-    void* img_k = row_offset(k, x0, hidden);
-    void* img_v = row_offset(v, x0, hidden);
-    ada_layer_norm_bf16in_fp16out(bm(img_x), h(c_.img_mod1.scale), h(c_.img_mod1.shift),
-                                  hm(img_modded), img_len, hidden, eps, s);
+    if (!input_normed) {
+        ada_layer_norm_bf16in_fp16out(bm(img_x), h(c_.img_mod1.scale), h(c_.img_mod1.shift),
+                                      hm(img_modded), img_len, hidden, eps, s);
+    }
     linear(w.img_qkv, img_modded, c_.img_qkv_merged, img_len, s);
     copy_qkv(c_.img_qkv_merged, 3 * hidden, img_len, hidden, img_q, img_k, img_v, s);
     rms_norm_fp16(h(img_q), h(w.img_query_norm), hm(img_q), img_len * nh, hd, eps, s);
@@ -303,32 +380,40 @@ void NativePipeline::double_layer(int i, cudaStream_t s) {
     attention(q, i, a0, a0, s);
 
     void* proj = c_.proj_scratch;
-    linear(w.txt_proj, q, proj, x0, s);
-    gate_res_bf16res(h(proj), h(c_.txt_mod1.gate), bm(combined), x0 * hidden, s);
     void* img_proj = row_offset(proj, x0, hidden);
+    const NextNorm txt_norm2{c_.txt_mod2.shift_f32, c_.txt_mod2.scale_f32, modded};
+    const NextNorm img_norm2{c_.img_mod2.shift_f32, c_.img_mod2.scale_f32, img_modded};
+    linear(w.txt_proj, q, proj, x0, s);
+    gated_residual(proj, c_.txt_mod1, combined, x0, hidden, true, txt_norm2, s);
     linear(w.img_proj, img_q, img_proj, img_len, s);
-    gate_res_bf16res(h(img_proj), h(c_.img_mod1.gate), bm(img_x), img_len * hidden, s);
+    gated_residual(img_proj, c_.img_mod1, img_x, img_len, hidden, true, img_norm2, s);
 
-    ada_layer_norm_bf16in_fp16out(bm(combined), h(c_.txt_mod2.scale), h(c_.txt_mod2.shift),
-                                  hm(modded), x0, hidden, eps, s);
+    if (!fuse) {
+        ada_layer_norm_bf16in_fp16out(bm(combined), h(c_.txt_mod2.scale), h(c_.txt_mod2.shift),
+                                      hm(modded), x0, hidden, eps, s);
+    }
     mlp_gate_up(w.txt_mlp0, modded, c_.txt_mlp_merged, c_.txt_mlp_gated, x0, c_.mlp_hidden, s);
     linear(w.txt_mlp2, c_.txt_mlp_gated, proj, x0, s);
-    gate_res_bf16res(h(proj), h(c_.txt_mod2.gate), bm(combined), x0 * hidden, s);
+    gated_residual(proj, c_.txt_mod2, combined, x0, hidden, true, next_txt, s);
 
-    ada_layer_norm_bf16in_fp16out(bm(img_x), h(c_.img_mod2.scale), h(c_.img_mod2.shift),
-                                  hm(img_modded), img_len, hidden, eps, s);
+    if (!fuse) {
+        ada_layer_norm_bf16in_fp16out(bm(img_x), h(c_.img_mod2.scale), h(c_.img_mod2.shift),
+                                      hm(img_modded), img_len, hidden, eps, s);
+    }
     mlp_gate_up(w.img_mlp0, img_modded, c_.img_mlp_merged, c_.img_mlp_gated, img_len,
                 c_.mlp_hidden, s);
     linear(w.img_mlp2, c_.img_mlp_gated, img_proj, img_len, s);
-    gate_res_bf16res(h(img_proj), h(c_.img_mod2.gate), bm(img_x), img_len * hidden, s);
+    gated_residual(img_proj, c_.img_mod2, img_x, img_len, hidden, true, next_img, s);
     check_launch("double-stream layer");
 }
 
-void NativePipeline::single_layer(int i, cudaStream_t s) {
+void NativePipeline::single_block(int i, bool input_normed, const NextNorm& next,
+                                  cudaStream_t s) {
     const frt_imagewam_single_layer& w = single_layers_.at(i);
     const int site = c_.num_double + i;
     const int hidden = c_.hidden, a0 = c_.a0, nh = c_.num_heads, hd = c_.head_dim;
-    const int linear1_width = 3 * hidden + 2 * c_.mlp_hidden;
+    const int mlp_hidden = c_.mlp_hidden;
+    const int linear1_width = 3 * hidden + 2 * mlp_hidden;
     const float eps = c_.eps;
     void* combined = c_.backbone_hidden;
     void* modded = c_.modded_scratch;
@@ -336,34 +421,62 @@ void NativePipeline::single_layer(int i, cudaStream_t s) {
     void* k = k_layer(site);
     void* v = v_layer(site);
 
-    ada_layer_norm_bf16in_fp16out(bm(combined), h(c_.single_mod.scale), h(c_.single_mod.shift),
-                                  hm(modded), a0, hidden, eps, s);
+    if (!input_normed) {
+        ada_layer_norm_bf16in_fp16out(bm(combined), h(c_.single_mod.scale),
+                                      h(c_.single_mod.shift), hm(modded), a0, hidden, eps, s);
+    }
     linear(w.linear1, modded, c_.single_linear1_merged, a0, s);
     copy_qkv(c_.single_linear1_merged, linear1_width, a0, hidden, q, k, v, s);
-    silu_glu_merged_fp16(h(c_.single_linear1_merged) + 3 * hidden, hm(c_.single_mlp_gated), a0,
-                         c_.mlp_hidden, s, linear1_width);
+    if (c_.merge_linear2) {
+        silu_glu_merged_fp16(h(c_.single_linear1_merged) + 3 * hidden,
+                             hm(c_.single_linear2_in) + hidden, a0, mlp_hidden, s, linear1_width,
+                             hidden + mlp_hidden);
+    } else {
+        silu_glu_merged_fp16(h(c_.single_linear1_merged) + 3 * hidden, hm(c_.single_mlp_gated),
+                             a0, mlp_hidden, s, linear1_width);
+    }
     rms_norm_fp16(h(q), h(w.query_norm), hm(q), a0 * nh, hd, eps, s);
     rms_norm_fp16(h(k), h(w.key_norm), hm(k), a0 * nh, hd, eps, s);
     rope_apply_fp16_perhead(hm(q), h(c_.rope_table), a0, nh, hd, s);
     rope_apply_fp16_perhead(hm(k), h(c_.rope_table), a0, nh, hd, s);
     attention(q, site, a0, a0, s);
 
-    linear(w.attn_out_proj, q, c_.proj_scratch, a0, s);
-    linear(w.mlp_down, c_.single_mlp_gated, c_.proj_scratch2, a0, s);
-    residual_add_fp16(hm(c_.proj_scratch), h(c_.proj_scratch2), a0 * hidden, s);
-    gate_res_bf16res(h(c_.proj_scratch), h(c_.single_mod.gate), bm(combined), a0 * hidden, s);
+    single_output(w, q, hidden, c_.single_linear2_in, c_.single_mlp_gated, mlp_hidden,
+                  c_.proj_scratch, c_.proj_scratch2, a0, hidden, s);
+    gated_residual(c_.proj_scratch, c_.single_mod, combined, a0, hidden, true, next, s);
     check_launch("single-stream layer");
 }
 
 void NativePipeline::prefill(cudaStream_t s) {
     const int img_len = c_.a0 - c_.x0;
+    const bool fuse = c_.fuse_res_norm != 0;
+    const int nd = c_.num_double, ns = c_.num_single;
+    void* modded = c_.modded_scratch;
+    void* img_modded = row_offset(modded, c_.x0, c_.hidden);
     linear(c_.txt_in, c_.context, c_.backbone_hidden, c_.x0, s);
     linear(c_.img_in, c_.img_raw, row_offset(c_.backbone_hidden, c_.x0, c_.hidden), img_len, s);
-    for (int i = 0; i < c_.num_double; ++i) double_layer(i, s);
-    for (int i = 0; i < c_.num_single; ++i) single_layer(i, s);
+    // pipeline_thor.imagewam_prefill's AdaLN chain (fuse_res_norm): each
+    // block's last gated residual writes the next block's AdaLN.
+    for (int i = 0; i < nd; ++i) {
+        NextNorm next_txt, next_img;
+        if (fuse && i + 1 < nd) {
+            next_txt = {c_.txt_mod1.shift_f32, c_.txt_mod1.scale_f32, modded};
+            next_img = {c_.img_mod1.shift_f32, c_.img_mod1.scale_f32, img_modded};
+        } else if (fuse && ns > 0) {
+            next_txt = {c_.single_mod.shift_f32, c_.single_mod.scale_f32, modded};
+            next_img = {c_.single_mod.shift_f32, c_.single_mod.scale_f32, img_modded};
+        }
+        double_block(i, fuse && i > 0, next_txt, next_img, s);
+    }
+    for (int i = 0; i < ns; ++i) {
+        NextNorm next;
+        if (fuse && i + 1 < ns) next = {c_.single_mod.shift_f32, c_.single_mod.scale_f32, modded};
+        single_block(i, fuse && (nd > 0 || i > 0), next, s);
+    }
 }
 
-void NativePipeline::action_double_layer(int i, const frt_imagewam_action_step& mods,
+void NativePipeline::action_double_block(int i, const frt_imagewam_action_step& mods,
+                                         bool input_normed, const NextNorm& next,
                                          cudaStream_t s) {
     const frt_imagewam_action_double_layer& w = action_double_layers_.at(i);
     const int ahd = c_.action_hidden_dim, aaw = c_.action_attn_width, na = c_.num_action;
@@ -375,8 +488,10 @@ void NativePipeline::action_double_layer(int i, const frt_imagewam_action_step& 
     void* ak = row_offset(k_layer(i), c_.a0, aaw);
     void* av = row_offset(v_layer(i), c_.a0, aaw);
 
-    ada_layer_norm_fp16(h(x), h(mods.double1.scale), h(mods.double1.shift), hm(modded), na, ahd,
-                        eps, s);
+    if (!input_normed) {
+        ada_layer_norm_fp16(h(x), h(mods.double1.scale), h(mods.double1.shift), hm(modded), na,
+                            ahd, eps, s);
+    }
     linear(w.qkv, modded, c_.action_qkv_merged, na, s);
     copy_qkv(c_.action_qkv_merged, 3 * aaw, na, aaw, aq, ak, av, s);
     rms_norm_fp16(h(aq), h(w.query_norm), hm(aq), na * nh, hd, eps, s);
@@ -387,23 +502,27 @@ void NativePipeline::action_double_layer(int i, const frt_imagewam_action_step& 
 
     void* proj = c_.action_proj_scratch;
     linear(w.proj, aq, proj, na, s);
-    gate_res_fp16(h(proj), h(mods.double1.gate), hm(x), na * ahd, s);
-    ada_layer_norm_fp16(h(x), h(mods.double2.scale), h(mods.double2.shift), hm(modded), na, ahd,
-                        eps, s);
+    gated_residual(proj, mods.double1, x, na, ahd, false,
+                   {mods.double2.shift_f32, mods.double2.scale_f32, modded}, s);
+    if (!c_.fuse_res_norm) {
+        ada_layer_norm_fp16(h(x), h(mods.double2.scale), h(mods.double2.shift), hm(modded), na,
+                            ahd, eps, s);
+    }
     mlp_gate_up(w.mlp0, modded, c_.action_mlp_merged, c_.action_mlp_gated, na,
                 c_.action_mlp_hidden, s);
     linear(w.mlp2, c_.action_mlp_gated, proj, na, s);
-    gate_res_fp16(h(proj), h(mods.double2.gate), hm(x), na * ahd, s);
+    gated_residual(proj, mods.double2, x, na, ahd, false, next, s);
     check_launch("action double-stream layer");
 }
 
-void NativePipeline::action_single_layer(int i, const frt_imagewam_action_step& mods,
+void NativePipeline::action_single_block(int i, const frt_imagewam_action_step& mods,
+                                         bool input_normed, const NextNorm& next,
                                          cudaStream_t s) {
     const frt_imagewam_single_layer& w = action_single_layers_.at(i);
     const int site = c_.action_num_double + i;
     const int ahd = c_.action_hidden_dim, aaw = c_.action_attn_width, na = c_.num_action;
-    const int nh = c_.num_heads, hd = c_.head_dim;
-    const int linear1_width = 3 * aaw + 2 * c_.action_mlp_hidden;
+    const int nh = c_.num_heads, hd = c_.head_dim, amh = c_.action_mlp_hidden;
+    const int linear1_width = 3 * aaw + 2 * amh;
     const float eps = c_.eps;
     void* x = c_.action_hidden;
     void* modded = c_.action_modded;
@@ -411,38 +530,67 @@ void NativePipeline::action_single_layer(int i, const frt_imagewam_action_step& 
     void* ak = row_offset(k_layer(site), c_.a0, aaw);
     void* av = row_offset(v_layer(site), c_.a0, aaw);
 
-    ada_layer_norm_fp16(h(x), h(mods.single.scale), h(mods.single.shift), hm(modded), na, ahd, eps,
-                        s);
+    if (!input_normed) {
+        ada_layer_norm_fp16(h(x), h(mods.single.scale), h(mods.single.shift), hm(modded), na, ahd,
+                            eps, s);
+    }
     linear(w.linear1, modded, c_.action_linear1_merged, na, s);
     copy_qkv(c_.action_linear1_merged, linear1_width, na, aaw, aq, ak, av, s);
-    silu_glu_merged_fp16(h(c_.action_linear1_merged) + 3 * aaw, hm(c_.action_mlp_gated), na,
-                         c_.action_mlp_hidden, s, linear1_width);
+    if (c_.merge_linear2) {
+        silu_glu_merged_fp16(h(c_.action_linear1_merged) + 3 * aaw,
+                             hm(c_.action_linear2_in) + aaw, na, amh, s, linear1_width, aaw + amh);
+    } else {
+        silu_glu_merged_fp16(h(c_.action_linear1_merged) + 3 * aaw, hm(c_.action_mlp_gated), na,
+                             amh, s, linear1_width);
+    }
     rms_norm_fp16(h(aq), h(w.query_norm), hm(aq), na * nh, hd, eps, s);
     rms_norm_fp16(h(ak), h(w.key_norm), hm(ak), na * nh, hd, eps, s);
     rope_apply_fp16_perhead(hm(aq), h(c_.action_rope_table), na, nh, hd, s);
     rope_apply_fp16_perhead(hm(ak), h(c_.action_rope_table), na, nh, hd, s);
     attention(aq, site, na, c_.total, s);
 
-    linear(w.attn_out_proj, aq, c_.action_proj_scratch, na, s);
-    linear(w.mlp_down, c_.action_mlp_gated, c_.action_proj_scratch2, na, s);
-    residual_add_fp16(hm(c_.action_proj_scratch), h(c_.action_proj_scratch2), na * ahd, s);
-    gate_res_fp16(h(c_.action_proj_scratch), h(mods.single.gate), hm(x), na * ahd, s);
+    single_output(w, aq, aaw, c_.action_linear2_in, c_.action_mlp_gated, amh,
+                  c_.action_proj_scratch, c_.action_proj_scratch2, na, ahd, s);
+    gated_residual(c_.action_proj_scratch, mods.single, x, na, ahd, false, next, s);
     check_launch("action single-stream layer");
 }
 
 void NativePipeline::denoise_step(int step, cudaStream_t s) {
     const frt_imagewam_action_step& mods = steps_.at(step);
     const int na = c_.num_action, ad = c_.action_dim, ahd = c_.action_hidden_dim;
+    const bool fuse = c_.fuse_res_norm != 0;
+    const int nd = c_.action_num_double, ns = c_.action_num_single;
+    void* modded = c_.action_modded;
 
     gpu_cast_fp32_to_fp16(static_cast<const float*>(c_.action_latent), hm(c_.action_latent_fp16),
                           na * ad, s);
     linear(c_.action_encoder, c_.action_latent_fp16, c_.action_hidden, na, s);
     add_bias_fp16(hm(c_.action_hidden), h(c_.action_encoder_bias), na, ahd, s);
-    for (int i = 0; i < c_.action_num_double; ++i) action_double_layer(i, mods, s);
-    for (int i = 0; i < c_.action_num_single; ++i) action_single_layer(i, mods, s);
-
-    ada_layer_norm_fp16(h(c_.action_hidden), h(mods.head.scale), h(mods.head.shift),
-                        hm(c_.head_modded), na, ahd, c_.eps, s);
+    // pipeline_thor.imagewam_denoise_step's chain: the last block writes the head's AdaLN.
+    const NextNorm head{mods.head.shift_f32, mods.head.scale_f32, c_.head_modded};
+    for (int i = 0; i < nd; ++i) {
+        NextNorm next;
+        if (fuse) {
+            if (i + 1 < nd) {
+                next = {mods.double1.shift_f32, mods.double1.scale_f32, modded};
+            } else if (ns > 0) {
+                next = {mods.single.shift_f32, mods.single.scale_f32, modded};
+            } else {
+                next = head;
+            }
+        }
+        action_double_block(i, mods, fuse && i > 0, next, s);
+    }
+    for (int i = 0; i < ns; ++i) {
+        NextNorm next;
+        if (fuse) next = i + 1 < ns ? NextNorm{mods.single.shift_f32, mods.single.scale_f32, modded}
+                                    : head;
+        action_single_block(i, mods, fuse && (nd > 0 || i > 0), next, s);
+    }
+    if (!(fuse && nd + ns > 0)) {
+        ada_layer_norm_fp16(h(c_.action_hidden), h(mods.head.scale), h(mods.head.shift),
+                            hm(c_.head_modded), na, ahd, c_.eps, s);
+    }
     linear(c_.head_linear, c_.head_modded, c_.velocity, na, s);
     gpu_euler_step(static_cast<float*>(c_.action_latent), h(c_.velocity), na, ad, mods.delta, 0,
                    s);

@@ -38,6 +38,12 @@ class ImageWAMRuntimeSurface:
     - `state_scale` / `state_offset` / `action_scale` / `action_offset`:
       f32 min/max normalization constants from `dataset_stats.json`
       (`None` when not loaded).
+    - `view_shape`: `(views, H, W)` of the uint8 frames `stage_images`
+      takes: `(2, 224, 224)` with the VAE outside the graph, the
+      frontend's `vae_graph_input` with the VAE inside it.
+    - `views_u8`: the graph's `(views, H, W, 3)` uint8 view buffer when
+      the VAE runs inside the graph (the graph then writes `img_raw`
+      itself), else `None`.
     """
 
     graph_exec: int
@@ -63,6 +69,8 @@ class ImageWAMRuntimeSurface:
     state_offset: torch.Tensor | None
     action_scale: torch.Tensor | None
     action_offset: torch.Tensor | None
+    view_shape: tuple[int, int, int]
+    views_u8: torch.Tensor | None
 
 
 class ImageWAMRuntimeSource(Protocol):
@@ -71,7 +79,7 @@ class ImageWAMRuntimeSource(Protocol):
     def runtime_surface(self) -> ImageWAMRuntimeSurface:
         ...
 
-    def stage_images(self, view1: torch.Tensor, view2: torch.Tensor | None) -> None:
+    def stage_images(self, *views: torch.Tensor) -> None:
         ...
 
     def stage_proprio(self, proprio: np.ndarray) -> None:

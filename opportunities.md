@@ -4032,6 +4032,554 @@ Gate runs:
   the generator and runner.
 - ISSUE-061 (the 231.6 ms baseline has no clock or FA4 record).
 
+# OPT-018: ActionDiT small-M CUTLASS tile selection (roadmap item 1)
+
+Status: implemented behind an opt-in flag
+(`gemm_variant_autotune=True`). It passes the sm_110 compile check.
+Thor correctness and speed are not yet measured. Plan: plan.md "Plan:
+ActionDiT small-M CUTLASS tile selection".
+
+## Observation
+
+Every ActionDiT weight GEMM runs at `M = num_action = 64`, and both
+CUTLASS-backed quantized precisions pick their tile from an `(N, K)`
+heuristic tuned at other M. Tiles dispatched today at the real
+ActionDiT shapes (5 double + 20 single layers):
+
+| site | N | K | `nvfp4` (`pick_variant`) | `fp8_static_cutlass` (`_pick_fp8_cutlass_variant`) | `fp16_cutlass` |
+|---|---:|---:|---|---|---|
+| double `qkv` | 9216 | 1024 | v6 `128x256x128` c1x1x1 | `wide` `256x128x128` c2x2x1 | `wide` |
+| double `proj`, single `attn_out_proj` | 1024 | 3072 | v6 | `sq` `256x256x128` c2x2x1 | `sq` |
+| double `mlp0` | 8192 | 1024 | v6 | `wide` | SwiGLU pair, `256x256x64` c2x2x1, N=4096 |
+| double `mlp2`, single `mlp_down` | 1024 | 4096 | v6 | `sq` | `sq` |
+| single `linear1` | 17408 | 1024 | v8 `128x256x256` c1x1x1 | `wide` | split: `qkv` `wide` + SwiGLU pair |
+| `action_encoder` (K=7), `head.linear` (N=7) | | | cuBLASLt `Fp16Linear` (alignment fallback) | same | same |
+
+At M = 64, one M tile covers the whole problem, so the CTA count
+equals the number of N tiles. The `N = 1024` GEMMs make up 50 of the
+80 quantized ActionDiT GEMM calls per denoise step (500 per `infer()`).
+On Thor's 20 SMs they get 4
+CTAs under v6 and 4 useful CTA pairs under FP8 `sq`, while they are
+weight-bandwidth bound (2M = 128 FLOP per weight element). The SM100
+FP8 CUTLASS family had no tile narrower than 128 in N and no 1-SM
+tile at all. OPT-014 result 3 measured FP8 CUTLASS 1.44-1.68x slower
+than cuBLASLt at this M.
+
+## Mechanism
+
+- `GemmVariantTuner` (`flash_rt/models/imagewam/gemm_variant_tuner.py`)
+  works on each group of ActionDiT linears sharing `(family, M, N, K)`.
+  Candidates must reproduce the default tile's output on every member
+  (return code 0, no Python exception, finite, cosine >= 0.9999). A
+  stale `flash_rt_kernels` that lacks the `cutlass_fp8_t128x*` symbols
+  raises `AttributeError` for those candidates, which rejects them
+  without aborting construction. They are timed as one launch per
+  member, round robin, so every launch reads a different layer's
+  weight, inside CUDA graphs (`gemm_variant_timer.CudaGraphVariantTimer`)
+  and interleaved across candidates. A candidate the timer cannot
+  capture is rejected (`timing_failed`), and the caller's stream is
+  restored. A candidate replaces the default only if it is more than 2%
+  faster, and the default is kept if it could not be timed itself. The
+  choice is cached per `(family, M, N, K)` and applied before graph
+  capture.
+- NVFP4 candidates: every cluster-1x1x1 tile, v4, v5, v6, v7, v8, and
+  v10 `128x64x256` (Pi0.5's decoder tile). The clustered tiles are
+  excluded because Pi0.5 measured them winning in isolation and losing
+  in the pipeline on Thor.
+- FP8 CUTLASS candidates: `sq`, `wide`, `t1`, `plain`, plus four new
+  1-SM cluster-1x1x1 tiles (`gemm_types_sm100.h`, `sm100_small_m`):
+  `t128x64x256` (v10 shape), `t128x64x128`, `t128x128x128`, and
+  `t128x256x128`.
+- `ImageWAMTorchFrontendThor(gemm_variant_autotune=True)` is accepted
+  for `nvfp4` and `fp8_static_cutlass` only. Results are in
+  `frontend.gemm_variant_results`. Backbone GEMMs are not tuned. With
+  the flag off (the default), every tile is the one dispatched before
+  this change.
+
+## Local evidence (H100, sm_90)
+
+The SM100 CUTLASS and NVFP4 kernels do not run on sm_90, so every
+number below is about the mechanism, not about a tile.
+
+- `tests/test_imagewam_gemm_variant_tuner.py` (18 tests): the
+  selection rule against stub GEMMs. It covers argmin choice, the 2%
+  hysteresis, rejection on a nonzero return code, on a raised exception
+  (`AttributeError`) and on a candidate that cannot be timed, mismatch
+  (cosine 0.7987 in the test) and non-finite output, failure on one
+  member only, an error when the default itself fails or raises,
+  keeping an untimeable default, the cache, and a distinct M counting
+  as a distinct key. The timer test also feeds a raising batch and a
+  capture-invalidating batch; both come back as `None`, the good batch
+  is still timed, and the caller's stream is restored. The real-timer test runs on real cuBLASLt
+  launches (M=64, N=1024, K=3072, 6 weights): graph-timed 7.75 us per
+  launch against 11.30 us eager event-timed, so launch overhead is
+  excluded. A batch with 4x the work measured 3.62x.
+- `tests/test_imagewam_gemm_variant_routing.py` (7 tests): only the
+  GEMM entry points are replaced (the whole `flash_rt_fp4` module, and
+  the `cutlass_fp8_*` attributes). The real `Nvfp4Linear` /
+  `StaticFp8Linear`, frontend grouping, tuner, graph capture and
+  `infer()` run as shipped. For both precisions, each of the 5
+  ActionDiT shapes is tuned once at `M = num_action`, the chosen tile
+  reaches every ActionDiT GEMM in the captured graph, and the backbone
+  keeps its heuristic tile. Tuning leaves `StaticFp8Linear`'s
+  calibrate-before-call contract intact. With the flag off, no GEMM
+  launches at construction. With the `cutlass_fp8_t128x*` symbols
+  removed, which simulates a stale build, construction completes and
+  those candidates show `launch_failed AttributeError`.
+- `sm110_check.sh` (CUDA 13.0, `GPU_ARCH=110`): `flash_rt_kernels`
+  and `flash_rt_fp4` build and link, and the four
+  `cutlass_fp8_t128x*` symbols are exported.
+
+## Thor check
+
+`benchmarks/imagewam_thor_small_m_tile_sweep.py`:
+
+- `--part kernels`: every NVFP4 and FP8 CUTLASS tile at each real
+  ActionDiT shape (M=64), over as many distinct weights as layers
+  share the shape. Reports GEMM-only us/GEMM, cosine against the fp32
+  `x @ W`, the heuristic pick (`*`), the tuner pick (`T`), and the
+  per-shape winner, with cuBLASLt fp16 and cuBLASLt FP8 references on
+  the same weights.
+- `--part infer`: for `nvfp4` and `fp8_static_cutlass`, two graphs
+  captured from one frontend (ActionDiT on heuristic vs tuned tiles),
+  with action cosine on identical inputs and alternating `infer()`
+  P10/P50/P90.
+
+Expected: every tile other than the heuristic's shows cosine vs fp16
+equal to the heuristic's own within about 1e-4 (same quantized
+operands, different accumulation order). NVFP4 v10 or v5, and FP8
+`t128x64x*`, win at N = 1024. New-vs-old action cosine is at least
+0.9999.
+
+## Decision pending
+
+If Thor shows a correct `infer()` win, `gemm_variant_autotune` should
+become the default for `nvfp4`: a one-line change of the constructor
+default. If it shows no win, the heuristic stays, and the sweep table
+still says which tile to hardcode, if any. Split-K / stream-K for the
+`N = 1024` shapes (16 CTAs at most even with a 64-wide N tile) was not
+attempted.
+
+# OPT-019: attention-chain fusion recheck at ImageWAM's real shapes (roadmap item 6)
+
+Status: analysis done. The H100 numbers are indicative only, because a
+co-tenant training job shares the GPU. Two changes are implemented, and
+both are opt-in:
+
+- FA4 at the backbone site: `use_fa4=True`, or `FLASHRT_THOR_FA4=1`
+  with the default `use_fa4=None`.
+- FA4 at the `mot` site: `use_fa4_mot=True`.
+
+FA4 has run on Thor only at `a0 = 896` in the per-layer bench
+(OPT-005). It has not run at the served backbone shape (q = kv = 905,
+a partial last tile), at the `mot` shape (q = 64, kv = 969), inside the
+full captured graph with the real checkpoint, or end to end. The
+shipped `nvfp4` baseline of 231.6 ms was measured with FA4 off. Plan:
+plan.md "Plan: attention-chain fusion recheck at ImageWAM's real
+shapes".
+
+## Finding 1: FlashRT's `mot` call is unmasked; official masks padded text keys
+
+The frontend always runs `use_real_mot_mask=True`. At the `mot` site
+that dispatches unmasked attention: 64 action queries over all 969
+keys, 24 heads, HD 128, per-head K/V, through the same kernel as the
+backbone site. Official `infer_action_flux2` builds its mask with
+`_build_mot_attention_mask_flux2(target_len=0)`. `target_len = 0`
+removes only the region mask: there is no noisy-target block to
+exclude. The same builder then applies
+`mask[:, :, t0:r0] &= text_valid[:, None, :]`, with
+`text_attention_mask` passed at both the prefill call and the action
+call. So official excludes the padded text keys for every query row
+at both sites, while FlashRT attends to them at both sites (issues.md
+ISSUE-020).
+
+For a fused kernel:
+
+- A plain non-causal FA4 call reproduces what FlashRT computes today
+  at the `mot` site. That is what `use_fa4_mot` runs, and what the
+  dispatch tests compare against. It does not reproduce official.
+- Matching official needs the padded keys removed: a key mask, or,
+  since padded tokens are inert under the official mask, a context of
+  only the valid tokens (ISSUE-020, next experiment). Removing the
+  padding from the sequence keeps plain attention correct, so the
+  fused path stays a plain FA4 call.
+- The three-region `attention_qkv_fp16_mot_joint*` kernels serve only
+  the legacy `use_real_mot_mask=False` path.
+
+## Finding 2: attention share at the real shapes (H100, fp16, random weights)
+
+Measured as graph time with the real attention backend minus graph
+time with a backend that launches nothing, all else identical
+(`benchmarks/imagewam_attention_share_bench.py --part share`):
+
+| stage | with attention P50 | without P50 | attention | per call |
+|---|---:|---:|---:|---:|
+| prefill (25 backbone calls) | 23.160 ms | 16.869 ms | 6.29 ms (27.2%) | 252 us |
+| one denoise step (25 `mot` calls) | 3.520 ms | 2.126 ms | 1.39 ms (39.6%) | 56 us |
+| prefill + 10 steps | 58.36 ms | | 20.23 ms (34.7%) | |
+
+## Finding 3: per-call kernels at the real shapes (H100)
+
+Each call reads a different layer's K/V, round robin over 8 layers,
+CUDA-graph timed (`--part kernels`). Accuracy is against fp32
+PyTorch attention.
+
+| site | kernel | us/call | vs chain | cosine | rel_l2 |
+|---|---|---:|---:|---:|---:|
+| backbone q=kv=905 | cuBLAS chain (today) | 437.1 | 1.00x | 1.000000 | 5.5e-4 |
+| | SDPA flash (FA2) | 56.1 | 7.79x | 1.000000 | 2.8e-4 |
+| | SDPA cuDNN | 39.2 | 11.15x | 1.000000 | 2.8e-4 |
+| | SDPA mem-efficient | 176.2 | 2.48x | 1.000000 | 2.8e-4 |
+| mot q=64, kv=969 | cuBLAS chain (today) | 42.3 | 1.00x | 1.000000 | 5.5e-4 |
+| | SDPA flash (FA2) | 15.8 | 2.68x | 1.000000 | 2.7e-4 |
+| | SDPA cuDNN | 22.0 | 1.93x | 1.000000 | 2.8e-4 |
+| | SDPA mem-efficient | 44.1 | 0.96x | 1.000000 | 2.8e-4 |
+
+The chain's per-call cost here (437 us) is higher than its in-graph
+cost in Finding 2 (252 us). Both runs share the GPU with the
+co-tenant, and the ratios, not the absolute values, are the
+information.
+
+## Finding 4: in-pipeline A/B with an sm_90 fused kernel (H100, fp16)
+
+`--part infer --sdpa-standin`: one frontend, three graphs captured from
+the same buffers and weights. PyTorch SDPA runs behind the FA4
+calling convention, so the backend's FA4 branches run as they would on
+Thor. Timing is 30 `infer()` calls, rotating order.
+
+| configuration | actions cosine vs chain | `infer()` P10 | P50 | delta P50 |
+|---|---:|---:|---:|---:|
+| cuBLAS chain at both sites | 1.000000 | 48.78 ms | 49.38 ms | |
+| fused at backbone | 1.000000 (max-abs 2.8e-3) | 44.53 ms | 45.45 ms | -3.93 ms |
+| fused at both sites | 1.000000 (max-abs 2.6e-3) | 38.66 ms | 39.57 ms | -9.81 ms (-19.9%) |
+
+P90 was about 2x P50 for all three configurations: the co-tenant
+regime changes, not the kernel. On this device about 60% of the gain
+comes from the `mot` site.
+
+## Why Pi0.5's rejection does not transfer
+
+Pi0.5 rejected a fused SIMT attention chain at decoder M = 10, HD 256
+(5-7x slower, `docs/pi05_thor_decoder_fp4_e2e.md`). Its QK^T and PV
+were about 1 us of tensor-core work that SIMT code could not approach,
+and FA4 had no KV-split path at HD 256. ImageWAM differs on each
+point:
+
+- HD is 128.
+- Both sites have long KV (905 and 969 keys).
+- The fused kernels available on both devices are tensor-core kernels.
+- The chain writes and re-reads a 24 x q x kv fp16 logits buffer:
+  39 MB per backbone call, 3 MB per `mot` call.
+
+On Thor, FA4 at the backbone site already measured 3.75x per call and
+-10.5% prefill (OPT-005).
+
+## Implemented
+
+- `fa4_backend.thor_default_enabled()` returns True only on a
+  compute-capability-11.x device whose FA4 runtime imports. It checks
+  the device first, so FA4 is never imported off Thor.
+- `ImageWAMTorchFrontendThor(use_fa4=None)` is the default and
+  resolves to the cuBLAS chain. `FLASHRT_THOR_FA4=1` opts in: FA4 at
+  the backbone site exactly when `thor_default_enabled()` holds, and
+  the chain otherwise, with no error for a missing runtime.
+  `use_fa4=True` forces FA4 and raises without a runtime, and
+  `use_fa4=False` forces the chain regardless of the environment. The
+  resolved value is `frontend.use_fa4`. Making FA4 the default is a
+  one-line change: `_FA4_OPT_IN_DEFAULT` in `imagewam_thor.py` goes
+  from `"0"` to `"1"`. `FLASHRT_THOR_FA4=0` also stops `fa4_backend`
+  from importing FA4 at all, for every model.
+- `ImageWAMAttnBackend(use_fa4_mot=True)` and
+  `ImageWAMTorchFrontendThor(use_fa4_mot=True)` run the `mot` site
+  through FA4. Q is the action rows at row offset `a0`, K/V are the
+  full per-head `(1, 969, 24, 128)`, with `causal=False`,
+  `pack_gqa=False`, `num_splits=1`, and an explicit `softmax_scale`.
+  The combination requires `use_real_mot_mask=True` and
+  `use_perhead_kv=True`, and the constructor raises otherwise.
+- FA4 output, both sites, goes to a dedicated buffer. The frontend owns
+  `_fa4_out` of shape `(total, hidden)`, allocated only when some site
+  runs FA4, and passes it to the backend as the `fa4_out` /
+  `fa4_out_numel` slots. The backend checks the capacity at
+  construction and on every call, then copies the result back to the Q
+  rows. An earlier version staged FA4 output in `logits`
+  (`total*NH x (total + total%2)` elements). That is large enough at
+  the real dims but smaller than `q_seq*NH*HD` at small dims: at the
+  default test dims it failed with `CUDA error: invalid argument`, and
+  at other small dims it wrote past the buffer silently. The frontend
+  used it only when FA4 was on. The tests now pre-fill a guard band
+  after `fa4_out`, and `logits`, with a sentinel, and fail on any FA4
+  write outside `fa4_out`; they fail on the old staging.
+- Falling back when FA4 fails. FA4 compiles on its first call, which
+  lands in the eager warmup of `set_prompt()`'s graph capture, and it
+  can fail there or inside the capture. One way is an FA4 runtime that
+  imports but cannot compile for sm_110, as with `nvidia-cutlass-dsl`
+  4.4.x (see `fa4_backend`). On such a failure with FA4 on,
+  `set_prompt()` logs an error, emits a `RuntimeWarning`, stores the
+  reason in `frontend.fa4_fallback_reason`, rebuilds the attention
+  backend with FA4 off at both sites, and captures again. It also
+  restores the caller's CUDA stream first, because an invalidated
+  capture leaves the capture stream current. A failure with FA4 off
+  still raises. Tested with stand-ins that raise on every call, raise
+  only inside capture, and issue a device sync inside capture, which
+  invalidates the capture. All three recover to the cuBLAS chain's
+  output: cosine 1.0000000, max-abs up to 9.5e-7, the difference
+  coming from the two frontends' own cuBLASLt autotune picks.
+- Local verification, `tests/test_imagewam_fa4_dispatch.py` (23
+  tests). FA4 is replaced by a stand-in with `_flash_attn_fwd`'s
+  calling convention that computes an fp32 matmul-softmax-matmul in
+  PyTorch, and each FA4 branch is compared against the cuBLAS chain at
+  the real shapes:
+  - Backbone q=kv=905: cosine 1.000000, max-abs 4.9e-4, rel_l2 5.8e-4.
+  - `mot` q=64 at row 905, kv=969: cosine 1.000000, max-abs 3.7e-4,
+    rel_l2 5.6e-4, with rows `[0, a0)` untouched.
+  - Small-dims frontend end to end, both sites on the stand-in vs the
+    chain: actions cosine 1.000000.
+  - Also covered: the constructor guard, the `fa4_out` bounds and
+    capacity, `use_fa4` resolution over the environment variable,
+    runtime availability and explicit argument, and the FA4-failure
+    fallback.
+- `tests/test_imagewam_fa4_backbone.py` gains a real-FA4 test for both
+  sites at the real shapes. It skips without FA4.
+
+## Thor check
+
+FA4 is opt-in, so every FA4 step below opts in explicitly: an
+environment variable, `--fa4 on`, or the bench's own FA4
+configurations. In any run with FA4 on, a line containing `falling back
+to the cuBLAS attention chain` means FA4 failed and the numbers are the
+chain's. Report it with the reason.
+
+1. Runtime:
+   `FLASHRT_THOR_FA4=1 python -c "from flash_rt.hardware.thor import fa4_backend as f; from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor as F; print(f.status(), F._resolve_use_fa4(None))"`.
+   Expect `active True`. Without the variable, the second value must be
+   `False`.
+2. Real-FA4 correctness at the served shapes:
+   `pytest tests/test_imagewam_fa4_backbone.py -q -s -k both_sites_real_shapes`
+   (`test_fa4_matches_cublas_both_sites_real_shapes`). This covers the
+   backbone at q = kv = 905, whose last tile is partial, and `mot` at
+   64 over 969. Expect a pass, not a skip. Report both printed cosines
+   (expect > 0.999) and max-abs values.
+3. Per-call kernels: `python benchmarks/imagewam_attention_share_bench.py --part kernels`.
+   Report both tables, including `fa4_splits1/2/4` for `mot`.
+4. Attention share on the shipped precision:
+   `python benchmarks/imagewam_attention_share_bench.py --part share --precision nvfp4 --fa4 off`,
+   then `--fa4 on`, then `--fa4 on --fa4-mot`. Report the three
+   "attention = ..." blocks.
+5. `infer()` A/B, FA4 on vs off, real checkpoint:
+   `CKPT_PATH=<model.pt> python benchmarks/imagewam_attention_share_bench.py --part infer --precision nvfp4 --iters 60`.
+   The bench builds chain, backbone-FA4 and both-sites-FA4 graphs from
+   one frontend. Report each configuration's action cosine against the
+   chain (expect >= 0.999) and the P10/P50/P90 plus delta.
+6. nvfp4 end-to-end official compare, FA4 off then on:
+   `PRECISION=nvfp4 N_TASKS=10 FRAMES=0,60 SEEDS=0,1 python benchmarks/imagewam_e2e_official_compare.py`,
+   then the same command with `FLASHRT_THOR_FA4=1` in front. Report
+   `fr_vs_off` median/min, mean `mae_fr_vs_gt`, and the printed `infer()`
+   P50 for both runs. Expect the FA4 run to match the FA4-off run
+   closely: `fr_vs_off` within about 1e-4 at the median.
+
+## Recommendation
+
+1. Backbone: make FA4 the Thor default (`_FA4_OPT_IN_DEFAULT = "1"`)
+   once Thor passes three checks, each run with FA4 opted in:
+   - the real-shape test at q = kv = 905 and at 64 over 969;
+   - an nvfp4 end-to-end official compare with FA4 on vs off;
+   - an `infer()` A/B with FA4 on vs off.
+2. `mot`: FA4 is the strongest remaining attention lever. It computes
+   the same math as FlashRT's current unmasked chain (not official's
+   padded-key-masked rule; Finding 1), and on H100 an sm_90 fused
+   kernel took the bigger share of the in-pipeline gain. Flip `use_fa4_mot` to default
+   on (a one-line change) once Thor shows cosine >= 0.999 against the
+   chain at the real shape and an `infer()` win. The Thor kernel sweep
+   also times `num_splits` 2 and 4 for this shape. If a split wins,
+   change the constant in the `mot` branch.
+3. No custom fused attention kernel is needed at either site.
+4. ISSUE-020 (padded text keys) is fixed most simply by dropping the
+   padded tokens from the context (`x0 = n_valid + 1`), which needs no
+   key mask in any kernel, fused or not. That fix belongs to a separate
+   stream.
+
+# OPT-016: single-stream `linear2` merge (roadmap item 4)
+
+Status: implemented and locally verified (H100, `fp16`); default on for
+every precision except `fp16_cutlass`. Thor speed and `nvfp4` numerics
+pending (Thor check below).
+
+Area: single-stream blocks, 20 backbone + 20 ActionDiT
+(`pipeline_thor.py` `_single_stream_layer` / `_action_single_layer`).
+Plan: plan.md "single-stream `linear2` merge (roadmap item 4)". This is
+OPT-015's op-fusion audit finding 1, sub-problem 3.
+
+## What changed
+
+The official blocks run `linear2` as one GEMM over
+`cat([attn_out, mlp_act])`. FlashRT used to split it at load time and run
+`attn_out_proj` + `mlp_down` + a torch add before the gated residual.
+With `dims["merge_linear2"]` (default = the `merge_qkv_mlp` rule):
+
+- `checkpoint_loader._extract_single_block(merge_linear2=True)` keeps the
+  real unsplit `linear2.weight`: `(12288, 3072)` backbone, `(7168, 1024)`
+  ActionDiT, in the (K,N) convention.
+- `silu_glu_merged_fp16` gained `out_row_stride`; the `linear1`-merged
+  SiLU-GLU writes straight into the MLP columns of `single_linear2_in` /
+  `action_linear2_in`. A strided copy places the attention output in the
+  first `attn_width` columns, then one GEMM with K = attn + mlp_hidden
+  writes `proj_scratch`.
+- Per layer call: one strided copy + one GEMM replaces two GEMMs + one
+  add (two kernels fewer for `nvfp4`, whose linear op is quantize + GEMM).
+- `nvfp4`: `hidden` = 3072 is a multiple of the 16-element scale block,
+  so the merged activation and weight quantize to exactly the split
+  path's operands; K = 12288 and 7168 are multiples of 64 (no
+  scale-factor padding). Only the accumulation changes.
+
+## Local results (H100, `fp16`)
+
+| check | result |
+|---|---|
+| strided SiLU-GLU vs packed call, real shapes | bit-exact, untouched columns zero |
+| real `linear2.weight` vs `cat(attn_out_proj, mlp_down)` (blocks 0, 19, both experts) | `torch.equal` |
+| backbone single layer (a0=905), projection, merged vs split | cos 0.9999999, max-abs 3.9e-3, rel_l2 3.5e-4 |
+| ActionDiT single layer (M=64), projection, merged vs split | cos 0.9999998, max-abs 9.8e-4, rel_l2 3.6e-4 |
+| projection rel_l2 vs FP32 reference, merged / split | 2.07e-4 / 2.95e-4 (backbone), 2.08e-4 / 3.01e-4 (ActionDiT) |
+| real checkpoint, full graph, actions merged vs split | cos 0.999999, rel_l2 1.4e-3 |
+| CUDA kernels per prefill + 10-step denoise | 7082 -> 6662 |
+| e2e vs official, 20 frames, `fr_vs_off` median / min | 0.99840 / 0.99566 (baseline 0.99840 / 0.99567) |
+| e2e mean `mae_fr_vs_gt` | 0.18359 (baseline 0.18359) |
+
+The merged path is closer to the FP32 reference because it rounds once
+where the split path rounds three times.
+
+Speed on the shared H100 (indicative only, same process, interleaved,
+40 iterations): `infer()` P50 102.23 -> 101.27 ms (P10 91.42 / 98.87,
+P90 102.61 / 101.49). No Thor claim.
+
+## Thor check
+
+```
+# FlashRT at this branch, GPU_ARCH=110 build
+cmake --build build -j --target flash_rt_kernels flash_rt_fp4
+pytest tests/test_imagewam_real_mlp.py tests/test_imagewam_thor_real_wiring.py -q -s
+CKPT_PATH=<.../model.pt> AB=merge_linear2 PRECISIONS=nvfp4,fp16 COUNT_KERNELS=1 \
+  python benchmarks/imagewam_fusion_ab.py
+```
+
+Expected: pytest passes and prints `bit_exact_vs_packed=True` and merged
+vs split `cos` >= 0.9999. The A/B prints, per precision, `actions B vs A`
+(expect cos >= 0.9999 and finite for `nvfp4`; the `linear1` merge gave
+0.99998), `infer()` / `replay()` P10/P50/P90 for split (A) and merged
+(B), and the kernel count (B lower). The `linear1` precedent predicts
+most of any win in the ActionDiT loop. Report every printed line.
+
+## Follow-ups
+
+- The attention output is copied into the `linear2` input (one strided
+  copy per layer, 11 MB per backbone layer). Having the attention backend
+  write its output there directly (an output row stride in
+  `ImageWAMAttnBackend.run`, or the FA4 path's existing output copy
+  retargeted) would remove it.
+- FP8 precisions: one activation scale now spans both halves
+  (ISSUE-011).
+
+# OPT-017: gated residual + next AdaLN in one kernel (roadmap item 3)
+
+Status: implemented and locally verified bit-exact (H100); default on
+for every precision. Thor speed pending (Thor check below).
+
+Area: every gated residual update in `pipeline_thor.py` (backbone
+double/single, ActionDiT double/single, ActionDiT head). Plan: plan.md
+"gated-residual + next-AdaLN fusion (roadmap item 3)". Supersedes
+OPT-015's deferred CUTLASS gated-residual epilogue for this problem.
+
+## What changed
+
+- `csrc/kernels/fusion.cu`: `gate_res_ada_layer_norm_bf16res` (backbone,
+  BF16 residual) and `gate_res_ada_layer_norm_fp16` (ActionDiT) update
+  the residual and write the next normed + modulated FP16 activation in
+  one launch, one block per row. gate/scale/shift are `(dim,)` FP32
+  vectors read straight from the modulation output and rounded to FP16
+  in-kernel; the LayerNorm statistics use the stored residual and the
+  reduction of `ada_layer_norm_*`. `out == nullptr` gives the
+  residual-only update (the backbone's last layer).
+- `pipeline_thor.py` with `dims["fuse_res_norm"]`: AdaLN2 of each double
+  block fuses into its attention residual; `imagewam_prefill` and
+  `imagewam_denoise_step` chain each layer's last residual into the next
+  layer's AdaLN: double -> double, last double -> single (txt and img
+  rows each normalized with the single blocks' modulation), single ->
+  single, ActionDiT last single -> head (`head_modded`, the standalone
+  head AdaLN is skipped).
+- The fused path records no per-layer `_fuse_mod_group` kernels (FP16
+  casts of shift/scale/gate and the `(rows, dim)` gate broadcast). FP16
+  copies remain only for the standalone AdaLN at the start of each chain
+  (prefill layer 0, each denoise step's layer 0).
+
+## Local results (H100)
+
+| check | result |
+|---|---|
+| kernel vs `gate_res_*` + `ada_layer_norm_*`, 513 / 392 / 905 x 3072 BF16, 64 x 1024 FP16 | residual and output bit-exact |
+| kernel normed output vs FP32 torch reference | rel_l2 2.07e-4 (FP16 output rounding) |
+| residual-only mode vs `gate_res_bf16res` | bit-exact |
+| real dims, random weights, prefill + 10-step denoise, fused vs unfused | `backbone_hidden`, all 25 layers' K/V, `action_latent` bit-exact |
+| real checkpoint, captured graph, fused vs unfused (`fp16`) | actions and `backbone_hidden` bit-exact |
+| CUDA kernels per prefill + 10-step denoise | 6662 -> 4968 (-1694) |
+| e2e vs official, 20 frames, both items on, `fr_vs_off` median / min | 0.99840 / 0.99566 (baseline 0.99840 / 0.99567) |
+| e2e mean `mae_fr_vs_gt`, both items on | 0.18359 (baseline 0.18359) |
+
+Speed on the shared H100 (indicative only, same process, interleaved):
+
+| A/B | iterations | `infer()` P50 A -> B | P10 A / B | P90 A / B |
+|---|---:|---:|---:|---:|
+| `fuse_res_norm` | 40 | 101.38 -> 96.24 ms | 100.89 / 93.52 | 102.09 / 96.99 |
+| `merge_linear2` + `fuse_res_norm` | 200 | 102.30 -> 96.17 ms | 92.78 / 91.70 | 104.84 / 96.90 |
+
+Both items together: 7082 -> 4968 CUDA kernels per pass. No Thor claim.
+
+## Thor check
+
+```
+# FlashRT at this branch, GPU_ARCH=110 build
+cmake --build build -j --target flash_rt_kernels flash_rt_fp4
+pytest tests/test_imagewam_residual_norm_fusion.py -q -s
+CKPT_PATH=<.../model.pt> AB=fuse_res_norm PRECISIONS=nvfp4,fp16 COUNT_KERNELS=1 \
+  python benchmarks/imagewam_fusion_ab.py
+CKPT_PATH=<.../model.pt> AB=merge_linear2,fuse_res_norm PRECISIONS=nvfp4,fp16 \
+  python benchmarks/imagewam_fusion_ab.py
+```
+
+Expected: pytest prints `bit_exact=True` for every kernel case and for
+`backbone_hidden`, `K_cache`, `V_cache`, `action_latent` of the whole
+pass. `AB=fuse_res_norm`: `actions` and `backbone_hidden` B vs A
+bit-exact for both `nvfp4` and `fp16`. The script builds B on A's
+autotuned `GemmRunner` (`gemm_runner=`), so every cuBLASLt shape runs
+the same algorithm on both sides: all `fp16` weight GEMMs, and under
+`nvfp4` the `fp16_nn` fallbacks (`action_encoder`, `head.linear`) and
+the `bf16_nn` entry GEMMs (`txt_in`, `img_in`); the NVFP4 CUTLASS GEMMs
+choose their variant from the shape alone. Kernel count B lower by
+about 1700; `infer()` P50 B below A.
+The combined run gives the total of items 3 and 4 against the
+pre-roadmap per-layer path. Report every printed line. Add `USE_FA4=1`
+if the production configuration uses FA4.
+
+## Remaining per-pass launches after items 3 and 4 (H100 profiler, real dims, `fp16`)
+
+Prefill: 478 CUDA kernels. 10-step denoise: 4490, of which:
+
+| kernel | launches | source |
+|---|---:|---|
+| torch elementwise copy | 950 | 750 Q/K/V column-slice copies (`_copy_slice`, 3 per layer) + 200 attention-output copies into the merged `linear2` input |
+| `rms_norm_kernel` | 500 | QK-Norm, 2 per layer |
+| `rope_apply_fp16_perhead_kernel` | 500 | RoPE on Q and K, 2 per layer |
+| GEMM kernels (cuBLASLt, incl. 310 split-K reduces) | ~1100 | weight GEMMs + attention QK^T / PV |
+| `gate_res_ada_layer_norm_kernel` | 300 | this entry |
+| `fill_neginf_strided_kernel` | 250 | odd `kv_seq` (969) logits pad column |
+| `softmax_fp16_kernel`, `silu_glu_merged_kernel` | 250 each | |
+
+Candidates by launch count (not planned): one kernel doing the Q/K/V
+split + QK-Norm + RoPE from the `qkv`/`linear1` output would replace
+7 launches per layer with 1 (about 1500 per `infer()` in the denoise
+loop alone); an even-padded K/V length or a pad-aware softmax would
+drop the 250 pad fills; the attention-output copy is OPT-016's
+follow-up.
+
 # OPT-028: ImageWAM through `frt_model_runtime_v1` (Python producer)
 
 Status: implemented and verified on H100 (fp16, real checkpoint,

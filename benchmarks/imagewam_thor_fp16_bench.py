@@ -12,6 +12,10 @@ reference -- do NOT use this for new speed comparisons. Use
 current dims -- by construction can't drift out of sync with
 `pipeline_thor.py`'s real math the way this file did).
 
+`pipeline_thor.py` now runs single-stream `linear2` as one GEMM and fuses each gated
+residual with the next AdaLN (roadmap items 4 and 3); this script keeps the old split
+per-layer path and is not updated for them.
+
 ImageWAM FP16 full-scale steady-state speed benchmark (baseline).
 
 Companion to imagewam_thor_fp4_bench.py / imagewam_thor_fp8_bench.py --

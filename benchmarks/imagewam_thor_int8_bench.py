@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 """ImageWAM INT8 (SM80 CUTLASS) full-scale speed benchmark.
 
+`pipeline_thor.py` now runs single-stream `linear2` as one GEMM and fuses each gated
+residual with the next AdaLN (roadmap items 4 and 3); this script keeps the old split
+per-layer path and is not updated for them.
+
 **Rewritten 2026-09-17** to match the CURRENT real per-layer math in
 `flash_rt/models/imagewam/pipeline_thor.py` -- the previous version of
 this file predated real AdaLN modulation, real gated residual, and the

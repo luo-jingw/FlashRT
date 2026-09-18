@@ -144,12 +144,18 @@ typedef struct frt_imagewam_linear {
     void* act_scales;                /* NVFP4: activation SFA                       */
 } frt_imagewam_linear;
 
-/* One AdaLN site: fp16 shift/scale (dim) and the gate materialized to
- * (rows, dim) as gate_res_* consumes it (null for the gate-less head). */
+/* One AdaLN site. fp16 shift/scale (dim) feed a standalone AdaLN and the
+ * gate materialized to (rows, dim) feeds gate_res_* (the unfused path);
+ * the fp32 (dim) vectors are the modulation output the fused gated
+ * residual + next AdaLN kernel reads (fuse_res_norm). The gate-less head
+ * leaves both gates null. */
 typedef struct frt_imagewam_adaln {
     const void* shift;
     const void* scale;
     const void* gate;
+    const float* shift_f32;
+    const float* scale_f32;
+    const float* gate_f32;
 } frt_imagewam_adaln;
 
 typedef struct frt_imagewam_double_layer {
@@ -161,9 +167,11 @@ typedef struct frt_imagewam_double_layer {
     const void* img_key_norm;
 } frt_imagewam_double_layer;
 
-/* Backbone or ActionDiT single-stream block (merged linear1). */
+/* Backbone or ActionDiT single-stream block (merged linear1). With
+ * merge_linear2 only `linear2` (K = attn width + mlp hidden) is used,
+ * otherwise only attn_out_proj and mlp_down. */
 typedef struct frt_imagewam_single_layer {
-    frt_imagewam_linear linear1, attn_out_proj, mlp_down;
+    frt_imagewam_linear linear1, attn_out_proj, mlp_down, linear2;
     const void* query_norm;
     const void* key_norm;
 } frt_imagewam_single_layer;
@@ -186,6 +194,8 @@ typedef struct frt_imagewam_pipeline_config {
     int32_t x0, a0, total, num_action, action_dim;
     int32_t action_hidden_dim, action_attn_width, action_mlp_hidden;
     int32_t num_double, num_single, action_num_double, action_num_single, num_steps;
+    int32_t merge_linear2;           /* single-stream linear2 as one GEMM         */
+    int32_t fuse_res_norm;           /* gated residual fused with the next AdaLN  */
     float eps;
     /* Borrowed buffers (pipeline_thor.py `bufs`); bf16: context, backbone_hidden,
      * img_raw; f32: action_latent; every other one fp16. */
@@ -195,6 +205,7 @@ typedef struct frt_imagewam_pipeline_config {
     void *txt_mlp_merged, *txt_mlp_gated, *img_mlp_merged, *img_mlp_gated, *single_mlp_gated;
     void *proj_scratch, *proj_scratch2, *action_latent, *action_hidden, *action_modded;
     void *action_proj_scratch, *action_proj_scratch2, *action_mlp_merged, *action_mlp_gated;
+    void *single_linear2_in, *action_linear2_in;   /* merged linear2 inputs      */
     /* Attention (borrowed): shared Q/O, per-layer K/V at base + layer * stride. */
     void *q_o, *k_cache, *v_cache, *logits;
     uint64_t kv_layer_stride_bytes;
