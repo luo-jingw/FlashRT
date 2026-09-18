@@ -20,11 +20,12 @@ import torch
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor import fa4_backend
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA GPU")
 
 FP16 = torch.float16
-NH, HD = 24, 128
+NH, HD = LIBERO_REAL_DIMS["NH"], LIBERO_REAL_DIMS["HD"]
 
 
 def _fa4_stand_in(calls: list[dict]):
@@ -91,7 +92,7 @@ def _assert_fa4_in_bounds(bufs) -> None:
 
 
 def test_backbone_fa4_branch_matches_cublas_chain(fa4_calls):
-    a0, total = 905, 969
+    a0, total = LIBERO_REAL_DIMS["a0"], LIBERO_REAL_DIMS["total"]
     ref_be, ref_bufs = _backend(total, a0, use_fa4=False, use_fa4_mot=False)
     fa4_be, fa4_bufs = _backend(total, a0, use_fa4=True, use_fa4_mot=False)
     stream = torch.cuda.Stream()
@@ -109,12 +110,13 @@ def test_backbone_fa4_branch_matches_cublas_chain(fa4_calls):
 
 
 def test_mot_fa4_branch_matches_cublas_chain(fa4_calls):
-    a0, total, num_action = 905, 969, 64
+    a0, total, num_action = (LIBERO_REAL_DIMS["a0"], LIBERO_REAL_DIMS["total"],
+                             LIBERO_REAL_DIMS["num_action"])
     ref_be, ref_bufs = _backend(total, a0, use_fa4=False, use_fa4_mot=False)
     fa4_be, fa4_bufs = _backend(total, a0, use_fa4=False, use_fa4_mot=True)
     before = fa4_bufs[0].clone()
-    ref_be.run("mot", 1, q_seq=num_action, kv_seq=total, stream=0, x0=513, a0=a0)
-    fa4_be.run("mot", 1, q_seq=num_action, kv_seq=total, stream=0, x0=513, a0=a0)
+    ref_be.run("mot", 1, q_seq=num_action, kv_seq=total, stream=0, x0=LIBERO_REAL_DIMS["x0"], a0=a0)
+    fa4_be.run("mot", 1, q_seq=num_action, kv_seq=total, stream=0, x0=LIBERO_REAL_DIMS["x0"], a0=a0)
     torch.cuda.synchronize()
     rows = slice(a0, a0 + num_action)
     cos, max_abs, rel = _stats(fa4_bufs[0][rows], ref_bufs[0][rows])
@@ -126,7 +128,8 @@ def test_mot_fa4_branch_matches_cublas_chain(fa4_calls):
     _assert_fa4_in_bounds(fa4_bufs)
 
 
-@pytest.mark.parametrize("a0,total", [(8, 12), (8, 24), (905, 969)])
+@pytest.mark.parametrize("a0,total", [(8, 12), (8, 24),
+                                     (LIBERO_REAL_DIMS["a0"], LIBERO_REAL_DIMS["total"])])
 def test_fa4_stays_inside_fa4_out_at_every_size(fa4_calls, a0, total):
     """Small dims included: at (8, 12) the old logits staging needed
     8*24*128 = 24576 elements of a 288*12 = 3456-element buffer."""

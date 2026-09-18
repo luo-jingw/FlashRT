@@ -8,9 +8,10 @@ The fused path keeps the math unchanged, so both checks here demand
 bit-exact equality with the unfused path and print the error against an
 FP32 torch reference alongside:
 
-1. Kernel level, at the real shapes: backbone BF16 residual (txt rows
-   x0=513, img rows 392, single-stream rows a0=905; hidden 3072) and
-   ActionDiT FP16 residual (64 x 1024).
+1. Kernel level, at the real shapes (libero_dims.LIBERO_REAL_DIMS): the
+   backbone BF16 residual at the x0 text rows, the img_len (a0 - x0)
+   image rows and the a0 single-stream rows, each `hidden` wide, and the
+   ActionDiT FP16 residual at num_action x action_hidden_dim.
 2. Whole pass: real-dims prefill + 10-step denoise (random weights,
    fp16) with the flag off and on -- backbone residual, every layer's
    K/V cache, and the final action latent.
@@ -19,6 +20,7 @@ import torch
 
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill
 
 DEV = "cuda"
@@ -83,11 +85,13 @@ def _one_case(rows: int, dim: int, res_dtype: torch.dtype, res_scale: float, see
 
 
 def test_fused_kernel_bit_exact_vs_unfused_real_shapes():
+    img_rows = LIBERO_REAL_DIMS["a0"] - LIBERO_REAL_DIMS["x0"]
     cases = {
-        "backbone txt rows (bf16 res)": (513, 3072, BF16, 3.0e4),
-        "backbone img rows (bf16 res)": (392, 3072, BF16, 4.0),
-        "backbone single rows (bf16 res)": (905, 3072, BF16, 4.0),
-        "actiondit rows (fp16 res)": (64, 1024, FP16, 4.0),
+        "backbone txt rows (bf16 res)": (LIBERO_REAL_DIMS["x0"], LIBERO_REAL_DIMS["hidden"], BF16, 3.0e4),
+        "backbone img rows (bf16 res)": (img_rows, LIBERO_REAL_DIMS["hidden"], BF16, 4.0),
+        "backbone single rows (bf16 res)": (LIBERO_REAL_DIMS["a0"], LIBERO_REAL_DIMS["hidden"], BF16, 4.0),
+        "actiondit rows (fp16 res)": (LIBERO_REAL_DIMS["num_action"], LIBERO_REAL_DIMS["action_hidden_dim"],
+                                      FP16, 4.0),
     }
     for i, (name, (rows, dim, res_dtype, res_scale)) in enumerate(cases.items()):
         res_f, out_f, res_u, out_u, ref_res, ref_out = _one_case(rows, dim, res_dtype, res_scale, seed=i)
@@ -102,7 +106,7 @@ def test_fused_kernel_bit_exact_vs_unfused_real_shapes():
 def test_fused_kernel_residual_only_mode():
     """`out == nullptr` (no AdaLN follows -- the backbone's last layer):
     residual update only, bit-exact vs `gate_res_bf16res`."""
-    rows, dim = 905, 3072
+    rows, dim = LIBERO_REAL_DIMS["a0"], LIBERO_REAL_DIMS["hidden"]
     gen = torch.Generator(device=DEV).manual_seed(7)
     residual = (torch.randn(rows, dim, generator=gen, device=DEV) * 4.0).to(BF16)
     proj = torch.randn(rows, dim, generator=gen, device=DEV).to(FP16)
@@ -133,15 +137,10 @@ def test_fused_kernel_rejects_odd_dim():
     print("gate_res_ada_layer_norm: odd dim / zero rows -> ValueError, no launch")
 
 
-REAL_DIMS = dict(
-    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
-    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
-    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
-    num_action=64, total=969,
-    action_num_layers_double=5, action_num_layers_single=20,
-    dt=1.0 / 10, num_denoise_steps=10,
-    ref_h=14, ref_w=28, shift=5.0, num_train_timesteps=1000,
-)
+# The served dims minus `proprio_dim`: the frontend builds its proprio
+# encoder only when `dims["proprio_dim"]` is set, and these passes drive
+# the context rows they hand in.
+REAL_DIMS = {key: value for key, value in LIBERO_REAL_DIMS.items() if key != "proprio_dim"}
 
 
 def _pipeline_pass(fe: ImageWAMTorchFrontendThor, fuse: bool, ctx: torch.Tensor, img: torch.Tensor,

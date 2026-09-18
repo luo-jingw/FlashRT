@@ -24,16 +24,9 @@ import os
 import sys
 from pathlib import Path
 
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS as REAL_DIMS
+
 GOLDEN = Path(__file__).with_name("data") / "imagewam_native_schema.records"
-REAL_DIMS = dict(
-    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
-    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
-    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
-    num_action=64, total=969,
-    action_num_layers_double=5, action_num_layers_single=20,
-    dt=0.1, num_denoise_steps=10,
-    ref_h=14, ref_w=28, proprio_dim=8, shift=5.0, num_train_timesteps=1000,
-)
 
 
 def _diff(label: str, actual: list[str], expected: list[str]) -> bool:

@@ -37,14 +37,15 @@ from flash_rt.hardware.thor.attn_backend import (
     _fp16_tensor_from_ptr,
     make_imagewam_attention_spec,
 )
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 from flash_rt.models.imagewam.quant_linear import Fp16Linear
 from flash_rt.models.imagewam.text_context import pack_trimmed_context, trimmed_sequence_dims
 
 DEV = "cuda"
 FP16 = torch.float16
 BF16 = torch.bfloat16
-NH, HD = 24, 128
-REAL_MAX_DIMS = dict(x0=513, a0=905, total=969, num_action=64)
+NH, HD = LIBERO_REAL_DIMS["NH"], LIBERO_REAL_DIMS["HD"]
+REAL_MAX_DIMS = {k: LIBERO_REAL_DIMS[k] for k in ("x0", "a0", "total", "num_action")}
 
 # Small frontend: 16 text rows + proprio, 10 image rows, 4 action rows.
 TEXT_LEN, JA, PROPRIO = 16, 16, 3
@@ -123,11 +124,11 @@ def test_pack_without_proprio_and_errors():
 
 def test_trimmed_sequence_dims_real():
     d = dict(REAL_MAX_DIMS)
-    assert trimmed_sequence_dims(d, 513) is d
+    assert trimmed_sequence_dims(d, LIBERO_REAL_DIMS["x0"]) is d
     t = trimmed_sequence_dims(d, 20)
     assert (t["x0"], t["a0"], t["total"], t["num_action"]) == (20, 412, 476, 64)
-    assert d["x0"] == 513, "the max dims must not be modified"
-    for bad in (0, 514):
+    assert d["x0"] == LIBERO_REAL_DIMS["x0"], "the max dims must not be modified"
+    for bad in (0, LIBERO_REAL_DIMS["x0"] + 1):
         with pytest.raises(ValueError):
             trimmed_sequence_dims(d, bad)
 
@@ -464,7 +465,10 @@ _FLUX2_SRC = os.path.join(_FLUX2_SRC, "src") if os.path.isdir(os.path.join(_FLUX
 _AE_PATH = os.environ.get("AE_MODEL_PATH") or os.environ.get("FLUX2_AE_MODEL_PATH", "")
 _AE_AVAILABLE = os.path.isdir(_FLUX2_SRC) and os.path.isfile(_AE_PATH)
 # Image span of the real 2x224x224 VAE output (392 tokens, 14x28 grid).
-_VAE_DIMS = dict(SMALL_DIMS, a0=SMALL_DIMS["x0"] + 392, total=SMALL_DIMS["x0"] + 392 + 4, ref_h=14, ref_w=28)
+_IMG_ROWS = LIBERO_REAL_DIMS["a0"] - LIBERO_REAL_DIMS["x0"]
+_VAE_DIMS = dict(SMALL_DIMS, a0=SMALL_DIMS["x0"] + _IMG_ROWS,
+                 total=SMALL_DIMS["x0"] + _IMG_ROWS + 4,
+                 ref_h=LIBERO_REAL_DIMS["ref_h"], ref_w=LIBERO_REAL_DIMS["ref_w"])
 
 
 @needs_gpu

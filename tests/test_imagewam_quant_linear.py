@@ -17,6 +17,7 @@ Availability is probed with real canary calls, not guessed:
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 from flash_rt.models.imagewam.quant_linear import (
     Fp16Linear,
     Fp8Linear,
@@ -222,20 +223,34 @@ def test_static_fp8_linear_cutlass_matches_fp16_reference():
 
 
 # Every distinct (M, N, K) a quantized precision runs in the served
-# pipeline at the real LIBERO dims (x0=513 text rows, img_len=392 image
-# rows, a0=905 single-stream rows, num_action=64 ActionDiT rows;
-# hidden=3072, mlp_hidden=9216, action_hidden_dim=1024,
-# action_mlp_hidden=4096), with the merged single-stream linear1 and
-# linear2 (K = hidden + mlp_hidden).
+# pipeline at the served dims (libero_dims.LIBERO_REAL_DIMS): M is the x0
+# text rows, the img_len = a0 - x0 image rows, the a0 single-stream rows
+# or the num_action ActionDiT rows, and N/K are the block widths, with the
+# merged single-stream linear1 and linear2 (K = hidden + mlp_hidden) and
+# the merged ActionDiT linear1 and linear2.
+_X0_ROWS = LIBERO_REAL_DIMS["x0"]
+_IMG_ROWS = LIBERO_REAL_DIMS["a0"] - LIBERO_REAL_DIMS["x0"]
+_A0_ROWS = LIBERO_REAL_DIMS["a0"]
+_ACTION_ROWS = LIBERO_REAL_DIMS["num_action"]
+_HIDDEN = LIBERO_REAL_DIMS["hidden"]
+_MLP_HIDDEN = LIBERO_REAL_DIMS["mlp_hidden"]
+_ACTION_HIDDEN = LIBERO_REAL_DIMS["action_hidden_dim"]
+_ACTION_WIDTH = LIBERO_REAL_DIMS["action_attn_width"]
+_ACTION_MLP = LIBERO_REAL_DIMS["action_mlp_hidden"]
+
 _REAL_SHAPES = {
-    "txt_qkv": (513, 9216, 3072), "txt_proj": (513, 3072, 3072),
-    "txt_mlp0": (513, 18432, 3072), "txt_mlp2": (513, 3072, 9216),
-    "img_qkv": (392, 9216, 3072), "img_proj": (392, 3072, 3072),
-    "img_mlp0": (392, 18432, 3072), "img_mlp2": (392, 3072, 9216),
-    "single_linear1": (905, 27648, 3072), "single_linear2": (905, 3072, 12288),
-    "action_qkv": (64, 9216, 1024), "action_proj": (64, 1024, 3072),
-    "action_mlp0": (64, 8192, 1024), "action_mlp2": (64, 1024, 4096),
-    "action_linear1": (64, 17408, 1024), "action_linear2": (64, 1024, 7168),
+    "txt_qkv": (_X0_ROWS, 3 * _HIDDEN, _HIDDEN), "txt_proj": (_X0_ROWS, _HIDDEN, _HIDDEN),
+    "txt_mlp0": (_X0_ROWS, 2 * _MLP_HIDDEN, _HIDDEN), "txt_mlp2": (_X0_ROWS, _HIDDEN, _MLP_HIDDEN),
+    "img_qkv": (_IMG_ROWS, 3 * _HIDDEN, _HIDDEN), "img_proj": (_IMG_ROWS, _HIDDEN, _HIDDEN),
+    "img_mlp0": (_IMG_ROWS, 2 * _MLP_HIDDEN, _HIDDEN), "img_mlp2": (_IMG_ROWS, _HIDDEN, _MLP_HIDDEN),
+    "single_linear1": (_A0_ROWS, 3 * _HIDDEN + 2 * _MLP_HIDDEN, _HIDDEN),
+    "single_linear2": (_A0_ROWS, _HIDDEN, _HIDDEN + _MLP_HIDDEN),
+    "action_qkv": (_ACTION_ROWS, 3 * _ACTION_WIDTH, _ACTION_HIDDEN),
+    "action_proj": (_ACTION_ROWS, _ACTION_HIDDEN, _ACTION_WIDTH),
+    "action_mlp0": (_ACTION_ROWS, 2 * _ACTION_MLP, _ACTION_HIDDEN),
+    "action_mlp2": (_ACTION_ROWS, _ACTION_HIDDEN, _ACTION_MLP),
+    "action_linear1": (_ACTION_ROWS, 3 * _ACTION_WIDTH + 2 * _ACTION_MLP, _ACTION_HIDDEN),
+    "action_linear2": (_ACTION_ROWS, _ACTION_HIDDEN, _ACTION_WIDTH + _ACTION_MLP),
 }
 
 

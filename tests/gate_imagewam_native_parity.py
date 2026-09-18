@@ -48,16 +48,11 @@ import torch
 from _helpers.imagewam_abi_checks import PIPELINE_MUTATIONS, MutatedPipelineSource, bits, poison_tick_state
 from _helpers.model_runtime_consumer import ModelRuntimeConsumer, exec_library_path
 
-HORIZON, STEPS, SHIFT = 64, 10, 5.0
-REAL_DIMS = dict(
-    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
-    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
-    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
-    num_action=HORIZON, total=969,
-    action_num_layers_double=5, action_num_layers_single=20,
-    dt=1.0 / STEPS, num_denoise_steps=STEPS,
-    ref_h=14, ref_w=28, proprio_dim=8, shift=SHIFT, num_train_timesteps=1000,
+from flash_rt.models.imagewam.libero_dims import (
+    LIBERO_HORIZON as HORIZON,
+    LIBERO_REAL_DIMS as REAL_DIMS,
 )
+
 PROMPT = "pick up the black bowl between the plate and the ramekin and place it on the plate"
 CHUNK = (HORIZON, 7)
 

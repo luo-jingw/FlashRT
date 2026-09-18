@@ -23,6 +23,7 @@ import torch
 
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 from flash_rt.models.imagewam.pipeline_real import compute_action_modulation, compute_shared_modulation
 from flash_rt.models.imagewam.pipeline_thor import _action_double_layer, _action_single_layer, _double_stream_layer, _single_stream_layer
 from flash_rt.models.imagewam.quant_linear import Fp16Linear
@@ -588,8 +589,9 @@ def test_action_double_and_single_layers_match_real_reference():
 # ──────────────────────────────────────────────────────────────────
 # Real-shape merged vs split `linear2` (roadmap item 4)
 # ──────────────────────────────────────────────────────────────────
-_REAL = dict(NH=24, HD=128, hidden=3072, mlp_hidden=9216, x0=513, a0=905,
-             action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096, num_action=64)
+_REAL = {k: LIBERO_REAL_DIMS[k] for k in (
+    "NH", "HD", "hidden", "mlp_hidden", "x0", "a0",
+    "action_hidden_dim", "action_attn_width", "action_mlp_hidden", "num_action")}
 
 
 def _diff_stats(a: torch.Tensor, b: torch.Tensor) -> dict:

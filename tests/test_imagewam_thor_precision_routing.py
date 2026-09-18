@@ -47,6 +47,7 @@ import torch
 import torch._dynamo  # noqa: F401
 
 import flash_rt
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 
 FRONTEND_MODULE = "flash_rt.frontends.torch.imagewam_thor"
 KERNELS_MODULE = "flash_rt.flash_rt_kernels"
@@ -123,18 +124,15 @@ EXPECTED_ROUTING: dict[tuple[str, str, str], tuple[str, ...]] = {
     ("action_dit", "single", "key_norm"):               ("ptr",     "ptr",       "ptr",     "ptr",     "ptr",     "ptr", "ptr", "ptr"),
 }
 
-# Real FLUX.2-4B LIBERO dims (benchmarks/imagewam_e2e_official_compare.py's
-# REAL_DIMS, structural subset). Every weight except action_encoder (K=7)
-# and head.linear (N=7) is 16-aligned here, so the fallbacks above are the
-# only alignment-driven routes.
-REAL_DIMS = dict(
-    hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
-    x0=513, a0=905, num_layers_double=5, num_layers_single=20,
-    action_hidden_dim=1024, action_attn_width=3072, action_mlp_hidden=4096,
-    action_dim=7, num_action=64, total=969,
-    action_num_layers_double=5, action_num_layers_single=20,
-    ref_h=14, ref_w=28,
-)
+# Real FLUX.2-4B LIBERO dims: `libero_dims.LIBERO_REAL_DIMS` minus the
+# entries this routing table leaves at the frontend's own defaults -- the
+# timestep schedule (`dt`, `num_denoise_steps`, `shift`,
+# `num_train_timesteps`) and `proprio_dim` (proprio conditioning). Every
+# weight except action_encoder (K=7) and head.linear (N=7) is 16-aligned
+# here, so the fallbacks above are the only alignment-driven routes.
+_DEFAULTED_DIM_KEYS = ("dt", "num_denoise_steps", "proprio_dim", "shift", "num_train_timesteps")
+REAL_DIMS = {key: value for key, value in LIBERO_REAL_DIMS.items()
+             if key not in _DEFAULTED_DIM_KEYS}
 DIMS_CASES = {"real": REAL_DIMS, "default": None}
 
 

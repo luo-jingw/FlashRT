@@ -40,6 +40,7 @@ import torch
 
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
+from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 
 try:
     from flash_rt.hardware.thor import fa4_backend
@@ -91,7 +92,7 @@ def test_fa4_matches_cublas_backbone_attention():
                     f"{fa4_backend.status() if 'fa4_backend' in dir() else 'import failed'}")
 
     torch.manual_seed(0)
-    NH, HD, hidden = 24, 128, 3072
+    NH, HD, hidden = LIBERO_REAL_DIMS["NH"], LIBERO_REAL_DIMS["HD"], LIBERO_REAL_DIMS["hidden"]
     q_seq = kv_seq = 8  # even, required by the cuBLAS path's own softmax alignment
     num_layers = 1
 
@@ -129,7 +130,7 @@ def test_fa4_matches_cublas_backbone_attention_perhead():
                     f"{fa4_backend.status() if 'fa4_backend' in dir() else 'import failed'}")
 
     torch.manual_seed(0)
-    NH, HD, hidden = 24, 128, 3072
+    NH, HD, hidden = LIBERO_REAL_DIMS["NH"], LIBERO_REAL_DIMS["HD"], LIBERO_REAL_DIMS["hidden"]
     q_seq = kv_seq = 8
     num_layers = 1
 
@@ -189,7 +190,9 @@ def test_fa4_matches_cublas_both_sites_real_shapes():
     if not _FA4_AVAILABLE:
         import pytest
         pytest.skip(f"FA4 runtime not available on this machine: {fa4_backend.status()}")
-    NH, HD, a0, total, num_action = 24, 128, 905, 969, 64
+    NH, HD, a0, total, num_action = (LIBERO_REAL_DIMS["NH"], LIBERO_REAL_DIMS["HD"],
+                                     LIBERO_REAL_DIMS["a0"], LIBERO_REAL_DIMS["total"],
+                                     LIBERO_REAL_DIMS["num_action"])
     ref, ref_bufs = _real_shape_backend(use_fa4=False, use_fa4_mot=False, total=total, a0=a0, NH=NH, HD=HD)
     fa4, fa4_bufs = _real_shape_backend(use_fa4=True, use_fa4_mot=True, total=total, a0=a0, NH=NH, HD=HD)
     ref.run("backbone", 1, q_seq=a0, kv_seq=a0, stream=0)
@@ -199,8 +202,8 @@ def test_fa4_matches_cublas_both_sites_real_shapes():
     print(f"FA4 vs cuBLAS backbone q=kv={a0}: cosine={cos:.6f} max_abs={mx:.3e} rel_l2={rel:.6f}")
     assert cos > 0.999, f"backbone cosine too low: {cos}"
     before = fa4_bufs[0][:a0].clone()
-    ref.run("mot", 1, q_seq=num_action, kv_seq=total, stream=0, x0=513, a0=a0)
-    fa4.run("mot", 1, q_seq=num_action, kv_seq=total, stream=0, x0=513, a0=a0)
+    ref.run("mot", 1, q_seq=num_action, kv_seq=total, stream=0, x0=LIBERO_REAL_DIMS["x0"], a0=a0)
+    fa4.run("mot", 1, q_seq=num_action, kv_seq=total, stream=0, x0=LIBERO_REAL_DIMS["x0"], a0=a0)
     torch.cuda.synchronize()
     rows = slice(a0, a0 + num_action)
     cos, mx, rel = _cos_rel(ref_bufs[0][rows], fa4_bufs[0][rows])
