@@ -6437,7 +6437,7 @@ default (issues.md ISSUE-080 lists the conditions).
 
 # Plan: configuration consolidation (workload / precision / profile)
 
-Plan Status: pending
+Plan Status: approved
 
 ## Problem
 
@@ -6680,6 +6680,46 @@ def load_imagewam(ckpt_path, workload, *, profile="default",
                   precision=None, calibration_path=None, **expert)
 ```
 
+W0 addendum: names frozen while executing W6-W12, each one a plan edit:
+
+- `ImageWAMStructure.libero()` (`structure.py`), beside `toy()` and
+  `from_checkpoint()`. The structure constants of the real
+  `ImageWAM-FLUX.2-4B-LIBERO` release (`hidden=3072`, `HD=128`, `NH=24`,
+  `mlp_hidden=9216`, `joint_attention_dim=7680`, 5 double + 20 single
+  backbone layers and the same for the action expert,
+  `action_hidden_dim=1024`, `action_attn_width=3072`,
+  `action_mlp_hidden=4096`, `max_action_horizon=64`,
+  `patch_stride=16`), needed because `LIBERO_REAL_DIMS` mixes structure
+  and workload and the resolver takes the two separately. It is a
+  constant table, pinned two ways: against `LIBERO_REAL_DIMS`' own
+  structure entries, and against `from_checkpoint()` when a checkpoint
+  is configured.
+- `ImageWAMTorchFrontendThor.from_config(resolved: ResolvedConfig, *,
+  ckpt_path=None, ae_model_path=None, flux2_src=None,
+  qwen3_model_spec=None, dataset_stats_path=None, vae_resize="area")`.
+  A classmethod that splits `ResolvedConfig` into the constructor's
+  arguments: dims (through `dims_override=resolved.frontend_dims()`) and
+  every option in `resolved.options`. It constructs the same object the
+  equivalent constructor call builds, bit for bit.
+- `load_imagewam(ckpt_path, workload, *, structure=None, profile="default",
+  precision=None, calibration_path=None, ae_model_path=None,
+  flux2_src=None, qwen3_model_spec=None, dataset_stats_path=None,
+  consumer="infer", allow_placeholder_calibration=False, **expert)` in
+  `imagewam_thor.py`, the deployment entry. `structure=None` reads
+  `ImageWAMStructure.from_checkpoint(ckpt_path)`. It calls
+  `resolve_config(...)` and `from_config(...)`, so every illegal
+  combination raises the resolver's `ConfigError`. `**expert` carries the
+  expert tier (`EXPERT_KEYS`) only; the tier-1 arguments above are named.
+- Runtime identity: `runtime_surface()`, `pipeline_resources()` and
+  `export_model_runtime()` describe the workload explicitly, as
+  `workload.<field>` entries (`num_views`, `image_h`, `image_w`,
+  `text_max_len`, `action_horizon`, `action_dim`, `proprio_dim`,
+  `num_steps`, `shift`) beside the existing `dims.<key>` entries. The
+  entries are additive and descriptive: no stored calibration file is
+  invalidated by them, and `calibration_file.IDENTITY_DIM_KEYS` keeps its
+  current key set (a new key there would refuse every file recorded before
+  it, which is an owner decision, not part of W10).
+
 State transitions: `Workload` + `Structure` -> `resolve_config` ->
 `ResolvedConfig` (immutable) -> frontend construction. No state is
 mutated after resolution; `effective_config` is the resolved value, not a
@@ -6797,14 +6837,14 @@ Parallelism:
   of the profile contents.
 
 ### Phase W0: interface freeze
-Phase Status: pending
+Phase Status: completed
 - Goal: this section's Interface and rule table are the contract; any
   change to a name here is a plan edit.
 - Modified files: `plan.md` only.
 - Observation: review of this section.
 
 ### Phase W1: `ImageWAMWorkload` and layout
-Phase Status: pending
+Phase Status: completed
 - Goal: derive `x0`, `img_len`, `a0`, `total`, `ref_h`, `ref_w`, `dt`,
   `vae_graph_input` from the workload; reject inconsistent input.
 - First step: confirm from `vae_stage.py`, `pipeline_real.py` and
@@ -6819,7 +6859,7 @@ Phase Status: pending
   equals `LIBERO_REAL_DIMS`; invalid inputs raise.
 
 ### Phase W2: `ImageWAMStructure`
-Phase Status: pending
+Phase Status: completed
 - Goal: one place that reads backbone dims from checkpoint tensor shapes
   and the rest from `config.yaml`, with `toy()` for tests.
 - Modified files: `flash_rt/models/imagewam/structure.py` (new).
@@ -6828,7 +6868,7 @@ Phase Status: pending
   backbone values in `LIBERO_REAL_DIMS`; `toy()` matches `_DEFAULT_DIMS`.
 
 ### Phase W3: `Precision` property table
-Phase Status: pending
+Phase Status: completed
 - Goal: precision properties as data. The alignment rules reproduce
   today's `_wrap_linear` fallbacks (fp16_cutlass n/k % 8, nvfp4 % 16,
   fp8/fp8_static/fp8_static_cutlass % 8 -> fp16 linear).
@@ -6838,7 +6878,7 @@ Phase Status: pending
   `_VARIANT_TUNED_PRECISIONS`.
 
 ### Phase W4: `resolve_config`, profiles, rules
-Phase Status: pending
+Phase Status: completed
 - Goal: rules R1-R8 in one function with ids; `effective_config` string
   identical in format to the current compare-script line.
 - Modified files: `flash_rt/models/imagewam/config_resolver.py` (new).
@@ -6846,14 +6886,14 @@ Phase Status: pending
   `default` profile reproduces today's constructor defaults.
 
 ### Phase W5: tests
-Phase Status: pending
+Phase Status: completed
 - Goal: pin profiles and rules.
 - Modified files: `tests/test_imagewam_thor_precision_routing.py`
   (extend), `tests/test_imagewam_workload.py` (new).
 - Observation: CPU-only, no GPU needed; run locally.
 
 ### Phase W6: frontend builds dims from `ResolvedConfig`
-Phase Status: pending
+Phase Status: active
 - Goal: `from_config` constructs the frontend from resolved dims and
   options; the constructor signature and behaviour with `dims_override`
   stay.
