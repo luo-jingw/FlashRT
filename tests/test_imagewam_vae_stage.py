@@ -118,6 +118,12 @@ def test_stage_rejects_wrong_view_shape(ae):
         stage.stage([torch.zeros(224, 224, 3, dtype=torch.uint8)] * 2)
     with pytest.raises(ValueError):
         stage.stage([torch.zeros(512, 512, 3, dtype=torch.uint8)])
+    # A bad second view must leave the whole buffer untouched, view 0 included.
+    before = stage.views_u8.clone()
+    with pytest.raises(ValueError):
+        stage.stage([torch.full((512, 512, 3), 7, dtype=torch.uint8), torch.zeros(224, 224, 3, dtype=torch.uint8)])
+    torch.cuda.synchronize()
+    assert torch.equal(stage.views_u8, before)
 
 
 # Small random-weight dims whose image span matches the real 2x224x224
@@ -198,6 +204,13 @@ def test_frontend_vae_in_graph_matches_eager_reference(vae_encoder):
         torch.manual_seed(1)
         actions = torch.from_numpy(fe.infer({"view1": v1, "view2": v2})["actions"])
         graph_tokens = fe._img_raw.clone()
+        # Explicit action_noise with the VAE in the graph: staging views and
+        # the given latent before the single replay; numpy views accepted.
+        noise = torch.randn(_SMALL_DIMS["num_action"], _SMALL_DIMS["action_dim"],
+                            generator=torch.Generator().manual_seed(7))
+        actions_fixed = torch.from_numpy(
+            fe.infer({"view1": v1.numpy(), "view2": v2.numpy()}, action_noise=noise)["actions"])
+        assert torch.equal(fe._img_raw, graph_tokens)
         with torch.no_grad():
             ref_tokens = encode_to_tokens(fe._ae, v1, v2, preprocessor=fe._vae_pre, encoder=fe._vae_encoder)[0]
         _cmp(f"frontend graph[{vae_encoder}] img_raw vs encode_to_tokens (same encoder)", graph_tokens, ref_tokens)
@@ -213,6 +226,13 @@ def test_frontend_vae_in_graph_matches_eager_reference(vae_encoder):
         assert torch.isfinite(actions).all()
         assert torch.equal(actions, ref_actions)
 
+        fe._img_raw.copy_(ref_tokens)
+        fe._action_latent.copy_(noise)
+        _eager_pipeline(fe)
+        ref_fixed = fe._action_latent.detach().cpu()
+        _cmp(f"frontend graph[{vae_encoder}] action_noise= actions vs eager reference", actions_fixed, ref_fixed)
+        assert torch.equal(actions_fixed, ref_fixed)
+
 
 def test_frontend_eager_native_matches_encode_to_tokens():
     """`vae_encoder="native"` outside the graph: img_raw equals
@@ -223,7 +243,7 @@ def test_frontend_eager_native_matches_encode_to_tokens():
                                    flux2_src=_FLUX2_SRC, vae_encoder="native")
     fe.set_prompt()
     frames = [torch.from_numpy(f) for f in _frames(4)]
-    fe.infer({"view1": frames[0], "view2": frames[2]})
+    fe.infer({"view1": frames[0].numpy(), "view2": frames[2].numpy()})  # numpy views, as in the graph path
     with torch.no_grad():
         ref = encode_to_tokens(fe._ae, frames[0], frames[2], preprocessor=fe._vae_pre, encoder=fe._vae_encoder)[0]
     _cmp("frontend eager[native] img_raw vs encode_to_tokens (native)", fe._img_raw, ref)
@@ -238,6 +258,10 @@ def test_frontend_vae_flag_validation():
         ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", vae_encoder="bogus")
     with pytest.raises(ValueError):
         ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", vae_resize="bogus")
+    with pytest.raises(ValueError, match="needs ae_model_path"):
+        ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", vae_encoder="native")
+    with pytest.raises(ValueError, match="needs ae_model_path"):
+        ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", vae_resize="pil_bilinear")
     fe = ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16", ae_model_path=_AE_PATH,
                                    flux2_src=_FLUX2_SRC, vae_graph_input=(2, 224, 224))
     fe.set_prompt()

@@ -86,7 +86,9 @@ class ImageWAMVaeStage:
 
     def stage(self, views: Sequence[torch.Tensor]) -> None:
         """Copies `views` (each `(in_h, in_w, 3)` uint8, CPU or CUDA)
-        into the fixed `views_u8` buffer on the current stream."""
+        into the fixed `views_u8` buffer on the current stream. Every
+        view is validated before any is copied, so a rejected call leaves
+        the buffer unchanged."""
         if len(views) != self.spec.num_views:
             raise ValueError(f"expected {self.spec.num_views} views, got {len(views)}")
         shape = (self.spec.in_h, self.spec.in_w, 3)
@@ -94,6 +96,7 @@ class ImageWAMVaeStage:
             if v.dtype != torch.uint8 or tuple(v.shape) != shape:
                 raise ValueError(f"view {i} must be uint8 {shape} (the captured VAE input shape), "
                                  f"got {tuple(v.shape)} {v.dtype}")
+        for i, v in enumerate(views):
             self._view_slices[i].copy_(v)
 
     @torch.no_grad()

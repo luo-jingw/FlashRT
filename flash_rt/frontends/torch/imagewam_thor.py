@@ -148,6 +148,12 @@ class ImageWAMTorchFrontendThor:
             raise ValueError(f"vae_encoder={vae_encoder!r} -- must be one of {_VAE_ENCODERS}")
         if vae_graph_input is not None and ae_model_path is None:
             raise ValueError("vae_graph_input (VAE inside the CUDA graph) needs ae_model_path/flux2_src")
+        if vae_encoder != "torch" and ae_model_path is None:
+            raise ValueError(f"vae_encoder={vae_encoder!r} selects a real VAE encoder and needs "
+                             f"ae_model_path/flux2_src")
+        if vae_resize != "area" and ae_model_path is None:
+            raise ValueError(f"vae_resize={vae_resize!r} configures the real VAE preprocessing and needs "
+                             f"ae_model_path/flux2_src")
         if ae_model_path is not None:
             from flash_rt.models.imagewam.vae_encoder import load_real_ae
             self._ae = load_real_ae(ae_model_path, flux2_src)
@@ -1101,7 +1107,9 @@ class ImageWAMTorchFrontendThor:
             self._vae_stage.stage([torch.as_tensor(v) for v in views])
         elif self._ae is not None and "view1" in observation:
             from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
-            tokens = encode_to_tokens(self._ae, observation["view1"], observation.get("view2"),
+            view2 = observation.get("view2")
+            tokens = encode_to_tokens(self._ae, torch.as_tensor(observation["view1"]),
+                                      None if view2 is None else torch.as_tensor(view2),
                                       preprocessor=self._vae_pre, encoder=self._vae_encoder)
             self._img_raw.copy_(tokens[0].to(dtype=BF16))
         else:
