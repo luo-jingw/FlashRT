@@ -4182,9 +4182,13 @@ CKPT_PATH=<.../model.pt> AB=merge_linear2,fuse_res_norm PRECISIONS=nvfp4,fp16 \
 Expected: pytest prints `bit_exact=True` for every kernel case and for
 `backbone_hidden`, `K_cache`, `V_cache`, `action_latent` of the whole
 pass. `AB=fuse_res_norm`: `actions` and `backbone_hidden` B vs A
-bit-exact for `nvfp4`; for `fp16` bit-exact unless the two frontends'
-`fp16_nn` autotune picked different cuBLASLt algorithms (then cos >=
-0.99999). Kernel count B lower by about 1700; `infer()` P50 B below A.
+bit-exact for both `nvfp4` and `fp16`. The script builds B on A's
+autotuned `GemmRunner` (`gemm_runner=`), so every cuBLASLt shape runs
+the same algorithm on both sides: all `fp16` weight GEMMs, and under
+`nvfp4` the `fp16_nn` fallbacks (`action_encoder`, `head.linear`) and
+the `bf16_nn` entry GEMMs (`txt_in`, `img_in`); the NVFP4 CUTLASS GEMMs
+choose their variant from the shape alone. Kernel count B lower by
+about 1700; `infer()` P50 B below A.
 The combined run gives the total of items 3 and 4 against the
 pre-roadmap per-layer path. Report every printed line. Add `USE_FA4=1`
 if the production configuration uses FA4.

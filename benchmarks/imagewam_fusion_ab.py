@@ -33,6 +33,13 @@ Env:
 - `USE_FA4` (default 0): `use_fa4=True` for the "backbone" attention site
   (Thor only; match the production configuration being compared).
 
+B is built on A's `GemmRunner` (`gemm_runner=`), so the cuBLASLt
+autotune runs once and both sides replay the same algorithm for every
+`fp16_nn`/`bf16_nn` shape (`fp16`/`fp8` weight GEMMs; under `nvfp4` the
+`action_encoder`/`head.linear` fallbacks and `txt_in`/`img_in`). Two
+independently autotuned frontends can pick different algorithms for the
+same shape, which breaks bit-exactness without any flag effect.
+
 Speed on a shared GPU is indicative only; Thor numbers come from Thor.
 """
 from __future__ import annotations
@@ -74,11 +81,12 @@ def _pcts(ts: list[float]) -> str:
     return f"P10={p10:8.2f}  P50={p50:8.2f}  P90={p90:8.2f} ms"
 
 
-def _build(precision: str, flags: list[str], value: bool, ckpt: str | None,
-           use_fa4: bool) -> ImageWAMTorchFrontendThor:
+def _build(precision: str, flags: list[str], value: bool, ckpt: str | None, use_fa4: bool,
+           gemm_runner: object | None) -> ImageWAMTorchFrontendThor:
     torch.manual_seed(0)
     dims = dict(REAL_DIMS, **{flag: value for flag in flags})
-    return ImageWAMTorchFrontendThor(precision=precision, dims_override=dims, ckpt_path=ckpt, use_fa4=use_fa4)
+    return ImageWAMTorchFrontendThor(precision=precision, dims_override=dims, ckpt_path=ckpt, use_fa4=use_fa4,
+                                     gemm_runner=gemm_runner)
 
 
 def _replay_with(fe: ImageWAMTorchFrontendThor, img: torch.Tensor, noise: torch.Tensor):
@@ -108,8 +116,8 @@ def run(precision: str, flags: list[str], ckpt: str | None, iters: int, warmup: 
     names = "+".join(flags)
     print(f"\n=== {precision}: A = {names} off, B = {names} on "
           f"({'real checkpoint' if ckpt else 'random weights'}, use_fa4={use_fa4}) ===", flush=True)
-    a = _build(precision, flags, False, ckpt, use_fa4)
-    b = _build(precision, flags, True, ckpt, use_fa4)
+    a = _build(precision, flags, False, ckpt, use_fa4, None)
+    b = _build(precision, flags, True, ckpt, use_fa4, a._gemm)  # A's autotuned algorithms
     x0, jad = REAL_DIMS["x0"], REAL_DIMS["joint_attention_dim"]
     g = torch.Generator(device=DEV).manual_seed(1)
     ctx = torch.randn(x0, jad, generator=g, device=DEV).to(BF16)

@@ -115,6 +115,7 @@ class ImageWAMTorchFrontendThor:
                  ae_model_path: str | None = None, flux2_src: str | None = None,
                  qwen3_model_spec: str | None = None,
                  dataset_stats_path: str | None = None,
+                 gemm_runner: object | None = None,
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
@@ -210,8 +211,16 @@ class ImageWAMTorchFrontendThor:
                 "be passed explicitly for real-checkpoint accuracy")
 
         self._ctx = fvk.FvkContext()
-        self._gemm = fvk.GemmRunner()
-        self._autotune_gemm(d)
+        # `gemm_runner`: an already-autotuned `fvk.GemmRunner` from another
+        # frontend. Both then run the same cuBLASLt algorithm per shape,
+        # which an A/B of two frontends needs for a bit-exact comparison
+        # (`benchmarks/imagewam_fusion_ab.py`); the autotune shape set does
+        # not depend on dims flags, so one autotune covers both.
+        if gemm_runner is None:
+            self._gemm = fvk.GemmRunner()
+            self._autotune_gemm(d)
+        else:
+            self._gemm = gemm_runner
 
         # OPT-001 (plan.md): ckpt_path switches every weight/modulation
         # source from random to the real checkpoint's own tensors --
