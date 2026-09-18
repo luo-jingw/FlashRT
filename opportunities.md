@@ -3850,3 +3850,64 @@ dramatically slower on Thor (same ISA-mismatch root cause already
 confirmed). **OPT-007 stays closed** -- this round only aligned the
 measurement tools with reality, it does not reopen the INT8/INT4-on-
 Thor question.
+
+# OPT-022: real activation calibration for `fp8_static*` (roadmap item 7)
+
+Status: done on H100; Thor confirmation pending (checklist below).
+Plan: `plan.md` "Real calibration data pipeline for `fp8_static*`
+(roadmap item 7)". Mechanism and file format:
+`docs/imagewam_calibration.md`.
+
+## What changed
+
+- `_calibrate_fp8()` takes its scales from a real calibration file
+  (`calibration_path=`), built by `benchmarks/imagewam_build_calibration.py`
+  from 64 LIBERO frames of `libero_object` / `libero_goal` / `libero_10`
+  through the real fp16 pipeline (VAE, Qwen3, proprio, 10 denoise
+  steps). Scale = house percentile (99.9) of per-sample absmax, / 448.
+  The `N(0, 0.1)` placeholder remains only without a file and logs a
+  warning.
+- Prerequisite: `issues.md` ISSUE-001 (TN cuBLASLt FP8) so `fp8` and
+  `fp8_static` run on the H100 dev machine at all.
+
+## Why the placeholder failed
+
+Real GEMM-input absmax per site ranges from ~2 (ActionDiT `proj`) to
+~7000 (backbone double `txt_mlp2`, whose input has p99.99/amax = 0.018:
+a few text-stream positions are huge). `N(0, 0.1)` noise has absmax ~0.5,
+so the placeholder clipped nearly every site by 1-4 orders of magnitude.
+
+## H100 results (real checkpoint, 20 held-out `libero_spatial` frames)
+
+`benchmarks/imagewam_precision_fidelity.py`, `fp8_static` vs `fp16`,
+official-sampler noise, median (min):
+
+| | backbone_hidden | action_hidden | action_latent | actions | MAE / fp16 |
+|---|---:|---:|---:|---:|---:|
+| placeholder (H100) | 0.45582 (0.42467) | 0.68728 | 0.87187 (0.67097) | 0.90093 (0.73530) | 1.697 |
+| **real file (H100)** | **0.99994 (0.99984)** | **0.99995** | **0.99997 (0.99995)** | **0.99997 (0.99989)** | **1.000** |
+| Thor, OPT-014 result 1 (placeholder, 1 frame, `infer()` noise) | 0.467 | - | 0.257 | 0.697 | 1.43 (`_cutlass`, 50 frames) |
+
+The H100 placeholder row reproduces the Thor collapse
+(`backbone_hidden` 0.456 vs 0.467).
+
+`benchmarks/imagewam_e2e_official_compare.py`, `N_TASKS=10 FRAMES=0,60
+SEEDS=0,1` (20 frames), vs official ImageWAM:
+
+| FlashRT path | fr_vs_off median | min | mean MAE vs GT | served_vs_off median |
+|---|---:|---:|---:|---:|
+| fp16 (baseline, re-run on this branch) | 0.99840 | 0.99567 | 0.18359 | 0.99602 |
+| fp8_static, placeholder | 0.87576 | 0.66887 | 0.30207 | 0.91927 |
+| **fp8_static, real file** | **0.99844** | **0.99559** | **0.18372** | **0.99599** |
+| fp8 (dynamic scale, `N_TASKS=3 FRAMES=0`) | 0.99845 | 0.99836 | 0.20706 (official 0.20688) | 0.99439 |
+
+With real scales `fp8_static` is indistinguishable from `fp16` against
+official ImageWAM (official's own seed-to-seed spread: median 0.99630).
+
+## Thor check
+
+Checklist item in the stream's final report: `fp8_static` and
+`fp8_static_cutlass` with the real file, vs `fp16`, compared with
+OPT-014 result 1/2; `infer()` P50 against OPT-014 result 4 (243.0 ms
+`fp8_static_cutlass`, 236.9 ms `nvfp4`). Calibration changes scale
+values only, not the captured graph, so P50 should not move.

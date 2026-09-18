@@ -3200,7 +3200,7 @@ Serve:
 
 ### Phase 1: TN FP8 cuBLASLt path (ISSUE-001)
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: `Fp8Linear` / `StaticFp8Linear(use_cutlass=False)` run on
   sm_89/sm_90; Thor keeps the NN path unchanged.
@@ -3212,7 +3212,7 @@ Phase Status: active
 
 ### Phase 2: frontend eager-run hooks
 
-Phase Status: pending
+Phase Status: completed
 
 - Goal: `stage_inputs()` and `run_eager()`; `infer()` uses
   `stage_inputs()` with unchanged behavior.
@@ -3222,7 +3222,7 @@ Phase Status: pending
 
 ### Phase 3: recorder, frame selection, calibration file, build script
 
-Phase Status: pending
+Phase Status: completed
 
 - Goal: a real calibration file on disk.
 - Files: `libero_frames.py`, `activation_recorder.py`,
@@ -3234,7 +3234,7 @@ Phase Status: pending
 
 ### Phase 4: `_calibrate_fp8()` loads the file
 
-Phase Status: pending
+Phase Status: completed
 
 - Goal: real scales applied before capture; placeholder only without a
   file, with a warning.
@@ -3245,7 +3245,7 @@ Phase Status: pending
 
 ### Phase 5: H100 validation and Thor handoff
 
-Phase Status: pending
+Phase Status: active
 
 - Goal: measured `fp8_static` accuracy with placeholder vs real
   calibration, against `fp16` and official; Thor checklist.
