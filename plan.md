@@ -3040,7 +3040,7 @@ approved`.
 
 # Plan: Hadamard-rotated INT4 (E0M3) precision tier (roadmap item 9)
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -3242,7 +3242,7 @@ Phase Status: completed
 
 ### Phase 3 — `e0m3_hadamard` precision tier
 
-Phase Status: active
+Phase Status: completed
 
 - Goal: `E0m3HadamardLinear`, the precision string, the `K`/`N`
   alignment fallback, tests; `sm110_check.sh` passes.
@@ -3255,7 +3255,7 @@ Phase Status: active
 
 ### Phase 4 — Thor check script
 
-Phase Status: pending
+Phase Status: completed
 
 - Goal: one script that reports `backbone_hidden`, `action_latent`,
   `actions` cosine vs fp16 and open-loop MAE on real LIBERO frames for
@@ -3264,3 +3264,19 @@ Phase Status: pending
 - Files: `benchmarks/imagewam_e0m3_hadamard_thor_check.py`.
 - Observation: runs on H100 in `fp16`-only mode to check the harness;
   the Thor checklist carries the real run.
+
+### Outcome
+
+- Phase 2 decision: simulated `e0m3_hadamard` (E0M3 W4A4, per-16
+  Hadamard, per-tensor weight pre-scale) lowers the median actions
+  error vs fp16 by 60% relative to `nvfp4` (2.86e-4 vs 7.17e-4, 20/20
+  frames better) with MAE vs ground truth equal to fp16's; the tier
+  proceeded. Numbers in `opportunities.md` OPT-024.
+- Phase 3 adds tile variants 1/6/8 to the E0M3-weight GEMM
+  (`cutlass_fp4_gemm_e0m3w_variant`) so the tier runs the same tiles as
+  `nvfp4`. No new rotation kernel: rotations larger than 16 were not
+  more accurate, and the existing in-register H16 quantizer is used.
+- Thor verification (kernel tests, whole pipeline, latency) is listed
+  in OPT-024 "Open" and runs through
+  `tests/test_imagewam_e0m3_hadamard.py` and
+  `benchmarks/imagewam_e0m3_hadamard_thor_check.py`.
