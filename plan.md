@@ -4918,3 +4918,246 @@ Same environment as the item-2 Thor check.
    `VAE_ENCODER=native VAE_GRAPH=1`. Expected: `fr_vs_off` and
    `mae_fr_vs_gt` equal between the two runs to about 1e-4. Report both
    SUMMARY blocks.
+
+# Plan: Hadamard-rotated INT4 (E0M3) precision tier (roadmap item 9)
+
+Plan Status: completed
+
+## Problem
+
+### Current
+
+- ImageWAM's shipped quantized tier is `nvfp4` (`Nvfp4Linear`,
+  `quant_linear.py`): weights and activations both E2M1 with one UE4M3
+  scale per 16 K-elements, scale = `amax/6` rounded to UE4M3
+  (`quantize_fp4_dynamic_sfa_fp16`, `csrc/quantize/quantize_fp4_sfa.cu`),
+  no per-tensor global scale, GEMM `cutlass_fp4_gemm_variant`.
+- The repository already contains a native SM110 uniform-INT4 path from
+  the Pi0.5 decoder work (`docs/pi05_thor_decoder_fp4_e2e.md`):
+  - `cutlass_fp4_gemm_e0m3w` (`csrc/gemm/fp4/cutlass_fp4_gemm_e0m3w_sm100.cu`):
+    tcgen05 block-scaled GEMM whose runtime instruction descriptor
+    decodes B as E0M3 (sign-magnitude integers -7..7) and A as E2M1
+    (`a_format=1`) or E0M3 (`a_format=0`), same packed/SFA/SFB layouts
+    as NVFP4, fp16 output, `alpha` scalar.
+  - `quantize_e0m3_dynamic_sfa_fp16` (weights, `amax/7`) and
+    `quantize_e0m3_dynamic_sfa_fp16_vec(use_rht)` (activations,
+    optional in-register 16-point Walsh-Hadamard transform scaled by
+    1/4 before quantization, `csrc/fused_fp4/pi05_e0m3_act.cu`).
+  - Offline weight rotation: each 16-wide K block multiplied by the
+    orthonormal Sylvester matrix `H16/4` in PyTorch before
+    quantization (`pi05_thor_fp4.py`). The rotation is block-diagonal
+    along K, so it needs only `K % 16 == 0`; the power-of-two full-K
+    constraint that blocked the SM80 QuaRot kernel (OPT-007, the
+    padding probe) does not apply.
+  - Pi0.5 result (3-view decoder): W4A4 E0M3 + H16 raw cosine 0.99937
+    vs NVFP4 0.99906, +0.35 ms from software E0M3 encoders.
+- Measured on the real ImageWAM checkpoint (H100, 30 weight tensors
+  sampled across backbone and ActionDiT): median per-16 block amax is
+  about 0.05, so the UE4M3 block scale (`amax/6` or `amax/7`) lands
+  below the smallest normal UE4M3 value (2^-6) for 69-100% of blocks,
+  typically above 95%. There, UE4M3 has an absolute step of 2^-9, so
+  the scale itself carries up to about 14% rounding error. This error
+  source is shared by both element formats and is not addressed by
+  either.
+
+### Problem
+
+It is unknown whether E0M3 + Hadamard is more accurate than `nvfp4`
+on ImageWAM's real weights and activations. If it is, ImageWAM has no
+precision string that uses it.
+
+### Measurable goal
+
+1. Accuracy decision, H100 simulation matched to the real quantizer
+   math, on real weights at every quantized GEMM and real activations
+   from the fp16 pipeline on real LIBERO frames:
+   - per-GEMM output relative error vs the fp16 GEMM;
+   - whole-pipeline `backbone_hidden`, `action_latent`, and denormalized
+     `actions` cosine vs fp16 with the same N(0,1) noise, and MAE vs
+     ground truth.
+   Decision rule: the tier proceeds to wiring only if simulated
+   `e0m3_h16` lowers the whole-pipeline actions error vs fp16
+   (`1 - cos`, median over frames) by at least 25% relative to
+   simulated `nvfp4`, without a worse MAE vs ground truth. Otherwise
+   the result is recorded as negative and the plan stops after Phase 2.
+2. If it proceeds: `precision="e0m3_hadamard"` runs end to end through
+   `ImageWAMTorchFrontendThor`, the default stays `nvfp4`, all Thor-only
+   code passes `sm110_check.sh`, and a Thor script reports correctness
+   vs fp16 and `infer()` P50 vs `nvfp4`.
+
+## Structure
+
+- `flash_rt/models/imagewam/blockscaled_ref.py` (new): PyTorch
+  reference of the SM100 block-scaled operand formats. Pure functions,
+  no state. Owns the reference math: UE4M3 scale rounding (RNE,
+  saturating at 448), E2M1 thresholds as in `quantize_fp4_sfa.cu`,
+  E0M3 RNE integer grid, `amax` and MSE scale rules, per-block
+  Sylvester Hadamard rotation, nibble packing, and the CUTLASS
+  `Sm1xxBlockScaledConfig<16>` SFA/SFB byte layout. Used by unit
+  tests, the accuracy study, and the weight preparation of the new
+  linear class.
+- `benchmarks/_imagewam_libero_frames.py` (new): real LIBERO frame
+  loader (first episode per task, chosen frames, both cameras, proprio,
+  64-step ground truth), shared by the study and the Thor script.
+- `benchmarks/imagewam_e0m3_accuracy_study.py` (new): H100 study.
+  Builds the fp16 frontend on the real checkpoint, runs the pipeline
+  eagerly with probe or fake-quant linears, prints per-GEMM and
+  whole-pipeline tables. Owns no persistent state.
+- Phase 3, conditional on the decision rule:
+  - `flash_rt/models/imagewam/quant_linear.py`: new
+    `E0m3HadamardLinear`. Owns its rotated, packed E0M3 weight, SFB,
+    activation scratch, and GEMM `alpha`.
+  - `flash_rt/frontends/torch/imagewam_thor.py`: `_PRECISIONS` gains
+    `"e0m3_hadamard"`; `_wrap_linear` gains its branch with the
+    `n % 16`/`k % 16` fallback to `Fp16Linear`. `merge_qkv_mlp` stays
+    on (the merged `linear1` is one ordinary `(K=3072|1024, N)` weight
+    to this class).
+- `benchmarks/imagewam_e0m3_hadamard_thor_check.py` (new, Phase 4):
+  Thor correctness and latency script.
+
+## Interface
+
+```python
+# flash_rt/models/imagewam/blockscaled_ref.py
+BLOCK: int = 16
+def ue4m3_round(x: torch.Tensor) -> torch.Tensor
+def e2m1_round(v: torch.Tensor) -> torch.Tensor
+def e0m3_round(v: torch.Tensor) -> torch.Tensor
+def hadamard_matrix(n: int, device=..., dtype=...) -> torch.Tensor   # orthonormal Sylvester
+def rotate_k_blocks(x: torch.Tensor, block: int) -> torch.Tensor     # last dim, block-diagonal
+def fwht16_butterfly(x: torch.Tensor) -> torch.Tensor                # kernel's butterfly order
+def quantize_blocks(x: torch.Tensor, fmt: str, scale_rule: str) -> BlockQuantized
+def dequantize_blocks(q: BlockQuantized) -> torch.Tensor
+def pack_codes(codes: torch.Tensor) -> torch.Tensor                  # [R,K] -> [R,K/2] uint8
+def sf_offsets(rows: int, k: int) -> torch.Tensor                    # [rows, K/16] byte offsets
+def sf_size_bytes(rows: int, k: int) -> int
+def pack_scales(scale_bytes: torch.Tensor) -> torch.Tensor           # [rows,K/16] -> [sf_size]
+
+@dataclass
+class BlockQuantized:
+    codes: torch.Tensor        # uint8 [R, K], sign-magnitude 4-bit codes
+    scale_bytes: torch.Tensor  # uint8 [R, K/16], UE4M3 bit patterns
+    scales: torch.Tensor       # float32 [R, K/16], decoded scale values
+    fmt: str                   # "e2m1" | "e0m3"
+
+# flash_rt/models/imagewam/quant_linear.py (Phase 3)
+class E0m3HadamardLinear:
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int) -> None
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None
+```
+
+State transitions of `E0m3HadamardLinear`: construction reads the
+`(K,N)` fp16 weight once, transposes to `(N,K)`, rotates every 16-wide
+K block by `H16/4`, quantizes to E0M3 + SFB, and keeps only the packed
+result. Each call quantizes the activation with the H16 rotation into
+its own scratch (allocated on the first call, grown if `m` grows) and
+runs `cutlass_fp4_gemm_e0m3w(a_format=0)`.
+
+## Flow
+
+Study (Phase 2), per frame: VAE tokens and proprio into the fp16
+frontend buffers, then `imagewam_prefill` + `imagewam_denoise_loop`
+eagerly on the current stream with the same arguments
+`_capture_graph` uses.
+
+- Per-GEMM pass: every quantized weight key is wrapped by a probe that
+  runs the real `Fp16Linear`, then evaluates each simulated tier on
+  the same input `x` and weight `W` and accumulates relative error.
+  The pipeline itself stays exactly fp16.
+- Whole-pipeline pass, one tier at a time: each quantized weight buffer
+  is overwritten in place by its fake-quantized value (exactly
+  representable in fp16), and each call fake-quantizes `x` (plus the
+  same rotation) into a scratch buffer before the unchanged fp16 GEMM
+  (fp32 accumulation). Weights are restored from a CPU copy between
+  tiers.
+
+Served tier (Phase 3): `_wrap_linear` -> `E0m3HadamardLinear` ->
+`pipeline_thor.py` calls `weights[key](x_ptr, out_ptr, m, stream)`
+unchanged -> activation quantizer + E0M3 GEMM inside the captured
+CUDA graph.
+
+## Code Mapping
+
+| item | file |
+|---|---|
+| reference math, packing, SF layout | `flash_rt/models/imagewam/blockscaled_ref.py` |
+| reference unit tests | `tests/test_imagewam_blockscaled_ref.py` |
+| LIBERO frame loader | `benchmarks/_imagewam_libero_frames.py` |
+| accuracy study | `benchmarks/imagewam_e0m3_accuracy_study.py` |
+| linear class (Phase 3) | `flash_rt/models/imagewam/quant_linear.py` |
+| precision string, fallback (Phase 3) | `flash_rt/frontends/torch/imagewam_thor.py` |
+| routing + Thor kernel tests (Phase 3) | `tests/test_imagewam_e0m3_hadamard.py` |
+| Thor script (Phase 4) | `benchmarks/imagewam_e0m3_hadamard_thor_check.py` |
+| results | `opportunities.md` OPT-024; problems in ISSUE-050..059 |
+
+## Implementation Phases
+
+### Phase 1 — Reference math and unit tests
+
+Phase Status: completed
+
+- Goal: a PyTorch reference that reproduces the repository's NVFP4 and
+  E0M3 quantizers, the H16 rotation, and the packed/SF byte layout.
+- Files: `flash_rt/models/imagewam/blockscaled_ref.py`,
+  `tests/test_imagewam_blockscaled_ref.py`.
+- Observation: rotation orthogonality and GEMM invariance in fp32 at
+  the real K values (max-abs error printed), butterfly equals the
+  matrix form, grid and scale-rule properties, pack/unpack round trip,
+  SF offsets form a permutation of the `sf_size_bytes` buffer for the
+  real `(rows, K)` shapes.
+
+### Phase 2 — Accuracy study on H100 (decision gate)
+
+Phase Status: completed
+
+- Goal: per-GEMM and whole-pipeline simulated accuracy of `nvfp4`,
+  `nvfp4` with MSE weights, E0M3 weights with E2M1 activations, E0M3
+  W4A4 without and with H16, and E2M1 with H16, on real weights, real
+  activations, and real LIBERO frames. Arms with a per-tensor
+  power-of-two weight scale (applied through the GEMM `alpha`) measure
+  the UE4M3 subnormal-scale effect.
+- Files: `benchmarks/_imagewam_libero_frames.py`,
+  `benchmarks/imagewam_e0m3_accuracy_study.py`.
+- Observation: printed tables; results in `opportunities.md` OPT-024;
+  decision rule from the Problem section.
+
+### Phase 3 — `e0m3_hadamard` precision tier
+
+Phase Status: completed
+
+- Goal: `E0m3HadamardLinear`, the precision string, the `K`/`N`
+  alignment fallback, tests; `sm110_check.sh` passes.
+- Files: `quant_linear.py`, `imagewam_thor.py`,
+  `tests/test_imagewam_e0m3_hadamard.py`.
+- Observation: routing test on H100 (every quantized key maps to the
+  new class, `K=7`/`N=7` map to `Fp16Linear`); Thor-only kernel tests
+  (weight packing bit-exact vs the reference, GEMM vs fp16 cosine at
+  the real shapes) skip on H100; regression suite count.
+
+### Phase 4 — Thor check script
+
+Phase Status: completed
+
+- Goal: one script that reports `backbone_hidden`, `action_latent`,
+  `actions` cosine vs fp16 and open-loop MAE on real LIBERO frames for
+  `fp16`, `nvfp4`, `e0m3_hadamard`, plus `infer()` P50/P10/P90 for
+  `nvfp4` vs `e0m3_hadamard` in one process.
+- Files: `benchmarks/imagewam_e0m3_hadamard_thor_check.py`.
+- Observation: runs on H100 in `fp16`-only mode to check the harness;
+  the Thor checklist carries the real run.
+
+### Outcome
+
+- Phase 2 decision: simulated `e0m3_hadamard` (E0M3 W4A4, per-16
+  Hadamard, per-tensor weight pre-scale) lowers the median actions
+  error vs fp16 by 60% relative to `nvfp4` (2.86e-4 vs 7.17e-4, 20/20
+  frames better) with MAE vs ground truth equal to fp16's; the tier
+  proceeded. Numbers in `opportunities.md` OPT-024.
+- Phase 3 adds tile variants 1/6/8 to the E0M3-weight GEMM
+  (`cutlass_fp4_gemm_e0m3w_variant`) so the tier runs the same tiles as
+  `nvfp4`. No new rotation kernel: rotations larger than 16 were not
+  more accurate, and the existing in-register H16 quantizer is used.
+- Thor verification (kernel tests, whole pipeline, latency) is listed
+  in OPT-024 "Open" and runs through
+  `tests/test_imagewam_e0m3_hadamard.py` and
+  `benchmarks/imagewam_e0m3_hadamard_thor_check.py`.

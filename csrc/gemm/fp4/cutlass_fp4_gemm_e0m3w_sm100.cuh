@@ -10,7 +10,9 @@
 //  (produced by quantize_e0m3_dynamic_sfa_fp16). Scale factors stay per-16
 //  UE4M3 in the standard SFA/SFB tile-interleaved layouts on both operands.
 //
-//  Tile = 128x64x256 (the production decoder projection tile, variant v10).
+//  cutlass_fp4_gemm_e0m3w uses tile 128x64x256 (the production decoder
+//  projection tile, variant v10); cutlass_fp4_gemm_e0m3w_variant adds the
+//  wide-N tiles the NVFP4 dispatch uses for large-M projections.
 //  Additive: does NOT modify cutlass_fp4_gemm_variants.cu or any existing
 //  GEMM path.
 // ============================================================================
@@ -29,6 +31,16 @@ namespace fp4 {
 // 0x20000 / 0x30000 for can_implement / initialize / run failures.
 int cutlass_fp4_gemm_e0m3w(
     void const* A, void const* SFA, void const* B, void const* SFB,
+    void* D, int M, int N, int K, float alpha, float beta,
+    cudaStream_t stream, int a_format = 1);
+
+// Same GEMM with the tile/cluster configuration chosen by index, numbered
+// as cutlass_fp4_gemm_variant: 1 = 128x256x128 cluster 2x1x1,
+// 6 = 128x256x128 cluster 1x1x1, 8 = 128x256x256 cluster 1x1x1,
+// 10 = 128x64x256 cluster 1x1x1 (the tile of cutlass_fp4_gemm_e0m3w).
+// Any other index returns -99.
+int cutlass_fp4_gemm_e0m3w_variant(
+    int idx, void const* A, void const* SFA, void const* B, void const* SFB,
     void* D, int M, int N, int K, float alpha, float beta,
     cudaStream_t stream, int a_format = 1);
 

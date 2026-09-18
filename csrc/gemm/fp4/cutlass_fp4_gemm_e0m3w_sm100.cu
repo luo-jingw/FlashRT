@@ -1,7 +1,8 @@
 // ============================================================================
 //  Block-scaled GEMM with E0M3 (uniform INT4) weights — SM110 runtime idesc.
 //
-//  Structure mirrors cutlass_fp4_gemm_variants.cu with two differences:
+//  Structure mirrors cutlass_fp4_gemm_variants.cu (templated on the MMA tile
+//  and cluster shape, same variant numbering) with two differences:
 //    * ElementA/B are the CUTLASS runtime datatype
 //      (type_erased_dynamic_nv_float4_t), which makes the collective read
 //      the element format from mainloop arguments at run time and write it
@@ -32,7 +33,8 @@ namespace e0m3w {
 
 using namespace cute;
 
-struct RunnerV10 {
+template <class MmaTile_, class Cluster_>
+struct Runner {
   using ElementA   = cutlass::type_erased_dynamic_nv_float4_t;
   using LayoutATag = cutlass::layout::RowMajor;
   static constexpr int AlignmentA = 32;
@@ -51,9 +53,8 @@ struct RunnerV10 {
   using ElementAccumulator = float;
   using ArchTag            = cutlass::arch::Sm100;
   using OperatorClass      = cutlass::arch::OpClassBlockScaledTensorOp;
-  // Production decoder projection tile (variant v10).
-  using MmaTile            = Shape<_128, _64, _256>;
-  using Cluster            = Shape<_1, _1, _1>;
+  using MmaTile            = MmaTile_;
+  using Cluster            = Cluster_;
 
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
       ArchTag, OperatorClass,
@@ -137,6 +138,14 @@ struct RunnerV10 {
   }
 };
 
+// Tile/cluster configurations, numbered as in cutlass_fp4_gemm_variants.cu.
+// V10 is the production decoder projection tile; V1/V6/V8 are the tiles
+// the NVFP4 dispatch picks for large-M projections (pick_variant).
+using RunnerV1  = Runner<Shape<_128, _256, _128>, Shape<_2, _1, _1>>;
+using RunnerV6  = Runner<Shape<_128, _256, _128>, Shape<_1, _1, _1>>;
+using RunnerV8  = Runner<Shape<_128, _256, _256>, Shape<_1, _1, _1>>;
+using RunnerV10 = Runner<Shape<_128, _64, _256>, Shape<_1, _1, _1>>;
+
 }  // namespace e0m3w
 
 int cutlass_fp4_gemm_e0m3w(
@@ -145,6 +154,19 @@ int cutlass_fp4_gemm_e0m3w(
     cudaStream_t stream, int a_format) {
   return e0m3w::RunnerV10::run(A, SFA, B, SFB, D, M, N, K, alpha, beta,
                                stream, a_format);
+}
+
+int cutlass_fp4_gemm_e0m3w_variant(
+    int idx, void const* A, void const* SFA, void const* B, void const* SFB,
+    void* D, int M, int N, int K, float alpha, float beta,
+    cudaStream_t stream, int a_format) {
+  switch (idx) {
+    case 1:  return e0m3w::RunnerV1::run(A, SFA, B, SFB, D, M, N, K, alpha, beta, stream, a_format);
+    case 6:  return e0m3w::RunnerV6::run(A, SFA, B, SFB, D, M, N, K, alpha, beta, stream, a_format);
+    case 8:  return e0m3w::RunnerV8::run(A, SFA, B, SFB, D, M, N, K, alpha, beta, stream, a_format);
+    case 10: return e0m3w::RunnerV10::run(A, SFA, B, SFB, D, M, N, K, alpha, beta, stream, a_format);
+    default: return -99;
+  }
 }
 
 }  // namespace fp4
