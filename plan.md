@@ -3579,10 +3579,12 @@ NCHW out (the VAE's input dtype and layout, concatenated in place).
 
 - `resize="area"`: bit-exact to `_prep_view` for every input size,
   including the no-resize case, which reads a 256-entry BF16 table.
-- `resize="pil_bilinear"`: bit-exact to the official
+- `resize="pil_bilinear"`: resize bit-exact to the official
   `_center_crop_resize` (PIL `BILINEAR`, fixed-point 22-bit
   coefficients, horizontal pass then vertical pass with uint8
-  rounding in between), followed by the same 256-entry table.
+  rounding in between), followed by the same 256-entry table. The
+  official eval's own normalization (BF16 arithmetic) is not
+  reproduced; ISSUE-030 records that difference.
 - Observations: bit-exactness counts at real 512x512 LIBERO frames and
   synthetic sizes, launch count, and preprocessing latency A/B.
 
@@ -3728,25 +3730,33 @@ Plan Status: completed
 
 `infer()` runs the real FLUX.2 `AutoEncoder.encode` in plain PyTorch
 BF16 outside the CUDA graph: 21.5 ms of the 231.6 ms `nvfp4` P50 on
-Thor (opportunities.md OPT-012). A first H100 profile at the real
-224x448 input (indicative; shared GPU) shows about 297 kernels per
-encode and this GPU-time split (8.5 ms per encode in the profiled run):
+Thor (opportunities.md OPT-012). On H100 at the real 224x448 input,
+`benchmarks/imagewam_vae_stage_bench.py --section profile
+--profile-repeats 7` (torch profiler, GPU kernel time per op family, 3
+invocations x 7 captures of 10 encodes) gives 282 kernels and 9.5-10.2
+ms of kernel time per encode, split as below. Shares are the per-
+invocation medians over captures; single captures vary more (range in
+parentheses) because the co-tenant job time-slices the GPU. The same
+numbers are recorded in opportunities.md OPT-021.
 
-| op family | share |
-|---|---:|
-| cuDNN NCHW<->NHWC layout transforms around every conv | ~35% |
-| GroupNorm (`RowwiseMoments` launches only N*G=32 blocks) | ~29% |
-| conv math kernels | ~11% |
-| residual adds, sigmoid, mul, pad, copies | ~20% |
+| op family | kernels per encode | share of GPU kernel time |
+|---|---:|---:|
+| torch GroupNorm statistics (`RowwiseMoments`, only N*G = 32 blocks) | 44 | 35-39% (31-50%) |
+| convolution math | 25 | 18-26% (12-34%) |
+| other elementwise: conv-bias broadcast adds, residual adds, mul, pad, copies | 109 | 16-24% (10-30%) |
+| cuDNN NCHW<->NHWC layout transforms around each convolution | 72 | 10-17% (8-24%) |
+| sigmoid (swish) | 21 | 2-4% |
+| attention, q/k/v and proj GEMMs | 11 | ~2% |
 
 Converting the stock module to `channels_last` removes the transforms
 but makes torch's GroupNorm slower (strided kernels), so no speedup.
 
 ### Problem
 
-The VAE encode is outside the graph, launch-heavy, and spends most of
-its GPU time on layout transforms and a poorly parallelized GroupNorm,
-not on convolution math.
+The VAE encode is outside the graph and launch-heavy (282 kernels),
+and about half of its GPU time goes to a poorly parallelized GroupNorm
+statistics kernel and to layout transforms, a further fifth to unfused
+elementwise ops; convolution math is only about a fifth to a quarter.
 
 ### Measurable goal
 

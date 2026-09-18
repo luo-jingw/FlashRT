@@ -241,26 +241,41 @@ Status: open (decision needed: served resize filter)
 Area: VAE input resize in the served path
 (`vae_encoder._prep_view`, and `VaePreprocessor(resize="area")`, the
 frontend default `vae_resize="area"`), against the official LIBERO eval
-(`ImageWAM/experiments/libero/eval_libero_single._center_crop_resize`)
-and training (`torchvision.transforms.Resize([224, 224])` per camera,
-`config.yaml` `processor.val_transforms`/`train_transforms`)
+(`ImageWAM/experiments/libero/eval_libero_single._obs_to_model_input` and
+`_center_crop_resize`) and training (`torchvision.transforms.Resize([224,
+224])` per camera, `config.yaml` `processor.val_transforms` /
+`train_transforms`)
 
 ## Observation
 
-The served path resizes each camera view to 224x224 with
-`F.interpolate(mode="area")`. The official eval uses PIL
-`Image.resize(BILINEAR)` plus a center crop (a no-op for the square
-512x512 LIBERO frames). Training resizes with torchvision `Resize`
-(bilinear, antialias). `benchmarks/imagewam_e2e_official_compare.py`
-feeds the same PIL-resized 224x224 views to both sides by default, so its
-baseline does not see this difference.
+Three different preprocessing chains feed the same model:
+
+| chain | resize to 224x224 per camera | normalization |
+|---|---|---|
+| served (`vae_resize="area"`) | torch `F.interpolate(mode="area")` | float32 `x*2/255-1`, then BF16 (256-entry table) |
+| official LIBERO eval | PIL `Image.resize(BILINEAR)` + center crop | `x*(2/255)-1` in BF16 arithmetic |
+| training | float32 `x/255`, torchvision `Resize` (bilinear, antialias) | `Normalize(0.5, 0.5)` in float32, then BF16 |
+
+The official eval renders the simulator at 256x256
+(`LIBERO_ENV_RESOLUTION = 256`, `experiments/libero/libero_utils.py:16`,
+passed to `get_libero_env` at `eval_libero_single.py:753`), so its resize
+is 256 -> 224; the LIBERO-fastwam dataset frames are 512x512. The center
+crop is a no-op for square frames.
+
+`vae_resize="pil_bilinear"` makes the served resize bit-exact to the
+official eval's resize (`tests/test_imagewam_vae_preprocess.py`); its
+normalization stays the served table, so it is not bit-exact to the
+official eval as a whole. `benchmarks/imagewam_e2e_official_compare.py`
+feeds the same PIL-resized views to both sides by default, so its
+baseline does not see the resize difference.
 
 ## Impact
 
-With raw frames the served policy sees a slightly different image than
-the model saw in training and in the official eval. Measured action
-effect on open-loop LIBERO frames is small (below the official model's
-own seed-to-seed spread); closed-loop effect is unmeasured.
+With raw camera frames the served policy sees a different image than
+the official eval and than training. The measured open-loop action
+effect is small at 512x512 and larger at 256x256, the resolution the
+official eval runs at, but stays inside the official model's own
+seed-to-seed spread. Closed-loop effect is unmeasured.
 
 ## Evidence
 
@@ -268,48 +283,64 @@ Resize filters on real 512x512 LIBERO frames (episode 0, frame 0, both
 cameras), uint8 levels: torchvision `Resize` vs PIL mean |diff| 0.07,
 max 1; area vs PIL mean |diff| 0.66-0.80, max 31-34.
 
-Same 20 raw frames (libero_spatial, 10 tasks x frames {0,60}), served
-area vs `pil_bilinear` preprocessing, torch BF16 VAE on H100:
+VAE token cosine, `benchmarks/imagewam_vae_resize_compare.py` (torch
+BF16 VAE, H100), 20 frame pairs (libero_spatial, 10 tasks x frames
+{0,60}), median (min):
 
-| quantity | min | median | max |
-|---|---:|---:|---:|
-| VAE input image cosine | 0.99887 | 0.99934 | 0.99957 |
-| VAE token cosine | 0.98757 | 0.98933 | 0.99077 |
-| VAE token rel_l2 | 0.136 | 0.146 | 0.158 |
-| VAE token max-abs | 1.15 | 1.43 | 2.30 |
+| pair | 512x512 frames | 256x256 proxy (`--proxy-size 256`) |
+|---|---:|---:|
+| served area vs `pil_bilinear` | 0.98933 (0.98757) | 0.97369 (0.96405) |
+| `pil_bilinear` vs official eval chain (normalization only) | 0.99989 (0.99977) | 0.99989 (0.99980) |
+| `pil_bilinear` vs training transform | 0.99631 (0.99540) | 0.99566 (0.99483) |
+| official eval chain vs training transform | 0.99631 (0.99513) | 0.99567 (0.99465) |
+| served area vs training transform | 0.99263 (0.98985) | 0.97925 (0.96790) |
 
-End to end, `imagewam_e2e_official_compare.py`, fp16, same 20 frames,
-seeds {0,1}, the official side always PIL-resized:
+The 256x256 proxy PIL-downscales the 512x512 frames (BILINEAR); a real
+256x256 simulator render is not identical to it. At 256x256 the
+area-vs-PIL token gap (1 - cosine, median) is about 2.5x the 512x512 gap.
+
+End to end, `imagewam_e2e_official_compare.py`, fp16, the same 20
+frames, seeds {0,1}; the official side always gets its PIL resize of
+the same frames:
 
 | FlashRT input | `fr_vs_off` median | min | mean | mean `mae_fr_vs_gt` |
 |---|---:|---:|---:|---:|
-| PIL-resized 224x224 (baseline) | 0.99840 | 0.99567 | 0.99803 | 0.18359 |
+| 512x512 frames PIL-resized to 224 (baseline) | 0.99840 | 0.99567 | 0.99803 | 0.18359 |
 | raw 512x512, `vae_resize="area"` (served) | 0.99830 | 0.99531 | 0.99806 | 0.18375 |
 | raw 512x512, `vae_resize="pil_bilinear"` | 0.99840 | 0.99567 | 0.99803 | 0.18359 |
+| raw 256x256 proxy (`RAW_SIZE=256`), `vae_resize="area"` | 0.99827 | 0.99371 | 0.99786 | 0.18470 |
+| raw 256x256 proxy, `vae_resize="pil_bilinear"` | 0.99842 | 0.99558 | 0.99806 | 0.18394 |
 
-Official seed 0 vs seed 1: median 0.99630, min 0.97154. Official mean
-MAE vs ground truth: 0.18538. The `pil_bilinear` row reproduces the
-baseline exactly because the kernel is bit-exact to the official PIL
-resize (`tests/test_imagewam_vae_preprocess.py`).
+Official seed 0 vs seed 1: median 0.99630, min 0.97154 (512x512);
+median 0.99612, min 0.97035 (256x256 proxy). Official mean MAE vs ground
+truth: 0.18538 (512), 0.18557 (256 proxy). The `pil_bilinear` rows equal
+what FlashRT gets from pre-resized views because the resize is
+bit-exact; the harness normalizes both sides in float32, so the
+normalization difference is not in these rows.
 
-Secondary: the official eval normalizes in the model dtype (BF16 math,
-`bf16(bf16(v * (2/255)) - 1)`), which differs from the served table
-(float32 math, then BF16) in 127 of 256 entries by at most 0.0039 (one
-BF16 ulp). The end-to-end harness normalizes in float32, which equals
-the served table, so this part is not in the numbers above.
+Normalization: the official eval's BF16 arithmetic,
+`bf16(bf16(v * (2/255)) - 1)`, differs from the served float32-derived
+table in 127 of 256 entries, by at most 0.0039; on tokens this is the
+`pil_bilinear` vs official eval chain row above (median 0.99989).
 
 ## Hypotheses
 
-The VAE amplifies the resize-filter difference to about 1% token
-cosine, and the policy is robust to it in open loop. Because training
-used a bilinear antialiased resize, `pil_bilinear` is the in-distribution
-choice; area averaging is a different low-pass filter.
+The VAE amplifies the resize-filter difference, more at 256 -> 224 than
+at 512 -> 224, and the policy is robust to it in open loop at both
+sizes. `pil_bilinear` is closer to the training transform than area
+(token cosine 0.9963 vs 0.9926 at 512, 0.9957 vs 0.9793 at 256), but
+neither reproduces training exactly: training resizes in float32 without
+uint8 rounding. The official eval chain is as far from training as
+`pil_bilinear` is.
 
 ## Next Experiment
 
 Owner decision: make `vae_resize="pil_bilinear"` the served default
-(same kernel launch count and cost; bit-exact to the official eval).
-A closed-loop LIBERO success-rate A/B of `area` vs `pil_bilinear` on
-Thor would settle whether the difference matters beyond open loop.
+(same kernel cost; resize bit-exact to the official eval, token cosine
+0.9999 to the official chain including its normalization). A training-
+transform mode (float32 bilinear antialias) would be closer to training
+still, but no reference eval uses it. A closed-loop LIBERO success-rate
+A/B of `area` vs `pil_bilinear` at the eval's 256x256 rendering on Thor
+would settle whether the difference matters beyond open loop.
 
 ## Resolution

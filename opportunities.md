@@ -4062,6 +4062,9 @@ BF16 cast) and `torch.cat`.
   `Resample.c` fixed-point bilinear (22-bit coefficients built on the
   host in double precision, horizontal then vertical pass with uint8
   rounding between them) plus the official center crop, then the table.
+  Only the resize is bit-exact to the official eval; the eval normalizes
+  in BF16 arithmetic, which differs from the table in 127 of 256 entries
+  (ISSUE-030).
 
 ## Result (H100, shared GPU, indicative)
 
@@ -4112,19 +4115,29 @@ Area: `flash_rt/models/imagewam/vae_stage.py`,
 
 ## Profile of the stock encode (H100, 224x448, indicative)
 
-`benchmarks/imagewam_vae_stage_bench.py --section profile`: 282-298
-kernels per `AutoEncoder.encode`. GPU kernel time by family, one run
-(the split is stable across runs; the absolute total varies 8.5-10.5
-ms on the shared GPU):
+Measured with `benchmarks/imagewam_vae_stage_bench.py --section profile
+--profile-repeats 7`: torch-profiler GPU kernel time per op family, 3
+invocations x 7 captures of 10 encodes. 282 kernels per
+`AutoEncoder.encode`, 9.5-10.2 ms kernel time per encode (per-invocation
+medians; single captures 8.6-10.5 ms). Shares are the per-invocation
+medians over captures, with the single-capture range in parentheses:
+the co-tenant job time-slices the GPU, which stretches individual kernel
+durations, so one capture alone can misstate the split.
 
-| family | share | kernels |
+| op family | kernels per encode | share of GPU kernel time |
 |---|---:|---:|
-| torch GroupNorm statistics (`RowwiseMoments`, N*G = 32 blocks) | 47% | 44 |
-| convolution math | 20% | 25 |
-| elementwise (conv-bias broadcast adds, residual adds, copies) | 15% | 79 |
-| cuDNN NCHW<->NHWC transforms around each convolution | 13% | 72 |
-| sigmoid + mul (swish) | 4% | 42 |
-| attention (one 1568-token block) | 1% | 1 |
+| torch GroupNorm statistics (`RowwiseMoments`, N*G = 32 blocks) | 44 | 35-39% (31-50%) |
+| convolution math | 25 | 18-26% (12-34%) |
+| other elementwise: conv-bias broadcast adds, residual adds, mul, pad, copies | 109 | 16-24% (10-30%) |
+| cuDNN NCHW<->NHWC transforms around each convolution | 72 | 10-17% (8-24%) |
+| sigmoid (swish) | 21 | 2-4% |
+| attention (one 1568-token block), q/k/v and proj GEMMs | 11 | ~2% |
+
+The same command profiles `NativeFlux2Encoder`: 142 kernels, 2.6-3.9 ms
+kernel time per encode (per-invocation medians); convolution math 30-44%
+of it, FlashRT GroupNorm apply 8-21%, GroupNorm statistics + finalize
+8-13%, bias+residual about 2%; the single attention kernel ranges 4-53%
+across captures, the most time-slicing-sensitive entry.
 
 Converting the stock module to `channels_last` removes the transforms
 but makes torch's GroupNorm slower on the strided layout; no net gain.
@@ -4185,8 +4198,11 @@ alternating):
 | stage, native encoder, CUDA graph | 147 | 1.9 ms | 4.3 ms |
 
 Wall-clock on this box has a ~2.4 ms floor per synchronized call from
-GPU time-slicing with the co-tenant job. Graph capture alone is worth
-~0.35 ms here, where the host CPU is fast and the encode is GPU-bound.
+GPU time-slicing with the co-tenant job, and kernel-time totals move
+with that load between runs (stock 7.8-10.5 ms, native 1.9-3.9 ms
+across the runs recorded here); compare variants within one run. Graph
+capture alone is worth ~0.35 ms here, where the host CPU is fast and
+the encode is GPU-bound.
 
 `infer()` at real dims (`--section infer`, fp16, random weights,
 alternating frontends): eager-torch 120.0 ms, graph-torch 119.5 ms,
@@ -4198,6 +4214,7 @@ eager-native 114.3 ms (512x512 views).
 - Thor: VAE-stage latency (stock 21.5 ms in OPT-012), `infer()` P50 on
   `nvfp4` for the four placements/encoders, and the token cosine on
   sm_110 (checklist).
-- Remaining native cost is mostly convolution math (~50%); the three
-  (0,1,0,1) zero pads before the stride-2 convolutions and the conv_in
-  input layout conversion are the next copy-elimination candidates.
+- The largest remaining native cost is convolution math (30-44% of its
+  kernel time); the three (0,1,0,1) zero pads before the stride-2
+  convolutions and the conv_in input layout conversion are the next
+  copy-elimination candidates.
