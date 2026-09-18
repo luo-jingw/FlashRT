@@ -3151,7 +3151,7 @@ warning line.
 
 ### Phase 1 — helper and unit tests
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `jetson_clock_state.py` with the interface above.
 Modified files: `flash_rt/hardware/jetson_clock_state.py`, `tests/test_jetson_clock_state.py`.
@@ -3160,7 +3160,7 @@ printed on this H100 box (expected `is_jetson=false`).
 
 ### Phase 2 — wire into the benchmark entry points
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: every listed benchmark prints the record once before timing.
 Modified files: the four benchmarks listed in Code Mapping.
@@ -3169,16 +3169,29 @@ on H100 far enough to see the record line (fp16 row).
 
 ### Phase 3 — Thor handoff
 
-Phase Status: pending
+Phase Status: blocked
 
 Goal: Thor checklist entry: record before and after
 `sudo nvpmodel -m 0 && sudo jetson_clocks`.
 Modified files: none (checklist in the stream report).
 Observation method: owner's Thor run.
+Blocker: needs the Thor hardware. The checklist command is
+`python -c "from flash_rt.hardware.jetson_clock_state import
+report_jetson_clock_state; report_jetson_clock_state()"`, run before and
+after locking; on the shared H100 the record is `is_jetson=false`.
+
+## Results
+
+- `tests/test_jetson_clock_state.py`: 11 passed on x86 (fake sysfs trees
+  for locked, unlocked GPU, non-MAXN, missing `nvpmodel`, EMC node
+  locked/unlocked, Jetson without GPU devfreq, unreadable frequency,
+  reporter output, off-Jetson).
+- `benchmarks/imagewam_thor_graph_bench.py` on H100 prints the
+  `[jetson-clock-state]` record (`is_jetson=false`) before its table.
 
 # Plan: Precision-routing contract test (roadmap item 11)
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -3264,7 +3277,7 @@ def route_of(value: object) -> str
 
 ### Phase 1 — contract test
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: the test file above, passing on H100 and in a process where
 `flash_rt.flash_rt_kernels` is unimportable and `CUDA_VISIBLE_DEVICES=""`.
@@ -3272,6 +3285,18 @@ Modified files: `tests/test_imagewam_thor_precision_routing.py`.
 Observation method: pytest in both environments; a deliberate
 mutation of `_wrap_linear` (drop the `nvfp4` K%16 fallback) must fail
 the test (checked once, not committed).
+
+## Results
+
+- `tests/test_imagewam_thor_precision_routing.py`: 54 passed on H100
+  with the real extension importable; 53 passed and 1 skipped
+  (`test_stub_signatures_match_quant_linear`, needs the real
+  `quant_linear`) with `CUDA_VISIBLE_DEVICES=""` and
+  `flash_rt.flash_rt_kernels` made unimportable. About 15 s either way.
+- Mutation check (not committed): removing the `nvfp4` `K%16`/`N%16`
+  fallback in `_wrap_linear` fails 5 tests, naming
+  `action_encoder.weight` and `head.linear.weight`; making
+  `fp8_static` skip the `linear1` merge fails 5 tests.
 
 # Plan: Fidelity and latency regression gate harness (roadmap item 13)
 
@@ -3284,9 +3309,8 @@ Plan Status: approved
 The repository has no committed gate for ImageWAM. Fidelity is checked
 ad hoc with `benchmarks/imagewam_e2e_official_compare.py`, which loads
 the official bf16 model (Qwen3-4B included) next to FlashRT in the same
-process and needs `av`/`pandas` for LIBERO decoding; the Thor
-environment has neither the spare memory budget nor those packages as a
-requirement. Latency claims (`nvfp4` 231.6 ms, `opportunities.md`
+process (about 34GB) and needs `av`/`pandas` for LIBERO decoding, none
+of which a Thor gate run should depend on. Latency claims (`nvfp4` 231.6 ms, `opportunities.md`
 OPT-015) are recorded in prose, with no machine-readable baseline and no
 pass/fail rule. Pi0.5's harness (`tests/bench_pi05_decoder_fp4_e2e.py`)
 has the generic pieces: per-sample cosine thresholds,
@@ -3425,7 +3449,7 @@ Runner (any CUDA device):
 
 ### Phase 1 — gate policy and fixture format, CPU tests
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `regression_gate.py`, `imagewam_gate_fixture.py`, the two config
 JSON files, unit tests.
@@ -3435,7 +3459,7 @@ fixture array) must fail verification.
 
 ### Phase 2 — explicit initial-noise hook in `infer()`
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `infer(observation, *, action_noise=None)`; default path
 unchanged.
@@ -3447,7 +3471,7 @@ regression suite unchanged.
 
 ### Phase 3 — fixture generator, fixture v1 on H100
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `imagewam_libero_gate_v1` (libero_spatial, 10 tasks, frames 0 and
 60, seeds 0 and 1) generated; manifest committed.
@@ -3458,7 +3482,7 @@ cosine; its summary must reproduce the end-to-end baseline.
 
 ### Phase 4 — gate runner, real fp16 gate on H100
 
-Phase Status: pending
+Phase Status: completed
 
 Goal: `tests/gate_imagewam_libero.py`; real `fp16` run on H100 passes
 fidelity with latency ungated; `fp8_static` without a calibration file
@@ -3469,9 +3493,27 @@ Observation method: result JSON values next to the end-to-end baseline.
 
 ### Phase 5 — Thor handoff
 
-Phase Status: pending
+Phase Status: blocked
 
 Goal: Thor checklist: copy fixture, verify checksums, run `nvfp4` and
 `fp16`, report result JSON.
 Modified files: none.
 Observation method: owner's Thor run.
+Blocker: needs the Thor hardware and a copy of the v1 fixture there.
+
+## Results (H100, shared GPU)
+
+- Phase 1: `tests/test_imagewam_regression_gate.py` 19 passed on CPU
+  without the compiled extension; a flipped byte in `fixture.npz` and a
+  mismatched array record are both rejected.
+- Phase 2: `tests/test_imagewam_infer_action_noise.py` 4 passed; the
+  fixed-noise path equals the direct buffer write plus graph replay
+  (max abs difference 0.0), the default path is unchanged.
+- Phase 3: fixture v1 generated (81 MiB). FlashRT fp16 against official,
+  seed 0: median 0.99840, min 0.99567, mean MAE 0.18359, equal to the
+  end-to-end baseline; official seed spread median 0.99630, min 0.97154.
+- Phase 4: `fp16` gate verdict `pass` (vs official median 0.99836, min
+  0.99554 over 40 runs; vs fp16 reference bit-identical; MAE 0.18364);
+  latency P50 158.2 ms recorded and ungated. `nvfp4` on sm_90 is
+  `blocked` at construction; `fp8_static` is `skipped` without a
+  calibration file and `blocked` with one (no constructor keyword yet).
