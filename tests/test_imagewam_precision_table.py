@@ -1,26 +1,28 @@
-"""The `Precision` property table against the frontend's own source.
+"""The `Precision` property table: its values, and the frontend's use of it.
 
-`flash_rt/models/imagewam/precision.py` holds, as data, what
-`flash_rt/frontends/torch/imagewam_thor.py` decides with string tuples and
-an `if self._precision == ...` chain. This test parses the frontend's SOURCE
-TEXT with `ast` (no import of the frontend, torch or the compiled kernels)
-and checks that the table says the same thing:
+`flash_rt/models/imagewam/precision.py` holds, as data, what the frontend
+(`flash_rt/frontends/torch/imagewam_thor.py`) decides: which precision needs
+a calibration file, takes AWQ input scales, has a switchable CUTLASS tile,
+falls back to the plain fp16 linear at which alignment, runs the merged
+single-stream `linear1`, keeps the fused SwiGLU MLP, and autotunes the
+`fp16_nn` backbone GEMMs.
 
-* the enum members equal `_PRECISIONS` (order included);
-* `needs_calibration`, `supports_awq`, `supports_tile_autotune` equal
-  membership in `_STATIC_FP8_PRECISIONS`, `_NVFP4_PRECISIONS`,
-  `_VARIANT_TUNED_PRECISIONS`;
-* `merge_qkv_mlp`, `fused_swiglu_mlp`, `fp16_nn_backbone_gemm` equal the
-  single-precision comparisons in the constructor / `_rnd_swiglu_mlp` /
-  the `fp16_nn_shapes=` call site;
-* `alignment_fallback(n, k)` equals the fallback rule extracted from each
-  branch of `_wrap_linear`, on a grid of (n, k);
-* `supports_native_runtime` equals "every linear class `_wrap_linear`
-  returns for that precision is one `pipeline_resources.linear_resource`
-  accepts", and the merged path holds.
+Since plan phase W7 the frontend has no second copy of that knowledge: its
+four module-level tuples are comprehensions over `Precision`/`PROPERTIES`,
+`_wrap_linear` takes its fallback from `Precision.alignment_fallback`, and
+the constructor, `_rnd_swiglu_mlp`, `_load_real_weights` and the
+`fp16_nn_shapes=` call site read the matching properties. So this test pins
+two things:
 
-When the frontend stops carrying these tuples (plan W7) the extraction
-helpers here move to the new source of truth; the expectations do not.
+* the VALUES, as literal expectation tables in this file (the table is the
+  source of truth, and a silent edit to it fails here);
+* the DELEGATION, by parsing the frontend's SOURCE TEXT with `ast` (no import
+  of the frontend, torch or the compiled kernels): every tuple is the
+  comprehension over the property it must be, `_wrap_linear` keeps exactly one
+  branch per enum member, takes its fallback decision from
+  `alignment_fallback`, and carries no precision string constant of its own.
+
+The libcudart-free, torch-free load of `precision.py` is checked at the end.
 """
 from __future__ import annotations
 
@@ -55,12 +57,151 @@ ALL = tuple(Precision)
 _FRONTEND_TREE = ast.parse(FRONTEND_SRC.read_text())
 
 
-def _module_tuple(name: str) -> tuple[str, ...]:
+# -- the pin: literal expectation tables ---------------------------------------
+
+# plan.md W3: the native GEMM of a tier needs both `n` and `k` of a (k, n)
+# linear to be a multiple of this; 1 means no constraint (plain fp16).
+EXPECTED_ALIGNMENT = {
+    "fp16": 1, "fp16_cutlass": 8, "fp8": 8, "nvfp4": 16,
+    "fp8_static": 8, "fp8_static_cutlass": 8, "e0m3_hadamard": 16, "nvfp4_sim": 16,
+}
+EXPECTED_NEEDS_CALIBRATION = frozenset({"fp8_static", "fp8_static_cutlass"})
+EXPECTED_SUPPORTS_AWQ = frozenset({"nvfp4", "nvfp4_sim"})
+EXPECTED_SUPPORTS_TILE_AUTOTUNE = frozenset({"nvfp4", "fp8_static_cutlass"})
+# Every precision except `fp16_cutlass` merges qkv+mlp gate/up: that tier has
+# its own fused SwiGLU MLP, which needs `mlp_in.weight` as a standalone tensor.
+EXPECTED_MERGE_QKV_MLP = frozenset(
+    p.value for p in ALL if p.value != "fp16_cutlass")
+EXPECTED_FUSED_SWIGLU_MLP = frozenset({"fp16_cutlass"})
+EXPECTED_FP16_NN_BACKBONE_GEMM = frozenset({"fp16"})
+# `pipeline_resources.linear_resource` accepts Fp16Linear, Bf16OutLinear and
+# Nvfp4Linear only, and the native pipeline records the merged linear1.
+EXPECTED_SUPPORTS_NATIVE_RUNTIME = frozenset({"fp16", "nvfp4"})
+# The classes `_wrap_linear` returns per branch (source-checked below).
+EXPECTED_WRAP_LINEAR_CLASSES = {
+    "fp16": frozenset({"Fp16Linear"}),
+    "fp16_cutlass": frozenset({"Fp16Linear", "CutlassFp16Linear"}),
+    "fp8": frozenset({"Fp16Linear", "Fp8Linear"}),
+    "nvfp4": frozenset({"Fp16Linear", "Nvfp4Linear"}),
+    "fp8_static": frozenset({"Fp16Linear", "StaticFp8Linear"}),
+    "fp8_static_cutlass": frozenset({"Fp16Linear", "StaticFp8Linear"}),
+    "e0m3_hadamard": frozenset({"Fp16Linear", "E0m3HadamardLinear"}),
+    "nvfp4_sim": frozenset({"Fp16Linear", "SimNvfp4Linear"}),
+}
+
+_BY_NAME = {p.value: p for p in ALL}
+
+
+# -- (a) the values -------------------------------------------------------------
+
+def test_alignment_values():
+    for name, alignment in EXPECTED_ALIGNMENT.items():
+        assert _BY_NAME[name].alignment == alignment, name
+
+
+def test_needs_calibration_values():
+    for p in ALL:
+        assert p.needs_calibration is (p.value in EXPECTED_NEEDS_CALIBRATION), p
+
+
+def test_supports_awq_values():
+    for p in ALL:
+        assert p.supports_awq is (p.value in EXPECTED_SUPPORTS_AWQ), p
+
+
+def test_supports_tile_autotune_values():
+    for p in ALL:
+        assert p.supports_tile_autotune is (p.value in EXPECTED_SUPPORTS_TILE_AUTOTUNE), p
+
+
+def test_merge_and_fused_swiglu_values():
+    for p in ALL:
+        assert p.merge_qkv_mlp is (p.value in EXPECTED_MERGE_QKV_MLP), p
+        assert p.merge_linear2_allowed is (p.value in EXPECTED_MERGE_QKV_MLP), p
+        assert p.fused_swiglu_mlp is (p.value in EXPECTED_FUSED_SWIGLU_MLP), p
+        # the fused MLP is a standalone weight, which is what excludes the merge
+        assert not (p.fused_swiglu_mlp and p.merge_qkv_mlp), p
+
+
+def test_fp16_nn_backbone_gemm_and_native_runtime_values():
+    for p in ALL:
+        assert p.fp16_nn_backbone_gemm is (p.value in EXPECTED_FP16_NN_BACKBONE_GEMM), p
+        assert p.supports_native_runtime is (p.value in EXPECTED_SUPPORTS_NATIVE_RUNTIME), p
+
+
+def test_members_and_plain_strings():
+    assert tuple(p.value for p in ALL) == ("fp16", "fp16_cutlass", "fp8", "nvfp4", "fp8_static",
+                                          "fp8_static_cutlass", "e0m3_hadamard", "nvfp4_sim")
+    for p in ALL:
+        assert p == p.value and isinstance(p, str)
+        assert str(p) == p.value
+        assert f"{p}" == p.value
+        assert Precision(p.value) is p
+    assert Precision("nvfp4") == "nvfp4"
+    assert "nvfp4" in tuple(ALL)
+
+
+def test_table_has_a_row_per_member():
+    assert set(precision_mod.PROPERTIES) == set(ALL)
+
+
+def test_accepts_calibration_path_matches_the_two_consumers():
+    # `calibration_path` is legal iff the precision is static-FP8 (activation
+    # scales) or, with nvfp4_awq, in the AWQ family (per-channel statistics).
+    for p in ALL:
+        assert p.accepts_calibration_path() is (p.value in EXPECTED_NEEDS_CALIBRATION), p
+        assert p.accepts_calibration_path(nvfp4_awq=True) is (
+            p.value in EXPECTED_NEEDS_CALIBRATION or p.value in EXPECTED_SUPPORTS_AWQ), p
+
+
+# -- (b) fallback behaviour -----------------------------------------------------
+
+def _grid():
+    dims = [1, 7, 8, 9, 15, 16, 17, 24, 32, 48, 64, 100, 128, 256, 384, 1024, 3072, 4096, 12288]
+    return list(itertools.product(dims, dims))
+
+
+@pytest.mark.parametrize("p", ALL, ids=lambda p: p.value)
+def test_alignment_fallback_matches_the_alignment(p):
+    for n, k in _grid():
+        assert p.alignment_fallback(n, k) is (n % p.alignment != 0 or k % p.alignment != 0), (p, n, k)
+
+
+def test_alignment_fallback_named_cases():
+    # action_encoder: K=7 (real LIBERO 7-DoF), head.linear: N=7
+    for p in ALL:
+        if p is Precision.FP16:
+            assert not p.alignment_fallback(128, 7) and not p.alignment_fallback(7, 128)
+        else:
+            assert p.alignment_fallback(128, 7), p
+            assert p.alignment_fallback(7, 128), p
+    # 8-multiple that is not a 16-multiple: only the block-scaled tiers fall back
+    for p in ALL:
+        expect = p.value in ("nvfp4", "e0m3_hadamard", "nvfp4_sim")
+        assert p.alignment_fallback(24, 8) is expect, p
+        assert p.alignment_fallback(8, 24) is expect, p
+    # both multiples of 16: nobody falls back
+    for p in ALL:
+        assert not p.alignment_fallback(3072, 4096), p
+    # one misaligned dim is enough
+    assert Precision.FP8.alignment_fallback(16, 9)
+    assert Precision.NVFP4.alignment_fallback(15, 16)
+
+
+@pytest.mark.parametrize("bad", ["bogus", "", "FP16", "nvfp4 ", "fp8_dynamic", None, 4])
+def test_unknown_precision_raises_value_error(bad):
+    with pytest.raises(ValueError):
+        Precision(bad)
+
+
+# -- frontend source: delegation, no second copy --------------------------------
+
+def _assign_value(name: str) -> ast.AST:
+    """Module-level `name = <expr>` in the frontend."""
     for node in _FRONTEND_TREE.body:
-        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
-            value = ast.literal_eval(node.value)
-            assert isinstance(value, tuple) and all(isinstance(v, str) for v in value), name
-            return value
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            return node.value
     raise AssertionError(f"{name} not found in {FRONTEND_SRC.name}")
 
 
@@ -72,68 +213,134 @@ def _method(name: str) -> ast.FunctionDef:
     raise AssertionError(f"method {name} not found")
 
 
-def _is_self_precision(node: ast.AST) -> bool:
-    return isinstance(node, ast.Attribute) and node.attr == "_precision" and \
-        isinstance(node.value, ast.Name) and node.value.id == "self"
+def _tuple_comprehension(name: str) -> str | None:
+    """`name = tuple(<gen>)` over `Precision`; returns the `if` attribute read
+    on the loop variable (`p.supports_awq` -> "supports_awq"), or None for a
+    plain `tuple(p.value for p in Precision)`."""
+    value = _assign_value(name)
+    assert isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "tuple", \
+        f"{name} is no longer tuple(...)"
+    gen = value.args[0]
+    assert isinstance(gen, ast.GeneratorExp), f"{name} is not a generator comprehension"
+    assert isinstance(gen.elt, ast.Attribute) and gen.elt.attr == "value", ast.dump(gen.elt)
+    assert isinstance(gen.elt.value, ast.Name) and gen.elt.value.id == "p", ast.dump(gen.elt)
+    assert len(gen.generators) == 1, name
+    comp = gen.generators[0]
+    assert isinstance(comp.iter, ast.Name) and comp.iter.id == "Precision", ast.dump(comp.iter)
+    assert isinstance(comp.target, ast.Name) and comp.target.id == "p", ast.dump(comp.target)
+    if not comp.ifs:
+        return None
+    assert len(comp.ifs) == 1, name
+    cond = comp.ifs[0]
+    assert isinstance(cond, ast.Attribute) and isinstance(cond.value, ast.Name) and cond.value.id == "p", \
+        ast.dump(cond)
+    return cond.attr
 
 
-def _is_precision_name(node: ast.AST) -> bool:
-    return isinstance(node, ast.Name) and node.id == "precision"
+def _attribute_names(node: ast.AST, attr: str) -> bool:
+    return any(isinstance(n, ast.Attribute) and n.attr == attr for n in ast.walk(node))
 
 
-def _single_compare(node: ast.AST, subject) -> tuple[type, str] | None:
-    """`<subject> ==|!= "literal"` -> (op type, literal)."""
-    if (isinstance(node, ast.Compare) and len(node.ops) == 1 and subject(node.left)
-            and isinstance(node.ops[0], (ast.Eq, ast.NotEq))
-            and isinstance(node.comparators[0], ast.Constant)):
-        return type(node.ops[0]), node.comparators[0].value
-    return None
+def test_module_tuples_are_comprehensions_over_the_table():
+    assert _tuple_comprehension("_PRECISIONS") is None
+    assert _tuple_comprehension("_NVFP4_PRECISIONS") == "supports_awq"
+    assert _tuple_comprehension("_STATIC_FP8_PRECISIONS") == "needs_calibration"
+    assert _tuple_comprehension("_VARIANT_TUNED_PRECISIONS") == "supports_tile_autotune"
 
 
-def _predicate_from_compare(node: ast.AST, subject) -> dict[str, bool]:
-    """Evaluate a `subject ==|!= "lit"` expression for every precision."""
-    found = _single_compare(node, subject)
-    assert found is not None, ast.dump(node)
-    op, lit = found
-    return {p.value: ((p.value == lit) if op is ast.Eq else (p.value != lit)) for p in ALL}
+def test_constructor_reads_merge_qkv_mlp_from_the_table():
+    found = None
+    for node in ast.walk(_method("__init__")):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Subscript)
+                and isinstance(node.targets[0].slice, ast.Constant)
+                and node.targets[0].slice.value == "merge_qkv_mlp"):
+            found = node.value
+    assert found is not None, "merge_qkv_mlp assignment not found"
+    assert isinstance(found, ast.Attribute) and found.attr == "merge_qkv_mlp", ast.dump(found)
+    call = found.value
+    assert isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "Precision", \
+        ast.dump(call)
+    assert isinstance(call.args[0], ast.Name) and call.args[0].id == "precision", ast.dump(call)
 
 
-# -- extraction from the source ------------------------------------------------
+def test_swiglu_and_fp16_nn_sites_read_the_table():
+    # `_rnd_swiglu_mlp`: `if not Precision(self._precision).fused_swiglu_mlp: return self._rnd_linear(...)`
+    swiglu = _method("_rnd_swiglu_mlp")
+    first_if = next(stmt for stmt in swiglu.body if isinstance(stmt, ast.If))
+    assert _attribute_names(first_if.test, "fused_swiglu_mlp"), ast.dump(first_if.test)
+    assert "_rnd_linear" in ast.dump(ast.Module(body=first_if.body, type_ignores=[]))
+    # the real-weights path branches on the same property and builds the fused MLP
+    lrw = _method("_load_real_weights")
+    matches = [n for n in ast.walk(lrw)
+               if isinstance(n, ast.If) and _attribute_names(n.test, "fused_swiglu_mlp")
+               and "CutlassFp16SwiGluMlp" in ast.dump(ast.Module(body=n.body, type_ignores=[]))]
+    assert len(matches) == 1, "the fused SwiGLU branch in _load_real_weights is gone or duplicated"
+    # the backbone-GEMM autotune flag
+    sites = [node.value for node in ast.walk(_FRONTEND_TREE)
+             if isinstance(node, ast.keyword) and node.arg == "fp16_nn_shapes"]
+    assert len(sites) == 1, f"expected one fp16_nn_shapes call site, found {len(sites)}"
+    assert _attribute_names(sites[0], "fp16_nn_backbone_gemm"), ast.dump(sites[0])
 
-def _wrap_linear_branches() -> dict[str, dict]:
-    """precision -> {"alignment": int | None, "classes": set[str]} from the
-    top-level `if self._precision == "<p>":` blocks of `_wrap_linear`."""
-    branches: dict[str, dict] = {}
-    for stmt in _method("_wrap_linear").body:
+
+def test_wrap_linear_takes_the_fallback_from_the_table():
+    """One branch per enum member, one shared `fallback` decision from
+    `alignment_fallback(n, k)`, no precision string constant of its own."""
+    fn = _method("_wrap_linear")
+    fallbacks = [n for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id == "fallback" for t in n.targets)]
+    assert len(fallbacks) == 1, f"expected one fallback assignment, found {len(fallbacks)}"
+    call = fallbacks[0].value
+    assert isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute), ast.dump(call)
+    assert call.func.attr == "alignment_fallback", ast.dump(call)
+    assert [a.id for a in call.args] == ["n", "k"], ast.dump(call)
+    # the AWQ guard reads supports_awq
+    assert _attribute_names(fn, "supports_awq"), "the awq_inv_s guard no longer reads supports_awq"
+
+    branches: dict[str, set[str]] = {}
+    for stmt in fn.body:
         if not isinstance(stmt, ast.If):
             continue
-        found = _single_compare(stmt.test, _is_self_precision)
-        if found is None or found[0] is not ast.Eq:
-            continue  # the awq_inv_s guard is not a precision branch
-        name = found[1]
-        alignment = None
-        classes: set[str] = set()
-        for node in ast.walk(stmt):
-            if isinstance(node, ast.If) and isinstance(node.test, ast.BoolOp) and isinstance(node.test.op, ast.Or):
-                mults = set()
-                for cmp_ in node.test.values:
-                    assert (isinstance(cmp_, ast.Compare) and isinstance(cmp_.ops[0], ast.NotEq)
-                            and isinstance(cmp_.left, ast.BinOp) and isinstance(cmp_.left.op, ast.Mod)
-                            and isinstance(cmp_.left.left, ast.Name) and cmp_.left.left.id in ("n", "k")
-                            and isinstance(cmp_.left.right, ast.Constant)
-                            and cmp_.comparators[0].value == 0), ast.dump(cmp_)
-                    mults.add((cmp_.left.left.id, cmp_.left.right.value))
-                assert {v for v, _ in mults} == {"n", "k"} and len({m for _, m in mults}) == 1, mults
-                # the fallback must be the fp16 linear
-                ret = node.body[0]
-                assert isinstance(ret, ast.Return) and ret.value.func.id == "Fp16Linear", ast.dump(node)
-                alignment = next(iter(mults))[1]
-            if isinstance(node, ast.Return) and isinstance(node.value, ast.Call) and \
-                    isinstance(node.value.func, ast.Name):
-                classes.add(node.value.func.id)
-        assert name not in branches, f"duplicate branch {name}"
-        branches[name] = {"alignment": alignment, "classes": classes}
-    return branches
+        test = stmt.test
+        if not (isinstance(test, ast.Compare) and len(test.ops) == 1
+                and isinstance(test.ops[0], ast.Is)
+                and isinstance(test.comparators[0], ast.Attribute)
+                and isinstance(test.comparators[0].value, ast.Name)
+                and test.comparators[0].value.id == "Precision"):
+            continue
+        member = test.comparators[0].attr
+        classes = {n.value.func.id for n in ast.walk(stmt)
+                   if isinstance(n, ast.Return) and isinstance(n.value, ast.Call)
+                   and isinstance(n.value.func, ast.Name)}
+        # every branch except fp16 returns the plain linear when the table says so
+        guards = [n for n in ast.walk(stmt) if isinstance(n, ast.If)
+                  and isinstance(n.test, ast.Name) and n.test.id == "fallback"]
+        assert len(guards) == (0 if member == "FP16" else 1), (member, len(guards))
+        for g in guards:
+            ret = g.body[0]
+            assert isinstance(ret, ast.Return) and ret.value.func.id == "Fp16Linear", ast.dump(g)
+        assert member not in branches, f"duplicate branch {member}"
+        branches[member] = classes
+    assert set(branches) == {p.name for p in ALL}, sorted(branches)
+    for member, classes in branches.items():
+        value = Precision[member].value
+        assert classes == set(EXPECTED_WRAP_LINEAR_CLASSES[value]), (member, sorted(classes))
+    # no precision string constant survives in the rewritten method
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            assert node.value not in {p.value for p in ALL}, node.value
+
+
+def test_native_runtime_support_matches_linear_resource_dispatch():
+    accepted = _linear_resource_accepted_classes()
+    assert {"Fp16Linear", "Bf16OutLinear", "Nvfp4Linear"} <= accepted
+    merge = {p.value: p.merge_qkv_mlp for p in ALL}
+    for p in ALL:
+        classes = EXPECTED_WRAP_LINEAR_CLASSES[p.value]
+        expected = classes <= accepted and merge[p.value]
+        assert p.supports_native_runtime is expected, (p, sorted(classes))
+    # the two precisions the native pipeline serves today
+    assert {p.value for p in ALL if p.supports_native_runtime} == {"fp16", "nvfp4"}
 
 
 def _linear_resource_accepted_classes() -> set[str]:
@@ -148,216 +355,15 @@ def _linear_resource_accepted_classes() -> set[str]:
     return accepted
 
 
-def _merge_qkv_mlp_rule() -> dict[str, bool]:
-    """`self.dims["merge_qkv_mlp"] = precision != "fp16_cutlass"` in __init__."""
-    for node in ast.walk(_method("__init__")):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Subscript)
-                and isinstance(node.targets[0].slice, ast.Constant)
-                and node.targets[0].slice.value == "merge_qkv_mlp"):
-            return _predicate_from_compare(node.value, _is_precision_name)
-    raise AssertionError("merge_qkv_mlp assignment not found")
-
-
-def _fused_swiglu_rule() -> dict[str, bool]:
-    """`_rnd_swiglu_mlp`: `if self._precision != "fp16_cutlass": return self._rnd_linear(...)`;
-    the rest builds `CutlassFp16SwiGluMlp`. `_load_real_weights` uses the
-    `self._precision == "fp16_cutlass"` form for the same class."""
-    fn = _method("_rnd_swiglu_mlp")
-    plain = None
-    for stmt in fn.body:
-        if isinstance(stmt, ast.If) and _single_compare(stmt.test, _is_self_precision):
-            plain = _predicate_from_compare(stmt.test, _is_self_precision)
-            assert isinstance(stmt.body[0], ast.Return)
-            assert "_rnd_linear" in ast.dump(stmt.body[0])
-    assert plain is not None
-    fused = {p: (not v if list(_single_compare_ops(fn))[0] is ast.NotEq else v) for p, v in plain.items()}
-    # the real-weights path must agree
-    lrw = None
-    for node in ast.walk(_method("_load_real_weights")):
-        if isinstance(node, ast.If) and isinstance(node.test, ast.BoolOp) and isinstance(node.test.op, ast.And):
-            first = node.test.values[0]
-            if _single_compare(first, _is_self_precision):
-                body_dump = ast.dump(ast.Module(body=node.body, type_ignores=[]))
-                if "CutlassFp16SwiGluMlp" in body_dump:
-                    lrw = _predicate_from_compare(first, _is_self_precision)
-    assert lrw == fused, (lrw, fused)
-    return fused
-
-
-def _single_compare_ops(fn: ast.FunctionDef):
-    for stmt in fn.body:
-        if isinstance(stmt, ast.If):
-            found = _single_compare(stmt.test, _is_self_precision)
-            if found:
-                yield found[0]
-
-
-def _fp16_nn_rule() -> dict[str, bool]:
-    """`self._autotune_gemm(dims, fp16_nn_shapes=self._precision == "fp16")`."""
-    rules = [_predicate_from_compare(node.value, _is_self_precision)
-             for node in ast.walk(_FRONTEND_TREE)
-             if isinstance(node, ast.keyword) and node.arg == "fp16_nn_shapes"]
-    assert len(rules) == 1, f"expected one fp16_nn_shapes call site, found {len(rules)}"
-    return rules[0]
-
-
-BRANCHES = _wrap_linear_branches()
-
-# The plan's W3 statement of the rules, kept as a second, hand-written check.
-PLAN_ALIGNMENT = {
-    "fp16": None, "fp16_cutlass": 8, "fp8": 8, "fp8_static": 8, "fp8_static_cutlass": 8,
-    "nvfp4": 16, "e0m3_hadamard": 16, "nvfp4_sim": 16,
-}
-
-
-# -- (a) members ---------------------------------------------------------------
-
-def test_members_equal_frontend_precisions_tuple():
-    frontend = _module_tuple("_PRECISIONS")
-    assert tuple(p.value for p in Precision) == frontend
-
-
-def test_values_are_plain_strings():
-    for p in Precision:
-        assert p == p.value and isinstance(p, str)
-        assert str(p) == p.value
-        assert f"{p}" == p.value
-        assert f"precision={p!r}".startswith("precision=<Precision.")  # repr stays the enum repr
-        assert Precision(p.value) is p
-    assert Precision("nvfp4") == "nvfp4"
-    assert "nvfp4" in tuple(Precision)
-
-
-def test_table_has_a_row_per_member():
-    assert set(precision_mod.PROPERTIES) == set(Precision)
-
-
-# -- (b) properties equal tuple membership -------------------------------------
-
-@pytest.mark.parametrize("prop,tuple_name", [
-    ("needs_calibration", "_STATIC_FP8_PRECISIONS"),
-    ("supports_awq", "_NVFP4_PRECISIONS"),
-    ("supports_tile_autotune", "_VARIANT_TUNED_PRECISIONS"),
-])
-def test_property_equals_frontend_tuple_membership(prop, tuple_name):
-    members = _module_tuple(tuple_name)
-    assert set(members) <= {p.value for p in Precision}
-    for p in Precision:
-        assert getattr(p, prop) is (p.value in members), (prop, p)
-
-
-def test_merge_qkv_mlp_matches_constructor_rule():
-    rule = _merge_qkv_mlp_rule()
-    for p in Precision:
-        assert p.merge_qkv_mlp is rule[p.value], p
-        assert p.merge_linear2_allowed is rule[p.value], p
-
-
-def test_fused_swiglu_matches_frontend_rule():
-    rule = _fused_swiglu_rule()
-    for p in Precision:
-        assert p.fused_swiglu_mlp is rule[p.value], p
-    # the fused MLP is a standalone weight, which is what excludes the merge
-    for p in Precision:
-        assert not (p.fused_swiglu_mlp and p.merge_qkv_mlp), p
-
-
-def test_fp16_nn_backbone_gemm_matches_frontend_rule():
-    rule = _fp16_nn_rule()
-    for p in Precision:
-        assert p.fp16_nn_backbone_gemm is rule[p.value], p
-
-
-def test_accepts_calibration_path_matches_frontend_check():
-    # `calibration_path is not None` is legal iff precision in the static FP8
-    # tuple or nvfp4_awq (itself legal only for the NVFP4 tuple).
-    static = set(_module_tuple("_STATIC_FP8_PRECISIONS"))
-    nvfp4 = set(_module_tuple("_NVFP4_PRECISIONS"))
-    for p in Precision:
-        assert p.accepts_calibration_path() is (p.value in static)
-        assert p.accepts_calibration_path(nvfp4_awq=True) is (p.value in static or p.value in nvfp4)
-
-
-def test_native_runtime_support_matches_linear_resource_dispatch():
-    accepted = _linear_resource_accepted_classes()
-    assert {"Fp16Linear", "Bf16OutLinear", "Nvfp4Linear"} <= accepted
-    merge = _merge_qkv_mlp_rule()
-    for p in Precision:
-        classes = BRANCHES[p.value]["classes"]
-        expected = classes <= accepted and merge[p.value]
-        assert p.supports_native_runtime is expected, (p, classes)
-    # the two precisions the native pipeline serves today
-    assert {p.value for p in Precision if p.supports_native_runtime} == {"fp16", "nvfp4"}
-
-
-# -- (c) alignment_fallback vs _wrap_linear ------------------------------------
-
-def test_every_precision_has_a_wrap_linear_branch():
-    assert set(BRANCHES) == {p.value for p in Precision}
-
-
-def test_alignment_matches_wrap_linear_source_and_plan():
-    for p in Precision:
-        src = BRANCHES[p.value]["alignment"]
-        assert src == PLAN_ALIGNMENT[p.value], (p, src)
-        assert p.alignment == (src or 1), p
-
-
-def _grid():
-    dims = [1, 7, 8, 9, 15, 16, 17, 24, 32, 48, 64, 100, 128, 256, 384, 1024, 3072, 4096, 12288]
-    return list(itertools.product(dims, dims))
-
-
-def _source_fallback(p: Precision, n: int, k: int) -> bool:
-    a = BRANCHES[p.value]["alignment"]
-    return a is not None and (n % a != 0 or k % a != 0)
-
-
-@pytest.mark.parametrize("p", ALL, ids=lambda p: p.value)
-def test_alignment_fallback_matches_wrap_linear(p):
-    for n, k in _grid():
-        assert p.alignment_fallback(n, k) is _source_fallback(p, n, k), (p, n, k)
-
-
-def test_alignment_fallback_named_cases():
-    # action_encoder: K=7 (real LIBERO 7-DoF), head.linear: N=7
-    for p in Precision:
-        if p is Precision.FP16:
-            assert not p.alignment_fallback(128, 7) and not p.alignment_fallback(7, 128)
-        else:
-            assert p.alignment_fallback(128, 7), p
-            assert p.alignment_fallback(7, 128), p
-    # 8-multiple that is not a 16-multiple: only the block-scaled tiers fall back
-    for p in Precision:
-        expect = p.value in ("nvfp4", "e0m3_hadamard", "nvfp4_sim")
-        assert p.alignment_fallback(24, 8) is expect, p
-        assert p.alignment_fallback(8, 24) is expect, p
-    # both multiples of 16: nobody falls back
-    for p in Precision:
-        assert not p.alignment_fallback(3072, 4096), p
-    # one misaligned dim is enough
-    assert Precision.FP8.alignment_fallback(16, 9)
-    assert Precision.NVFP4.alignment_fallback(15, 16)
-
-
 def test_alignment_fallback_covers_awq_eligibility():
     # `_plan_awq` eligible: t.shape[0] % 16 == 0 and t.shape[1] % 16 == 0
     src = ast.dump(_method("_plan_awq"))
     assert src.count("Mod()") == 2 and "value=16" in src
-    for p in Precision:
+    for p in ALL:
         if p.supports_awq:
             assert p.alignment == 16
             for n, k in _grid():
                 assert p.alignment_fallback(n, k) is not (n % 16 == 0 and k % 16 == 0)
-
-
-# -- (d) invalid names ----------------------------------------------------------
-
-@pytest.mark.parametrize("bad", ["bogus", "", "FP16", "nvfp4 ", "fp8_dynamic", None, 4])
-def test_unknown_precision_raises_value_error(bad):
-    with pytest.raises(ValueError):
-        Precision(bad)
 
 
 # -- leaf module ----------------------------------------------------------------

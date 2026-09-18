@@ -389,26 +389,32 @@ def test_V1_value_domains():
 # -- effective_config --------------------------------------------------------------
 
 
-def _compare_line_template() -> tuple[str, list[str]]:
-    """The f-string of the compare script's `effective_config` print, with `{}`
-    for every interpolation, and its keys in order."""
+def _compare_effective_config_call() -> ast.Call:
+    """The compare script's `effective_config` print. Since W12 the script
+    calls the resolver's own `format_effective_config` on the resolved
+    configuration, with the runtime-resolved FA4 values, so the line it prints
+    cannot drift from `EFFECTIVE_CONFIG_FIELDS`."""
     for node in ast.walk(ast.parse(COMPARE_SRC.read_text())):
-        if isinstance(node, ast.JoinedStr) and node.values and isinstance(node.values[0], ast.Constant) \
-                and str(node.values[0].value).startswith("effective_config"):
-            t = "".join(v.value if isinstance(v, ast.Constant) else "{}" for v in node.values)
-            return t, re.findall(r"(\w+)=\{\}", t)
-    raise AssertionError("effective_config print not found in the compare script")
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "format_effective_config"):
+            return node
+    raise AssertionError("the compare script does not print format_effective_config(...)")
 
 
 def test_effective_config_keeps_the_compare_scripts_format():
-    template, keys = _compare_line_template()
-    assert tuple(keys) == EFFECTIVE_CONFIG_FIELDS
+    call = _compare_effective_config_call()
+    assert isinstance(call.args[0], ast.Attribute) and call.args[0].attr == "options", ast.dump(call)
+    kwargs = {k.arg for k in call.keywords}
+    assert {"use_fa4", "use_fa4_mot", "fa4_fallback_reason"} <= kwargs, sorted(kwargs)
+    # the key order of the one line every log carries, pinned literally: the
+    # matrix script's parse_log and the ABI identity both read this order
+    assert tuple(EFFECTIVE_CONFIG_FIELDS) == ("precision", "text_trim", "vae_encoder", "vae_graph",
+                                              "use_fa4", "use_fa4_mot", "fa4_fallback_reason",
+                                              "calibration", "awq")
     line = resolve().effective_config
     assert "\n" not in line
     assert line == ("effective_config precision=nvfp4 text_trim=False vae_encoder=torch vae_graph=False "
                     "use_fa4=auto use_fa4_mot=False fa4_fallback_reason=None calibration=None awq=False")
-    # literal parts of the script's f-string == the resolver's line without its values
-    assert re.sub(r"\{\}", "", template).split() == re.sub(r"=\S+", "=", line).split()
 
 
 def test_effective_config_takes_runtime_values():
