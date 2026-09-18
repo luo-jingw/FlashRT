@@ -118,6 +118,21 @@ def test_fused_kernel_residual_only_mode():
     assert exact
 
 
+def test_fused_kernel_rejects_odd_dim():
+    """The kernel reads rows as packed pairs; the launcher rejects an odd
+    `dim` (and an empty row count) on the host instead of faulting."""
+    import pytest
+    buf = torch.zeros(4, 8, dtype=FP16, device=DEV)
+    vec = torch.zeros(8, dtype=F32, device=DEV)
+    for fn in (fvk.gate_res_ada_layer_norm_bf16res, fvk.gate_res_ada_layer_norm_fp16):
+        for rows, dim in ((4, 7), (0, 8)):
+            with pytest.raises(ValueError, match="even dim"):
+                fn(buf.data_ptr(), vec.data_ptr(), buf.data_ptr(), vec.data_ptr(), vec.data_ptr(),
+                   buf.data_ptr(), rows, dim, EPS, 0)
+    torch.cuda.synchronize()
+    print("gate_res_ada_layer_norm: odd dim / zero rows -> ValueError, no launch")
+
+
 REAL_DIMS = dict(
     hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
     x0=513, a0=905, num_layers_double=5, num_layers_single=20,

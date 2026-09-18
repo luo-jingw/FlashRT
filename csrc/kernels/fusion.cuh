@@ -47,8 +47,9 @@ void gate_residual_ada_norm_int8(__nv_bfloat16* residual, const __nv_bfloat16* x
 // out[r,:] = fp16(LN_no_affine(residual[r,:]) * (1 + fp16(scale)) + fp16(shift))
 // gate/scale/shift: (dim,) FP32, rounded to FP16 in-kernel. Bit-identical to
 // gate_res_{bf16res,fp16} followed by ada_layer_norm_{bf16in_fp16out,fp16}
-// with FP16 modulation vectors. `dim` even. `out == nullptr`: residual
-// update only (no AdaLN follows); `scale`/`shift` are then not read.
+// with FP16 modulation vectors. `dim` even and `rows` > 0 (otherwise
+// std::invalid_argument). `out == nullptr`: residual update only (no
+// AdaLN follows); `scale`/`shift` are then not read.
 
 void gate_res_ada_layer_norm_bf16res(const __half* proj, const float* gate,
                                      __nv_bfloat16* residual,

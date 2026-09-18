@@ -7,6 +7,9 @@
 #include "fusion.cuh"
 #include "common.cuh"
 
+#include <stdexcept>
+#include <string>
+
 // ── Fused Gate*Residual + AdaRMSNorm + Style -> FP8 ──
 // Pass 1: residual += x * gate; sum_sq += residual^2
 // Reduce: rms = rsqrt(sum_sq / dim + eps)
@@ -336,10 +339,20 @@ FVK_KERNEL_INSTANTIATE(__global__ void gate_res_ada_layer_norm_kernel<__half>(
 FVK_KERNEL_INSTANTIATE(__global__ void gate_res_ada_layer_norm_kernel<__nv_bfloat16>(
     const __half*, const float*, __nv_bfloat16*, const float*, const float*, __half*, int, float))
 
+// The kernel walks each row as packed pairs (__half2 / __nv_bfloat162),
+// so an odd `dim` would misalign every other row.
+static void check_gate_res_ada_layer_norm_shape(int rows, int dim) {
+    if (rows <= 0 || dim <= 0 || (dim & 1)) {
+        throw std::invalid_argument("gate_res_ada_layer_norm: need rows > 0 and an even dim > 0, got rows=" +
+                                    std::to_string(rows) + " dim=" + std::to_string(dim));
+    }
+}
+
 void gate_res_ada_layer_norm_bf16res(const __half* proj, const float* gate,
                                      __nv_bfloat16* residual,
                                      const float* scale, const float* shift, __half* out,
                                      int rows, int dim, float eps, cudaStream_t stream) {
+    check_gate_res_ada_layer_norm_shape(rows, dim);
     gate_res_ada_layer_norm_kernel<__nv_bfloat16><<<rows, 256, 256 * sizeof(float), stream>>>(
         proj, gate, residual, scale, shift, out, dim, eps);
 }
@@ -348,6 +361,7 @@ void gate_res_ada_layer_norm_fp16(const __half* proj, const float* gate,
                                   __half* residual,
                                   const float* scale, const float* shift, __half* out,
                                   int rows, int dim, float eps, cudaStream_t stream) {
+    check_gate_res_ada_layer_norm_shape(rows, dim);
     gate_res_ada_layer_norm_kernel<__half><<<rows, 256, 256 * sizeof(float), stream>>>(
         proj, gate, residual, scale, shift, out, dim, eps);
 }
