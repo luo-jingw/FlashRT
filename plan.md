@@ -3241,3 +3241,223 @@ Phase Status: completed
 Goal: `docs/imagewam_model_runtime.md` records the verified interface;
 the Thor checklist runs the gate at `nvfp4`.
 Observation: the H100 gate output quoted in OPT-028; Thor result pending.
+
+# Plan: Native C++ overlay, `io="native"` (roadmap item 14)
+
+Plan Status: approved
+
+## Problem
+
+### Current
+
+After roadmap item 12 (OPT-028), ImageWAM publishes `frt_model_runtime_v1`
+with `io="python"`: every STAGED verb is a Python callable behind a
+GIL-acquiring trampoline, and the graph is recorded by the Python
+pipeline functions (`imagewam_prefill`, `imagewam_denoise_loop` in
+`flash_rt/models/imagewam/pipeline_thor.py`). A native host that ticks
+the model still enters Python for proprio staging, action readback and
+`step`. The captured graph also carries per-replay torch kernels that
+exist only because it was recorded from Python: the fp16 casts and
+`(seq, dim)` gate expansions of `_fuse_mod_group`, `_copy_slice` column
+copies, and `_add_inplace`.
+
+### Problem
+
+No C++ component records ImageWAM's prefill and denoise loop against the
+existing `csrc` kernels, and no native verb implements ImageWAM's
+per-tick input/output transforms, so Python and the GIL remain on the hot
+path.
+
+### Measurable goal
+
+1. `export_model_runtime(io="native", native=...)` publishes a runtime
+   whose `set_input` / `get_output` / `step` are C functions from
+   `libflashrt_imagewam_native.so`: a tick takes no GIL. Schema: the
+   Python-built declaration, the C++-rendered records and a golden file
+   agree line for line.
+2. The C++ pipeline records prefill and denoise with the same `csrc`
+   kernels, and at each step (one block type, full prefill, full denoise,
+   captured graph) its outputs are `array_equal` to the Python pipeline's
+   on H100 at fp16, small dims and the real checkpoint.
+3. `nvfp4` is wired in the native pipeline; `sm110_check.sh` builds the
+   native target for `GPU_ARCH=110`; the Thor checklist runs the parity
+   gates at `nvfp4`.
+
+Stays in Python (setup only): checkpoint loading and quantization, GEMM
+autotune, AdaLN modulation and RoPE table precompute, VAE (roadmap item
+5) and Qwen3 prompt encoding, and building the declaration. FA4
+(`use_fa4=True`) is a Python/CuTe runtime and is not supported by the
+native pipeline.
+
+## Structure
+
+| module | responsibility | owned state |
+|---|---|---|
+| `flash_rt/frontends/torch/imagewam_thor.py` | owns every device allocation: weights (incl. quantized copies), activation scratch, K/V caches, the three IO windows, the Python graph | all device memory |
+| `csrc/gemm/gemm_runner.{h,cu}`, `csrc/bindings.cpp` | additive: read or install the cached cuBLASLt algorithm of one `fp16_nn` / `bf16_nn` shape, so a second runner replays the algorithm the frontend autotuned | the runner's own algo cache |
+| `cpp/models/imagewam/` → `libflashrt_imagewam_native.so` (root CMake target `flashrt_imagewam_native`, `EXCLUDE_FROM_ALL`) | C ABI (`c_api.h`); `NativeRuntime`: native verbs, host IO transforms, proprio projection, schema rendering, the stream and graph it replays; `NativePipeline` (Phase 3+): records prefill/denoise from a borrowed resource table with its own `GemmRunner` and cuBLAS handle, captures the graph | its stream, graph exec, cuBLAS/cuBLASLt handles, tiny staging scratch, host copies of the normalization constants; borrows every other pointer |
+| `flash_rt/models/imagewam/native_library.py` | ctypes binding of `c_api.h` | none |
+| `flash_rt/models/imagewam/native_resources.py` | builds the handoff structs from a captured frontend: windows, normalization constants, proprio projection weight, per-layer linear descriptors, precomputed fp16 modulation, RoPE and norm pointers, GEMM algorithms | host-side ctypes arrays and the fp16 modulation / transposed-weight tensors it materializes (kept alive by the native wrapper) |
+| `flash_rt/models/imagewam/runtime_export.py` | adds the `io="native"` face: declaration over the native stream and graph, validated and overridden with the native verbs (`frt_model_runtime_override_verbs`) | the exec context and wrapped windows, as for `io="python"` |
+
+Buffer ownership contract: the frontend is the single owner of every
+device buffer the native library touches, except the native library's
+own stream, graph exec, handles, workspace and staging scratch. The
+native library never frees a borrowed pointer. The model runtime anchors
+the frontend (through the declaration's Python owner) and the native
+handle (through the override's owner reference), so every borrowed
+pointer outlives every verb call. The Python graph and the native graph
+share the same buffers and must not run concurrently.
+
+## Interface
+
+C ABI (`cpp/models/imagewam/include/flashrt/cpp/models/imagewam/c_api.h`):
+
+```c
+typedef struct frt_imagewam_native frt_imagewam_native;   /* refcounted */
+
+typedef struct frt_imagewam_io_config {                   /* Phase 2 */
+    uint32_t struct_size;
+    uint32_t img_len, token_dim, num_action, action_dim, proprio_dim; /* proprio_dim 0 = none */
+    uint32_t context_rows, context_width;
+    void *img_raw, *context, *action_latent;                /* borrowed device windows */
+    const void *proprio_weight_t, *proprio_bias;            /* borrowed bf16 (proprio_dim, context_width), (context_width) */
+    const float *state_scale, *state_offset;                /* copied; null = no normalization */
+    const float *action_scale, *action_offset;              /* copied; null = raw actions */
+} frt_imagewam_io_config;
+
+int  frt_imagewam_native_create(const frt_imagewam_io_config*, frt_imagewam_native** out);
+void frt_imagewam_native_retain(void* h);
+void frt_imagewam_native_release(void* h);
+const char* frt_imagewam_native_last_error(const frt_imagewam_native*);
+void* frt_imagewam_native_stream(frt_imagewam_native*);          /* its cudaStream_t */
+int  frt_imagewam_native_use_graph(frt_imagewam_native*, void* graph_exec); /* Phase 2: adopt the Python graph */
+int  frt_imagewam_native_set_proprio_row(frt_imagewam_native*, int row);
+int  frt_imagewam_native_schema_records(const frt_imagewam_native*, char* out, uint64_t cap, uint64_t* written);
+int  frt_imagewam_native_bind_declaration(frt_imagewam_native*, const frt_model_runtime_v1*);
+const frt_model_runtime_verbs* frt_imagewam_native_verbs(void);   /* self = handle */
+
+/* Phase 3+ */
+typedef struct frt_imagewam_linear_desc { uint32_t kind; int32_t n, k; void* weight; ...nvfp4 fields } ...;
+int frt_imagewam_native_set_pipeline(frt_imagewam_native*, const frt_imagewam_pipeline_config*);
+int frt_imagewam_native_set_gemm_algo(frt_imagewam_native*, uint32_t kind, int m, int n, int k, const void* algo, uint64_t bytes);
+int frt_imagewam_native_run(frt_imagewam_native*, uint32_t segment, int32_t index);  /* eager, for parity */
+int frt_imagewam_native_capture(frt_imagewam_native*);          /* native graph replaces the adopted one */
+```
+
+`GemmRunner` additions (setup only):
+`bool get_cached_algo(int kind, int M, int N, int K, void* out) const;`
+`void set_cached_algo(int kind, int M, int N, int K, const void* in);`
+with `kind` 0 = `bf16_nn`, 1 = `fp16_nn`, exposed to Python as
+`GemmRunner.cached_algo(kind, M, N, K) -> bytes`.
+
+`io="native"` port schema (declaration order):
+
+| port | dir | update | modality | dtype | shape | window |
+|---|---|---|---|---|---|---|
+| `image_tokens` | in | SWAP | TENSOR | bf16 | (img_len, 128) | `img_raw` |
+| `proprio` | in | STAGED | STATE | f32 | (proprio_dim,) | none (when `proprio_dim`) |
+| `noise` | in | SWAP | TENSOR | f32 | (num_action, action_dim) | `action_latent` |
+| `actions` | out | STAGED | ACTION | f32 | (num_action, action_dim) | none |
+| `actions_raw` | out | SWAP | TENSOR | f32 | (num_action, action_dim) | `action_latent` |
+
+No `images` and no `prompt`: VAE and Qwen3 stay in Python, so the native
+face does not advertise them. The prompt is set through the frontend in
+setup, which then calls `set_proprio_row`. Buffers `img_raw`, `context`,
+`action_latent`; region `rollout_boundary`; one GRAPH stage `infer`.
+
+Native verbs: `proprio` = host normalization in fp32 (`x*scale`, then
+`+offset`, clamp to ±5, compiled without FP contraction to match the
+two torch kernels bit for bit), round to bf16, asynchronous copy, one
+cached cuBLASLt bf16 GEMM with bias epilogue into the context row, all on
+the native stream. `actions` = device-to-host copy on the native stream,
+synchronize, host `(x - offset) / scale`. `step` = `cudaGraphLaunch` on
+the native stream.
+
+## Flow
+
+Setup (Python process): construct the frontend, `set_prompt()` (Python
+graph), `native_resources.build(frontend)` → `create` → (Phase 2)
+`use_graph(python exec)` / (Phase 3+) `set_pipeline`,
+`set_gemm_algo` for every shape, `capture()` → `set_proprio_row` →
+`export_model_runtime(io="native", native=h)`: the declaration's stream
+and graph are the native handle's; `bind_declaration` validates it
+against the native schema; `frt_model_runtime_override_verbs` installs
+the native verbs and retains `h`.
+
+Tick (any thread, no Python): host writes `image_tokens` and `noise` on
+the exported stream, `set_input(proprio)`, `step`, `get_output(actions)`
+or read `actions_raw` after synchronizing the stream.
+
+## Code Mapping
+
+| item | file |
+|---|---|
+| C ABI | `cpp/models/imagewam/include/flashrt/cpp/models/imagewam/c_api.h`, `cpp/models/imagewam/src/c_api.cpp` |
+| native runtime, verbs, lifetime | `cpp/models/imagewam/src/native_runtime.{h,cpp}` |
+| host IO transforms (no FP contraction) | `cpp/models/imagewam/src/io_transforms.{h,cpp}` |
+| proprio projection (cached cuBLASLt) | `cpp/models/imagewam/src/proprio_projection.{h,cpp}` |
+| schema records | `cpp/models/imagewam/src/native_schema.{h,cpp}` |
+| native pipeline (Phase 3+) | `cpp/models/imagewam/src/native_pipeline.{h,cpp}` |
+| build | root `CMakeLists.txt` (`flashrt_imagewam_native`) |
+| GEMM algo hand-off | `csrc/gemm/gemm_runner.{h,cu}`, `csrc/bindings.cpp` |
+| ctypes binding | `flash_rt/models/imagewam/native_library.py` |
+| handoff builder | `flash_rt/models/imagewam/native_resources.py` |
+| `io="native"` face | `flash_rt/models/imagewam/runtime_export.py` |
+| schema golden + gate | `tests/data/imagewam_native_schema.records`, `tests/gate_imagewam_native_schema_parity.py` |
+| step-by-step parity (small dims) | `tests/test_imagewam_native_pipeline.py` |
+| real-checkpoint parity gate | `tests/gate_imagewam_native_parity.py` |
+| records | `docs/imagewam_native_cpp.md`, `opportunities.md` OPT-029, `issues.md` ISSUE-07x |
+
+## Implementation Phases
+
+### Phase 1 — design
+
+Phase Status: completed
+
+Goal: this section.
+
+### Phase 2 — native verb overlay over the Python graph, schema parity
+
+Phase Status: pending
+
+Goal: `libflashrt_imagewam_native.so` with the Phase 2 C ABI; the
+`io="native"` face adopting the Python graph; schema-parity gate; a
+GIL-free ctypes tick compared with `infer()`.
+Modified files: C++ sources above (runtime, transforms, projection,
+schema, c_api), root `CMakeLists.txt`, `native_library.py`,
+`native_resources.py` (IO part), `runtime_export.py`, schema gate and
+golden, unit test.
+Observation: schema records equal (Python, C++, golden); tick parity:
+`actions_raw` and `actions` `array_equal` when proprio is staged by
+Python; the native proprio token vs torch `F.linear` reported as
+`max_abs` / `array_equal`, and its effect on actions.
+
+### Phase 3 — native fp16 pipeline: block, prefill, denoise, graph
+
+Phase Status: pending
+
+Goal: GEMM algo hand-off; `NativePipeline` recording one backbone
+single-stream block, then the full prefill, then the denoise loop, each
+`array_equal` to the Python pipeline run eagerly on the same buffers;
+native capture replaces the adopted graph; the `io="native"` tick is
+bit-exact to `infer()` (Python-staged proprio) on small dims and on the
+real checkpoint at fp16.
+Modified files: `gemm_runner.{h,cu}`, `bindings.cpp`,
+`native_pipeline.{h,cpp}`, `c_api`, `native_resources.py`, unit test,
+real-checkpoint gate.
+Observation: per-step `array_equal` / `max_abs`; graph kernel counts;
+indicative alternating A/B latency of the Python graph vs the native
+graph (H100, same process).
+
+### Phase 4 — nvfp4 wiring and Thor handoff
+
+Phase Status: pending
+
+Goal: NVFP4 linear descriptors (packed weight, SFB, activation scratch,
+CUTLASS variant) recorded natively with the `flash_rt_fp4` kernels;
+`sm110_check.sh` builds `flashrt_imagewam_native` for `GPU_ARCH=110`;
+Thor checklist runs the parity gates at `nvfp4`.
+Modified files: `native_pipeline.{h,cpp}`, root `CMakeLists.txt`,
+`native_resources.py`.
+Observation: `sm110_check` rc; Thor parity (pending).
