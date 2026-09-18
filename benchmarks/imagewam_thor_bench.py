@@ -287,11 +287,13 @@ def _make_1layer_backend(*, kind: str):
     V_cache = _zeros(1, max_seq, HIDDEN)
     Q_O = _zeros(max_seq, HIDDEN)
     logits = _zeros(max_seq * NH, max_seq + (max_seq % 2))
+    fa4_out = _zeros(max_seq, HIDDEN)  # FA4 output staging (ImageWAMAttnBackend slot docs)
     backend = ImageWAMAttnBackend(
         spec, ctx,
         backbone_slots={
             "Q_O": Q_O.data_ptr(), "K": K_cache.data_ptr(), "V": V_cache.data_ptr(),
             "logits": logits.data_ptr(), "scale": 1.0 / (HD ** 0.5),
+            "fa4_out": fa4_out.data_ptr(), "fa4_out_numel": fa4_out.numel(),
         },
         mot_slots={
             "Q_O": Q_O.data_ptr(), "K": K_cache.data_ptr(), "V": V_cache.data_ptr(),

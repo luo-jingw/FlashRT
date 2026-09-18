@@ -56,7 +56,6 @@ import torch
 import torch.nn.functional as F
 
 import flash_rt.flash_rt_kernels as fvk
-from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend
 from flash_rt.models.imagewam.gemm_variant_timer import CudaGraphVariantTimer
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_step, imagewam_prefill
 
@@ -316,19 +315,19 @@ def run_infer(precision: str, warmup: int, iters: int, sdpa_standin: bool) -> No
         print(f"SKIP: no FA4 runtime ({fa4_backend.status()})")
         return
     try:
-        fe = _frontend(precision, use_fa4=False)
+        # FA4 on at construction so the frontend allocates its FA4 output
+        # buffer; each configuration then rebuilds the backend over the
+        # same buffers.
+        fe = _frontend(precision, use_fa4=True, use_fa4_mot=True)
     except RuntimeError as e:
         print(f"SKIP precision={precision} ({str(e)[:100]})")
         return
     fe.set_prompt("attention A/B")
-    base = fe._attn
     configs = {"chain": (False, False), "fa4_backbone": (True, False), "fa4_both": (True, True)}
     graphs: dict[str, torch.cuda.CUDAGraph] = {}
     for name, (use_fa4, use_fa4_mot) in configs.items():
-        fe._attn = ImageWAMAttnBackend(
-            base._spec, fe._ctx, backbone_slots=dict(base._slots["backbone"]),
-            mot_slots=dict(base._slots["mot"]), use_fa4=use_fa4, use_perhead_kv=True,
-            use_real_mot_mask=True, use_fa4_mot=use_fa4_mot)
+        fe.use_fa4, fe.use_fa4_mot = use_fa4, use_fa4_mot
+        fe._attn = fe._build_attn_backend()
         fe._capture_graph()
         graphs[name] = fe._graph
 

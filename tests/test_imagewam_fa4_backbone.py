@@ -59,6 +59,7 @@ def _run_backend(*, use_fa4: bool, q_seq: int, kv_seq: int, NH: int, HD: int,
     K_all = torch.randn(num_layers, kv_seq, kv_width, dtype=torch.float16, device=device)
     V_all = torch.randn(num_layers, kv_seq, kv_width, dtype=torch.float16, device=device)
     logits = torch.zeros(q_seq * NH, max(kv_seq, HD), dtype=torch.float16, device=device)
+    fa4_out = torch.zeros(q_seq * NH, HD, dtype=torch.float16, device=device)
     layer_stride = K_all[0].numel() * 2
 
     backend = ImageWAMAttnBackend(
@@ -66,6 +67,7 @@ def _run_backend(*, use_fa4: bool, q_seq: int, kv_seq: int, NH: int, HD: int,
         backbone_slots={
             "Q_O": Q_O.data_ptr(), "K": K_all.data_ptr(), "V": V_all.data_ptr(),
             "logits": logits.data_ptr(), "scale": 1.0 / (HD ** 0.5),
+            "fa4_out": fa4_out.data_ptr(), "fa4_out_numel": fa4_out.numel(),
         },
         mot_slots={
             "Q_O": Q_O.data_ptr(), "K": K_all.data_ptr(), "V": V_all.data_ptr(),
@@ -162,13 +164,15 @@ def _real_shape_backend(*, use_fa4: bool, use_fa4_mot: bool, total: int, a0: int
     k = torch.randn(num_layers, total, hidden, generator=gen, device="cuda").to(torch.float16)
     v = torch.randn(num_layers, total, hidden, generator=gen, device="cuda").to(torch.float16)
     logits = torch.zeros(total * NH, total + total % 2, dtype=torch.float16, device="cuda")
+    fa4_out = torch.zeros(total, hidden, dtype=torch.float16, device="cuda")
     slots = {"Q_O": q_o.data_ptr(), "K": k.data_ptr(), "V": v.data_ptr(),
-             "logits": logits.data_ptr(), "scale": 1.0 / (HD ** 0.5)}
+             "logits": logits.data_ptr(), "scale": 1.0 / (HD ** 0.5),
+             "fa4_out": fa4_out.data_ptr(), "fa4_out_numel": fa4_out.numel()}
     backend = ImageWAMAttnBackend(
         spec, fvk.FvkContext(), backbone_slots=dict(slots),
         mot_slots=dict(slots, layer_stride=k[0].numel() * 2),
         use_fa4=use_fa4, use_perhead_kv=True, use_real_mot_mask=True, use_fa4_mot=use_fa4_mot)
-    return backend, (q_o, k, v, logits)
+    return backend, (q_o, k, v, logits, fa4_out)
 
 
 def _cos_rel(a: torch.Tensor, b: torch.Tensor) -> tuple[float, float, float]:

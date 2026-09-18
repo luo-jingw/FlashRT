@@ -32,7 +32,8 @@ def _fa4_stand_in(calls: list[dict]):
             pack_gqa: bool, out: torch.Tensor, softmax_scale: float | None = None):
         calls.append(dict(q=tuple(q.shape), k=tuple(k.shape), causal=causal, pack_gqa=pack_gqa,
                           num_splits=num_splits, scale=softmax_scale,
-                          stream=torch.cuda.current_stream().cuda_stream))
+                          stream=torch.cuda.current_stream().cuda_stream,
+                          out_ptr=out.data_ptr(), out_bytes=out.numel() * out.element_size()))
         scale = softmax_scale if softmax_scale is not None else q.shape[-1] ** -0.5
         qf, kf, vf = (t.float().transpose(1, 2) for t in (q, k, v))  # (B, H, S, D)
         o = torch.softmax(qf @ kf.transpose(-1, -2) * scale, dim=-1) @ vf
@@ -54,7 +55,15 @@ def _stats(a: torch.Tensor, b: torch.Tensor) -> tuple[float, float, float]:
     return cos, float((af - bf).abs().max()), float((af - bf).norm() / (bf.norm() + 1e-12))
 
 
+_GUARD = 4096          # fp16 elements of guard band after fa4_out
+_SENTINEL = 1234.0     # exactly representable in fp16
+
+
 def _backend(total: int, a0: int, *, use_fa4: bool, use_fa4_mot: bool, layers: int = 2, seed: int = 0):
+    """Backend over real per-head buffers. `fa4_out` is the first
+    `total * hidden` elements of a larger buffer whose tail (the guard
+    band) and `logits` are pre-filled with a sentinel, so a write past
+    `fa4_out` or into `logits` by the FA4 path is observable."""
     gen = torch.Generator(device="cuda").manual_seed(seed)
     hidden = NH * HD
     spec = make_imagewam_attention_spec(max_prefix_seq=a0, max_total_seq=total,
@@ -62,14 +71,23 @@ def _backend(total: int, a0: int, *, use_fa4: bool, use_fa4_mot: bool, layers: i
     q_o = torch.randn(total, hidden, generator=gen, device="cuda").to(FP16)
     k = torch.randn(layers, total, hidden, generator=gen, device="cuda").to(FP16)
     v = torch.randn(layers, total, hidden, generator=gen, device="cuda").to(FP16)
-    logits = torch.zeros(total * NH, total + total % 2, dtype=FP16, device="cuda")
+    logits = torch.full((total * NH, total + total % 2), _SENTINEL, dtype=FP16, device="cuda")
+    fa4_buf = torch.full((total * hidden + _GUARD,), _SENTINEL, dtype=FP16, device="cuda")
     slots = {"Q_O": q_o.data_ptr(), "K": k.data_ptr(), "V": v.data_ptr(),
-             "logits": logits.data_ptr(), "scale": HD ** -0.5}
+             "logits": logits.data_ptr(), "scale": HD ** -0.5,
+             "fa4_out": fa4_buf.data_ptr(), "fa4_out_numel": total * hidden}
     backend = ImageWAMAttnBackend(
         spec, fvk.FvkContext(), backbone_slots=dict(slots),
         mot_slots=dict(slots, layer_stride=k[0].numel() * 2),
         use_fa4=use_fa4, use_perhead_kv=True, use_real_mot_mask=True, use_fa4_mot=use_fa4_mot)
-    return backend, (q_o, k, v, logits)
+    return backend, (q_o, k, v, logits, fa4_buf)
+
+
+def _assert_fa4_in_bounds(bufs) -> None:
+    logits, fa4_buf = bufs[3], bufs[4]
+    guard = fa4_buf[-_GUARD:]
+    assert bool((guard == _SENTINEL).all()), "FA4 path wrote past fa4_out"
+    assert bool((logits == _SENTINEL).all()), "FA4 path wrote into logits"
 
 
 def test_backbone_fa4_branch_matches_cublas_chain(fa4_calls):
@@ -87,6 +105,7 @@ def test_backbone_fa4_branch_matches_cublas_chain(fa4_calls):
     assert fa4_calls[-1]["pack_gqa"] is False and fa4_calls[-1]["causal"] is False
     assert fa4_calls[-1]["stream"] == stream.cuda_stream
     assert cos > 0.9999
+    _assert_fa4_in_bounds(fa4_bufs)
 
 
 def test_mot_fa4_branch_matches_cublas_chain(fa4_calls):
@@ -104,6 +123,42 @@ def test_mot_fa4_branch_matches_cublas_chain(fa4_calls):
     assert fa4_calls[-1]["scale"] == pytest.approx(HD ** -0.5)
     assert cos > 0.9999
     assert torch.equal(fa4_bufs[0][:a0], before[:a0])  # prefix/image rows untouched
+    _assert_fa4_in_bounds(fa4_bufs)
+
+
+@pytest.mark.parametrize("a0,total", [(8, 12), (8, 24), (905, 969)])
+def test_fa4_stays_inside_fa4_out_at_every_size(fa4_calls, a0, total):
+    """Small dims included: at (8, 12) the old logits staging needed
+    8*24*128 = 24576 elements of a 288*12 = 3456-element buffer."""
+    backend, bufs = _backend(total, a0, use_fa4=True, use_fa4_mot=True)
+    backend.run("backbone", 0, q_seq=a0, kv_seq=a0, stream=0)
+    backend.run("mot", 0, q_seq=total - a0, kv_seq=total, stream=0, x0=max(1, a0 // 2), a0=a0)
+    torch.cuda.synchronize()
+    _assert_fa4_in_bounds(bufs)
+    assert all(c["out_ptr"] == bufs[4].data_ptr() for c in fa4_calls[-2:])
+
+
+def test_fa4_out_is_required_and_capacity_checked(fa4_calls):
+    spec = make_imagewam_attention_spec(max_prefix_seq=8, max_total_seq=12, num_layers=1,
+                                        num_heads=NH, head_dim=HD)
+    buf = torch.zeros(12, NH * HD, dtype=FP16, device="cuda")
+    base = {"Q_O": buf.data_ptr(), "K": buf.data_ptr(), "V": buf.data_ptr(),
+            "logits": buf.data_ptr(), "scale": 1.0}
+    cases = (
+        (dict(use_fa4=True), {}, "fa4_out"),                                     # missing
+        (dict(use_fa4=True), dict(fa4_out=buf.data_ptr(), fa4_out_numel=8 * NH * HD - 1), "fa4_out_numel"),
+        (dict(use_fa4_mot=True), dict(fa4_out=buf.data_ptr(), fa4_out_numel=8 * NH * HD), "fa4_out_numel"),
+    )
+    for flags, extra, match in cases:
+        with pytest.raises(ValueError, match=match):
+            ImageWAMAttnBackend(spec, fvk.FvkContext(), backbone_slots=dict(base, **extra),
+                                mot_slots=dict(base, layer_stride=0, **extra), use_perhead_kv=True,
+                                use_real_mot_mask=True, **flags)
+    ok = ImageWAMAttnBackend(spec, fvk.FvkContext(),
+                             backbone_slots=dict(base, fa4_out=buf.data_ptr(), fa4_out_numel=buf.numel()),
+                             mot_slots=dict(base, layer_stride=0, fa4_out=buf.data_ptr(), fa4_out_numel=buf.numel()),
+                             use_perhead_kv=True, use_real_mot_mask=True, use_fa4=True, use_fa4_mot=True)
+    assert ok._use_fa4 and ok._use_fa4_mot
 
 
 def test_use_fa4_mot_requires_the_unmasked_perhead_rule(fa4_calls):
@@ -163,6 +218,32 @@ def test_frontend_default_is_the_cublas_chain(monkeypatch, fa4_calls):
     monkeypatch.setenv("FLASHRT_THOR_FA4", "1")
     fe = _frontend()
     assert fe.use_fa4 is True and fe._attn._use_fa4 is True
+
+
+@pytest.mark.parametrize("dims", [dict(), dict(num_action=16, total=24)])
+def test_frontend_fa4_writes_stay_in_its_fa4_out(fa4_calls, dims):
+    """Frontend-owned buffers, FA4 on at both sites: every FA4 output
+    view lies inside the frontend's dedicated `_fa4_out`. The default
+    dims (a0=8, total=12) are the case where staging in `logits` wrote
+    past that buffer."""
+    from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
+
+    fe = ImageWAMTorchFrontendThor(precision="fp16", dims_override=dims, use_fa4=True, use_fa4_mot=True)
+    fe.set_prompt("bounds")
+    fe.infer({})
+    torch.cuda.synchronize()
+    lo = fe._fa4_out.data_ptr()
+    hi = lo + fe._fa4_out.numel() * fe._fa4_out.element_size()
+    assert fa4_calls, "FA4 stand-in never called"
+    for c in fa4_calls:
+        assert lo <= c["out_ptr"] and c["out_ptr"] + c["out_bytes"] <= hi, c
+    print(f"\n{len(fa4_calls)} FA4 calls, all inside fa4_out [{hi - lo} bytes], dims={dims or 'default'}")
+
+
+def test_frontend_allocates_fa4_out_only_when_fa4_runs(fa4_calls):
+    assert _frontend(use_fa4=False)._fa4_out is None
+    assert _frontend(use_fa4=True)._fa4_out is not None
+    assert _frontend(use_fa4=False, use_fa4_mot=True)._fa4_out is not None
 
 
 def test_frontend_end_to_end_with_fa4_on_both_sites(fa4_calls):

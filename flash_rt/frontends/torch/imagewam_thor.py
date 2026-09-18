@@ -330,30 +330,23 @@ class ImageWAMTorchFrontendThor:
         self._logits = self._own(
             torch.zeros(d["total"] * d["NH"], d["total"] + (d["total"] % 2), dtype=FP16, device=DEV))
         layer_stride = self._K_cache[0].numel() * 2
-        self._attn = ImageWAMAttnBackend(
-            spec, self._ctx,
-            backbone_slots={
-                "Q_O": self._Q_O.data_ptr(), "K": self._K_cache.data_ptr(),
-                "V": self._V_cache.data_ptr(), "logits": self._logits.data_ptr(),
-                "scale": 1.0 / (HD ** 0.5),
-            },
-            mot_slots={
-                "Q_O": self._Q_O.data_ptr(), "K": self._K_cache.data_ptr(),
-                "V": self._V_cache.data_ptr(), "logits": self._logits.data_ptr(),
-                "scale": 1.0 / (HD ** 0.5), "layer_stride": layer_stride,
-            },
-            # OPT-002: real per-head K/V + the real (no-mask) attention
-            # rule, both confirmed against the real trained checkpoint
-            # (benchmarks/imagewam_real_checkpoint_validation.py) --
-            # this is now the default for this frontend, not opt-in.
-            use_perhead_kv=True, use_real_mot_mask=True,
-            # OPT-005 / OPT-019: FA4 for the "backbone" site, resolved by
-            # `_resolve_use_fa4` (opt-in; see `_FA4_OPT_IN_ENV`).
-            use_fa4=self.use_fa4,
-            # OPT-019: FA4 for the "mot" site (unmasked real rule).
-            # Opt-in until Thor confirms it.
-            use_fa4_mot=self.use_fa4_mot,
-        )
+        # FA4 output staging (OPT-019): FA4 cannot write over its own Q
+        # input. `(total, hidden)` holds either site's `q_seq * NH * HD`;
+        # `logits` (sized for the cuBLAS chain's scores) is too small for
+        # that at small dims. Allocated only when some site runs FA4.
+        self._fa4_out = None
+        if self.use_fa4 or self.use_fa4_mot:
+            self._fa4_out = self._own(torch.zeros(d["total"], hidden, dtype=FP16, device=DEV))
+        common = {
+            "Q_O": self._Q_O.data_ptr(), "K": self._K_cache.data_ptr(),
+            "V": self._V_cache.data_ptr(), "logits": self._logits.data_ptr(),
+            "scale": 1.0 / (HD ** 0.5),
+        }
+        if self._fa4_out is not None:
+            common.update(fa4_out=self._fa4_out.data_ptr(), fa4_out_numel=self._fa4_out.numel())
+        self._attn_spec = spec
+        self._attn_slots = {"backbone": dict(common), "mot": dict(common, layer_stride=layer_stride)}
+        self._attn = self._build_attn_backend()
 
         self._graph = None
         self._current_prompt = None
@@ -381,6 +374,24 @@ class ImageWAMTorchFrontendThor:
         if os.environ.get(_FA4_OPT_IN_ENV, _FA4_OPT_IN_DEFAULT) != "1":
             return False
         return fa4_backend.thor_default_enabled()
+
+    def _build_attn_backend(self) -> ImageWAMAttnBackend:
+        """The attention backend for this frontend's own buffers, with
+        the current `self.use_fa4` / `self.use_fa4_mot` choice."""
+        return ImageWAMAttnBackend(
+            self._attn_spec, self._ctx,
+            backbone_slots=dict(self._attn_slots["backbone"]),
+            mot_slots=dict(self._attn_slots["mot"]),
+            # OPT-002: real per-head K/V + the real "mot" rule (no region
+            # mask), both confirmed against the real trained checkpoint
+            # (benchmarks/imagewam_real_checkpoint_validation.py).
+            use_perhead_kv=True, use_real_mot_mask=True,
+            # OPT-005 / OPT-019: FA4 for the "backbone" site, resolved by
+            # `_resolve_use_fa4` (opt-in; see `_FA4_OPT_IN_ENV`).
+            use_fa4=self.use_fa4,
+            # OPT-019: FA4 for the "mot" site. Opt-in until Thor confirms it.
+            use_fa4_mot=self.use_fa4_mot,
+        )
 
     def _own(self, t: torch.Tensor) -> torch.Tensor:
         """Keep a buffer tensor alive for the frontend's own lifetime.

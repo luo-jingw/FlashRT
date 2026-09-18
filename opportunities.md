@@ -4086,9 +4086,21 @@ On Thor, FA4 at the backbone site already measured 3.75x per call and
   through FA4. Q is the action rows at row offset `a0`, K/V are the
   full per-head `(1, 969, 24, 128)`, with `causal=False`,
   `pack_gqa=False`, `num_splits=1`, and an explicit `softmax_scale`.
-  The output is staged in `logits` and copied back. The combination
-  requires `use_real_mot_mask=True` and `use_perhead_kv=True`, and the
-  constructor raises otherwise.
+  The combination requires `use_real_mot_mask=True` and
+  `use_perhead_kv=True`, and the constructor raises otherwise.
+- FA4 output, both sites, goes to a dedicated buffer. The frontend owns
+  `_fa4_out` of shape `(total, hidden)`, allocated only when some site
+  runs FA4, and passes it to the backend as the `fa4_out` /
+  `fa4_out_numel` slots. The backend checks the capacity at
+  construction and on every call, then copies the result back to the Q
+  rows. An earlier version staged FA4 output in `logits`
+  (`total*NH x (total + total%2)` elements). That is large enough at
+  the real dims but smaller than `q_seq*NH*HD` at small dims: at the
+  default test dims it failed with `CUDA error: invalid argument`, and
+  at other small dims it wrote past the buffer silently. The frontend
+  used it only when FA4 was on. The tests now pre-fill a guard band
+  after `fa4_out`, and `logits`, with a sentinel, and fail on any FA4
+  write outside `fa4_out`; they fail on the old staging.
 - Local verification, `tests/test_imagewam_fa4_dispatch.py` (6
   tests): FA4 is replaced by an fp32 PyTorch stand-in with
   `_flash_attn_fwd`'s calling convention, and each FA4 branch is

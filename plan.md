@@ -3430,9 +3430,17 @@ class ImageWAMTorchFrontendThor:
 
 FA4 `"mot"` call: Q `(1, q_seq, NH, HD)` at row offset `a0` of `Q_O`,
 K/V `(1, kv_seq, NH, HD)` per layer, `causal=False`, `pack_gqa=False`,
-`num_splits=1`. Output goes to the `logits` scratch, then is copied
-back to the Q rows. This is the same pattern as the verified
+`num_splits=1`. Output goes to the dedicated FA4 output buffer, then
+is copied back to the Q rows. This is the same pattern as the
 `"backbone"` per-head branch.
+
+FA4 output buffer: a site that runs FA4 gets `"fa4_out"` (fp16 pointer)
+and `"fa4_out_numel"` in its slots. The capacity must be at least that
+site's `max_q_seq * NH * HD`, checked at construction and on every call.
+The frontend owns one `(total, hidden)` buffer for both sites, allocated
+only when some site runs FA4. `logits` is sized for the cuBLAS chain's
+score matrix (`total*NH x total`), which at small dims is smaller than
+`q_seq*NH*HD`, so FA4 output never goes there.
 
 ## Flow
 
