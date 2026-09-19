@@ -190,12 +190,13 @@ def parse_paths(value: str) -> tuple[str, ...]:
     return names
 
 
-def expert_overrides(args: argparse.Namespace) -> dict[str, bool | str]:
+def expert_overrides(args: argparse.Namespace) -> dict[str, bool | str | int]:
     """The `**expert` pack for `load_imagewam` (`config_resolver.EXPERT_KEYS`):
     only the switches actually passed, so an unset flag leaves the profile's
-    own value. `--text-trim`, `--use-fa4-mot` and `--vae-graph` are on|off and
-    `--vae-encoder` is one of `config_resolver.VAE_ENCODERS`."""
-    expert: dict[str, bool | str] = {}
+    own value. `--text-trim`, `--use-fa4-mot` and `--vae-graph` are on|off,
+    `--vae-encoder` is one of `config_resolver.VAE_ENCODERS`, and
+    `--text-trim-cache-size` is the per-length cache bound (S3)."""
+    expert: dict[str, bool | str | int] = {}
     if args.text_trim is not None:
         expert["text_trim"] = args.text_trim == "on"
     if args.use_fa4 is not None:
@@ -206,6 +207,8 @@ def expert_overrides(args: argparse.Namespace) -> dict[str, bool | str]:
         expert["vae_encoder"] = args.vae_encoder
     if args.vae_graph is not None:
         expert["vae_graph"] = args.vae_graph == "on"
+    if args.text_trim_cache_size is not None:
+        expert["text_trim_cache_size"] = args.text_trim_cache_size
     return expert
 
 
@@ -342,6 +345,14 @@ def parse_valid_tokens(spec: str | None, workload_name: str) -> list[int]:
     return counts
 
 
+def resolved_cache_size(fe: ImageWAMTorchFrontendThor) -> int:
+    """The per-length cache bound the frontend was built with (S3)."""
+    resolved = fe.resolved_config
+    if resolved is None:
+        raise RuntimeError("the bench builds the frontend through load_imagewam, so it has a resolved config")
+    return resolved.options.text_trim_cache_size
+
+
 def run_path(path: str, fe: ImageWAMTorchFrontendThor, observation: dict[str, object],
              noise: torch.Tensor, workload: ImageWAMWorkload, *, warmup: int, iters: int) -> PathResult:
     """Measure one requested path. Everything a path needs is built inside its
@@ -387,6 +398,10 @@ def main() -> int:
                     help="valid text tokens per prompt, comma-separated to sweep (default: the named "
                          "workload's own, benchmarks/_imagewam_workload_cli.VALID_TOKENS); this is what a "
                          "--text-trim comparison turns on")
+    ap.add_argument("--precapture", action="store_true",
+                    help="hand the --valid-tokens lengths to "
+                         "load_imagewam(precapture_text_lengths=...), so the startup precapture captures "
+                         "them before serving; needs text_trim (the profile's or --text-trim on)")
     ap.add_argument("--text-trim", choices=("on", "off"), default=None)
     ap.add_argument("--use-fa4", choices=("on", "off"), default=None)
     ap.add_argument("--use-fa4-mot", choices=("on", "off"), default=None)
@@ -404,6 +419,15 @@ def main() -> int:
 
     from flash_rt.frontends.torch.imagewam_thor import load_imagewam
     from flash_rt.models.imagewam.structure import ImageWAMStructure
+
+    # The length of each captured graph is `x0` (valid text tokens + 1 with
+    # proprio), the units `precapture_text_lengths` and
+    # `captured_text_lengths()` use.
+    trim_on = (PROFILES[args.profile].text_trim if args.text_trim is None
+               else args.text_trim == "on")
+    if args.precapture and not trim_on:
+        ap.error(f"--precapture needs text_trim: profile {args.profile!r} has text_trim="
+                 f"{PROFILES[args.profile].text_trim} and --text-trim was not set to on")
 
     ckpt = os.environ.get("CKPT_PATH")
     ae_model_path = os.environ.get("FLUX2_AE_MODEL_PATH") or os.environ.get("AE_MODEL_PATH")
@@ -426,11 +450,19 @@ def main() -> int:
     print(f"layout:   {format_layout(layout)}")
 
     started = time.time()
+    precapture = None
+    if args.precapture:
+        own_proprio = workload.proprio_dim
+        precapture = tuple(valid + (1 if own_proprio else 0) for valid in valid_counts)
     fe = load_imagewam(ckpt, workload, structure=structure, profile=args.profile, precision=args.precision,
                        ae_model_path=ae_model_path, flux2_src=flux2_src,
                        qwen3_model_spec=os.environ.get("QWEN3_MODEL_SPEC"),
                        dataset_stats_path=dataset_stats_path, consumer="infer",
+                       precapture_text_lengths=precapture,
                        **expert_overrides(args))
+    if precapture is not None:
+        print(f"precaptured x0 {list(precapture)} (text_trim_cache_size="
+              f"{resolved_cache_size(fe)})")
     resolved = fe.resolved_config
     if resolved is None:
         raise RuntimeError("load_imagewam did not record a resolved configuration")

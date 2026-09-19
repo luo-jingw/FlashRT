@@ -149,7 +149,7 @@ GPU stack.
 | Profile | Contents |
 |---|---|
 | `default` | the frontend's own defaults: `nvfp4`, no text trim, FA4 backbone as the frontend resolves it (`FLASHRT_THOR_FA4`, off unless set), no FA4 mot, torch VAE encoder outside the graph, no AWQ |
-| `fast` | `text_trim` + FA4 backbone + FA4 mot + native VAE encoder inside the graph. PROVISIONAL: the contents and whether any switch becomes the default are an owner decision (measured 106.1 ms against 203.3 ms for `default`, `nvfp4`, `libero_spatial`); `text_trim` is refused with the `abi`/`native` consumers (rule R5) |
+| `fast` | `text_trim` + FA4 backbone + FA4 mot + native VAE encoder inside the graph. PROVISIONAL: the contents and whether any switch becomes the default are an owner decision (measured 106.1 ms against 203.3 ms for `default`, `nvfp4`, `libero_spatial`); `text_trim` is served through the `abi` consumer (one graph per trimmed length) and refused for `native` (rule R5) |
 
 `resolve_config` raises `ConfigError("<rule id>: <combination>")`:
 
@@ -159,7 +159,7 @@ GPU stack.
 | R2 | `gemm_variant_autotune` with a precision that has no switchable tile |
 | R3 | a real VAE encoder, or the VAE inside the graph, without `ae_model_path` / `flux2_src` |
 | R4 | `nvfp4_awq` with a non-AWQ precision, or without a calibration file |
-| R5 | `text_trim` with the `abi` or `native` consumer (one graph per prompt length against a single-graph surface; ISSUE-080 condition 5) |
+| R5 | `text_trim` with the `native` consumer. The ABI carries one graph per trimmed length (the exec layer's `ShapeKey` variant table), so it is legal there; the native C++ pipeline still holds one graph and one context length, which is ISSUE-080 condition 5's remaining half |
 | R6 | native consumer with something the native pipeline does not carry: AWQ, a precision it cannot describe, FA4, or the VAE stage |
 | R7 | workload layout inconsistent with the structure |
 | R8 | a calibration file whose identity differs from the resolved dims or `text_trim` |
@@ -185,9 +185,20 @@ configuration (`frontend.resolved_config.options`) with the runtime-resolved
 `use_fa4`, `use_fa4_mot` and `fa4_fallback_reason`, which is what
 `scripts/imagewam_thor_matrix.sh:parse_log` reads.
 
+A trimmed frontend's surface carries the per-length graph table:
+`graph_variants` (`active_key`, `entries` of `(key, graph_exec)` ascending,
+`per_prompt_length`), with the `ShapeKey` being the context length `x0`; the
+export adopts one exec per key, declares them (`default_key` = the length
+active at export, `keys` ascending, `max_variants` = the table size) and
+records them in the manifest as `text_lengths`. `step` replays the key of the
+length the prompt set, and a length that was never captured is refused by name
+(`precapture_text_lengths` at construction is how a deployment guarantees the
+set). An untrimmed frontend is the one-entry case, keyed by `dims["x0"]`.
+
 The runtime identity (`ImageWAMRuntimeSurface.setup_identity`, carried into
 the `frt_model_runtime_v1` export) lists the pipeline, the precision, the
-attention choices, the calibration digest, the VAE setup, then
+attention choices, the `text_trim` setting, the calibration digest, the VAE
+setup, then
 `workload.<field>` pairs (`runtime_surface.workload_identity`, fields in
 `WORKLOAD_IDENTITY_FIELDS`) and finally `dims.<key>` for every resolved dims
 entry. The workload entries are additive: they name the workload the graph

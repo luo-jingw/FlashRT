@@ -1697,7 +1697,7 @@ Phase Status: completed
   breakage). The v2 fixture itself is generated on Thor (checklist item E3).
 
 ### Phase S2: the ABI carries one graph per trimmed length
-Phase Status: active
+Phase Status: completed
 - Goal: ISSUE-080 condition 5. The exec layer already models a graph as a
   `ShapeKey -> graph-exec` variant table with an LRU cap, so a trimmed
   frontend's per-length graphs become keys of one declared graph, and `step`
@@ -1707,9 +1707,39 @@ Phase Status: active
 - Modified files: `flash_rt/models/imagewam/runtime_surface.py`,
   `runtime_export.py`, `flash_rt/frontends/torch/imagewam_thor.py`,
   `flash_rt/models/imagewam/config_resolver.py` (the R5 scope), their tests.
-- Observation: the key table and the active-key selection are checked on a
-  captured frontend, which needs a GPU; the Thor check is the ABI tick at two
-  prompt lengths against `infer()` (checklist item P).
+- Interface: `runtime_surface()` exposes `graph_variants` (`active_key`, the
+  `(key, graph_exec)` entries ascending, `per_prompt_length`), the `ShapeKey`
+  is the context length `x0`, `graph_variant_plan` turns the table into the
+  declaration's `default_key` / `keys` / `max_variants` (pure, CPU-tested),
+  the manifest records `text_lengths`, and `step` replays
+  `active_dims["x0"]` after `frt_graph_has_variant`, refusing an uncaptured
+  length by name. `setup_identity` gains the `text_trim` pair, so the export
+  fingerprint of an existing untrimmed deployment changes (no artifact
+  compatibility is required at this stage).
+- Observation: the pure table/plan seam and the resolver's R5 scope are
+  covered on CPU; the key table and the active-key selection are observed on a
+  captured frontend, so the Thor check is the ABI tick at two prompt lengths
+  against `infer()`, the shorter first (checklist item P).
+
+### Phase S4: the native pipeline carries one graph per trimmed length
+Phase Status: pending
+- Goal: ISSUE-080 condition 5's remaining half. The ABI face serves trimmed
+  prompts now; the native C++ pipeline refuses them explicitly at both entry
+  points (`ImageWAMNativeRuntime.create`, `export_model_runtime(io="native")`).
+- What it needs (assessed while implementing S2, all of it C-ABI + host work,
+  none of it Python-only): `NativeRuntime` holds one `graph_`, one
+  `owned_graph_` for the `capture()` path and one `context_rows_` (used by
+  `set_proprio_row`'s bound and `set_pipeline`'s dims check), so the keyed
+  variant table has to replace them (`frt_graph` already offers
+  adopt/has_variant/replay); the host needs a visible key
+  (`use_graph(key, exec)` / `has_variant(key)` / `set_text_length(key)`, wired
+  into the prompt/proprio verb path, since C++ cannot see the Python prompt);
+  `native_resources.build_io_config` hands the per-key `context_rows`; and
+  `native_schema.cpp` plus the schema-parity gate gain the new records.
+- Modified files: `cpp/models/imagewam/**`, `flash_rt/models/imagewam/native_runtime.py`,
+  `native_resources.py`, `runtime_export.py`, the native gates.
+- Observation: a native tick at two prompt lengths, bit-exact against
+  `infer()`, next to the ABI row that S2 already added.
 
 ### Phase S3: a bounded per-length graph cache, precaptured at construction
 Phase Status: completed

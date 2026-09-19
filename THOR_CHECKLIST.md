@@ -1,5 +1,7 @@
 # Thor 测试清单
 
+本节次（配置整合 + `text_trim` 服务化）的全部待测项。一次 `git pull` 后从头做到尾即可。
+
 ## 用法
 
 1. `git pull` 后按顺序做。每项的命令、判据、结论去向都写在项内。
@@ -10,14 +12,15 @@
 
 | 结论类型 | 写到 |
 |---|---|
-| 测得的数字与结论 | `opportunities.md` 对应 OPT 条目（OPT-016 … OPT-030） |
-| 默认值 / profile 决定、路线图状态 | `plan.md` 的 "Execution status" 与 "Decisions" |
-| 缺陷、未解释的现象、`text_trim` 转默认的条件 | `issues.md`（ISSUE-080 等） |
+| 测得的数字与结论 | `opportunities.md` 对应 OPT 条目（OPT-016 … OPT-031） |
+| ABI / native 服务路径的数字 | `opportunities.md` OPT-028（ABI）、OPT-029（native） |
+| 默认值 / profile 决定、相位状态 | `plan.md` 的 "Execution status" 与 "Decisions pending" |
+| 缺陷、未解释的现象、`text_trim` 转默认的条件 | `issues.md`（ISSUE-080、ISSUE-082 等） |
 | 对外总结 | `THOR_STATUS_SUMMARY.md` |
 
 ## 前置（每轮一次）
 
-环境变量与构建见 `scripts/imagewam_thor_validation.sh` 文件头。本轮改动是 Python 与脚本，不含 kernel 改动，不需要重编。
+环境变量与构建见 `scripts/imagewam_thor_validation.sh` 文件头。本轮改动是 Python（前端、runtime surface、ABI 导出、resolver、脚本）与文档，**不含 kernel 与 C++ 改动，不需要重编**；但 P / S 两节的 ABI 行需要 `exec/` 已构建，native 行还需 `runtime/` 与 `flashrt_imagewam_native`。
 
 ```
 export OUT=$HOME/thor_val/$(date +%m%d)
@@ -82,7 +85,7 @@ python benchmarks/imagewam_text_trim_bench.py --precision nvfp4 --section all --
 
 ## C. 配置矩阵（核心表）
 
-固定负载，一行一个配置，表格由脚本从日志生成（`$OUT/matrix_<suite>_<tag>.md/.csv`）。行定义见 `scripts/imagewam_thor_matrix.sh` 文件头。本轮起矩阵的每一行都经新入口构建 frontend：`benchmarks/imagewam_e2e_official_compare.py` 用 `load_imagewam(ckpt_path, workload, profile=..., precision=..., calibration_path=...)` 构建，环境变量 `PROFILE` 选具名 profile（未设时为 `default`），原有的逐开关环境变量（`TEXT_TRIM`、`FA4_MOT`、`VAE_GRAPH`、`VAE_ENCODER`、`VAE_RESIZE`、`PRECISION`、`CALIBRATION`、`NVFP4_AWQ`）作为 expert 覆盖传入。
+固定负载，一行一个配置，表格由脚本从日志生成（`$OUT/matrix_<suite>_<tag>.md/.csv`）。行定义见 `scripts/imagewam_thor_matrix.sh` 文件头。矩阵的每一行都经新入口构建 frontend：`benchmarks/imagewam_e2e_official_compare.py` 用 `load_imagewam(ckpt_path, workload, profile=..., precision=..., calibration_path=...)` 构建，环境变量 `PROFILE` 选具名 profile（未设时为 `default`），原有的逐开关环境变量（`TEXT_TRIM`、`FA4_MOT`、`VAE_GRAPH`、`VAE_ENCODER`、`VAE_RESIZE`、`PRECISION`、`CALIBRATION`、`NVFP4_AWQ`）作为 expert 覆盖传入。
 
 ```
 # 完整阶梯 + leave-one-out（libero_spatial，nvfp4）
@@ -92,13 +95,13 @@ SUITE=libero_goal PRECS=nvfp4 ROWS="default vae_trim stack" bash scripts/imagewa
 SUITE=libero_10   PRECS=nvfp4 ROWS="default vae_trim stack" bash scripts/imagewam_thor_matrix.sh
 # 精度行：默认与叠满两档
 SUITE=libero_spatial PRECS="e0m3_hadamard fp8_static_cutlass fp16" ROWS="default stack" bash scripts/imagewam_thor_matrix.sh
-# profile 行：一行是一个具名 profile，不是一组开关；单独输出目录，避免与上面的开关行写出同名日志
+# profile 行：一行是一个具名 profile，不是一组开关
 OUT=$OUT/C_profile SUITE=libero_spatial PRECS=nvfp4 PROFILES="default fast" bash scripts/imagewam_thor_matrix.sh
 OUT=$OUT/C_profile SUITE=libero_goal   PRECS=nvfp4 PROFILES="default fast" bash scripts/imagewam_thor_matrix.sh
 OUT=$OUT/C_profile SUITE=libero_10     PRECS=nvfp4 PROFILES="default fast" bash scripts/imagewam_thor_matrix.sh
 ```
 
-`PROFILES` 模式一行是一个具名 profile（`default`、`fast`），表与 CSV 里的行名是 `profile_<name>`，日志是 `matrix_<suite>_<prec>_profile_<name>.log`，与开关行的同名日志不冲突；表格文件名也带 mode 与 profile 名。不加 `PROFILES` 时仍按 `ROWS` 的开关行跑，行名与含义不变（`default vae vae_trim vae_trim_fa4bb stack stack_no_vae stack_no_trim`）。profile 行只导出 `PROFILE`，不导出开关变量，所以 `fast` 一行跑的是 profile 自己的内容（等于 `stack` 那一组），不是 profile 再叠脚本的默认值。
+`PROFILES` 模式一行是一个具名 profile（`default`、`fast`），表与 CSV 里的行名是 `profile_<name>`，日志是 `matrix_<suite>_<prec>_profile_<name>.log`，与开关行的同名日志不冲突；表格文件名也带 mode 与 profile 名。不加 `PROFILES` 时仍按 `ROWS` 的开关行跑，行名与含义不变（`default vae vae_trim vae_trim_fa4bb stack stack_no_vae stack_no_trim`）。profile 行只导出 `PROFILE`，不导出开关变量，所以 `fast` 一行跑的是 profile 自己的内容（等于 `stack` 那一组）。
 
 已完成（`c20f3a0`，数字在 `opportunities.md` OPT-019/021/030 与 `THOR_STATUS_SUMMARY.md`）：`libero_spatial` 的 nvfp4 完整阶梯与 leave-one-out，以及它的 `PROFILES="default fast"` 两行。仍需跑：`libero_goal`、`libero_10` 各三行，精度行，以及 `libero_goal` / `libero_10` 的 profile 行。
 
@@ -109,7 +112,6 @@ OUT=$OUT/C_profile SUITE=libero_10     PRECS=nvfp4 PROFILES="default fast" bash 
 - FA4 转默认的条件：`stack` 相对 `vae_trim` 的 P50 至少低 2 ms（约等于跑间波动），且 vs official 不劣于 `vae_trim`。否则 FA4 保持关。2 ms 这个工作值要在 E2 的重复测量给出会话内极差之后重定：`c20f3a0` 一轮里同一组开关出现两次，相差 13.6 ms（ISSUE-082），比 2 ms 大。
 - 原生 VAE 转默认的条件：`vae` 相对 `default` 的 P50 降低，且 vs official 不劣于 `default`。
 - 精度行：各行 vs official 不低于 `tests/fixtures/imagewam_gate/fidelity_thresholds.json` 的阈值。
-- 新入口：`c20f3a0` 一轮里已做过三项检查——记录值复现（`fast` 106.8 ms 落在 106.1 的波动内；`default` 的同口径基线缺失，见 ISSUE-082）、`effective_config` 与 `config_resolver` 逐字符一致（`default` 与 `fast`）、runtime identity 带九个 `workload.<field>` 且 ABI 与 `infer()` bit-exact、native schema 与 golden 一致。结论在 `plan.md` 的 W12、`opportunities.md` 的 OPT-019/021/030 与 `issues.md` ISSUE-082。
 
 去向：OPT 条目写数字，`plan.md` 的 "Decisions" 写默认与 profile 的决定。
 
@@ -117,13 +119,11 @@ OUT=$OUT/C_profile SUITE=libero_10     PRECS=nvfp4 PROFILES="default fast" bash 
 
 ## D. 目标配置（非 LIBERO）
 
-先填这张表，再决定怎么测：
-
 | 参数 | 值 |
 |---|---|
 | 相机数 × 分辨率 | 3 × 256×256 |
 | 指令 token 数（min / median / max） | 16 / 待定 / 128 |
-| 文本缓冲长度 `text_max_len` | 128（待确认，见 ISSUE-083：live Qwen3 固定输出 512 行） |
+| 文本缓冲长度 `text_max_len` | 128（`text_encoder` 已按 workload 取长度，见 ISSUE-083 的 Resolution） |
 | action horizon | 32 |
 | 去噪步数 | 10 |
 | proprio 维度 | 8：必须等于目标 checkpoint 的 `proprio_encoder` 宽度（LIBERO 微调是 7 关节 + 1 夹爪）。双臂 29 DoF 需要与它匹配的 checkpoint；模型其余部分与这一维无关，前端会用真实权重形状校验 |
@@ -134,65 +134,79 @@ OUT=$OUT/C_profile SUITE=libero_10     PRECS=nvfp4 PROFILES="default fast" bash 
 
 派生（由 `ImageWAMWorkload` 计算，不手填）：`ref_h=16`、`ref_w=48`、`img_len=768`、`text_max_len=128` 时 `x0=129`、`a0=897`、`total=929`、`dt=0.1`。
 
-说明：目标配置按 `ImageWAMWorkload` 的字段填入：部署方给出 `num_views`、每视角 `image_h`/`image_w`、`text_max_len`、`action_horizon`、`action_dim`、`proprio_dim`、`num_steps`、`shift`，`x0`、`img_len`、`a0`、`total`、`ref_h`、`ref_w`、`dt` 与 `vae_graph_input` 由它派生并在不一致时报错，不再手改 dims。`action_dim=7`、`shift=5.0` 随候选值给定。
-
-跑之前先看三个已知缺口（都在 `issues.md`）：
-
-- **ISSUE-084**：observation 与图外 VAE 编码通路目前只支持 1–2 路视角，三路 workload 走 `infer()` 且带真实 VAE 会报 `expected 3 views, got 2`；今天能测的是"三路序列布局 + 随机 image tokens"的延迟，测不到 VAE stage。
-- **ISSUE-083**：`text_encoder.py` 固定 `max_length=512`，`text_max_len=128` 的 workload 需要先决定 context 怎么产生（截取前 128 行 / 改编码长度 / 保持 512 再 trim）。
-- **ISSUE-081**：VAE 不在图内时 ABI 的 `view_shape` 硬编码 `(2,224,224)`，三路 256 的 ABI 端口形状不对。
-
-精度与 trim 需要目标配置的数据和官方对照，这个缺口要在配置表确认之后再补；延迟部分用下节的 path bench。
+说明：目标配置按 `ImageWAMWorkload` 的字段填入：部署方给出 `num_views`、每视角 `image_h`/`image_w`、`text_max_len`、`action_horizon`、`action_dim`、`proprio_dim`、`num_steps`、`shift`，`x0`、`img_len`、`a0`、`total`、`ref_h`、`ref_w`、`dt` 与 `vae_graph_input` 由它派生并在不一致时报错，不再手改 dims。`action_dim=7`、`shift=5.0` 随候选值给定。LIBERO 标准配置（`ImageWAMWorkload.libero()`：2 × 224×224、text 512、horizon 64）同时保留为一等配置，P 节两个 workload 都测。
 
 判据：`ImageWAMWorkload` 的九个字段都能从表里取到值，且 `ImageWAMWorkload(...)` 加 `resolve_config(..., profile=...)` 不抛 `ConfigError`（`layout()` 与 `vae_graph_input()` 也不报错）。
 去向：`plan.md` 的 W12 相位状态。
 
 ---
 
-## P. 服务路径对比（同一 workload，三条路径）
+## P. 服务路径对比（两个 workload × 三条路径 × trim）
 
 `benchmarks/imagewam_thor_path_bench.py`：不设 `CKPT_PATH` 时用随机权重、随机帧、随机 context，因此只测延迟；每个 workload 一个表，`infer()` / ABI（`io="python"`）/ native（`io="native"`）各一行 P10/P50/P90 与 n，另打印 workload 字段、派生布局、`effective_config` 行与 Jetson 时钟状态。构不出来的路径会打出原因并跳过，不影响其余路径。
 
-`--valid-tokens` 决定每个 prompt 的有效文本 token 数，也就是 trim 对比真正在比的东西：开 trim 时序列是 `valid+1` 行，关 trim 时永远是 `text_max_len+1` 行。给一个逗号列表就扫一遍（每换一个长度会触发一次捕获，打印里带 `set_prompt` 耗时）。默认值按 workload 取（LIBERO 24，目标 32）。
+`--valid-tokens` 决定每个 prompt 的有效文本 token 数，也就是 trim 对比真正在比的东西：开 trim 时序列是 `valid+1` 行，关 trim 时永远是 `text_max_len+1` 行。给逗号列表就扫一遍（每换一个长度会触发一次捕获，打印里带 `set_prompt` 耗时）。默认按 workload 取（LIBERO 24，目标 32）。
+`--precapture` 把这些长度交给 `load_imagewam(precapture_text_lengths=...)`，即 S3 的启动预捕获；`--text-trim-cache-size N` 设每长度图缓存上限（默认 32）。
 
 ```
 # LIBERO workload（2 × 224×224，text 512，horizon 64）
 python benchmarks/imagewam_thor_path_bench.py                                   # profile default
-python benchmarks/imagewam_thor_path_bench.py --profile fast                    # trim + FA4 + VAE 进图
-python benchmarks/imagewam_thor_path_bench.py --text-trim on --valid-tokens 16,24,31
-python benchmarks/imagewam_thor_path_bench.py --paths infer,abi                 # 没建 native 时
+python benchmarks/imagewam_thor_path_bench.py --profile fast --precapture       # trim + FA4 + VAE 进图
+python benchmarks/imagewam_thor_path_bench.py --text-trim on --valid-tokens 16,24,31 --precapture
+python benchmarks/imagewam_thor_path_bench.py --text-trim on --valid-tokens 16,24,31 --paths infer,abi
 
 # 目标 workload（3 × 256×256，horizon 32，指令 16–128 token）
 python benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 128
+python benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 128 --profile fast --precapture
 python benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 128 --text-trim on \
-  --valid-tokens 16,72,128
+  --valid-tokens 16,72,128 --precapture
 python benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 512 --text-trim on
 ```
 
-ABI 一行需要 `exec/` 构建，native 一行需要 `runtime/` 与 `flashrt_imagewam_native`（见 `scripts/imagewam_thor_validation.sh` 文件头）。**开 trim 的配置下 ABI 与 native 两行今天会被跳过**（规则 R5，ABI/native 还没有"按长度一张图"的支持，见 S2）；等 S2 落地后同样的命令会给出三条路径的数。
+ABI 行需要 `exec/`，native 行需要 `runtime/` 与 `flashrt_imagewam_native`。
 
-判据：每条的 rc；被跳过路径打出的原因；三条路径的 P50 记在案。**不设阈值、不判定好坏**——目标配置没有延迟预算。
-另外读三行：目标 workload 的 `view_shape`（默认 profile 下 VAE 在图外，应为 `(3, 256, 256)` 而不是 `(2, 224, 224)`，ABI 的 `images` 端口与 `views` 名单随之变成三路，见 ISSUE-081 的 Resolution）；`--workload target --text-max-len 128` 时 context 若是 `(1, 128, 7680)` 就满足 `x0 == text_len + 1`（ISSUE-083）；LIBERO 两路的 VAE token 与改动前逐位相同（跑一次 `tests/test_imagewam_vae_stage.py` 与一次 e2e 即可）。
-去向：ABI 与 native 的数字进 `opportunities.md` 的 OPT-028 / OPT-029，汇总进 `THOR_STATUS_SUMMARY.md`。
+**本轮起 ABI 行在 trim 下也能跑**（S2：一个声明图 + 每个长度一个 key，`step` 按 prompt 的活动长度选 key）；**native 行在 trim 下仍会跳过**，原因写明（C++ `NativeRuntime` 只有一个图与一个 `context_rows`，见 `plan.md` 的 S4 相位）。
 
-判据：每条的 rc；被跳过路径打出的原因；三条路径的 P50 记在案。**不设阈值、不判定好坏**——目标配置没有延迟预算。
-另外读三行：目标 workload 的 `view_shape`（默认 profile 下 VAE 在图外，应为 `(3, 256, 256)` 而不是 `(2, 224, 224)`，ABI 的 `images` 端口与 `views` 名单随之变成三路，见 ISSUE-081 的 Resolution）；`--workload target --text-max-len 128` 时 context 若是 `(1, 128, 7680)` 就满足 `x0 == text_len + 1`（ISSUE-083）；LIBERO 两路的 VAE token 与改动前逐位相同（跑一次 `tests/test_imagewam_vae_stage.py` 与一次 e2e 即可）。
-去向：ABI 与 native 的数字进 `opportunities.md` 的 OPT-028 / OPT-029，汇总进 `THOR_STATUS_SUMMARY.md`。
+判据：每条的 rc；被跳过路径打出的原因；每个 `valid_tokens` 下三条路径的 P50 记在案。**不设阈值、不判定好坏**——目标配置没有延迟预算。
+另外读四行：目标 workload 的 `view_shape`（默认 profile 下应为 `(3, 256, 256)` 而不是 `(2, 224, 224)`，ABI 的 `images` 端口与 `views` 名单随之变成三路）；`--workload target --text-max-len 128` 时 context 是 `(1, 128, 7680)`（`x0 == text_len + 1`）；开 trim 的 ABI 行是不是每个长度都出了数（没出就看 `step` 报的未捕获长度名字）；LIBERO 两路的 VAE token 与改动前逐位相同（跑一次 `tests/test_imagewam_vae_stage.py` 与一次 e2e）。
+去向：ABI 与 native 的数字进 `opportunities.md` 的 OPT-028 / OPT-029，其余进 OPT-019/021/030；汇总进 `THOR_STATUS_SUMMARY.md`。
+
+---
+
+## S. S 相位验证（trim 服务化）
+
+### S1 ABI 在每个捕获长度上仍与 `infer()` 逐位一致（S2）
+```
+python -m pytest tests/test_imagewam_model_runtime_export.py -q 2>&1 | tee $OUT/S1_abi_multilength.log
+python -m pytest tests/test_imagewam_text_trim_consumer_guards.py -q 2>&1 | tee $OUT/S1_guards.log
+python -m pytest tests/test_imagewam_text_trim_cache.py -q 2>&1 | tee $OUT/S1_cache.log
+```
+判据：三条都过且无 skip（无 GPU 时这三个文件会 skip，Thor 上有 GPU 应当真跑）。重点看 `test_abi_tick_matches_infer_at_every_captured_length`：导出一次后在**较短**长度先 tick、再 tick 较长长度，两次的 `actions` 与 `actions_raw` 都与 `infer()` 逐位相等；长长度 tick 时若 key 选错会表现为形状不符、NaN 或静默不一致。
+去向：`plan.md` S2 相位状态、`opportunities.md` OPT-028。
+
+### S2 启动预捕获与有界缓存（S3）
+P 节里带 `--precapture` 的命令即可，另加一条把上限压到小于长度数，观察驱逐：
+```
+python benchmarks/imagewam_thor_path_bench.py --text-trim on --valid-tokens 16,24,31 --precapture \
+  --text-trim-cache-size 2
+```
+读四项：`precaptured x0 [...]` 行与 `text_trim_cache_size` 的值；每个长度第一次 `set_prompt` 的耗时（预捕获后应只剩切图，不再有 0.6–2 s 的捕获）；上限 2 的三长度那一条里，被驱逐长度再次使用时的 `set_prompt` 耗时与日志；有界缓存下的图显存峰值。
+判据：预捕获后各长度的 `set_prompt` 耗时彼此接近且远低于首次捕获；驱逐后重新使用会再次捕获（这是设计行为，不是缺陷）；进程不因上限报错。
+去向：`issues.md` ISSUE-080 条件 6、`opportunities.md` OPT-030。
 
 ---
 
 ## E. 收尾
 
 ### E1 `text_trim` 转默认的剩余条件（ISSUE-080）
-Thor 上已满足：条件 1（三套件 trim ≥ 未 trim，P50 更低）、条件 3。
+Thor 上已满足：条件 1（三套件 trim ≥ 未 trim，P50 更低）、条件 3、条件 5 的 ABI 一半（`consumer="abi"` 已可带 trim，S2）。
 未满足：
 - 条件 2 的 FA4 开分支（依赖 A1）。
-- 条件 4：fixture v2（带 trim 的 fp16 参考，`benchmarks/imagewam_gate_fixture_generate.py`）——代码与数据工作。
-- 条件 5：runtime surface / ABI / native 支持按长度的图（目前 `runtime_surface()`、`pipeline_resources()` 直接拒绝 `text_trim=True`）——代码工作。
-- 条件 6：有界的按长度图缓存与启动时使用 `precapture_text_lengths`（该函数已存在，缺的是缓存上限与启动流程）——代码工作。
+- 条件 4：fixture v2（带 trim 的 fp16 参考）——见 E3。
+- 条件 5 的另一半：native（C++ `NativeRuntime` 单图/单 `context_rows`），见 `plan.md` 的 S4 相位；在此之前 `consumer="native"` 仍被规则 R5 拒绝，`pipeline_resources()` 也会直接拒绝并说明原因。
+- 条件 6：S3 已实现（有界缓存 + 构造时预捕获），待 S2 项验证。
 
-条件 4、5、6 不是 Thor 测试，完成之前 `text_trim` 不能转默认。
-规则 R5 同样在 `consumer="abi"` 与 `consumer="native"` 下拒绝 `text_trim=True`。这条拒绝是"尚未实现"（条件 5），不是 ABI 或 native 的性质：ABI 与 native 都是本项目自己的代码，按长度的图可以支持，见 ISSUE-080 末尾记的两种形状——精确长度 + 有界缓存（不改 kernel，图集合随数据变化），或 16 token 分块 + 对块内 padding 加掩码（图集合固定，LIBERO 33 张、128 token 的 workload 9 张，代价是掩码与 kernel 工作）。
+条件 4 与 5 的 native 一半完成之前，`text_trim` 不能作为 native 路径的默认；Python `infer()` 与 ABI 两条路径已经可以。
 
 ### E2 重定 Thor 延迟基线
 矩阵结果稳定后，更新 `tests/fixtures/imagewam_gate/latency_baselines.json` 的 Thor 项（当前 nvfp4 门限 243 ms 对应旧基线 231.6 ms）。
@@ -212,3 +226,24 @@ SUITE=libero_spatial PRECS=nvfp4 ROWS="default stack" bash scripts/imagewam_thor
 
 判据：得到 `default` 行的同口径（gate）数字，以及同一行三次重复的极差；用这个极差替换 C 节的 2 ms 工作阈值，并据此更新 `latency_baselines.json` 的 Thor 条目与 `THOR_STATUS_SUMMARY.md` 的默认行。
 去向：`issues.md` ISSUE-082、`plan.md` 的 W12 相位状态、`tests/fixtures/imagewam_gate/latency_baselines.json`。
+
+### E3 fixture v2：带 trim 的 fp16 参考（ISSUE-080 条件 4）
+环境同 `imagewam_e2e_official_compare.py`（`FLUX2_SRC`、`CKPT_PATH`（旁边有 `dataset_stats.json`/`config.yaml`）、`FLUX2_MODEL_PATH`、`FLUX2_AE_MODEL_PATH`、`QWEN3_MODEL_SPEC`、`DATA_ROOT`，ImageWAM `src/` 在 `PYTHONPATH` 上，另有 `$BUNDLE`、`$OUT`），需要 `av pandas pyarrow safetensors pillow`。`TEXT_TRIM=1` 是唯一与 v1 不同的开关：套件、任务数、帧、种子都不变。
+
+```
+TEXT_TRIM=1 N_TASKS=10 FRAMES=0,60 SEEDS=0,1 SUITE=libero_spatial \
+python benchmarks/imagewam_gate_fixture_generate.py --name imagewam_libero_gate_v2 \
+  --output-dir "$BUNDLE/imagewam_libero_gate_v2" 2>&1 | tee $OUT/E3_fixture_v2.log
+
+# manifest 进 git（fixture 数据不进 git），v2 目录与新的 SHA256SUMS 放回 bundle
+git add tests/fixtures/imagewam_gate/imagewam_libero_gate_v2.manifest.json
+
+# 用 v2 跑门：--text-trim 必须与 fixture 的 text_trim 一致，--manifest 指向 v2（默认仍是 v1）
+python tests/gate_imagewam_libero.py --precision nvfp4 --text-trim \
+  --manifest tests/fixtures/imagewam_gate/imagewam_libero_gate_v2.manifest.json \
+  --fixture-dir "$BUNDLE/imagewam_libero_gate_v2" --output-dir $OUT/E3_gate_nvfp4_trim \
+  2>&1 | tee $OUT/E3_gate_nvfp4_trim.log
+```
+
+判据：生成日志首行显示 fp16 参考是 trim 的（`text_trim=True`）；manifest 顶层 `"text_trim": true`，`metadata.fp16_reference` 里 `precision="fp16"`、`text_trim=true`、dims 与 v1 同形状（`x0=513` 等是缓冲几何，trim 下每次 prompt 的活动 `x0` 是 `n_valid+1`）；门上 `vs_fp16_reference_median/_min` 过 fp16 门限 0.999 / 0.995。对照：不加 `--text-trim` 用 v1 的同一命令必须仍与今天一致；`--text-trim` 对 v1、或不加 `--text-trim` 对 v2，都应被拒并写明两边的值。
+去向：`tests/fixtures/imagewam_gate/imagewam_libero_gate_v2.manifest.json`（提交）、`issues.md` ISSUE-080 条件 4、`plan.md` 相位 S1 状态。
