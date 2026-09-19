@@ -290,7 +290,11 @@ def build_stage_variants(ae: torch.nn.Module, encoders: dict[str, VaeEncoder], v
     its own `(392,128)` img_raw. Tokens of each variant are compared
     against the legacy torch path and printed."""
     in_h, in_w = int(views_cpu[0].shape[0]), int(views_cpu[0].shape[1])
-    spec = VaeStageSpec(num_views=len(views_cpu), in_h=in_h, in_w=in_w)
+    # This bench feeds raw 512x512 frames and encodes them at the
+    # preprocessor's own 224x224 (the LIBERO per-view size), so the spec's
+    # encode size is `pre.out_hw` rather than the default: the views' own
+    # 512x512 would be 2048 tokens.
+    spec = VaeStageSpec(num_views=len(views_cpu), in_h=in_h, in_w=in_w, out_hw=tuple(pre.out_hw))
     ref_raw = torch.zeros(spec.img_len, 128, dtype=BF16, device=DEV)
 
     def legacy() -> None:

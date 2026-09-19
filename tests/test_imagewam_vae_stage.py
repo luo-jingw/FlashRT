@@ -48,6 +48,21 @@ def _frames(n: int) -> list[np.ndarray]:
     return out
 
 
+def _resize_frames(frames: list[torch.Tensor], size: int) -> list[torch.Tensor]:
+    """`frames` as `size x size` uint8 views: the per-view size a
+    `VaeStageSpec`'s own `in_h x in_w` -- and a frontend's
+    `vae_graph_input` -- declares, since `stage()` takes exactly that."""
+    out: list[torch.Tensor] = []
+    for f in frames:
+        if tuple(f.shape[:2]) == (size, size):
+            out.append(f)
+            continue
+        x = f.permute(2, 0, 1).unsqueeze(0).to(torch.float32)
+        x = torch.nn.functional.interpolate(x, size=(size, size), mode="area")
+        out.append(x[0].round().clamp_(0, 255).to(torch.uint8).permute(1, 2, 0).contiguous())
+    return out
+
+
 def _cmp(name: str, a: torch.Tensor, b: torch.Tensor) -> None:
     x, y = a.float().flatten(), b.float().flatten()
     cos = (x @ y / (x.norm() * y.norm() + 1e-12)).item()
@@ -82,10 +97,13 @@ def test_stage_eager_and_graph_match_encode_to_tokens(ae):
     from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeStageSpec
 
     # _frames order: agent f0, agent f40, wrist f0, wrist f40 (real) or 4 synthetic frames.
-    frames = [torch.from_numpy(f) for f in _frames(4)]
+    frames = _resize_frames([torch.from_numpy(f) for f in _frames(4)], 512)
     first, second = [frames[0], frames[2]], [frames[1], frames[3]]
     pre = VaePreprocessor(resize="area")
-    spec = VaeStageSpec(num_views=2, in_h=512, in_w=512)
+    # 512x512 frames encoded at 224x224: the explicit per-view size
+    # (`out_hw`) of the LIBERO release, not 512x512 (the default would be
+    # the views' own size, 2048 tokens).
+    spec = VaeStageSpec(num_views=2, in_h=512, in_w=512, out_hw=(224, 224))
     img_raw = torch.zeros(spec.img_len, 128, dtype=BF16, device=DEV)
     stage = ImageWAMVaeStage(ae, pre, spec, img_raw)
 
@@ -112,7 +130,7 @@ def test_stage_rejects_wrong_view_shape(ae):
     from flash_rt.models.imagewam.vae_preprocess import VaePreprocessor
     from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeStageSpec
 
-    spec = VaeStageSpec(num_views=2, in_h=512, in_w=512)
+    spec = VaeStageSpec(num_views=2, in_h=512, in_w=512, out_hw=(224, 224))
     stage = ImageWAMVaeStage(ae, VaePreprocessor(), spec, torch.zeros(spec.img_len, 128, dtype=BF16, device=DEV))
     with pytest.raises(ValueError):
         stage.stage([torch.zeros(224, 224, 3, dtype=torch.uint8)] * 2)
@@ -162,8 +180,8 @@ def test_native_encoder_tokens_near_exact(ae):
     from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeStageSpec
 
     native = NativeFlux2Encoder(ae)
-    frames = [torch.from_numpy(f) for f in _frames(4)]
-    spec = VaeStageSpec(num_views=2, in_h=512, in_w=512)
+    frames = _resize_frames([torch.from_numpy(f) for f in _frames(4)], 512)
+    spec = VaeStageSpec(num_views=2, in_h=512, in_w=512, out_hw=(224, 224))
     img_raw = torch.zeros(spec.img_len, 128, dtype=BF16, device=DEV)
     stage = ImageWAMVaeStage(native, VaePreprocessor(), spec, img_raw)
     graph = _graph(stage.run)
@@ -195,11 +213,15 @@ def test_frontend_vae_in_graph_matches_eager_reference(vae_encoder):
     from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
 
     torch.manual_seed(0)
+    # `vae_graph_input` is the frontend's own per-view size: two 224x224
+    # views, the geometry `_SMALL_DIMS` (14x28 = 392 tokens) describes, so
+    # the stage encodes them at 224x224 and `stage()` takes frames of
+    # exactly that size.
     fe = ImageWAMTorchFrontendThor(dims_override=dict(_SMALL_DIMS), precision="fp16",
                                    ae_model_path=_AE_PATH, flux2_src=_FLUX2_SRC,
-                                   vae_encoder=vae_encoder, vae_graph_input=(2, 512, 512))
+                                   vae_encoder=vae_encoder, vae_graph_input=(2, 224, 224))
     fe.set_prompt()
-    frames = [torch.from_numpy(f) for f in _frames(4)]
+    frames = _resize_frames([torch.from_numpy(f) for f in _frames(4)], 224)
     for v1, v2 in ((frames[0], frames[2]), (frames[1], frames[3])):
         torch.manual_seed(1)
         actions = torch.from_numpy(fe.infer({"view1": v1, "view2": v2})["actions"])

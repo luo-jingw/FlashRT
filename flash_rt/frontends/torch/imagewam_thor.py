@@ -400,6 +400,13 @@ class ImageWAMTorchFrontendThor:
         self._vae_encoder = None
         self._vae_pre = None
         self._vae_stage = None
+        # The resize mode `_vae_pre` is built with (roadmap item 2), kept
+        # beside it because that build is per-view-size and happens where
+        # the size is resolvable: at construction for the in-graph path
+        # (`vae_graph_input` below), at the first `stage_images` for the
+        # outside-graph one (a frontend built by from_config records its
+        # workload after the constructor has returned).
+        self._vae_resize = vae_resize
         # Recorded for the runtime export's identity (image -> token numerics).
         self._vae_setup = (("vae_resize", vae_resize), ("vae_encoder", vae_encoder),
                            ("vae_graph_input", str(vae_graph_input)))
@@ -426,8 +433,10 @@ class ImageWAMTorchFrontendThor:
             # kernel. `vae_resize="area"` is bit-identical to the former
             # `_prep_view` path (the served default); `"pil_bilinear"`
             # reproduces the official LIBERO eval's PIL center-crop resize
-            # bit-exactly (issues.md ISSUE-030).
-            self._vae_pre = VaePreprocessor(resize=vae_resize)
+            # bit-exactly (issues.md ISSUE-030). The kernel itself is built
+            # for the per-view size the VAE encodes at, not for its own
+            # 224x224 default (`_vae_resize` above; the `vae_graph_input`
+            # block below and `stage_images` build it).
         # Live Qwen3 text encoding (real VAE + text-context wiring
         # plan's own deferred item, closed once real Qwen3-4B weights
         # were downloaded -- see opportunities.md). Independent of
@@ -623,11 +632,18 @@ class ImageWAMTorchFrontendThor:
             # Roadmap item 5 (plan.md): the VAE stage reads a fixed uint8
             # view buffer and writes straight into img_raw, so
             # _capture_graph() records it ahead of prefill and infer()
-            # does one replay.
+            # does one replay. Its views are the workload's own cameras
+            # (`ImageWAMWorkload.vae_graph_input()`, the shape this
+            # frontend's `_input_view_shape()` reports), so the stage
+            # encodes each of them at that size: the spec's `encode_hw` IS
+            # the workload's per-view `image_h x image_w`, the size its
+            # layout divides by the patch stride, and the preprocessing
+            # kernel is built for it rather than for 224x224.
             nv, in_h, in_w = (int(v) for v in vae_graph_input)
+            spec = VaeStageSpec(num_views=nv, in_h=in_h, in_w=in_w)
+            self._vae_pre = VaePreprocessor(resize=vae_resize, out_hw=spec.encode_hw)
             self._vae_stage = ImageWAMVaeStage(
-                self._vae_encoder, self._vae_pre, VaeStageSpec(num_views=nv, in_h=in_h, in_w=in_w),
-                self._img_raw)
+                self._vae_encoder, self._vae_pre, spec, self._img_raw)
         # `ref_h`/`ref_w`: the REAL image RoPE needs the actual 2D patch
         # grid (14x28 for the real confirmed 224x448 input, NOT a flat
         # (img_len, 1) "392x1" placeholder) -- see the ckpt_path check
@@ -757,7 +773,14 @@ class ImageWAMTorchFrontendThor:
 
         `view_shape` (`runtime_surface()`) and `num_views` both read it, so
         the declared frame shape and the observation's own keys cannot
-        disagree.
+        disagree. So does the VAE encode geometry: a view is delivered at
+        this size and encoded at it -- `stage_images` passes `(H, W)` as
+        `encode_to_tokens`'s per-view `out_hw`, the in-graph stage's
+        `VaeStageSpec` takes `in_h`/`in_w` from this same
+        `vae_graph_input()`, and its `encode_hw` is those two fields. The
+        tokens therefore match the workload's own `img_len` and image RoPE
+        grid; LIBERO resolves to 224x224 and the 3x256 target workload to
+        256x256.
         """
         if self._workload is not None:
             return self._workload.vae_graph_input()
@@ -2063,6 +2086,13 @@ class ImageWAMTorchFrontendThor:
         preprocessing kernel and VAE encoder run now (outside the graph) and
         the tokens are written into `img_raw`.
 
+        Every view is encoded at this frontend's own per-view size
+        (`_input_view_shape()`, the workload's `image_h`/`image_w`):
+        `encode_to_tokens` resizes a frame of another size to it, so a
+        512x512 LIBERO eval frame and a 224x224 one produce the same
+        tokens, and `img_raw` gets the workload's own `img_len` -- not the
+        392 tokens a fixed 224x224 grid gives for every workload.
+
         A view count other than `self.num_views` raises: `img_raw` and the
         captured graph are sized for that count, so a shorter or longer
         sequence of views is a mismatch, not a narrower run.
@@ -2076,9 +2106,16 @@ class ImageWAMTorchFrontendThor:
         if len(views) != self.num_views:
             raise ValueError(f"stage_images takes this frontend's {self.num_views} views (num_views of "
                              f"the workload it serves, runtime_surface().view_shape), got {len(views)}")
+        out_hw = self._input_view_shape()[1:]
+        if self._vae_pre is None:
+            # Built here, not in __init__: the per-view size comes from the
+            # workload, which a resolved frontend records after the
+            # constructor has returned (from_config).
+            self._vae_pre = VaePreprocessor(resize=self._vae_resize, out_hw=out_hw)
         from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
         tokens = encode_to_tokens(self._ae, [torch.as_tensor(v) for v in views],
-                                  preprocessor=self._vae_pre, encoder=self._vae_encoder)
+                                  out_hw=out_hw, preprocessor=self._vae_pre,
+                                  encoder=self._vae_encoder)
         self._img_raw.copy_(tokens[0].to(dtype=BF16))
 
     def stage_proprio(self, proprio: np.ndarray) -> None:

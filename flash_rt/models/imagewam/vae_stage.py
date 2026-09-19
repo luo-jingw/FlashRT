@@ -4,7 +4,9 @@
 `ImageWAMVaeStage` owns the stage's device state at fixed addresses:
 
 - `views_u8`: `(num_views, in_h, in_w, 3)` uint8, the camera views;
-- `image`: `(1, 3, out_h, num_views * out_w)` BF16, the VAE input;
+- `image`: `(1, 3, out_h, num_views * out_w)` BF16, the VAE input, each
+  view encoded at `VaeStageSpec.encode_hw` (the views' own `in_h x in_w`
+  by default: the workload's per-view size);
 
 and writes the encoder's tokens into a caller-owned `img_raw`
 `(img_len, 128)` BF16 buffer (the frontend's backbone input), in the
@@ -38,17 +40,39 @@ class VaeEncoder(Protocol):
 @dataclass(frozen=True)
 class VaeStageSpec:
     """Static input shape of the stage: `num_views` camera views of
-    `in_h x in_w` uint8 RGB, each resized to `out_hw`, concatenated
-    horizontally."""
+    `in_h x in_w` uint8 RGB, concatenated horizontally into the one image
+    the encoder takes, `encode_hw` per view."""
     num_views: int
     in_h: int
     in_w: int
-    out_hw: tuple[int, int] = (224, 224)
+    out_hw: tuple[int, int] | None = None
+
+    @property
+    def encode_hw(self) -> tuple[int, int]:
+        """The per-view size each view is encoded at: the views' own
+        `in_h x in_w` unless the caller pinned `out_hw`.
+
+        The views this stage stages are the workload's cameras, delivered
+        at the workload's `image_h x image_w`, and that is the size
+        `ImageWAMWorkload.layout` divides by the patch stride to get the
+        token grid the graph's `img_raw`, the image RoPE and the VAE's own
+        output all carry. The encode size therefore follows those two
+        fields -- a fixed 224x224 grid mismatches every workload but
+        LIBERO's. `out_hw` stays for a caller that stages a different
+        delivered size and resizes (`benchmarks/imagewam_vae_stage_bench.py`
+        encodes 512x512 LIBERO frames at 224x224).
+        """
+        if self.out_hw is None:
+            return (self.in_h, self.in_w)
+        return self.out_hw
 
     @property
     def latent_hw(self) -> tuple[int, int]:
-        return (self.out_hw[0] // VAE_SPATIAL_FACTOR,
-                self.num_views * self.out_hw[1] // VAE_SPATIAL_FACTOR)
+        """The VAE's token grid: each view contributes
+        `encode_hw / VAE_SPATIAL_FACTOR`, the views side by side along the
+        width."""
+        h, w = self.encode_hw
+        return (h // VAE_SPATIAL_FACTOR, self.num_views * w // VAE_SPATIAL_FACTOR)
 
     @property
     def img_len(self) -> int:
@@ -64,10 +88,10 @@ class ImageWAMVaeStage:
                  spec: VaeStageSpec, img_raw: torch.Tensor) -> None:
         if spec.num_views < 1:
             raise ValueError(f"num_views={spec.num_views} must be >= 1")
-        if tuple(preprocessor.out_hw) != tuple(spec.out_hw):
-            raise ValueError(f"preprocessor.out_hw={preprocessor.out_hw} != spec.out_hw={spec.out_hw}")
-        if spec.out_hw[0] % VAE_SPATIAL_FACTOR or spec.out_hw[1] % VAE_SPATIAL_FACTOR:
-            raise ValueError(f"out_hw={spec.out_hw} must be divisible by {VAE_SPATIAL_FACTOR}")
+        if tuple(preprocessor.out_hw) != tuple(spec.encode_hw):
+            raise ValueError(f"preprocessor.out_hw={preprocessor.out_hw} != spec.encode_hw={spec.encode_hw}")
+        if spec.encode_hw[0] % VAE_SPATIAL_FACTOR or spec.encode_hw[1] % VAE_SPATIAL_FACTOR:
+            raise ValueError(f"spec.encode_hw={spec.encode_hw} must be divisible by {VAE_SPATIAL_FACTOR}")
         expected = (spec.img_len, VAE_TOKEN_DIM)
         if tuple(img_raw.shape) != expected or img_raw.dtype != torch.bfloat16 or not img_raw.is_contiguous():
             raise ValueError(f"img_raw must be contiguous BF16 {expected} for {spec}, got "
@@ -76,7 +100,7 @@ class ImageWAMVaeStage:
         self._encoder = encoder
         self._preprocessor = preprocessor
         device = img_raw.device
-        out_h, out_w = spec.out_hw
+        out_h, out_w = spec.encode_hw
         self.views_u8 = torch.zeros(spec.num_views, spec.in_h, spec.in_w, 3, dtype=torch.uint8, device=device)
         self.image = torch.zeros(1, 3, out_h, spec.num_views * out_w, dtype=torch.bfloat16, device=device)
         self._view_slices = [self.views_u8[i] for i in range(spec.num_views)]

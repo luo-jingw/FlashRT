@@ -86,9 +86,9 @@ def load_real_ae(ae_model_path: str, flux2_src: str, *, device: str = DEV,
 
 def _prep_view(view: torch.Tensor, out_hw: tuple[int, int], device: str, dtype: torch.dtype) -> torch.Tensor:
     """One real camera view, `(H,W,3)` uint8, -> `(1,3,out_h,out_w)`
-    normalized `x*2/255-1` (real ImageWAM/FLUX.2 preprocessing,
-    confirmed against `libero_spatial_no_noops_lerobot`'s own real
-    eval preprocessing: resize to 224x224 per view)."""
+    normalized `x*2/255-1` (real ImageWAM/FLUX.2 preprocessing: resize to
+    the per-view encode size `out_hw`, which is the served workload's
+    `image_h x image_w`, or 224x224 for the LIBERO release)."""
     import torch.nn.functional as F
 
     if view.dtype != torch.uint8 or view.ndim != 3 or view.shape[-1] != 3:
@@ -126,6 +126,15 @@ def encode_to_tokens(ae, views: Sequence[torch.Tensor],
     392 tokens), and the resulting `img_len` is whatever that resolution
     produces -- caller's own responsibility to match
     `imagewam_thor.py`'s own configured `img_raw` shape.
+
+    `out_hw`: the per-view size every view is encoded at. The default
+    `(224, 224)` is LIBERO's own per-view size (`ImageWAMWorkload.libero()`
+    serves two 224x224 cameras). A workload-driven caller passes the
+    workload's `image_h`/`image_w` -- the size `ImageWAMWorkload.layout`
+    divides by the patch stride, so the tokens are that workload's own
+    `img_len` -- which is what `ImageWAMTorchFrontendThor.stage_images`
+    does, from `_input_view_shape()`. A view already of size `out_hw` is
+    not resized.
 
     `views` is validated before `ae` is touched: at least one view, every
     view `(H,W,3)` uint8 (`ValueError` naming the offending view).

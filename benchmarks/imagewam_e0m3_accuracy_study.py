@@ -83,7 +83,6 @@ from flash_rt.models.imagewam.libero_dims import (  # noqa: E402
 from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagewam_prefill  # noqa: E402
 from flash_rt.models.imagewam.quant_linear import Fp16Linear  # noqa: E402
 from flash_rt.models.imagewam.text_encoder import encode_prompts  # noqa: E402
-from flash_rt.models.imagewam.vae_encoder import encode_to_tokens  # noqa: E402
 
 DEV = "cuda"
 BF16 = torch.bfloat16
@@ -280,9 +279,11 @@ class Runner:
         torch.cuda.empty_cache()
         self.tokens = []
         for f in frames:
-            tok = encode_to_tokens(fe._ae, [torch.from_numpy(f.view1.copy()), torch.from_numpy(f.view2.copy())],
-                                   preprocessor=fe._vae_pre, encoder=fe._vae_encoder)
-            self.tokens.append(tok[0].to(BF16).clone())
+            # The frontend's own staging verb: it builds the preprocessing
+            # kernel for its own per-view size and writes the tokens into
+            # img_raw, which is exactly what the captured graph reads.
+            fe.stage_images(torch.from_numpy(f.view1.copy()), torch.from_numpy(f.view2.copy()))
+            self.tokens.append(fe._img_raw.clone())
         self.frames = frames
         self.keepalive = {t.data_ptr(): t for t in fe._keepalive}
         self.quant_keys = [k for k, v in fe._weights.items()
