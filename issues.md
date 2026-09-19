@@ -1143,11 +1143,11 @@ rows.
 Conditions for making `text_trim=True` the served default, all of them:
 
 1. Thor `nvfp4` end-to-end compare with `TEXT_TRIM=0` and `1` on
-   libero_spatial, libero_goal and libero_10, and the FA4 checks (plan.md
-   Thor check, steps 2-4): trimmed agreement with official at or above
-   untrimmed on every suite, `infer()` P50 lower.
+   libero_spatial, libero_goal and libero_10, and the FA4 checks (`plan.md`
+   "Thor validation checklist", steps 3 and 5): trimmed agreement with
+   official at or above untrimmed on every suite, `infer()` P50 lower.
 2. The multi-length safety check on Thor at the served precision, FA4
-   off and on (Thor check step 6,
+   off and on (`plan.md` "Thor validation checklist" step 3,
    `tests/test_imagewam_text_trim_graph_safety.py`): every length
    bit-identical to a fresh single-length frontend, no weight-op tensor
    reallocated, no write into poisoned free memory.

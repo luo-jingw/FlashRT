@@ -1,6 +1,6 @@
 # OPT-001
 
-Status: RESOLVED end to end, including real Thor validation (2026-09-15, `plan.md`'s own "OPT-001" plan, all 4 phases complete); FP8 calibration/quantization split off into OPT-004 steps 5-6 (already resolved separately, see that section)
+Status: RESOLVED end to end, including real Thor validation (2026-09-15, all 4 phases complete); FP8 calibration/quantization split off into OPT-004 steps 5-6 (already resolved separately, see that section)
 
 Area: ImageWAM on Thor — precision and real-weight path
 
@@ -49,14 +49,13 @@ full real-checkpoint frontend) as permanent regression coverage.
 **What remains, Thor-only**: confirming this same sequence completes
 on Thor's own 128GB unified memory without the WSL2 paging dependency,
 and a real per-layer P50 with real weights (this dev machine's numbers
-would not be a meaningful Thor performance number). See `plan.md`'s
-own "OPT-001" Phase 4.
+would not be a meaningful Thor performance number).
 
 ## Original framing (superseded by the above, kept for history)
 
 ## Observation
 
-`plan.md`'s current plan uses randomly initialized weights and a
+The original plan used randomly initialized weights and a
 BF16-only forward, deferring FP8 quantization, calibration, real
 checkpoint loading, and accuracy validation. ImageWAM's FLUX.2-4B
 variant needs roughly 18GB of weights in bf16 (backbone + Qwen3-4B
@@ -591,7 +590,7 @@ Area: ImageWAM denoise step — mot_joint attention computed ~15x more than need
 
 ## Observation (original)
 
-Real Thor (SM110) measurement (plan.md "Real Thor Results"): FP4/FP8
+Real Thor (SM110) measurement: FP4/FP8
 GEMM quantization speeds up backbone prefill by 1.3-1.5x but leaves the
 ActionDiT denoise step essentially unchanged across all four precisions
 tested (~35ms regardless of FP16/BF16/FP8/FP4). Root cause was
@@ -655,9 +654,7 @@ attention call yields roughly a 5-6x step-level speedup on both GPUs.
 Real, practically important consequence confirmed on Thor: prefill is
 now 58% of the full path (was the minority share before this fix) —
 the optimization center of gravity has moved from denoise attention to
-backbone GEMM. See plan.md's "Real Thor Results — Post-OPT-003 Run"
-for the full breakdown (FP8/FP4/autotune/graph numbers, all re-measured
-on Thor with this fix in place).
+backbone GEMM.
 
 ## Promotion Condition — met
 
@@ -672,7 +669,7 @@ Area: ImageWAM pipeline has none of FlashRT's real kernel-fusion or GEMM-autotun
 
 ## Observation
 
-Real Thor (SM110) measurement (plan.md "Real Thor Results"), BEFORE
+Real Thor (SM110) measurement, BEFORE
 the OPT-003 fix: full prefill+10-step-denoise steady-state is 407-453ms
 across all four precisions tested — the first real-hardware
 confirmation that this plan's own pipeline (Phase 3/4) is a direct,
@@ -969,7 +966,7 @@ Thor measurement.
 
 ## Step 5: FP8/NVFP4 quantized GEMM — wired and Ada-verified for FP16, untestable numerically for FP8/NVFP4 on this machine
 
-`plan.md`'s own "OPT-004 step 5" plan, Phases 0-3 complete (Phase 4,
+Phases 0-3 complete (Phase 4,
 real Thor measurement, still pending — needs the user). New
 `flash_rt/models/imagewam/quant_linear.py` promotes the benchmark
 scripts' own `_Fp8Linear`/`_Fp4Linear` pattern into real, reusable
@@ -990,8 +987,8 @@ either of these):
   capability (8,9)) fails `fp8_gemm_descale_fp16` with
   `cublasLtMatmulAlgoGetHeuristic ... cuBLAS status 15` at EVERY shape
   tried (down to 4x16x16) — a pre-existing, already-documented
-  environment gap (`plan.md`'s "Ada FP8 Environment Gap" section from
-  an earlier session), reproduced identically in the pre-existing
+  environment gap (`issues.md` ISSUE-001, from an earlier session),
+  reproduced identically in the pre-existing
   `imagewam_thor_fp8_bench.py`. Not a wiring bug, not fixable from this
   project's code, not a hardware limitation — the user's own real Thor
   run already produced real FP8 numbers with this exact kernel.
@@ -1468,7 +1465,7 @@ and rebuilding on this dev machine (`-DENABLE_SM80_INT8_CUTLASS=ON
 -DFLASHRT_ENABLE_CHAMELEON=ON`, `GPU_ARCH=89`) and running
 `cutlass_int4_rowwise_fp16out` successfully at real ImageWAM projection
 shapes (`benchmarks/imagewam_gemm_precision_compare.py`) — see
-plan.md's own recorded GEMM-only comparison table for the real numbers.
+this entry's own GEMM-only comparison table for the real numbers.
 INT8 (SM80, same family) also works. Both are meaningfully faster than
 FP16 at the shapes that work: INT4 ~9x, INT8 ~4x on the `q/proj`
 (3072x3072) shape.
@@ -1845,7 +1842,7 @@ regardless of which precision runs first.
 
 # OPT-008
 
-Status: real VAE-encode cost added to all local/Thor full-pipeline benchmarks; the `img_in` gap this exposed is FIXED (OPT-001 Phase 1); the VAE encoder ITSELF is NOW wired into the served frontend (2026-09-15, `plan.md`'s own "real VAE encoder + text-context wiring" plan, all 3 phases done) — see this file's own new entry below
+Status: real VAE-encode cost added to all local/Thor full-pipeline benchmarks; the `img_in` gap this exposed is FIXED (OPT-001 Phase 1); the VAE encoder ITSELF is NOW wired into the served frontend (2026-09-15, all 3 phases done) — see this file's own new entry below
 
 Area: VAE encoder (input-image tokenization) — previously excluded from every full-pipeline speed number with no clear justification; now included
 
@@ -3896,7 +3893,7 @@ to the gate's latency baseline.
 
 # OPT-026: precision-routing contract test for the ImageWAM Thor frontend (roadmap item 11)
 
-Status: done (plan.md "Plan: Precision-routing contract test").
+Status: done.
 
 Area: `ImageWAMTorchFrontendThor` weight-slot routing
 (`_wrap_linear`, `_alloc_random_weights`, `_load_real_weights`, the
@@ -4432,7 +4429,7 @@ pending (Thor check below).
 
 Area: single-stream blocks, 20 backbone + 20 ActionDiT
 (`pipeline_thor.py` `_single_stream_layer` / `_action_single_layer`).
-Plan: plan.md "single-stream `linear2` merge (roadmap item 4)". This is
+Plan: `plan.md` roadmap item 4. This is
 OPT-015's op-fusion audit finding 1, sub-problem 3.
 
 ## What changed
@@ -4511,8 +4508,8 @@ Status: implemented and locally verified bit-exact (H100); default on
 for every precision. Thor speed pending (Thor check below).
 
 Area: every gated residual update in `pipeline_thor.py` (backbone
-double/single, ActionDiT double/single, ActionDiT head). Plan: plan.md
-"gated-residual + next-AdaLN fusion (roadmap item 3)". Supersedes
+double/single, ActionDiT double/single, ActionDiT head). Plan:
+`plan.md` roadmap item 3. Supersedes
 OPT-015's deferred CUTLASS gated-residual epilogue for this problem.
 
 ## What changed
@@ -4609,7 +4606,7 @@ follow-up.
 # OPT-020: VAE input preprocessing kernel with a 256-entry normalization table (roadmap item 2)
 
 Status: implemented and served by default (bit-identical); Thor
-latency pending (Thor checklist in `plan.md`'s item-2 plan section)
+latency pending (Thor checklist step 2 in `plan.md`)
 
 Area: `flash_rt/models/imagewam/vae_preprocess.py`,
 `csrc/kernels/imagewam_vae_preprocess.cu`, used by
@@ -4679,7 +4676,7 @@ The served-vs-official resize difference is ISSUE-030.
 Status: implemented behind frontend flags (`vae_encoder="native"`,
 `vae_graph_input=(views, H, W)`), verified on H100; defaults unchanged
 (`vae_encoder="torch"`, VAE outside the graph). Thor latency pending
-(Thor checklist in `plan.md`'s item-5 plan section).
+(Thor checklist step 6 in `plan.md`).
 
 Area: `flash_rt/models/imagewam/vae_stage.py`,
 `flash_rt/models/imagewam/vae_native_encoder.py`,
@@ -4816,8 +4813,7 @@ to the CUDA quantizers; Thor correctness and latency pending
 
 Area: 4-bit block-scaled GEMM tier for every 16-aligned ImageWAM weight
 (`quant_linear.py` `E0m3HadamardLinear`, `imagewam_thor.py`
-`_wrap_linear`), plan.md "Plan: Hadamard-rotated INT4 (E0M3) precision
-tier (roadmap item 9)".
+`_wrap_linear`), `plan.md` roadmap item 9.
 
 ## Mechanism
 
@@ -5049,8 +5045,7 @@ the 128x64x256 tile).
 # OPT-022: real activation calibration for `fp8_static*` (roadmap item 7)
 
 Status: done on H100; Thor confirmation pending (checklist below).
-Plan: `plan.md` "Real calibration data pipeline for `fp8_static*`
-(roadmap item 7)". Mechanism and file format:
+Plan: `plan.md` roadmap item 7. Mechanism and file format:
 `docs/imagewam_calibration.md`.
 
 ## What changed
@@ -5138,9 +5133,8 @@ values only, not the captured graph, so P50 should not move.
 
 Status: implemented behind `nvfp4_awq=True` (default off); accuracy
 measured on H100 with simulated NVFP4; real `nvfp4` accuracy and speed
-pending on Thor. Plan: `plan.md` "AWQ per-channel scales folded into the
-NVFP4 weights (roadmap item 8)". Mechanism, fold points and exactness:
-`docs/imagewam_nvfp4_awq.md`.
+pending on Thor. Plan: `plan.md` roadmap item 8. Mechanism, fold
+points and exactness: `docs/imagewam_nvfp4_awq.md`.
 
 ## H100 results (simulated NVFP4, bit-exact quantizer, real checkpoint)
 
@@ -5196,8 +5190,7 @@ check.
 Status: implemented and verified on H100 (fp16, real checkpoint,
 bit-exact). Thor `nvfp4` parity pending on the Thor checklist.
 
-Area: deployment engineering, roadmap item 12 (`plan.md` "Plan: ABI
-integration, `frt_model_runtime_v1` Python producer").
+Area: deployment engineering, roadmap item 12.
 
 ## Observation
 
@@ -5298,8 +5291,7 @@ Status: implemented and verified bit-exact on H100 (fp16, small dims and
 real checkpoint); NVFP4 wiring compiles and links for sm_110; Thor
 `nvfp4` parity and speed pending on the Thor checklist.
 
-Area: deployment engineering, roadmap item 14 (`plan.md` "Plan: Native
-C++ overlay, `io="native"`"); interface record
+Area: deployment engineering, roadmap item 14; interface record
 `docs/imagewam_native_cpp.md`.
 
 ## Observation
@@ -5409,8 +5401,8 @@ inside the graph, and a native checkpoint loader (`native_v2`).
 
 Status: implemented behind `ImageWAMTorchFrontendThor(text_trim=True)`
 (default `False`), verified on H100 at `fp16`, `fp8` and `fp8_static`;
-`nvfp4`, `e0m3_hadamard`, FA4 and Thor latency pending (Thor check in `plan.md`, "Plan: text-context
-trimming to the prompt's valid length"; issues.md ISSUE-080).
+`nvfp4`, `e0m3_hadamard`, FA4 and Thor latency pending (Thor check in
+`plan.md`'s "Thor validation checklist", steps 3 and 5; issues.md ISSUE-080).
 
 Area: `flash_rt/models/imagewam/text_context.py`,
 `flash_rt/frontends/torch/imagewam_thor.py`,
@@ -5601,7 +5593,7 @@ gain.
 - Thor: `nvfp4` end-to-end compare off/on, `infer()` P50 A/B, capture
   time per new length, FA4 on/off, VAE-in-graph memory, and the
   multi-length safety check at `nvfp4`, `e0m3_hadamard` and with FA4
-  (plan.md Thor check, steps 2-6).
+  (`plan.md` "Thor validation checklist", steps 3, 5 and 6).
 - `fp8`/`fp8_static` run on H100 since the TN FP8 path (issues.md
   ISSUE-001) and are verified with trimming above;
   `fp8_static_cutlass` runs on Thor only.
