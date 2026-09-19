@@ -99,6 +99,7 @@ def test_default_profile_equals_frontend_constructor_defaults():
     o = resolve().options
     assert o.precision == fd["precision"] == "nvfp4"
     assert o.text_trim is fd["text_trim"] is False
+    assert o.text_trim_cache_size == fd["text_trim_cache_size"] == 32
     assert o.use_fa4 is fd["use_fa4"] is None       # None: resolved at construction (env FLASHRT_THOR_FA4)
     assert o.use_fa4_mot is fd["use_fa4_mot"] is False
     assert o.vae_encoder == fd["vae_encoder"] == "torch"
@@ -382,7 +383,8 @@ def test_R11_structure_invariants():
 
 def test_V1_value_domains():
     for kw in (dict(profile="turbo"), dict(precision="int3"), dict(consumer="cloud"),
-               dict(vae_encoder="onnx"), dict(text_trim=1), dict(use_fa4="yes"), dict(awq_scope=3)):
+               dict(vae_encoder="onnx"), dict(text_trim=1), dict(use_fa4="yes"), dict(awq_scope=3),
+               dict(text_trim_cache_size=0), dict(text_trim_cache_size="32")):
         assert rule_of(**kw) == "V1", kw
 
 

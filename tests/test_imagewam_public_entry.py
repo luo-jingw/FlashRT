@@ -48,7 +48,7 @@ def test_signature_is_the_frozen_entry():
     assert list(params) == ["ckpt_path", "workload", "structure", "profile", "precision",
                             "calibration_path", "ae_model_path", "flux2_src", "qwen3_model_spec",
                             "dataset_stats_path", "consumer", "allow_placeholder_calibration",
-                            "vae_resize", "expert"]
+                            "vae_resize", "precapture_text_lengths", "expert"]
     positional = [n for n, p in params.items()
                   if p.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD and n != "expert"]
     assert positional == ["ckpt_path", "workload"]
@@ -56,6 +56,7 @@ def test_signature_is_the_frozen_entry():
     assert params["profile"].default == "default"
     assert params["consumer"].default == "infer"
     assert params["allow_placeholder_calibration"].default is False
+    assert params["precapture_text_lengths"].default is None
 
 
 def test_structure_is_required_without_a_checkpoint():

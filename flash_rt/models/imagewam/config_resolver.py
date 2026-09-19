@@ -47,7 +47,8 @@ and, for existing checks the plan's table does not list:
     R11 structure invariants the frontend asserts (HD == 128,
         action_attn_width == hidden)
     V1  a value outside its domain (unknown profile, precision, vae_encoder,
-        consumer, expert key, or a non-bool switch)
+        consumer, expert key, a non-bool switch, or
+        `text_trim_cache_size < 1`)
 
 `effective_config`: one line, `effective_config key=value ...`, in exactly
 the key order and formatting of the line
@@ -118,11 +119,18 @@ class ImageWAMOptions:
     `vae_graph_input`: `(num_views, in_h, in_w)` when the VAE runs inside
     the CUDA graph (derived from the workload), else `None`.
 
+    `text_trim_cache_size`: the bound on the frontend's per-length
+    `text_trim` graph cache (`>= 1`). It is the constructor's own default:
+    LIBERO's four suites use 15 distinct lengths, so 32 covers them with
+    headroom, and one captured graph costs 10-16 MiB on H100 (NVML, per
+    process; ISSUE-080).
+
     The last block is the expert tier: constructor-only switches that a
     deployment does not set.
     """
     precision: Precision
     text_trim: bool
+    text_trim_cache_size: int
     use_fa4: bool | None
     use_fa4_mot: bool
     vae_encoder: str
@@ -184,8 +192,8 @@ PROFILES: dict[str, ProfileSpec] = {
 # `vae_graph` (bool) is the profile's VAE-in-graph switch; the resolved
 # `vae_graph_input` is derived from it and the workload, never typed.
 EXPERT_KEYS = (
-    "use_fa4", "use_fa4_mot", "text_trim", "vae_encoder", "vae_graph", "nvfp4_awq",
-    "awq_alpha", "awq_scope", "gemm_variant_autotune", "gemm_runner",
+    "use_fa4", "use_fa4_mot", "text_trim", "text_trim_cache_size", "vae_encoder", "vae_graph",
+    "nvfp4_awq", "awq_alpha", "awq_scope", "gemm_variant_autotune", "gemm_runner",
     "merge_qkv_mlp", "merge_linear2",
 )
 _BOOL_KEYS = ("use_fa4_mot", "text_trim", "vae_graph", "nvfp4_awq", "gemm_variant_autotune",
@@ -351,6 +359,13 @@ def resolve_config(workload: "ImageWAMWorkload", structure: "ImageWAMStructure",
     awq_scope = expert.get("awq_scope", "adaln+down")
     if not isinstance(awq_scope, str):
         raise ConfigError("V1", f"awq_scope={awq_scope!r} must be a str")
+    # The bound on the per-length `text_trim` graph cache; 32 is the
+    # frontend constructor's own default (pinned equal by the tests).
+    text_trim_cache_size = expert.get("text_trim_cache_size", 32)
+    if isinstance(text_trim_cache_size, bool) or not isinstance(text_trim_cache_size, int):
+        raise ConfigError("V1", f"text_trim_cache_size={text_trim_cache_size!r} must be an int")
+    if text_trim_cache_size < 1:
+        raise ConfigError("V1", f"text_trim_cache_size={text_trim_cache_size} -- must be >= 1")
 
     # -- R7: workload layout against the structure ----------------------------
     try:
@@ -429,7 +444,8 @@ def resolve_config(workload: "ImageWAMWorkload", structure: "ImageWAMStructure",
                                  f"precision={prec.value!r}")
 
     options = ImageWAMOptions(
-        precision=prec, text_trim=text_trim, use_fa4=use_fa4, use_fa4_mot=use_fa4_mot,
+        precision=prec, text_trim=text_trim, text_trim_cache_size=text_trim_cache_size,
+        use_fa4=use_fa4, use_fa4_mot=use_fa4_mot,
         vae_encoder=vae_encoder, vae_graph_input=vae_graph_input, nvfp4_awq=nvfp4_awq,
         calibration_path=calibration_path,
         gemm_variant_autotune=gemm_variant_autotune, gemm_runner=expert.get("gemm_runner"),
