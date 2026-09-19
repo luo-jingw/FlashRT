@@ -1635,7 +1635,7 @@ run isolated. Record each first failure text.
 
 # ISSUE-086
 
-Status: open
+Status: resolved
 
 Area: the VAE encode geometry against the workload's per-view size —
 `flash_rt/models/imagewam/vae_encoder.py` (`encode_to_tokens`'s `out_hw`),
@@ -1699,3 +1699,36 @@ it), with the LIBERO two-view result unchanged. Then re-run
 `benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 128`
 for all three paths, and the LIBERO rows for the bit-identity of the two-view
 tokens.
+
+## Resolution
+
+Both fixed-224 geometries are gone. `VaeStageSpec.out_hw` now defaults to
+`None`, meaning "the views' own size", exposed as `encode_hw` (the size the
+encode actually runs at) which `latent_hw`/`img_len` and
+`ImageWAMVaeStage.__init__` derive from; `(3, 256, 256)` gives 16x48 = 768
+tokens and `(2, 224, 224)` gives 14x28 = 392, an explicit `out_hw` is still
+honoured for direct callers. The frontend resolves the served per-view size in
+one place (`_input_view_shape()`) and uses it for both placements: the in-graph
+stage spec and its preprocessing kernel, and the outside-the-graph
+`encode_to_tokens(out_hw=...)` plus its kernel. No new switch and no new
+constructor argument.
+
+Two consequences worth knowing:
+
+- for the outside-the-graph path the preprocessing kernel is now built at the
+  first `stage_images` (the workload is recorded after the constructor
+  returns), so a caller reading `fe._vae_pre` before staging sees `None`; the
+  two in-tree callers (`benchmarks/imagewam_e2e_official_compare.py`,
+  `imagewam_e0m3_accuracy_study.py`) go through `stage_images` now, and the
+  e2e one gains correct `VAE_RESIZE=pil_bilinear` behaviour it would have
+  silently lost;
+- a caller that passes dims by hand with `vae_graph_input=(2, 512, 512)` now
+  encodes at 512x512 (2048 tokens) instead of silently resizing to 224.
+
+Verified on CPU: the spec geometry per workload against
+`ImageWAMWorkload.layout()`, the stage accepting `(768, 128)` for three
+256x256 views and `(392, 128)` for two 224x224 views, and the encode size
+`stage_images` passes for each workload (`tests/test_imagewam_vae_geometry.py`).
+To be observed on Thor (`THOR_CHECKLIST.md` item P):
+`--workload target --text-max-len 128` on all three paths, and the LIBERO rows
+for the bit-identity of the two-view tokens.

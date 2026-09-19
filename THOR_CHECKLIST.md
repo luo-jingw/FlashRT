@@ -80,7 +80,7 @@ python benchmarks/imagewam_text_trim_bench.py --precision nvfp4 --section all --
 
 ## P. 目标 workload 的三条路径（ISSUE-086 修完后）
 
-LIBERO 两个 profile 与目标 workload 的 ABI/native 行已完成；目标 workload 的 `infer()` 因 VAE 几何（768 vs 588，ISSUE-086）被跳过，`profile=fast` 构造时报 `img_raw` 期望 `(588,128)` 得到 `(768,128)`。VAE 几何按 workload 的每视角尺寸修好后重跑：
+LIBERO 两个 profile 与目标 workload 的 ABI/native 行已完成；目标 workload 的 `infer()` 因 VAE 几何（768 vs 588，ISSUE-086）被跳过，`profile=fast` 构造时报 `img_raw` 期望 `(588,128)` 得到 `(768,128)`。VAE 几何已改为跟随 workload 的每视角尺寸（`VaeStageSpec.encode_hw` / `_input_view_shape()`），重跑本节确认：
 
 ```
 # 目标 workload（3 × 256×256，horizon 32，指令 16–128 token）
@@ -90,7 +90,11 @@ python benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 1
   --valid-tokens 16,72,128 --precapture
 # LIBERO：确认两路 VAE token 与改动前逐位相同
 python -m pytest tests/test_imagewam_vae_stage.py -q 2>&1 | tee $OUT/P_vae_stage.log
+python -m pytest tests/test_imagewam_vae_geometry.py tests/test_imagewam_model_runtime_vae.py -q 2>&1 | tee $OUT/P_vae_geometry.log
 python benchmarks/imagewam_thor_path_bench.py
+python benchmarks/imagewam_thor_path_bench.py --profile fast
+# e2e 的 VAE 通路改成了走 stage_images（原来直接读 fe._vae_pre），跑一行矩阵确认数字没动
+SUITE=libero_spatial PRECS=nvfp4 ROWS="default" bash scripts/imagewam_thor_matrix.sh
 ```
 
 判据：目标 workload 三条路径都出数（不再 SKIP，`view_shape=(3,256,256)`，`img_len=768`）；`--profile fast` 构造成功；LIBERO 行的 VAE token 与 `eccf14f` 的逐位相同（跑一次 e2e 对比 gate fixture 的 fp16 参考即可）。**不设阈值、不判定**——目标配置没有延迟预算。
