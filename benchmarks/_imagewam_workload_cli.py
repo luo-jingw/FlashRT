@@ -110,14 +110,10 @@ def random_observation(workload: ImageWAMWorkload, seed: int) -> dict[str, objec
 
     The keys are `view1` ... `view<num_views>` plus `proprio`, which is
     `runtime_export.view_names(workload.num_views)`'s order and what
-    `ImageWAMTorchFrontendThor._observation_views` reads. That method reads
-    `view1` and `view2` only, and `stage_images` accepts at most two views on
-    the VAE-outside-the-graph path, so the observation path carries two views
-    whatever the workload asks for; the frames of the remaining views stay in
-    the dict for a caller that writes a window itself (the `image_views` SWAP
-    window holds all `num_views` frames). A workload above two views
-    therefore cannot drive the in-graph VAE stage through `infer()`, which
-    needs every view -- a limitation of the frontend, not of this helper.
+    `ImageWAMTorchFrontendThor`'s observation path reads
+    (`observation_views(observation, num_views)`, the frontend's own
+    `num_views`): one frame per view of the workload, so a three-view
+    workload gets three keys and the frontend encodes all three.
     """
     rng = np.random.default_rng(seed)
     observation: dict[str, object] = {}

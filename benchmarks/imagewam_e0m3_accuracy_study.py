@@ -280,7 +280,7 @@ class Runner:
         torch.cuda.empty_cache()
         self.tokens = []
         for f in frames:
-            tok = encode_to_tokens(fe._ae, torch.from_numpy(f.view1.copy()), torch.from_numpy(f.view2.copy()),
+            tok = encode_to_tokens(fe._ae, [torch.from_numpy(f.view1.copy()), torch.from_numpy(f.view2.copy())],
                                    preprocessor=fe._vae_pre, encoder=fe._vae_encoder)
             self.tokens.append(tok[0].to(BF16).clone())
         self.frames = frames

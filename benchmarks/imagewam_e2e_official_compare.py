@@ -225,8 +225,8 @@ def flashrt_infer_with_noise(fe, v1, v2, state, noise):
         fe._vae_stage.stage([torch.from_numpy(v1), torch.from_numpy(v2)])
     else:
         from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
-        tokens = encode_to_tokens(fe._ae, torch.from_numpy(v1), torch.from_numpy(v2), preprocessor=fe._vae_pre,
-                                  encoder=fe._vae_encoder)
+        tokens = encode_to_tokens(fe._ae, [torch.from_numpy(v1), torch.from_numpy(v2)],
+                                  preprocessor=fe._vae_pre, encoder=fe._vae_encoder)
         fe._img_raw.copy_(tokens[0].to(dtype=BF16))
     p = fe._state_norm.forward(torch.as_tensor(state, device=DEV).reshape(1, -1))
     tok = torch.nn.functional.linear(p.to(BF16), fe._proprio_w, fe._proprio_b)

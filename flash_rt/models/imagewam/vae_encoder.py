@@ -35,6 +35,7 @@ not-always-present package.
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 
 import torch
 
@@ -100,7 +101,7 @@ def _prep_view(view: torch.Tensor, out_hw: tuple[int, int], device: str, dtype: 
 
 
 @torch.no_grad()
-def encode_to_tokens(ae, view1: torch.Tensor, view2: torch.Tensor | None = None,
+def encode_to_tokens(ae, views: Sequence[torch.Tensor],
                       *, out_hw: tuple[int, int] = (224, 224),
                       preprocessor: VaePreprocessor | None = None,
                       encoder: VaeEncoder | None = None) -> torch.Tensor:
@@ -113,14 +114,21 @@ def encode_to_tokens(ae, view1: torch.Tensor, view2: torch.Tensor | None = None,
     opportunities.md OPT-001 "FP16 residual overflow", which is driven
     entirely by real Qwen3 TEXT conditioning, not the image tokens).
 
-    `view1`/`view2`: `(H,W,3)` uint8 tensors, one or two real camera
-    views. With two views, concatenated horizontally AFTER each is
-    independently resized to `out_hw` (matching real
-    `libero_spatial_no_noops_lerobot` eval preprocessing exactly: two
-    224x224 views -> one 224x448 input -> real VAE -> 14x28 packed
-    grid -> 392 tokens). With one view, encoded alone (whatever
-    `img_len` that resolution produces -- caller's own responsibility
-    to match `imagewam_thor.py`'s own configured `img_raw` shape).
+    `views`: one or more `(H,W,3)` uint8 real camera views, in the served
+    order (view1 first). Each is resized to `out_hw` on its own -- the
+    per-view size the real ImageWAM/FLUX.2 preprocessing uses, not the
+    concatenated one -- then the resized views are concatenated
+    horizontally into one `(1,3,out_h,out_w*len(views))` image and encoded
+    by ONE `encode` call. The view count is the workload's
+    (`ImageWAMWorkload.num_views`): two views reproduce real
+    `libero_spatial_no_noops_lerobot` eval preprocessing exactly (two
+    224x224 views -> one 224x448 input -> real VAE -> 14x28 packed grid ->
+    392 tokens), and the resulting `img_len` is whatever that resolution
+    produces -- caller's own responsibility to match
+    `imagewam_thor.py`'s own configured `img_raw` shape.
+
+    `views` is validated before `ae` is touched: at least one view, every
+    view `(H,W,3)` uint8 (`ValueError` naming the offending view).
 
     `preprocessor`: when given, the views are preprocessed by the fused
     `imagewam_vae_preprocess_bf16` kernel (`vae_preprocess.py`) instead
@@ -134,6 +142,15 @@ def encode_to_tokens(ae, view1: torch.Tensor, view2: torch.Tensor | None = None,
     `vae_native_encoder.NativeFlux2Encoder(ae)`; `ae` still sets the
     device and dtype.
     """
+    if not isinstance(views, Sequence):
+        raise ValueError(f"views must be a sequence of (H,W,3) uint8 camera views, "
+                         f"got {type(views).__name__}")
+    if len(views) == 0:
+        raise ValueError("encode_to_tokens needs at least one view, got an empty sequence")
+    for i, view in enumerate(views):
+        if view.dtype != torch.uint8 or view.ndim != 3 or view.shape[-1] != 3:
+            raise ValueError(f"view {i} must be (H,W,3) uint8, got shape={tuple(view.shape)} "
+                             f"dtype={view.dtype}")
     device = next(ae.parameters()).device
     dtype = next(ae.parameters()).dtype
     if preprocessor is not None:
@@ -141,17 +158,12 @@ def encode_to_tokens(ae, view1: torch.Tensor, view2: torch.Tensor | None = None,
             raise ValueError(f"preprocessor.out_hw={preprocessor.out_hw} != out_hw={out_hw}")
         if dtype != torch.bfloat16:
             raise ValueError(f"the preprocessing kernel writes BF16; the AE is {dtype}")
-        views = [view1] if view2 is None else [view1, view2]
-        views = [v.to(device=device).contiguous() for v in views]
-        x = torch.empty(1, 3, out_hw[0], out_hw[1] * len(views), dtype=dtype, device=device)
-        preprocessor.run(views, x, torch.cuda.current_stream(device).cuda_stream)
+        gpu_views = [v.to(device=device).contiguous() for v in views]
+        x = torch.empty(1, 3, out_hw[0], out_hw[1] * len(gpu_views), dtype=dtype, device=device)
+        preprocessor.run(gpu_views, x, torch.cuda.current_stream(device).cuda_stream)
     else:
-        x1 = _prep_view(view1, out_hw, str(device), dtype)
-        if view2 is not None:
-            x2 = _prep_view(view2, out_hw, str(device), dtype)
-            x = torch.cat([x1, x2], dim=-1)  # (1,3,H,2W) -- horizontal concat, real convention
-        else:
-            x = x1
+        # (1,3,out_h,out_w*N) -- horizontal concat, real convention.
+        x = torch.cat([_prep_view(v, out_hw, str(device), dtype) for v in views], dim=-1)
 
     z = (ae if encoder is None else encoder).encode(x)  # (1, HD, latent_h, latent_w), 2x2 patch-merge + BatchNorm
     tokens = z.permute(0, 2, 3, 1).reshape(z.shape[0], -1, z.shape[1])  # (1, img_len, HD)

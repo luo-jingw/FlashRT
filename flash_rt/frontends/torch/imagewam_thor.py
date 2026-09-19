@@ -181,6 +181,34 @@ _DEFAULT_DIMS = dict(
     dt=0.5, num_denoise_steps=2,
 )
 
+# The camera geometry of a frontend that NAMES NO WORKLOAD: a caller that
+# passes `dims_override` by hand. LIBERO's own two 224x224 views, which is
+# what `runtime_surface()` reported and what the observation path took
+# before the workload object existed; a workload-resolved frontend
+# (`from_config` / `load_imagewam`) reports its own instead.
+_NO_WORKLOAD_VIEW_SHAPE = (2, 224, 224)
+
+
+def observation_views(observation: dict, num_views: int) -> list:
+    """The `num_views` camera frames of an `infer()` observation, in view
+    order: `[observation["view1"], ..., observation[f"view{num_views}"]]`.
+
+    `num_views` is the served workload's camera count
+    (`ImageWAMTorchFrontendThor.num_views`). A missing key raises
+    `ValueError` naming it and the expected count -- an observation carrying
+    fewer views than the workload serves is a mismatch, not a shorter run.
+    """
+    views = []
+    for i in range(num_views):
+        key = f"view{i + 1}"
+        if key not in observation:
+            last = f"view{num_views}"
+            raise ValueError(f"observation[{key!r}] is missing: this frontend's workload has "
+                             f"num_views={num_views}, so infer() needs observation['view1'] ... "
+                             f"observation[{last!r}]")
+        views.append(observation[key])
+    return views
+
 
 def frontend_kwargs_from_config(resolved: ResolvedConfig, *, ckpt_path: str | None = None,
                                ae_model_path: str | None = None, flux2_src: str | None = None,
@@ -649,6 +677,40 @@ class ImageWAMTorchFrontendThor:
         resolver produced for this run.
         """
         return self._resolved
+
+    def _input_view_shape(self) -> tuple[int, int, int]:
+        """`(num_views, H, W)` of the uint8 camera frames this frontend's
+        staged image paths take, in order of authority:
+
+        1. the resolved workload's own `vae_graph_input()` -- the frontend
+           was built by `from_config`/`load_imagewam` and serves that
+           workload's cameras;
+        2. the in-graph VAE stage's `(spec.num_views, spec.in_h, spec.in_w)`
+           -- built from that same `vae_graph_input()`, so it agrees with
+           1 whenever both exist;
+        3. `_NO_WORKLOAD_VIEW_SHAPE` -- a caller that passed `dims_override`
+           by hand names no workload, and took two 224x224 views before the
+           workload object existed.
+
+        `view_shape` (`runtime_surface()`) and `num_views` both read it, so
+        the declared frame shape and the observation's own keys cannot
+        disagree.
+        """
+        if self._workload is not None:
+            return self._workload.vae_graph_input()
+        if self._vae_stage is not None:
+            return (self._vae_stage.spec.num_views, self._vae_stage.spec.in_h, self._vae_stage.spec.in_w)
+        return _NO_WORKLOAD_VIEW_SHAPE
+
+    @property
+    def num_views(self) -> int:
+        """The camera views this frontend serves: `observation_views` reads
+        `view1` ... `view<num_views>` from an observation, `stage_images`
+        takes exactly that many views, and `runtime_surface().view_shape[0]`
+        declares them. Resolved by `_input_view_shape` (the workload's own
+        count when this frontend was built for one). Read-only.
+        """
+        return self._input_view_shape()[0]
 
     @classmethod
     def from_config(cls, resolved: ResolvedConfig, *, workload: ImageWAMWorkload | None = None,
@@ -1661,6 +1723,17 @@ class ImageWAMTorchFrontendThor:
         """The context length `x0` of every cached capture, ascending."""
         return tuple(sorted(self._captures))
 
+    def _text_max_length(self) -> int:
+        """The padded text length this frontend's own context implies: the
+        number of rows `_set_context_with_optional_proprio` requires of the
+        encoder's output, `dims["x0"] - 1` when `dims["proprio_dim"]` is set
+        (the proprio row takes one row of the context), else `dims["x0"]`.
+        LIBERO (`x0=513`, `proprio_dim=8`) therefore encodes at 512, FLUX.2's
+        own `MAX_LENGTH`."""
+        if self._proprio_dim is None:
+            return self.dims["x0"]
+        return self.dims["x0"] - 1
+
     def set_prompt(self, prompt_text: str | None = None, *,
                     context: torch.Tensor | None = None,
                     context_mask: torch.Tensor | None = None) -> None:
@@ -1699,7 +1772,11 @@ class ImageWAMTorchFrontendThor:
         elif self._qwen3 is not None and prompt_text is not None:
             from flash_rt.models.imagewam.text_encoder import encode_prompts
             model, tokenizer = self._qwen3
-            real_context, real_mask = encode_prompts(model, tokenizer, [prompt_text])
+            # The context width this frontend's dims imply, not the encoder
+            # module's own 512 default: a workload with text_max_len=128
+            # needs a (128, ...) context (ISSUE-083).
+            real_context, real_mask = encode_prompts(model, tokenizer, [prompt_text],
+                                                      max_length=self._text_max_length())
             x0 = self._write_context(real_context[0].to(device=DEV, dtype=BF16), real_mask[0].to(device=DEV))
         else:
             self._context.normal_()
@@ -1727,14 +1804,16 @@ class ImageWAMTorchFrontendThor:
         `observation` random-fills `img_raw` by default (unchanged
         placeholder, standing in for whatever a real VAE would have
         produced) UNLESS this frontend was constructed with
-        `ae_model_path=`/`flux2_src=` AND `observation` contains a real
-        `"view1"` (optionally `"view2"`) camera frame -- then the real
-        VAE (`vae_encoder.encode_to_tokens`) runs OUTSIDE the captured
-        graph (plain PyTorch/`flux2`-dependent code has no business
-        being captured) and its result is copied into `img_raw` before
-        `.replay()`. `backbone_hidden`'s own image rows are WRITTEN by
+        `ae_model_path=`/`flux2_src=` AND `observation` carries a real
+        `view1` ... `view<num_views>` camera frame -- then the real VAE
+        (`vae_encoder.encode_to_tokens`, one encode of every view
+        concatenated horizontally) runs OUTSIDE the captured graph (plain
+        PyTorch/`flux2`-dependent code has no business being captured) and
+        its result is copied into `img_raw` before `.replay()`.
+        `backbone_hidden`'s own image rows are WRITTEN by
         `img_in.weight` inside the graph itself either way, not filled
-        directly here.
+        directly here. `num_views` is the served workload's camera count
+        (`observation_views` raises when a `view*` key is missing).
 
         `observation["proprio"]` -- real closed-loop robot-state
         conditioning (opportunities.md, found 2026-09-15), REQUIRED
@@ -1754,8 +1833,8 @@ class ImageWAMTorchFrontendThor:
         `vae_graph_input` given (roadmap item 5, plan.md): the VAE stage
         (preprocessing kernel, encoder, token write into `img_raw`) is
         part of the captured graph, so this method only copies
-        `view1`/`view2` (shape fixed by `vae_graph_input`) into the
-        stage's fixed uint8 buffer, stages proprio and noise, and
+        `view1` ... `view<num_views>` (shape fixed by `vae_graph_input`)
+        into the stage's fixed uint8 buffer, stages proprio and noise, and
         replays once. Views are then required on every call.
         `vae_encoder` selects the encoder in both placements.
         """
@@ -1780,6 +1859,9 @@ class ImageWAMTorchFrontendThor:
         latent. With `vae_graph_input` the views go into the VAE stage's
         fixed uint8 buffer instead (the stage encodes them inside the
         graph, or in `run_eager()`), and are required on every call.
+        The views of an observation with a real VAE are
+        `observation_views(observation, self.num_views)`: `view1` ...
+        `view<num_views>` of the workload this frontend serves.
 
         `noise`: `(num_action, action_dim)` initial action latent, copied
         in as given (`infer()`'s `action_noise`). `None` keeps the served
@@ -1791,10 +1873,10 @@ class ImageWAMTorchFrontendThor:
             # buffer holds, so the views are required every call.
             if "view1" not in observation:
                 raise ValueError("with vae_graph_input (VAE in the graph) infer()/stage_inputs() need "
-                                 "observation['view1'] (and 'view2' for 2 views) every call")
-            self.stage_images(*self._observation_views(observation))
+                                 f"observation['view1'] ... observation['view{self.num_views}'] every call")
+            self.stage_images(*observation_views(observation, self.num_views))
         elif self._ae is not None and "view1" in observation:
-            self.stage_images(*self._observation_views(observation))
+            self.stage_images(*observation_views(observation, self.num_views))
         else:
             self._img_raw.normal_()
         if self._proprio_dim is not None:
@@ -1849,28 +1931,29 @@ class ImageWAMTorchFrontendThor:
     # (flash_rt/models/imagewam/runtime_export.py). Each runs its torch
     # ops on the caller's current stream.
 
-    @staticmethod
-    def _observation_views(observation: dict) -> list:
-        """`[view1]` or `[view1, view2]` from an `infer()` observation."""
-        return [observation["view1"]] + ([observation["view2"]] if "view2" in observation else [])
-
     def stage_images(self, *views: torch.Tensor) -> None:
-        """Stage one or two `(H,W,3)` uint8 camera views. With the VAE
-        inside the graph (`vae_graph_input`) the views are copied into the
-        stage's fixed uint8 buffer and the next replay encodes them;
-        otherwise the configured preprocessing kernel and VAE encoder run
-        now (outside the graph) and the tokens are written into `img_raw`."""
+        """Stage `self.num_views` `(H,W,3)` uint8 camera views (the served
+        workload's cameras), in view order. With the VAE inside the graph
+        (`vae_graph_input`) the views are copied into the stage's fixed uint8
+        buffer and the next replay encodes them; otherwise the configured
+        preprocessing kernel and VAE encoder run now (outside the graph) and
+        the tokens are written into `img_raw`.
+
+        A view count other than `self.num_views` raises: `img_raw` and the
+        captured graph are sized for that count, so a shorter or longer
+        sequence of views is a mismatch, not a narrower run.
+        """
         if self._ae is None:
             raise RuntimeError("stage_images requires ae_model_path/flux2_src at construction")
         if self._vae_stage is not None:
+            # The stage validates the count against its own spec.num_views.
             self._vae_stage.stage([torch.as_tensor(v) for v in views])
             return
-        if not 1 <= len(views) <= 2:
-            raise ValueError(f"stage_images takes one or two views, got {len(views)}")
+        if len(views) != self.num_views:
+            raise ValueError(f"stage_images takes this frontend's {self.num_views} views (num_views of "
+                             f"the workload it serves, runtime_surface().view_shape), got {len(views)}")
         from flash_rt.models.imagewam.vae_encoder import encode_to_tokens
-        view2 = views[1] if len(views) > 1 else None
-        tokens = encode_to_tokens(self._ae, torch.as_tensor(views[0]),
-                                  None if view2 is None else torch.as_tensor(view2),
+        tokens = encode_to_tokens(self._ae, [torch.as_tensor(v) for v in views],
                                   preprocessor=self._vae_pre, encoder=self._vae_encoder)
         self._img_raw.copy_(tokens[0].to(dtype=BF16))
 
@@ -1950,8 +2033,7 @@ class ImageWAMTorchFrontendThor:
             state_offset=None if self._state_norm is None else self._state_norm.offset,
             action_scale=None if self._action_norm is None else self._action_norm.scale,
             action_offset=None if self._action_norm is None else self._action_norm.offset,
-            view_shape=((2, 224, 224) if self._vae_stage is None else
-                        (self._vae_stage.spec.num_views, self._vae_stage.spec.in_h, self._vae_stage.spec.in_w)),
+            view_shape=self._input_view_shape(),
             views_u8=None if self._vae_stage is None else self._vae_stage.views_u8,
             owner=self,
         )

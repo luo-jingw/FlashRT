@@ -47,12 +47,13 @@ VAE -- the native VAE encoder or the VAE inside the graph (rule R3, e.g.
 `infer()` refills and the graph reads, which changes no kernel any path here
 runs.
 
-The frontend's observation path carries at most two views (`_observation_views`
-reads `view1`/`view2`, `stage_images` accepts one or two on the
-VAE-outside-the-graph path), so a workload above two views cannot drive the
-in-graph VAE stage through `infer()`, which needs every view. Without a real
-VAE the views are not consumed at all (`stage_inputs` refills `img_raw`), so
-all three paths measure a three-view workload with random weights and frames.
+The frontend's observation path carries the workload's own view count
+(`observation_views` reads `view1` ... `view<num_views>`, `stage_images`
+takes that many views in either VAE placement), so a three-view workload
+drives the in-graph VAE stage through `infer()` with all three views.
+Without a real VAE the views are not consumed at all (`stage_inputs`
+refills `img_raw`), so all three paths measure a three-view workload with
+random weights and frames.
 
 Prints the workload and its derived layout, the resolved `effective_config`
 line, the Jetson clock state (read-only, `flash_rt.hardware.jetson_clock_state`),

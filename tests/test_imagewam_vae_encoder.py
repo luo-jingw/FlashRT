@@ -57,7 +57,7 @@ def test_load_real_ae_and_encode_matches_real_thor_stats():
     view1 = _make_test_frame().to(DEV)
     view2 = _make_test_frame().to(DEV)  # same synthetic frame twice -- structure, not content, matters here
 
-    tokens = encode_to_tokens(ae, view1, view2)
+    tokens = encode_to_tokens(ae, [view1, view2])
     assert tokens.shape == (1, 392, 128), f"expected (1,392,128), got {tuple(tokens.shape)}"
     assert torch.isfinite(tokens).all(), "real VAE encode produced NaN/Inf"
 
