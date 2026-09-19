@@ -72,6 +72,7 @@ NOT_A_RESOLVED_ARGUMENT = ("self", "checkpoint_dir")
 OPTION_TARGETS: dict[str, str] = {
     "precision": "precision",
     "text_trim": "text_trim",
+    "text_trim_cache_size": "text_trim_cache_size",
     "use_fa4": "use_fa4",
     "use_fa4_mot": "use_fa4_mot",
     "vae_encoder": "vae_encoder",
@@ -149,6 +150,7 @@ def test_default_profile_maps_to_the_constructor_defaults():
                 and parameter.kind is not inspect.Parameter.VAR_KEYWORD}
     assert kwargs["precision"] == defaults["precision"] == "nvfp4"
     assert kwargs["text_trim"] is defaults["text_trim"] is False
+    assert kwargs["text_trim_cache_size"] == defaults["text_trim_cache_size"] == 32
     assert kwargs["use_fa4"] is defaults["use_fa4"] is None   # resolved at construction
     assert kwargs["use_fa4_mot"] is defaults["use_fa4_mot"] is False
     assert kwargs["vae_encoder"] == defaults["vae_encoder"] == "torch"

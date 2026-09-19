@@ -33,6 +33,16 @@ computes that same math with no mask (`text_context.py`,
 issues.md ISSUE-020). With `text_trim=False` every context row is
 attended to, padding included.
 
+The trimmed path holds one captured graph per distinct context length in a
+bounded cache (`text_trim_cache_size`, `captured_text_lengths`,
+`evict_lru`): a new capture drops the least recently used length that is
+not the active one, and a length dropped that way captures again the next
+time it is used. A deployment's known lengths are captured once at
+construction (`from_config(precapture_text_lengths=...)`,
+`load_imagewam(..., precapture_text_lengths=...)`), so serving captures
+nothing (issues.md ISSUE-080 condition 6). Without `text_trim` there is no
+per-length cache to bound: every prompt runs at the one padded length.
+
 AdaLN modulation and RoPE tables are precomputed ONCE here (backbone's
 own conditioning timestep is fixed, ActionDiT's varies per denoise
 step but `step` is itself a compile-time constant during graph
@@ -247,6 +257,7 @@ def frontend_kwargs_from_config(resolved: ResolvedConfig, *, ckpt_path: str | No
         "dims_override": resolved.frontend_dims(),
         "precision": str(options.precision),
         "text_trim": options.text_trim,
+        "text_trim_cache_size": options.text_trim_cache_size,
         "use_fa4": options.use_fa4,
         "use_fa4_mot": options.use_fa4_mot,
         "vae_encoder": options.vae_encoder,
@@ -281,6 +292,41 @@ class TextLengthCapture:
     graph: torch.cuda.CUDAGraph
 
 
+def evict_lru(captures: Mapping[int, TextLengthCapture], *, active_x0: int | None,
+              limit: int) -> tuple[int, ...]:
+    """The captures `captures` must drop to hold at most `limit` of them.
+
+    `captures` is read in least-recently-used to most-recently-used order:
+    the frontend's cache is a `dict`, whose iteration order is its insertion
+    order, and every activation and every capture moves its own key to the
+    end. `active_x0`: the context length `infer()` replays, whose capture is
+    never returned -- dropping it would leave no graph to replay. `None` (no
+    graph captured yet) protects no length.
+
+    Returns the keys to drop, least recently used first, so a caller that
+    deletes them in that order leaves at most `limit` entries. It returns
+    fewer than the excess, or nothing, when the remaining candidates are all
+    the active capture: the cache is then left above `limit`, which keeps the
+    caller's state valid (the active graph stays replayable) and drops
+    nothing else. Nothing is returned at all while `len(captures) <= limit`.
+
+    A dropped length is not lost: the next `set_prompt` that runs at it
+    captures it again (`_capture_text_length`). The caller applies the bound
+    after inserting its new capture and passes that capture's own length as
+    `active_x0`; `limit >= 1`.
+    """
+    excess = len(captures) - limit
+    if excess <= 0:
+        return ()
+    drop: list[int] = []
+    for x0 in captures:
+        if len(drop) == excess:
+            break
+        if x0 != active_x0:
+            drop.append(x0)
+    return tuple(drop)
+
+
 class ImageWAMTorchFrontendThor:
     """Thor frontend for ImageWAM's real-math (random-weight) dry run.
 
@@ -303,6 +349,7 @@ class ImageWAMTorchFrontendThor:
                  vae_encoder: str = "torch",
                  vae_graph_input: tuple[int, int, int] | None = None,
                  text_trim: bool = False,
+                 text_trim_cache_size: int = 32,
                  **kwargs):
         del checkpoint_dir, kwargs
         if precision not in _PRECISIONS:
@@ -312,6 +359,17 @@ class ImageWAMTorchFrontendThor:
         # `dims["x0"]`, one CUDA graph per distinct length over the same
         # max-size buffers. Opt-in until Thor confirms it (OPT-030).
         self._text_trim = bool(text_trim)
+        # issues.md ISSUE-080 condition 6: the bound on that per-length
+        # cache (`self._captures`), so a deployment with many distinct
+        # prompt lengths cannot grow it without limit. 32 is the working
+        # default: LIBERO's four suites use 15 distinct lengths, so it
+        # covers them with headroom, and one captured graph costs 10-16 MiB
+        # on H100 (NVML, per process). Applied only by the trimmed path;
+        # without trim the cache holds the one padded length.
+        if (isinstance(text_trim_cache_size, bool) or not isinstance(text_trim_cache_size, int)
+                or text_trim_cache_size < 1):
+            raise ValueError(f"text_trim_cache_size={text_trim_cache_size!r} -- must be an int >= 1")
+        self._text_trim_cache_size = int(text_trim_cache_size)
         # Roadmap item 1: measure the CUTLASS tile per ActionDiT GEMM shape
         # (M = num_action) at construction instead of using the (N, K)
         # heuristic. Opt-in until Thor confirms it (opportunities.md OPT-018).
@@ -714,6 +772,7 @@ class ImageWAMTorchFrontendThor:
 
     @classmethod
     def from_config(cls, resolved: ResolvedConfig, *, workload: ImageWAMWorkload | None = None,
+                    precapture_text_lengths: Sequence[int] | None = None,
                     **kwargs) -> ImageWAMTorchFrontendThor:
         """Build the frontend for a resolved configuration.
 
@@ -731,10 +790,21 @@ class ImageWAMTorchFrontendThor:
         `workload.<field>` identity entries) and is not re-derived from
         `dims`. Both it and `resolved` are readable back as
         `self._workload` and `resolved_config`.
+
+        `precapture_text_lengths`: the deployment's known context lengths,
+        as `x0` values (valid text tokens + 1 with proprio, the units of
+        `captured_text_lengths()`). When given, the frontend's own
+        `precapture_text_lengths(x0s)` runs once, after construction and
+        before this call returns, so no length is captured while serving.
+        `None` captures nothing. It is not a constructor argument and not
+        part of `frontend_kwargs_from_config`: it needs `text_trim=True`
+        (the method's own `ValueError`).
         """
         fe = cls(**frontend_kwargs_from_config(resolved, **kwargs))
         fe._workload = workload
         fe._resolved = resolved
+        if precapture_text_lengths is not None:
+            fe.precapture_text_lengths(precapture_text_lengths)
         return fe
 
     @staticmethod
@@ -1668,13 +1738,41 @@ class ImageWAMTorchFrontendThor:
         self._graph = None
         self._current_prompt = None
 
+    def _touch_capture(self, x0: int) -> None:
+        """Makes the cached capture for `x0` this cache's most recently used
+        entry.
+
+        `self._captures`'s iteration order is the recency order `evict_lru`
+        reads, and a plain re-assignment would keep the position of a key
+        that is already there, so the key is removed and re-inserted.
+        """
+        self._captures[x0] = self._captures.pop(x0)
+
+    def _store_capture(self, x0: int, capture: TextLengthCapture) -> None:
+        """Caches `capture` as the most recently used capture for context
+        length `x0`, then applies the bound (`_text_trim_cache_size`): the
+        keys `evict_lru` returns are deleted, so any tensor only their
+        capture held becomes garbage.
+
+        `x0` is the length `_capture_text_length` just made active, so it is
+        the one key the bound never drops while `infer()` can replay it.
+        """
+        self._captures[x0] = capture
+        self._touch_capture(x0)
+        for key in evict_lru(self._captures, active_x0=x0, limit=self._text_trim_cache_size):
+            del self._captures[key]
+
     def _activate_text_length(self, x0: int) -> None:
         """Makes the capture for context length `x0` the one `infer()`
         replays, capturing it first if this length has none
         (`_capture_text_length`). If that capture raises, no graph is
         active afterwards (`_invalidate_active_graph`) and the exception
         propagates; the cached captures of other lengths, with their RoPE
-        tables, are kept (the FA4 fallback's own rule aside)."""
+        tables, are kept (the FA4 fallback's own rule aside).
+
+        Either way `x0` becomes the most recently used entry of the cache,
+        and a capture added here can evict the least recently used
+        non-active length (`_store_capture`, `_text_trim_cache_size`)."""
         capture = self._captures.get(x0)
         if capture is None:
             try:
@@ -1682,7 +1780,9 @@ class ImageWAMTorchFrontendThor:
             except BaseException:
                 self._invalidate_active_graph()
                 raise
-            self._captures[x0] = capture
+            self._store_capture(x0, capture)
+        else:
+            self._touch_capture(x0)
         self._active_dims, self._rope_table, self._graph = capture.dims, capture.rope_table, capture.graph
 
     def precapture_text_lengths(self, x0s: Sequence[int]) -> None:
@@ -1691,18 +1791,36 @@ class ImageWAMTorchFrontendThor:
         reports) that has none, so the first `set_prompt` of a prompt
         with that length only switches graphs. The context rows and the
         active length are unchanged afterwards. If a capture raises, no
-        graph is active afterwards, as for a failed `set_prompt`."""
+        graph is active afterwards, as for a failed `set_prompt`.
+
+        Needs `text_trim=True` (raises without it), and the distinct
+        lengths in `x0s` must fit `text_trim_cache_size` (raises otherwise):
+        a cache that cannot hold the requested lengths would make this call
+        recapture what it had just dropped, without ever finishing.
+
+        Each capture is applied to the cache as `_store_capture` does, so
+        the bound can evict a length cached before this call, and the
+        restored active length is captured again if that eviction or an FA4
+        fallback dropped it."""
         if not self._text_trim:
             raise ValueError("precapture_text_lengths needs text_trim=True")
+        wanted: list[int] = []
+        for x0 in x0s:
+            if int(x0) not in wanted:
+                wanted.append(int(x0))
+        if len(wanted) > self._text_trim_cache_size:
+            raise ValueError(
+                f"precapture_text_lengths was given {len(wanted)} distinct lengths {tuple(wanted)}, more "
+                f"than text_trim_cache_size={self._text_trim_cache_size}: at most that many captures stay "
+                f"cached, so the extra lengths would be captured and evicted in turn")
         active_x0 = None if self._graph is None else int(self._active_dims["x0"])
-        wanted = [int(x0) for x0 in x0s]
         try:
             # An FA4 fallback during one capture drops the graphs captured
             # before it (at most once: FA4 is off afterwards), so the
             # missing set is recomputed after every capture.
             missing = [x0 for x0 in wanted if x0 not in self._captures]
             while missing:
-                self._captures[missing[0]] = self._capture_text_length(missing[0])
+                self._store_capture(missing[0], self._capture_text_length(missing[0]))
                 missing = [x0 for x0 in wanted if x0 not in self._captures]
         except BaseException:
             self._invalidate_active_graph()
@@ -1720,7 +1838,8 @@ class ImageWAMTorchFrontendThor:
 
     @property
     def captured_text_lengths(self) -> tuple[int, ...]:
-        """The context length `x0` of every cached capture, ascending."""
+        """The context length `x0` of every cached capture, ascending
+        (`text_trim_cache_size` bounds how many there can be)."""
         return tuple(sorted(self._captures))
 
     def _text_max_length(self) -> int:
@@ -2178,6 +2297,7 @@ def load_imagewam(ckpt_path: str | None, workload: ImageWAMWorkload, *,
                   dataset_stats_path: str | None = None, consumer: str = "infer",
                   allow_placeholder_calibration: bool = False,
                   vae_resize: str = "area",
+                  precapture_text_lengths: Sequence[int] | None = None,
                   **expert) -> ImageWAMTorchFrontendThor:
     """The deployment entry: resolve the configuration, then build the frontend.
 
@@ -2200,7 +2320,17 @@ def load_imagewam(ckpt_path: str | None, workload: ImageWAMWorkload, *,
     Every legality decision is `resolve_config`'s: an illegal combination
     raises its `ConfigError` (message `<rule id>: ...`) before the frontend
     is constructed, so nothing is allocated for a configuration that cannot
-    run. `**expert` carries the expert tier (`config_resolver.EXPERT_KEYS`).
+    run. `**expert` carries the expert tier (`config_resolver.EXPERT_KEYS`),
+    including the per-length graph cache bound
+    (`text_trim_cache_size`).
+
+    `precapture_text_lengths`: the deployment's known context lengths, as
+    `x0` values (valid text tokens + 1 with proprio, the units of
+    `captured_text_lengths()`). The frontend captures a graph for each of
+    them once, before this call returns, so a `text_trim=True` deployment
+    serves without capturing. `None` captures nothing; it needs
+    `text_trim=True` (the method's own `ValueError`) and the lengths must
+    fit `text_trim_cache_size`.
     """
     from flash_rt.models.imagewam.config_resolver import resolve_config
     from flash_rt.models.imagewam.structure import ImageWAMStructure
@@ -2219,4 +2349,5 @@ def load_imagewam(ckpt_path: str | None, workload: ImageWAMWorkload, *,
     return ImageWAMTorchFrontendThor.from_config(
         resolved, workload=workload, ckpt_path=ckpt_path, ae_model_path=ae_model_path,
         flux2_src=flux2_src, qwen3_model_spec=qwen3_model_spec,
-        dataset_stats_path=dataset_stats_path, vae_resize=vae_resize)
+        dataset_stats_path=dataset_stats_path, vae_resize=vae_resize,
+        precapture_text_lengths=precapture_text_lengths)
