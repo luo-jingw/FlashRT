@@ -7077,34 +7077,47 @@ Not done, and why:
 
 ## Decisions pending (owner)
 
-Standing recommendations from the `c20f3a0` Thor round, with the measured
-basis in `opportunities.md` OPT-019, OPT-021 and OPT-030. No default has
-been changed.
+Decided (owner, after the `c20f3a0` Thor round):
+
+- `libero_dims.py` stays: one import for the benchmarks, gates and tests,
+  with its literal values pinned by `tests/test_imagewam_workload.py`.
+- No compatibility with previously produced artifacts. This is a
+  development stage: a calibration file, a runtime export or a gate fixture
+  that no longer matches is re-produced, not migrated. It follows that a
+  format or identity change may be made directly.
+- The target workload does not get a latency budget and no latency
+  pass/fail: the runs record numbers. (Whether `tests/fixtures/imagewam_gate/latency_baselines.json`
+  keeps its pass/fail role for the LIBERO gate is a separate question, item
+  E2.)
+- The service paths are compared as configurations of their own (Python
+  `infer()`, ABI, native) rather than one path being picked.
+
+Open:
 
 - Profile contents (T4): keep `fast` as `text_trim` + FA4 (backbone and mot)
-  + native VAE in graph. The FA4 criterion was met in that round (`stack`
-  9.7 ms below `vae_trim`, agreement with official not worse) and so was the
-  native-VAE criterion; `text_trim` remains the largest single step.
-- Whether any of it becomes the default (T5): the Python `infer()` path can
-  take it, the ABI and native paths cannot while rule R5 refuses
-  `text_trim` (ISSUE-080 condition 5), so a single default cannot cover both.
-- Whether `text_trim` may be part of a profile used with the ABI before
-  S2 (rule R5 says no).
-- Whether `libero_dims.py` stays as a module or is removed once the
-  workload test pins the equality.
-- Whether the calibration file's identity gains the workload fields:
-  recommendation is to keep it as it is. `IDENTITY_DIM_KEYS` already carries
-  every dims entry a workload changes (`x0`, `a0`, `num_action`, `action_dim`,
-  `num_denoise_steps`, `shift`, `proprio_dim`, `ref_h`, `ref_w`), so a file
-  recorded for another workload is already refused with the differing field
-  named, and the `workload.<field>` entries added to the runtime identity are
-  additional description. Naming the workload in the calibration identity
-  instead would refuse every file recorded before the change, so it needs a
-  format version and a migration rule for the files on Thor.
-- The target-workload table in `THOR_CHECKLIST.md` section D: the owner
-  supplied `num_views=3`, `image_h=image_w=256`, `action_horizon=32`,
-  `action_dim=7`, `proprio_dim=8`, `num_steps=10`, `shift=5.0`,
-  `text_max_len=512` as the candidate of the three-view 256 measurement,
-  entered in the table as candidates; the instruction-token distribution,
-  the latency budget, the serving path, the checkpoint and calibration
-  files and the graph memory budget are still open.
+  + native VAE in graph. The FA4 criterion was met in the `c20f3a0` round
+  (`stack` 9.7 ms below `vae_trim`, agreement with official not worse) and
+  so was the native-VAE criterion; `text_trim` remains the largest single
+  step on the LIBERO workload.
+- `text_trim` towards the default (owner direction: with short instructions
+  it is close to a must-have): two constraints decide how far it can go.
+  Rule R5 refuses it for the `abi`/`native` consumers until the per-length
+  graphs are implemented (ISSUE-080 condition 5, the S2 item; the refusal is
+  an unimplemented guard, not a property of the ABI), and ISSUE-080
+  condition 4 (a gate fixture whose `fp16` reference is recorded trimmed) is
+  needed before any trimmed configuration can pass the regression gate. A
+  third point to settle is the target workload's text length: with
+  `text_max_len=128` the trimmed sequence saves at most 112 of about 897
+  backbone rows, so the gain is a fraction of the LIBERO one (ISSUE-083).
+- Whether the calibration file's identity gains the workload fields
+  (`num_views`, `image_h`, `image_w`): with no compatibility requirement
+  this is a format version bump and a re-recorded file. It closes the one
+  collision the dims-derived identity has — two workloads with the same
+  `ref_h`/`ref_w` (e.g. two 224x224 views and four 224x112 views) have the
+  same dims but different VAE inputs.
+- The target-workload table in `THOR_CHECKLIST.md` section D: `num_views=3`,
+  `image_h=image_w=256`, `action_horizon=32`, `action_dim=7`,
+  `proprio_dim=8`, `num_steps=10`, `shift=5.0`; instruction tokens 16-128,
+  and the buffer length they imply (`text_max_len`) is the open field
+  (ISSUE-083). The checkpoint and calibration files and the graph memory
+  budget are still open.

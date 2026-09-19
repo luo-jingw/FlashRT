@@ -1171,6 +1171,34 @@ Conditions for making `text_trim=True` the served default, all of them:
 
 Then the owner decides the default.
 
+### Shape of condition 5: exact lengths or 16-token buckets
+
+Two ways to give the ABI and the native pipeline the per-length graphs that
+R5 refuses today, with different costs:
+
+- **Exact length + a bounded cache** (what `text_trim` does now): one graph
+  per distinct `x0 = n_valid + 1`, exactly the official masked math, no mask
+  in any kernel. The graph set is data-dependent, so the ABI must either
+  declare the deployment's known lengths at startup
+  (`precapture_text_lengths`, condition 6) or accept a graph adopted after
+  the prompt verb. Memory and capture time are per length (10-16 MiB,
+  0.6-2.0 s at fp16 on H100).
+- **16-token buckets**: `x0` rounded up to a multiple of 16, so the graph
+  set is fixed and known (`ceil(text_max_len / 16) + 1` graphs: 33 for
+  LIBERO's 512, 9 for a 128-token workload) whatever the prompts are. The
+  rows inside the last bucket are padding, and the official model MASKS
+  them: running the same unmasked attention over them would change the
+  softmax denominator, so a bucketed graph is only equal to the official
+  math if the padding rows are masked at both attention sites. The
+  backbone's masked reference kernel exists
+  (`tests/test_imagewam_backbone_ref_masked_kernel.py`); the FA4 path would
+  need to carry the same mask.
+
+Bucketing is the cheaper shape for a bounded ABI and for a small
+`text_max_len` (a 128-token workload has 9 buckets), and it costs a mask and
+the kernel work around it. Exact lengths need no kernel change and keep the
+graph set data-dependent.
+
 ## Resolution
 
 # ISSUE-081
@@ -1322,3 +1350,156 @@ and in how many times the graph is replayed per measurement.
    second session) and record the spread next to the clock state; use it to
    reset section C's threshold and the Thor entries of
    `tests/fixtures/imagewam_gate/latency_baselines.json` (item E2).
+
+# ISSUE-083
+
+Status: open
+
+Area: `ImageWAMWorkload.text_max_len` against the live Qwen3 text encoder
+(`flash_rt/models/imagewam/text_encoder.py`) and the frontend's context
+writer (`ImageWAMTorchFrontendThor.set_prompt`)
+
+## Observation
+
+The deployment's candidate workload carries instructions of 16-128 tokens
+(owner, 2026-09-18), so the padded text length is 128 rather than LIBERO's
+512. `text_encoder.py` fixes the encoder's own length: it tokenizes with
+`padding="max_length", truncation=True, max_length=512` (`_MAX_LENGTH =
+512`, matching `flux2.text_encoder.MAX_LENGTH`), so
+`encode_prompts`/`load_real_text_encoder` always produce a context of
+exactly `(512, 7680)`.
+
+The frontend requires the context it is given to match the workload:
+
+- `proprio_dim` set (the served path): `_set_context_with_optional_proprio`
+  raises `dims['x0']=129 must equal the text context length (512) + 1 (the
+  proprio slot)`;
+- `proprio_dim` unset: `context length 512 != dims['x0']=128`;
+- `text_trim=True`: `_write_trimmed_context` raises once the valid count
+  needs more than `dims['x0']` rows — that one is per prompt, not fixed.
+
+A `text_max_len=512` workload (LIBERO's) has none of these problems, which
+is why the served configuration never met them.
+
+## Impact
+
+A 128-token workload cannot take the live encoder's output as it is, so the
+deployment has to decide how the context for that workload is produced:
+
+1. slice the encoder's `(512, 7680)` output to its first `text_max_len`
+   rows (keeping the mask), or
+2. encode with a shorter `max_length` (a `text_encoder.py` change), or
+3. keep `text_max_len=512` and trim at run time (`text_trim`).
+
+(1) and (2) are only equivalent if a token's hidden state does not depend on
+how far the padding extends beyond it, which follows from the encoder's
+attention mask but has not been checked against the official model. (3)
+keeps the official served length and makes `text_trim` the thing that
+removes the padding.
+
+There is also a quantitative consequence for `text_trim`: at
+`text_max_len=128` with 3 views of 256x256 (`img_len = 16*48 = 768`,
+`x0 = 129`, `a0 = 897`) a trimmed sequence of `n_valid + 1` rows saves at
+most 112 of 897 backbone rows, so the trimmed-vs-untrimmed difference is a
+fraction of the LIBERO measurement (-87.2 ms out of 225.5 ms, where the
+padded block was 513 of 905 rows).
+
+## Evidence
+
+- `flash_rt/models/imagewam/text_encoder.py` (`_MAX_LENGTH = 512`, the
+  tokenizer call), `_imagewam_thor_spec.py`'s `context` shape `(512, ...)`.
+- `flash_rt/frontends/torch/imagewam_thor.py`,
+  `_set_context_with_optional_proprio` (`x0 != text_len + 1` ->
+  `ValueError`), `_write_context`, `_write_trimmed_context`.
+- `plan.md`, the LIBERO facts: `data.train.context_len: 128` is a
+  training-time setting, not the served text length.
+- `opportunities.md` OPT-030 and `THOR_STATUS_SUMMARY.md` for the LIBERO
+  ladder the 128-token arithmetic above is compared against.
+
+## Hypotheses
+
+The 512 comes from FLUX.2's own text encoder configuration, so slicing its
+output is expected to be a pure sub-sequence of the same computation (the
+padding positions are masked), but the official serving path and the
+checkpoint were built around 512, so this is a deviation to check rather
+than assume.
+
+## Next Experiment
+
+Decide (1), (2) or (3), then check it on Thor against the official model
+with one prompt shorter than the chosen length: the first `n` rows of a
+512-padded encoding against an encoding padded to `n`, and the actions from
+a workload at that `text_max_len` against the official model given the same
+context rows. Record the cosine per row count.
+
+# ISSUE-084
+
+Status: open
+
+Area: the served observation and VAE-encode paths are two-view only —
+`ImageWAMTorchFrontendThor._observation_views`, `stage_images`,
+`flash_rt/models/imagewam/vae_encoder.py:encode_to_tokens`
+
+## Observation
+
+The workload and the layout support any view count
+(`ImageWAMWorkload.num_views`, `ref_w = num_views * image_w / patch_stride`),
+and the in-graph VAE stage is already generic
+(`ImageWAMVaeStage.stage` checks `len(views) == spec.num_views`). The path
+that feeds it is not:
+
+- `_observation_views(observation)` returns `[view1] + [view2]` if present,
+  whatever the workload is: a three-view observation silently contributes
+  two views.
+- `stage_images(*views)` outside the graph rejects anything but one or two
+  views (`if not 1 <= len(views) <= 2`), and the encoder it calls,
+  `encode_to_tokens(ae, view1, view2=None, ...)`, takes exactly two views
+  (concatenated horizontally after each is resized).
+
+So a workload with `num_views=3` runs only as long as the image tokens are
+staged through the ABI (`image_tokens` SWAP) or left as the random
+placeholder: `infer()` with three `view*` keys feeds two to the VAE stage
+and fails its count check (`expected 3 views, got 2`), and the
+outside-the-graph path refuses three views outright.
+
+## Impact
+
+The candidate target workload (3 views of 256x256, ISSUE-083 /
+`THOR_CHECKLIST.md` section D) cannot be driven through the served
+`infer()` with the real VAE encoder. Latency for its sequence layout can be
+measured today (placeholder image tokens), but the VAE stage — one of the
+switches under comparison (OPT-021) — cannot.
+
+## Evidence
+
+- `flash_rt/frontends/torch/imagewam_thor.py`, `_observation_views`,
+  `stage_images`.
+- `flash_rt/models/imagewam/vae_encoder.py:103`, `encode_to_tokens`'s
+  docstring ("one or two real camera views").
+- `flash_rt/models/imagewam/vae_stage.py:87`, `stage` validating
+  `len(views) == spec.num_views`.
+- `benchmarks/_imagewam_workload_cli.py` and
+  `benchmarks/imagewam_thor_path_bench.py` (the target workload's three
+  paths), which is where the limitation surfaced.
+
+## Hypotheses
+
+The two-view shape is LIBERO's: the official LIBERO evaluation concatenates
+a third-person and a wrist view into one 224x448 image, so two views was
+the only case the plumbing ever had to carry. Nothing in the kernels or the
+VAE stage depends on it.
+
+## Next Experiment
+
+Make the view count the workload's, in the same three places:
+
+- `_observation_views`: read `view1..view{num_views}` (the workload's
+  count when the frontend was built from a resolved configuration, else
+  today's two).
+- `stage_images`: accept `num_views` views, and let
+  `encode_to_tokens` take a sequence (resize each view, concatenate
+  horizontally, one VAE encode — the same construction the two-view path
+  already uses).
+- Keep the LIBERO path bit-identical: two views must produce exactly the
+  same tokens as today (`benchmarks/imagewam_e2e_official_compare.py` and
+  the gate fixtures are the check).

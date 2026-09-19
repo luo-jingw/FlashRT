@@ -121,26 +121,53 @@ OUT=$OUT/C_profile SUITE=libero_10     PRECS=nvfp4 PROFILES="default fast" bash 
 
 | 参数 | 值 |
 |---|---|
-| 相机数 × 分辨率 | 3 × 256×256（候选：上次三路 256 的测量） |
-| 指令 token 数（min / median / max） | 待定 |
-| action horizon | 32（候选） |
-| 去噪步数 | 10（候选） |
-| proprio 维度 | 8（候选） |
-| 延迟预算 | 待定 |
-| 服务路径（Python `infer()` / ABI / native） | 待定 |
-| checkpoint 与校准文件 | 待定 |
+| 相机数 × 分辨率 | 3 × 256×256 |
+| 指令 token 数（min / median / max） | 16 / 待定 / 128 |
+| 文本缓冲长度 `text_max_len` | 128（待确认，见 ISSUE-083：live Qwen3 固定输出 512 行） |
+| action horizon | 32 |
+| 去噪步数 | 10 |
+| proprio 维度 | 8 |
+| 延迟预算 | 不设：只记录数字，不做判别 |
+| 服务路径 | 三条都测（Python `infer()` / ABI / native），作为三个配置对比 |
+| checkpoint 与校准文件 | checkpoint 复用 FLUX.2-4B 的 `model.pt`；校准文件待目标数据 |
 | 图显存预算 | 待定 |
 
-候选值由所有者给出（三路 256、horizon 32 那次测量），表内标"候选"的行要随目标确认后去掉标记；`action_dim=7`、`shift=5.0`、`text_max_len=512` 为同一候选下的建议值。
+派生（由 `ImageWAMWorkload` 计算，不手填）：`ref_h=16`、`ref_w=48`、`img_len=768`、`text_max_len=128` 时 `x0=129`、`a0=897`、`total=929`、`dt=0.1`。
 
-说明：目标配置按 `ImageWAMWorkload` 的字段填入：部署方给出 `num_views`、每视角 `image_h`/`image_w`、`text_max_len`、`action_horizon`、`action_dim`、`proprio_dim`、`num_steps`、`shift`，`x0`、`img_len`、`a0`、`total`、`ref_h`、`ref_w`、`dt` 与 `vae_graph_input` 由它派生并在不一致时报错，不再手改 dims。
+说明：目标配置按 `ImageWAMWorkload` 的字段填入：部署方给出 `num_views`、每视角 `image_h`/`image_w`、`text_max_len`、`action_horizon`、`action_dim`、`proprio_dim`、`num_steps`、`shift`，`x0`、`img_len`、`a0`、`total`、`ref_h`、`ref_w`、`dt` 与 `vae_graph_input` 由它派生并在不一致时报错，不再手改 dims。`action_dim=7`、`shift=5.0` 随候选值给定。
 
-表内还缺三个 workload 字段，要由目标配置的所有者给定：`action_dim`（反归一化后的动作维度）、`shift`（噪声调度位移）、`text_max_len`（填充后的文本长度，与表内的指令 token 数 min / median / max 不是同一个量）；分辨率一栏写成每个视角的 `image_h`×`image_w`。`num_train_timesteps` 用默认 1000，除非目标 checkpoint 另有记录。
+跑之前先看三个已知缺口（都在 `issues.md`）：
 
-说明：`benchmarks/imagewam_e2e_official_compare.py`（矩阵脚本用的）读取 LIBERO 数据，dims 取自 `flash_rt/models/imagewam/libero_dims.py` 的 `LIBERO_REAL_DIMS`，即 LIBERO 工作负载。目标配置的延迟部分可以用 `benchmarks/imagewam_thor_graph_bench.py`（随机权重，dims 换成目标工作负载，不含 VAE 与 proprio，也无法测 `text_trim`）；精度与 trim 需要目标配置的数据和官方对照，这个缺口要在配置表填完之后再补。
+- **ISSUE-084**：observation 与图外 VAE 编码通路目前只支持 1–2 路视角，三路 workload 走 `infer()` 且带真实 VAE 会报 `expected 3 views, got 2`；今天能测的是"三路序列布局 + 随机 image tokens"的延迟，测不到 VAE stage。
+- **ISSUE-083**：`text_encoder.py` 固定 `max_length=512`，`text_max_len=128` 的 workload 需要先决定 context 怎么产生（截取前 128 行 / 改编码长度 / 保持 512 再 trim）。
+- **ISSUE-081**：VAE 不在图内时 ABI 的 `view_shape` 硬编码 `(2,224,224)`，三路 256 的 ABI 端口形状不对。
+
+精度与 trim 需要目标配置的数据和官方对照，这个缺口要在配置表确认之后再补；延迟部分用下节的 path bench。
 
 判据：`ImageWAMWorkload` 的九个字段都能从表里取到值，且 `ImageWAMWorkload(...)` 加 `resolve_config(..., profile=...)` 不抛 `ConfigError`（`layout()` 与 `vae_graph_input()` 也不报错）。
 去向：`plan.md` 的 W12 相位状态。
+
+---
+
+## P. 服务路径对比（同一 workload，三条路径）
+
+`benchmarks/imagewam_thor_path_bench.py`：不设 `CKPT_PATH` 时用随机权重、随机帧、随机 context，因此只测延迟；每个 workload 一个表，`infer()` / ABI（`io="python"`）/ native（`io="native"`）各一行 P10/P50/P90 与 n，另打印 workload 字段、派生布局、`effective_config` 行与 Jetson 时钟状态。构不出来的路径会打出原因并跳过，不影响其余路径。
+
+```
+# LIBERO workload（2 × 224×224，text 512，horizon 64）
+python benchmarks/imagewam_thor_path_bench.py
+python benchmarks/imagewam_thor_path_bench.py --profile fast
+python benchmarks/imagewam_thor_path_bench.py --paths infer,abi          # 没建 native 时
+
+# 目标 workload（3 × 256×256，horizon 32）
+python benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 512
+python benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 128
+```
+
+ABI 一行需要 `exec/` 构建，native 一行需要 `runtime/` 与 `flashrt_imagewam_native`（见 `scripts/imagewam_thor_validation.sh` 文件头）。
+
+判据：每条的 rc；被跳过路径打出的原因；三条路径的 P50 记在案。**不设阈值、不判定好坏**——目标配置没有延迟预算。
+去向：ABI 与 native 的数字进 `opportunities.md` 的 OPT-028 / OPT-029，汇总进 `THOR_STATUS_SUMMARY.md`。
 
 ---
 
@@ -155,7 +182,7 @@ Thor 上已满足：条件 1（三套件 trim ≥ 未 trim，P50 更低）、条
 - 条件 6：有界的按长度图缓存与启动时使用 `precapture_text_lengths`（该函数已存在，缺的是缓存上限与启动流程）——代码工作。
 
 条件 4、5、6 不是 Thor 测试，完成之前 `text_trim` 不能转默认。
-规则 R5 同样在 `consumer="abi"` 与 `consumer="native"` 下拒绝 `text_trim=True`，所以含 `text_trim` 的 profile（`fast`）不能用于 ABI 与 native 两条服务路径；需要这两条路径的部署在条件 5 落地前不能设 `text_trim`。
+规则 R5 同样在 `consumer="abi"` 与 `consumer="native"` 下拒绝 `text_trim=True`。这条拒绝是"尚未实现"（条件 5），不是 ABI 或 native 的性质：ABI 与 native 都是本项目自己的代码，按长度的图可以支持，见 ISSUE-080 末尾记的两种形状——精确长度 + 有界缓存（不改 kernel，图集合随数据变化），或 16 token 分块 + 对块内 padding 加掩码（图集合固定，LIBERO 33 张、128 token 的 workload 9 张，代价是掩码与 kernel 工作）。
 
 ### E2 重定 Thor 延迟基线
 矩阵结果稳定后，更新 `tests/fixtures/imagewam_gate/latency_baselines.json` 的 Thor 项（当前 nvfp4 门限 243 ms 对应旧基线 231.6 ms）。
