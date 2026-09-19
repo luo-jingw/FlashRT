@@ -45,6 +45,20 @@ class ImageWAMNativeRuntime:
     @classmethod
     def create(cls, surface: ImageWAMRuntimeSurface,
                library: ImageWAMNativeLibrary | None = None) -> "ImageWAMNativeRuntime":
+        """One handle over `surface`'s buffers and weights.
+
+        A `text_trim=True` surface is refused: this handle borrows one
+        context geometry (`frt_imagewam_io_config.context_rows`, which its
+        own `set_proprio_row` and the pipeline's dims are validated
+        against) and replays one graph exec
+        (`cpp/models/imagewam/src/native_runtime.cpp`), while a trimmed
+        frontend runs one graph per prompt length (rule R5, ISSUE-080
+        condition 5)."""
+        if surface.graph_variants.per_prompt_length:
+            raise ValueError(
+                "ImageWAMNativeRuntime does not support a text_trim=True surface: the native handle "
+                "holds one context geometry and one graph exec, while a trimmed frontend runs one "
+                "graph per prompt length (rule R5)")
         library = library or ImageWAMNativeLibrary()
         handoff = build_io_config(surface)
         out = ctypes.c_void_p()

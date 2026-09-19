@@ -2,13 +2,18 @@
 
 Lowers one captured `ImageWAMTorchFrontendThor` into an
 `frt_model_runtime_v1` (docs/model_runtime_api.md). The frontend keeps
-ownership of the graph, the weights and every device buffer; this module
-wraps the device windows (`frt_buffer_wrap`), adopts the torch graph exec
+ownership of the graphs, the weights and every device buffer; this module
+wraps the device windows (`frt_buffer_wrap`), adopts the torch graph execs
 (`frt_graph_adopt`, not owned), declares ports, stage and region, and
 supplies the Python verbs. The verbs dispatch to the frontend's own
 staging operations (`ImageWAMRuntimeSource`), the same operations
 `infer()` uses, and run them on the capture stream so staged writes are
 ordered before the replay. Interface record: docs/imagewam_model_runtime.md.
+
+One captured text length is one graph variant, keyed by that length
+(`ShapeKey = x0`, `runtime_surface.GraphVariants`): the declaration adopts
+one exec per key, and `step` replays the key of the length the prompt set.
+`text_trim=False` is the one-entry case (`dims["x0"]`).
 
 `io="python"` port schema, in port-index order (ports absent from a
 deployment are skipped, the rest keep this relative order):
@@ -42,7 +47,8 @@ ISSUE-002). The ABI applies no scale.
 Its verbs are the C functions of `libflashrt_imagewam_native.so`
 (docs/imagewam_native_cpp.md), installed over the declaration with
 `frt_model_runtime_override_verbs`; the declaration's stream and graph are
-the native handle's.
+the native handle's. The native handle holds one graph at one context
+geometry, so this face refuses a `text_trim=True` frontend (rule R5).
 """
 from __future__ import annotations
 
@@ -54,7 +60,13 @@ import numpy as np
 import torch
 
 from flash_rt.models.imagewam.native_runtime import ImageWAMNativeRuntime
-from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSource, ImageWAMRuntimeSurface
+from flash_rt.models.imagewam.runtime_surface import (
+    GraphVariantPlan,
+    ImageWAMRuntimeSource,
+    ImageWAMRuntimeSurface,
+    graph_variant_plan,
+    uncaptured_text_length_message,
+)
 from flash_rt.runtime import exec as frt_exec
 from flash_rt.runtime import export as frt_export
 from flash_rt.runtime.export import VerbStatusError
@@ -137,19 +149,22 @@ def decode_image_views(payload: bytes, view_shape: tuple[int, int, int]) -> list
 
 class ImageWAMPythonVerbs:
     """The `io="python"` verbs. Each STAGED verb calls one frontend staging
-    operation on the capture stream; `step` replays the adopted graph.
-    Failures raise `VerbStatusError` with the status the `io="native"` verbs
-    return for the same case: -2 unknown port, -3 SWAP port, -4 payload
-    size or geometry, -1 anything else invalid (including a stream that is
-    not the exported one)."""
+    operation on the capture stream; `step` replays the graph variant of the
+    length the prompt actually set. Failures raise `VerbStatusError` with the
+    status the `io="native"` verbs return for the same case: -2 unknown port
+    (or a text length this runtime adopted no graph variant for), -3 SWAP
+    port, -4 payload size or geometry, -1 anything else invalid (including a
+    stream that is not the exported one)."""
 
     def __init__(self, source: ImageWAMRuntimeSource, surface: ImageWAMRuntimeSurface,
-                 layout: ImageWAMPortLayout, graph: frt_exec.Graph, stream_id: int):
+                 layout: ImageWAMPortLayout, graph: frt_exec.Graph, stream_id: int,
+                 plan: GraphVariantPlan):
         self._source = source
         self._surface = surface
         self._layout = layout
         self._graph = graph
         self._stream_id = stream_id
+        self._plan = plan
 
     def _port_name(self, verb: str, port: int, stream: int) -> str:
         if not 0 <= port < len(self._layout.names):
@@ -188,7 +203,21 @@ class ImageWAMPythonVerbs:
         return np.ascontiguousarray(actions, dtype=np.float32).tobytes()
 
     def step(self) -> int:
-        return int(self._graph.replay(0, self._stream_id))
+        """Replays the graph variant of the length the prompt set
+        (`source.active_dims["x0"]`, the same source `infer()` replays), on
+        the exported stream. A trimmed frontend has one graph per prompt
+        length, and the length is the variant key.
+
+        A length this runtime adopted no variant for is refused with -2 and
+        a message naming the length and the adopted ones: the deployment
+        declares its lengths at export time (`precapture_text_lengths`), and
+        `frt_graph_has_variant` decides, since the exec layer's live table
+        is the truth."""
+        key = int(self._source.active_dims["x0"])
+        if not self._graph.has_variant(key):
+            raise VerbStatusError(STATUS_NOT_FOUND,
+                                  uncaptured_text_length_message(key, self._plan.keys))
+        return int(self._graph.replay(key, self._stream_id))
 
 
 def _ports(surface: ImageWAMRuntimeSurface, windows: Mapping[str, frt_exec.Buffer],
@@ -255,28 +284,52 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
     digest. Returns a `ModelRuntime` whose `ptr` a native consumer adopts;
     the runtime anchors the frontend for its lifetime.
 
-    `io="python"`: Python verbs over the frontend's own graph and stream.
+    `io="python"`: Python verbs over the frontend's own graphs and stream.
+    The declaration adopts one exec per captured text length
+    (`surface.graph_variants`), `GraphSpec.default_key` is the length active
+    at export, and `step` replays the key of the length the prompt set. The
+    manifest's `text_lengths` states the adopted table.
+
     `io="native"`: `native` (an `ImageWAMNativeRuntime` with a graph, from
     `use_graph` or `capture`) supplies the stream, the graph and the C
     verbs; the declaration is checked by `native.bind_declaration` and
-    never published with placeholder verbs.
+    never published with placeholder verbs. The native handle holds one
+    graph at one context geometry, so a `text_trim=True` frontend is
+    refused (rule R5).
     """
     if io not in ("python", "native"):
         raise ValueError(f"unknown ImageWAM model-runtime io face {io!r} (supported: 'python', 'native')")
+    surface = source.runtime_surface()
+    plan = graph_variant_plan(surface.graph_variants)
+    if io == "native" and surface.graph_variants.per_prompt_length:
+        raise ValueError("io='native' does not support text_trim=True (rule R5): the native handle "
+                         "replays one graph at one context geometry, while a trimmed frontend runs one "
+                         "graph per prompt length (ISSUE-080 condition 5); the ABI face "
+                         "(io='python') serves a trimmed frontend")
     if io == "native" and (native is None or not native.graph_exec):
         raise ValueError("io='native' requires native=ImageWAMNativeRuntime with a graph "
                          "(use_graph or capture first)")
-    surface = source.runtime_surface()
     if io == "native" and surface.views_u8 is not None:
         raise ValueError("io='native' needs the VAE outside the graph (vae_graph_input=None): the "
                          "native face takes VAE tokens through image_tokens")
     ctx = frt_exec.Ctx()
     stream_handle = int(surface.stream.cuda_stream) if io == "python" else native.stream
-    graph_exec = surface.graph_exec if io == "python" else native.graph_exec
     graph_producer = "python" if io == "python" else native.graph_producer
     stream_id = ctx.wrap_stream(stream_handle)
-    graph = ctx.graph("imagewam_infer", 1)
-    graph.adopt(0, graph_exec)
+    if io == "python":
+        # One adopted exec per captured text length; `step` replays the
+        # length the prompt set (`ImageWAMPythonVerbs.step`).
+        default_key, keys = plan.default_key, plan.keys
+        graph = ctx.graph("imagewam_infer", plan.max_variants)
+        for variant in surface.graph_variants.entries:
+            graph.adopt(variant.key, variant.graph_exec)
+    else:
+        # The native handle owns its one graph, at the context geometry the
+        # surface had when the handle was created.
+        default_key = plan.default_key
+        keys = (default_key,)
+        graph = ctx.graph("imagewam_infer", 1)
+        graph.adopt(default_key, native.graph_exec)
 
     def wrap(name: str, tensor: torch.Tensor) -> frt_exec.Buffer:
         return ctx.wrap(name, tensor.data_ptr(), tensor.numel() * tensor.element_size())
@@ -303,12 +356,22 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
             "frontend_infer_fill": "0.01 * N(0, 1)",
         },
         "actions": {"denormalized": surface.action_denormalized},
+        # The deployment's record of which text lengths the runtime can
+        # serve: one adopted graph per `keys` entry, `default_key` the
+        # length active at export (`step` replays the length the prompt
+        # set, so a host must not assume the key is fixed while
+        # `per_prompt_length` is true).
+        "text_lengths": {
+            "default_key": default_key,
+            "keys": list(keys),
+            "per_prompt_length": surface.graph_variants.per_prompt_length,
+        },
     }
     if io == "native":
         manifest["prompt"] = "set through the setup producer; set_proprio_row after a prompt change"
     common = dict(
         streams=[frt_export.StreamSpec("main", stream_id, native_handle=stream_handle)],
-        graphs=[frt_export.GraphSpec("infer", graph, 0, (0,))],
+        graphs=[frt_export.GraphSpec("infer", graph, default_key, keys)],
         buffers=[
             frt_export.BufferSpec("img_raw", windows["img_raw"], "input"),
             frt_export.BufferSpec("context", windows["context"], ("input", "state")),
@@ -323,7 +386,7 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
     )
     if io == "python":
         layout = ImageWAMPortLayout(tuple(p.name for p in ports))
-        verbs = ImageWAMPythonVerbs(source, surface, layout, graph, stream_id)
+        verbs = ImageWAMPythonVerbs(source, surface, layout, graph, stream_id, plan)
         return frt_export.build_model_runtime(
             ctx, owner=(source, surface, windows, verbs),
             set_input=verbs.set_input, get_output=verbs.get_output, step=verbs.step, **common)

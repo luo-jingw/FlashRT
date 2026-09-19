@@ -117,7 +117,6 @@ def test_entry_passes_the_tier_one_arguments_through():
     (dict(vae_graph=True), "R3"),
     (dict(precision="fp16", nvfp4_awq=True, calibration_path="/cal"), "R4"),
     (dict(text_trim=True, consumer="native"), "R5"),
-    (dict(text_trim=True, consumer="abi"), "R5"),
     (dict(consumer="native", precision="fp8_static", allow_placeholder_calibration=True), "R6"),
 ])
 def test_illegal_combination_raises_before_the_constructor(kw, rule):
@@ -127,6 +126,18 @@ def test_illegal_combination_raises_before_the_constructor(kw, rule):
         with pytest.raises(ConfigError) as e:
             load_imagewam(CKPT, WORKLOAD, **kw)
     assert e.value.rule == rule, str(e.value)
+
+
+def test_text_trim_reaches_the_constructor_for_the_abi_consumer():
+    """`text_trim=True` is refused for the native consumer only (rule R5):
+    the ABI consumer carries one graph per captured text length, so the
+    entry resolves it and passes it to the frontend."""
+    with _structure_from_checkpoint_stub(), \
+            mock.patch.object(ImageWAMTorchFrontendThor, "from_config",
+                              return_value="frontend") as from_config:
+        assert load_imagewam(CKPT, WORKLOAD, text_trim=True, consumer="abi") == "frontend"
+    resolved = from_config.call_args[0][0]
+    assert resolved.options.text_trim is True
 
 
 def test_from_config_records_the_workload_without_building():

@@ -262,11 +262,17 @@ def test_R4_awq_needs_an_awq_precision_and_a_calibration_file():
     assert resolve(precision="nvfp4_sim", nvfp4_awq=True, calibration_path=CAL).options.nvfp4_awq
 
 
-def test_R5_text_trim_needs_the_infer_consumer():
-    assert rule_of(profile="fast", ae_model_path=AE, consumer="abi") == "R5"
+def test_R5_text_trim_needs_a_per_length_graph_consumer():
+    """The ABI consumer carries one graph per captured text length, so
+    `text_trim` is legal there; the native consumer replays one graph at
+    one context length and stays refused."""
     assert rule_of(text_trim=True, consumer="native") == "R5"
+    assert rule_of(profile="fast", ae_model_path=AE, consumer="native") == "R5"
+    assert resolve(text_trim=True, consumer="infer").options.text_trim
+    assert resolve(text_trim=True, consumer="abi").options.text_trim
     fast = resolve(profile="fast", ae_model_path=AE, consumer="infer")
     assert fast.options.text_trim
+    assert resolve(profile="fast", ae_model_path=AE, consumer="abi").options.text_trim
     assert not resolve(consumer="abi").options.text_trim
     assert not resolve(consumer="native").options.text_trim
 

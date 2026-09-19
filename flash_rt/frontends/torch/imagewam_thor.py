@@ -106,7 +106,12 @@ from flash_rt.models.imagewam.quant_linear import (
 from flash_rt.models.imagewam.rope import build_action_rope_table, build_backbone_rope_table
 from flash_rt.models.imagewam.text_context import pack_trimmed_context, trimmed_sequence_dims
 from flash_rt.models.imagewam.precision import Precision
-from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSurface, workload_identity
+from flash_rt.models.imagewam.runtime_surface import (
+    GraphVariants,
+    ImageWAMRuntimeSurface,
+    TextLengthGraph,
+    workload_identity,
+)
 from flash_rt.models.imagewam.vae_preprocess import RESIZE_MODES, VaePreprocessor
 from flash_rt.models.imagewam.vae_stage import ImageWAMVaeStage, VaeStageSpec
 
@@ -1982,25 +1987,51 @@ class ImageWAMTorchFrontendThor:
     # -- runtime export ---------------------------------------------------
 
     def _refuse_text_trim(self, what: str) -> None:
-        """`runtime_surface()` / `pipeline_resources()` describe one graph at
-        `self.dims`; with `text_trim` the graph, the context length and the
-        RoPE table change with every new prompt length (opportunities.md
-        OPT-030 lists what per-length support needs)."""
+        """`pipeline_resources()` describes the native C++ pipeline, which
+        replays one graph at one context length: `frt_imagewam_native` holds
+        a single graph exec and a single `context_rows`
+        (`cpp/models/imagewam/src/native_runtime.cpp`), so it has no place
+        to put a graph per prompt length. The ABI face carries one
+        (`runtime_surface().graph_variants`); the native pipeline keeps
+        refusing `text_trim` until it does too (ISSUE-080 condition 5,
+        plan.md phase S3)."""
         if self._text_trim:
-            raise ValueError(f"{what} does not support text_trim=True: it describes one graph at the max dims, "
-                             f"while a trimmed frontend runs one graph per prompt length (active_dims); "
-                             f"construct with text_trim=False")
+            raise ValueError(f"{what} does not support text_trim=True: the native pipeline replays one "
+                             f"graph at one context length and has no per-length variant table, while a "
+                             f"trimmed frontend runs one graph per prompt length (active_dims). The ABI "
+                             f"face serves a trimmed frontend (runtime_surface() and "
+                             f"export_model_runtime(io='python')); construct with text_trim=False for "
+                             f"the native pipeline")
+
+    def _captured_length_graphs(self) -> tuple[TextLengthGraph, ...]:
+        """The graph of every captured text length, ascending, for the
+        runtime surface's variant table
+        (`runtime_surface().graph_variants`): one entry per
+        `captured_text_lengths` key, the active length's graph included.
+        That cache is what `set_prompt` fills and `precapture_text_lengths`
+        pre-fills, so the table is exactly the set of lengths this frontend
+        can replay."""
+        return tuple(
+            TextLengthGraph(key=x0, graph_exec=int(self._captures[x0].graph.raw_cuda_graph_exec()))
+            for x0 in self.captured_text_lengths)
 
     def runtime_surface(self) -> ImageWAMRuntimeSurface:
-        """The captured graph and its device windows, for the runtime export.
-        Not available with `text_trim=True` (`ValueError`)."""
-        self._refuse_text_trim("runtime_surface()")
+        """The captured graphs and their device windows, for the runtime
+        export.
+
+        Every field describes the active graph, so with `text_trim=True`
+        the active length is `active_dims["x0"]` and `context_rows` is that
+        length; `graph_variants` carries the exec of every captured length,
+        so the export adopts one variant per key and `step` replays the
+        length the prompt set. `pipeline_resources()` stays refused for a
+        trimmed frontend (the native pipeline has no per-length table)."""
         if self._graph is None:
             raise RuntimeError("call set_prompt() before runtime_surface()")
-        d = self.dims
+        d = self._active_dims
         setup = [("pipeline", type(self).__name__), ("precision", self._precision),
                  ("use_fa4", str(self.use_fa4)), ("use_fa4_mot", str(self.use_fa4_mot)),
-                 ("calibration", self._calibration_digest), ("nvfp4_awq", str(self._nvfp4_awq))]
+                 ("calibration", self._calibration_digest), ("nvfp4_awq", str(self._nvfp4_awq)),
+                 ("text_trim", str(self._text_trim))]
         if self._nvfp4_awq:
             setup.extend((("awq_alpha", str(self._awq_alpha)), ("awq_scope", self._awq_scope)))
         setup.extend(self._vae_setup)
@@ -2011,6 +2042,10 @@ class ImageWAMTorchFrontendThor:
         setup.extend((f"dims.{k}", str(d[k])) for k in sorted(d))
         return ImageWAMRuntimeSurface(
             graph_exec=int(self._graph.raw_cuda_graph_exec()),
+            graph_variants=GraphVariants(
+                active_key=int(d["x0"]),
+                entries=self._captured_length_graphs(),
+                per_prompt_length=self._text_trim),
             stream=self._graph_stream,
             img_raw=self._img_raw,
             context=self._context,
@@ -2046,8 +2081,14 @@ class ImageWAMTorchFrontendThor:
         `fp16_adaln_operands` / `fp16_adaln_shift_scale` build (the unfused path and the
         standalone AdaLN that starts each chain) and the FP32 modulation
         chunks the fused gated residual + next AdaLN kernel reads
-        (`dims["fuse_res_norm"]`). Not available with `text_trim=True`
-        (`ValueError`)."""
+        (`dims["fuse_res_norm"]`).
+
+        Not available with `text_trim=True` (`ValueError`,
+        `_refuse_text_trim`): the native pipeline replays one graph at one
+        context length, so this describes `self.dims` and the max-size
+        RoPE table only. A trimmed frontend serves through `infer()` and
+        through the ABI face; the native pipeline gets its per-length table
+        in a later phase (plan.md phase S3)."""
         self._refuse_text_trim("pipeline_resources()")
         if self._graph is None:
             raise RuntimeError("call set_prompt() before pipeline_resources()")
@@ -2160,12 +2201,15 @@ class ImageWAMTorchFrontendThor:
 
     def export_model_runtime(self, *, identity: Mapping[str, str] | None = None, io: str = "python",
                              native: ImageWAMNativeRuntime | None = None) -> ModelRuntime:
-        """Package the captured graph as an `frt_model_runtime_v1`. See
+        """Package the captured graphs as an `frt_model_runtime_v1`. See
         `flash_rt.models.imagewam.runtime_export.export_model_runtime`.
         Needs the exec/ and runtime/ native modules (built separately);
         `io="native"` also needs `native` (an `ImageWAMNativeRuntime`).
-        Not available with `text_trim=True` (`runtime_surface()` raises
-        `ValueError`)."""
+
+        `io="python"` serves a trimmed frontend: it adopts one graph
+        variant per captured text length (`runtime_surface()`). `io="native"`
+        needs a single fixed context length and so refuses `text_trim=True`
+        (`ValueError`)."""
         from flash_rt.models.imagewam.runtime_export import export_model_runtime
         return export_model_runtime(self, identity=identity, io=io, native=native)
 
