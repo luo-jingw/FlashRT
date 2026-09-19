@@ -1169,6 +1169,32 @@ Conditions for making `text_trim=True` the served default, all of them:
    and a bounded per-length cache, so no capture happens while serving
    and memory stays bounded.
 
+Status of the six conditions after the `eccf14f` round:
+
+1. satisfied (Thor, three suites: trimmed agreement with official at or
+   above untrimmed, lower P50).
+2. open, and the only one left for the Python path: the FA4-on branch of the
+   multi-length safety check depends on ISSUE-085's `capture_sync` result.
+3. satisfied (a failed capture leaves no graph active).
+4. satisfied: fixture v2 with a trimmed `fp16` reference was generated
+   (`text_trim=true`) and a trimmed nvfp4 gate run passes against it (vs
+   official 0.99931 / min 0.99898, vs the fixture's fp16 reference
+   0.99935 / 0.99907, P50 114.6 ms). Only its manifest is committed; the
+   fixture data stays in the bundle.
+5. half satisfied: the ABI serves trimmed prompts (one adopted graph per
+   text length, selected by the replay key; the tick at two different
+   lengths is bit-exact against `infer()`), the native pipeline still refuses
+   them (plan.md phase S4).
+6. satisfied: the per-length cache is bounded (`text_trim_cache_size`,
+   default 32) and `precapture_text_lengths` fills it at construction. On
+   Thor a precaptured length switches in 0.000-0.012 s where a length
+   captured on first use takes 0.42-0.58 s.
+
+The design question in "Shape of condition 5" is settled for this
+deployment: exact trimmed lengths, precaptured at construction and bounded by
+an LRU cache, no 16-token buckets (the instruction set is fixed and short, so
+the graph count stays small and no padding mask is needed anywhere).
+
 Then the owner decides the default.
 
 ### Shape of condition 5: exact lengths or 16-token buckets
@@ -1267,7 +1293,7 @@ workload, and that a LIBERO export is unchanged.
 
 # ISSUE-082
 
-Status: open
+Status: resolved
 
 Area: Thor latency baselines and the configuration matrix's thresholds —
 `tests/gate_imagewam_libero.py` (gate) versus
@@ -1539,3 +1565,137 @@ and whether the first 128 rows of a 512-padded encoding equal a 128-padded
 encoding (they should, the padding being masked, but the checkpoint and the
 official serving path were built around 512). That needs the target data and
 the official side, and stays part of the target workload's fidelity gap.
+
+## Resolution
+
+The `eccf14f` round answers both questions. The default path is not slower:
+the gate measures **202.2 ms** nvfp4 (pass) and the end-to-end `default` row
+202.4 / 202.1 / 202.0 ms over three repeats on libero_spatial, against the
+recorded 203.3 ms gate / 202.3 ms e2e. The 225 ms and the 13.6 ms
+between-instances spread of the `c20f3a0` round were that session's state,
+not a measurement-scope difference: in the `eccf14f` session the same
+repeats spread **0.4 ms** (`default`) and **0.5 ms** (`stack`), so section C's
+2 ms working threshold is meaningful after all.
+
+What the round also shows: the recorded `stack` / `fast` latency of 106.1 ms
+belongs to that same unstable session. The same switch set measures
+**92.6-93.7 ms** across libero_goal and libero_10 (and 92.8-93.3 ms over
+three repeats on libero_spatial) in the `eccf14f` session. Baselines taken
+from a single row of an unstable session carry that session's error; the
+gate's own repeated-row spread is the number to compare against.
+
+# ISSUE-085
+
+Status: open
+
+Area: three test-level failures on Thor that are not the served path —
+`tests/test_imagewam_awq.py` (kernel accounting), the FA4 dispatch test's
+`capture_sync` mode, and the graph-recovery test
+
+## Observation
+
+The `eccf14f` round finds the same three symptoms as the previous round, with
+the served path unaffected (end-to-end FA4 does not fall back on any row of
+the configuration matrix):
+
+- the AWQ test's kernel count for the plain path is `0`;
+- the FA4 dispatch test's `capture_sync` mode still shows the mempool
+  behaviour noted last round;
+- the graph-recovery test's `torch.equal` comparison still fails.
+
+`THOR_CHECKLIST.md` item A1 carries the commands that separate a real failure
+from an ordering cascade.
+
+## Impact
+
+None observed on the served results: the matrix, the gate and the path
+benchmark all run with FA4 active when asked for and never fall back
+(`FA4 fallback=None` on every row of the `eccf14f` round). The three tests
+stay red on Thor, so a regression elsewhere in those areas would be hidden
+until they are explained.
+
+## Evidence
+
+- The `eccf14f` round's `A1_*.log` files under
+  `/home/jingwu/thor_val/0919s/`.
+- `THOR_CHECKLIST.md` item A1 (the commands and the cascade criterion).
+
+## Hypotheses
+
+Not restated: the previous round's hypothesis about `capture_sync` calling
+`torch.cuda.synchronize()` during capture is still the one to test first
+(`THOR_CHECKLIST.md` item A1 states it and how to falsify it).
+
+## Next Experiment
+
+Run item A1's commands in the order given: the isolated
+`test_imagewam_fa4_dispatch.py` run decides whether `capture_sync` is a real
+failure or the cascade source, and the AWQ and graph-recovery tests are then
+run isolated. Record each first failure text.
+
+# ISSUE-086
+
+Status: open
+
+Area: the VAE encode geometry against the workload's per-view size —
+`flash_rt/models/imagewam/vae_encoder.py` (`encode_to_tokens`'s `out_hw`),
+`flash_rt/models/imagewam/vae_stage.py` (`ImageWAMVaeStage` / `VaeStageSpec`
+token geometry), reached from `ImageWAMTorchFrontendThor.stage_images`
+
+## Observation
+
+The target workload is three views of 256x256, so
+`ImageWAMWorkload.layout` derives `ref_h = 256/16 = 16` and
+`ref_w = 3*256/16 = 48`: `img_len = 768`, and the frontend allocates
+`img_raw` as `(768, 128)`.
+
+On Thor (`benchmarks/imagewam_thor_path_bench.py --workload target
+--text-max-len 128`):
+
+- the `default` profile (torch VAE outside the graph) skips `infer()` with
+  "768 vs 588": the VAE path resizes each view to 224x224, so each view
+  yields 14x14 = 196 tokens and three views give 588;
+- the `fast` profile (native VAE inside the graph) fails during construction
+  with `img_raw` expected `(588, 128)` and got `(768, 128)`, i.e. the
+  in-graph stage computes its token geometry from a fixed 224-derived grid
+  while `img_raw` follows the workload.
+
+The ABI and native rows of that workload measure 152.7 ms and 154.5 ms
+because the benchmark stages `image_tokens` directly; those are layout
+numbers, with placeholder image tokens.
+
+## Impact
+
+`infer()` cannot serve a per-view size other than 224x224: the served path's
+image branch is tied to LIBERO's view size while the sequence layout, the
+RoPE grid and `img_raw` already follow the workload. The target
+configuration (`THOR_CHECKLIST.md` section D) therefore cannot be measured
+end to end, and the same mismatch would apply to any camera whose frames are
+not resized to 224x224 before staging.
+
+## Evidence
+
+- `ImageWAMWorkload.layout` (`ref_h`/`ref_w` from `image_h`/`image_w` and
+  `patch_stride`), `ImageWAMWorkload.vae_graph_input`.
+- `flash_rt/models/imagewam/vae_encoder.py`, `encode_to_tokens(...,
+  out_hw=(224, 224))` and `ImageWAMTorchFrontendThor.stage_images`'s call.
+- `flash_rt/models/imagewam/vae_stage.py`, the stage's token geometry versus
+  the `img_raw` it is handed.
+- The `eccf14f` round's target-workload logs under
+  `/home/jingwu/thor_val/0919s/`.
+
+## Hypotheses
+
+Both the `out_hw` default and the stage's token geometry predate the
+workload object (LIBERO's views are 224x224, so the two agreed by
+construction). `_input_view_shape()` is already the frontend's single owner
+of the served view geometry, so the fix is to route both paths through it.
+
+## Next Experiment
+
+Implemented and to be re-checked on Thor: the per-view size comes from the
+workload (outside the graph) and from the stage spec's `in_h`/`in_w` (inside
+it), with the LIBERO two-view result unchanged. Then re-run
+`benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 128`
+for all three paths, and the LIBERO rows for the bit-identity of the two-view
+tokens.

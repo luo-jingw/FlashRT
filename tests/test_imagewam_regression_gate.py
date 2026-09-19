@@ -205,8 +205,10 @@ def test_missing_latency_check_counts_as_ungated():
 def test_committed_latency_baselines():
     table = LatencyPolicyTable.load(CONFIG_DIR / "latency_baselines.json")
     thor = table.resolve("NVIDIA Thor", (11, 0))
-    assert thor.gated and thor.baselines["nvfp4"].p50_ms == 231.6
-    assert thor.baselines["nvfp4"].limit_ms == pytest.approx(231.6 * 1.05)
+    # Re-baselined from the eccf14f round: gate 202.2 ms, three consecutive
+    # end-to-end repeats within 0.4 ms (issues.md ISSUE-082).
+    assert thor.gated and thor.baselines["nvfp4"].p50_ms == 202.2
+    assert thor.baselines["nvfp4"].limit_ms == pytest.approx(202.2 * 1.05)
     h100 = table.resolve("NVIDIA H100 NVL", (9, 0))
     assert h100.device == "h100" and not h100.gated
     unknown = table.resolve("NVIDIA GeForce RTX 4090", (8, 9))
@@ -215,10 +217,23 @@ def test_committed_latency_baselines():
 
 def test_committed_fidelity_thresholds():
     table = FidelityThresholdTable.load(CONFIG_DIR / "fidelity_thresholds.json")
-    assert set(table.precisions) == {"fp16", "nvfp4", "fp8_static"}
+    assert set(table.precisions) == {"fp16", "nvfp4", "fp8_static", "fp8_static_cutlass",
+                                     "e0m3_hadamard"}
     assert table.for_precision("fp8_static").requires_calibration is True
     assert table.for_precision("nvfp4").requires_calibration is False
     assert table.for_precision("fp8") is None
+    # every served precision the gate can be asked for has an entry: the gate
+    # looks a precision up by name and reports "no fidelity thresholds" otherwise
+    cutlass = table.for_precision("fp8_static_cutlass")
+    static = table.for_precision("fp8_static")
+    assert cutlass is not None and cutlass.requires_calibration is True
+    assert (cutlass.vs_official_median_min, cutlass.vs_official_min_min) == (
+        static.vs_official_median_min, static.vs_official_min_min)
+    e0m3 = table.for_precision("e0m3_hadamard")
+    assert e0m3 is not None and e0m3.requires_calibration is False
+    nvfp4 = table.for_precision("nvfp4")
+    assert (e0m3.vs_official_median_min, e0m3.vs_official_min_min) == (
+        nvfp4.vs_official_median_min, nvfp4.vs_official_min_min)
     fp16 = table.for_precision("fp16")
     # The documented H100 fp16 end-to-end baseline must pass its own gate.
     checks = FidelityGate(fp16).evaluate(_measurement())

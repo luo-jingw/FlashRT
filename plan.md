@@ -1626,11 +1626,27 @@ Phase Status: completed
 
 ### Phase W12: Thor validation on the new entry
 Phase Status: blocked
-- Blocker: the two observations left in this phase are Thor runs on the
-  owner's schedule — the like-for-like `default` baseline (ISSUE-082 and
-  checklist item E2) and the target workload across the three service paths
-  (checklist item P), whose ABI row additionally needs phase S2. Everything
-  this phase could observe on the machine that ran W6-W11 is recorded below.
+- Blocker: the target workload's `infer()` cannot run until the VAE encode
+  geometry follows the workload's per-view size (ISSUE-086: the layout asks
+  for 768 image tokens, the VAE path produces 588). Its ABI and native rows
+  measure already (152.7 ms and 154.5 ms with placeholder image tokens), so
+  the remaining item is one re-run after that fix (`THOR_CHECKLIST.md` item
+  P).
+- Result on Thor at `eccf14f` (Jetson AGX Thor, MAXN, GPC 1.575 GHz,
+  `emc_locked=null`, GPU exclusive, logs under `/home/jingwu/thor_val/0919s/`):
+  the recorded numbers reproduce through the new entry. The gate measures
+  202.2 ms nvfp4 (pass) and the end-to-end `default` row 202.4 / 202.1 /
+  202.0 ms over three repeats on libero_spatial, against the recorded
+  203.3 ms gate and 202.3 ms e2e — the previous round's 225 ms and 13.6 ms
+  spread were that session's state, not a scope difference (ISSUE-082
+  resolved). The same three repeats spread 0.4 ms (`default`) and 0.5 ms
+  (`stack`), and no row fell back from FA4.
+- The recorded `stack` / `fast` value of 106.1 ms is likewise session-stale:
+  the same switch set measures 92.6-93.7 ms across libero_goal and
+  libero_10, and 92.8-93.3 ms over three repeats on libero_spatial. The
+  latency gate's Thor baseline is re-based on the new session
+  (`tests/fixtures/imagewam_gate/latency_baselines.json`, 231.6 -> 202.2 ms),
+  which closes item E2.
 - Goal: the recorded numbers reproduce through the new path, and the
   target workload (THOR_CHECKLIST D) runs as a `Workload`.
 - Modified files: `scripts/imagewam_thor_matrix.sh`,
@@ -1694,7 +1710,11 @@ Phase Status: completed
 - Observation: CPU round trip through `save`/`load` and the v1 manifest, the
   refusal of either mismatch, and the generator's imports resolving against
   the compare script (the check that caught the generator's own `REAL_DIMS`
-  breakage). The v2 fixture itself is generated on Thor (checklist item E3).
+  breakage). On Thor the v2 fixture was generated (`text_trim=true`) and the
+  trimmed nvfp4 gate passes against it: vs official 0.99931 / min 0.99898,
+  vs the fixture's fp16 reference 0.99935 / 0.99907, P50 114.6 ms; a trimmed
+  run against v1 and an untrimmed run against v2 are both refused. The
+  fixture's manifest still has to be committed (checklist item E2).
 
 ### Phase S2: the ABI carries one graph per trimmed length
 Phase Status: completed
@@ -1717,9 +1737,13 @@ Phase Status: completed
   fingerprint of an existing untrimmed deployment changes (no artifact
   compatibility is required at this stage).
 - Observation: the pure table/plan seam and the resolver's R5 scope are
-  covered on CPU; the key table and the active-key selection are observed on a
-  captured frontend, so the Thor check is the ABI tick at two prompt lengths
-  against `infer()`, the shorter first (checklist item P).
+  covered on CPU. On Thor the multi-length check passes (the ABI tick at two
+  captured lengths is bit-exact against `infer()`, and `guards` 7 tests
+  pass), and the served numbers come out: LIBERO `default` `infer()` 202.3 ms
+  against ABI 184.2 ms and native 183.8 ms in one process, and with
+  `profile=fast` plus precaptured lengths `infer()` 93.2 ms against ABI
+  95.1 ms. The native face keeps refusing trimmed prompts; its own phase is
+  S4.
 
 ### Phase S4: the native pipeline carries one graph per trimmed length
 Phase Status: pending
@@ -1756,8 +1780,10 @@ Phase Status: completed
   of 1, a cache whose only entry is active), the resolver option and its V1
   cases, the constructor validation before any allocation, and the precapture
   keyword reaching `precapture_text_lengths` once through a mocked
-  constructor. The live cache, the memory drop and the first-call latency are
-  Thor items (checklist item P).
+  constructor. On Thor a precaptured length switches in 0.000-0.012 s where a
+  length captured on first use takes 0.42-0.58 s, over three swept lengths
+  (16, 24, 31 valid tokens). The per-length graph memory increment is the one
+  number still missing (checklist item B3).
 - Two decisions made while implementing: `precapture_text_lengths` refuses a
   request with more distinct lengths than the bound (its refill loop would
   otherwise recapture what eviction had just dropped, forever), and the cache

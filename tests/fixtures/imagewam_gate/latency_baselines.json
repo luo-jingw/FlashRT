@@ -4,20 +4,32 @@
   "devices": [
     {
       "device": "thor",
-      "match": {"name_contains": "Thor", "compute_capability": [11, 0]},
+      "match": {
+        "name_contains": "Thor",
+        "compute_capability": [
+          11,
+          0
+        ]
+      },
       "gated": true,
       "reason": "Jetson AGX Thor, the deployment target",
       "baselines": {
         "nvfp4": {
-          "p50_ms": 231.6,
+          "p50_ms": 202.2,
           "margin": 0.05,
-          "source": "opportunities.md OPT-015: Thor infer() P50 231.63 ms, nvfp4, merged linear1, x0=513, proprio, 10-step shift schedule, real LIBERO dual-camera input; clock state not recorded"
+          "source": "opportunities.md OPT-030 / THOR_STATUS_SUMMARY.md: eccf14f round, Jetson AGX Thor, MAXN, GPC 1.575 GHz, emc_locked=null, GPU exclusive; gate nvfp4 202.2 ms (pass), end-to-end default row 202.4/202.1/202.0 ms over three repeats (0.4 ms spread). Supersedes the 231.6 ms baseline, which came from an earlier session whose repeated-row spread was not measured (issues.md ISSUE-082)."
         }
       }
     },
     {
       "device": "h100",
-      "match": {"name_contains": "H100", "compute_capability": [9, 0]},
+      "match": {
+        "name_contains": "H100",
+        "compute_capability": [
+          9,
+          0
+        ]
+      },
       "gated": false,
       "reason": "shared H100: another user's training job holds about 40GB and about 100% utilization on every GPU (PROJECT.md, Shared H100 server), so timings are contaminated",
       "baselines": {}

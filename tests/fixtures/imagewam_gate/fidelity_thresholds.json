@@ -28,6 +28,24 @@
       "mae_vs_gt_ratio_max": 1.05,
       "requires_calibration": true,
       "note": "Gated only with a real activation-calibration file (IMAGEWAM_FP8_CALIBRATION or --fp8-calibration). With the N(0, 0.1) placeholder calibration, fp8_static reached backbone_hidden cosine ~0.46 on Thor (opportunities.md OPT-014), so it is never gated without one. Same bounds as nvfp4, the precision it would replace."
+    },
+    "e0m3_hadamard": {
+      "vs_official_median_min": 0.995,
+      "vs_official_min_min": 0.985,
+      "vs_fp16_reference_median_min": 0.997,
+      "vs_fp16_reference_min_min": 0.99,
+      "mae_vs_gt_ratio_max": 1.05,
+      "requires_calibration": false,
+      "note": "Same bounds as nvfp4: e0m3_hadamard is the other block-scaled 4-bit tier, and the eccf14f round measured it at or above nvfp4 on libero_spatial (vs official median 0.99786 default / 0.99968 stacked, against nvfp4's 0.99744 gate median). The gate reported 'blocked' for this precision only because this entry did not exist."
+    },
+    "fp8_static_cutlass": {
+      "vs_official_median_min": 0.995,
+      "vs_official_min_min": 0.985,
+      "vs_fp16_reference_median_min": 0.997,
+      "vs_fp16_reference_min_min": 0.99,
+      "mae_vs_gt_ratio_max": 1.05,
+      "requires_calibration": true,
+      "note": "Same numbers as fp8_static, which it shares numerics with: fp8_static_cutlass is the same static-scale FP8 tier with the CUTLASS GEMM path instead of cuBLASLt. The gate looks a precision up by name, so without this entry a gate run at this precision reports 'no fidelity thresholds for precision'."
     }
   }
 }
