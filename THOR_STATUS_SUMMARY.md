@@ -1,6 +1,6 @@
 # ImageWAM on FlashRT — Thor 部署状态总结
 
-测试口径（除特别说明外）：Jetson AGX Thor，MAXN、GPU 锁频；LIBERO 配置——双相机 224×448（14×28 patch 网格）、8 维 proprio、10 步去噪、horizon=64、指令 16–31 个有效 token；真实 checkpoint；`infer()` 含 VAE 与 proprio，不含 Qwen3 文本编码。
+测试口径（除特别说明外）：Jetson AGX Thor，MAXN、GPU 锁频。服务并测量两个工作负载——LIBERO 配置：双相机 224×448（14×28 patch 网格）、512 个补齐文本 token、8 维 proprio、10 步去噪、horizon=64、指令 16–31 个有效 token；目标配置：3 个 256×256 视角、指令 16–128 个 token 加 128 token 的补齐缓冲、horizon=32、10 步去噪、8 维 proprio。两者用同一个入口测量：`benchmarks/imagewam_thor_path_bench.py --workload libero|target`。真实 checkpoint；`infer()` 含 VAE 与 proprio，不含 Qwen3 文本编码。
 
 ## Pipeline 架构
 
@@ -18,7 +18,7 @@
 解析链是 `workload + structure + profile + precision + calibration_path` → `resolve_config(...)` → `(dims, options)` → `from_config` → frontend；解析在构造后不再改变。
 
 - **workload**：服务的工作负载，由 `ImageWAMWorkload` 描述。部署方给出相机数、每视角图像尺寸、文本长度、action horizon、动作维度、proprio 维度、去噪步数、调度 shift；序列布局由它派生：`x0`、`img_len`、`a0`、`total`、`ref_h`、`ref_w`、`dt`，以及原生 VAE 进图时的 `vae_graph_input`。派生值互相矛盾时在解析阶段报错，不再手填这些整数。LIBERO 工作负载是 `ImageWAMWorkload.libero()`：两个 224×224 视角、512 token 文本、horizon 64、7 维动作、8 维 proprio、10 步去噪、shift=5.0，派生 `x0=513`、`img_len=392`、`a0=905`、`total=969`、`ref_h×ref_w=14×28`。
-- **profile**：一组开关的具名集合，按名字选用。`default` 复现今天的构造函数默认值：nvfp4、不裁文本、FA4 由 `FLASHRT_THOR_FA4` 决定、torch VAE 编码器在图外、无 AWQ。`fast` 是 `text_trim` + FA4 backbone + FA4 mot + 原生 VAE 进图，实测 106.8 ms 对 `default` 的 225.2 ms（`c20f3a0`，nvfp4，libero_spatial，`infer()` P50），标为 PROVISIONAL，内容与是否转默认待 T4/T5 决定。
+- **profile**：一组开关的具名集合，按名字选用。`default` 复现今天的构造函数默认值：nvfp4、不裁文本、FA4 由 `FLASHRT_THOR_FA4` 决定、torch VAE 编码器在图外、无 AWQ。`fast` 是 `text_trim` + FA4 backbone + FA4 mot + 原生 VAE 进图，实测 `infer()` 93.2 ms、ABI 95.1 ms，对 `default` 的约 202 ms（`eccf14f`，nvfp4，libero_spatial），标为 PROVISIONAL，内容与是否转默认待 T4/T5 决定。上一轮（`c20f3a0`）同一组开关是 106.8 ms 对 225.2 ms，那一轮的机器状态与 `eccf14f` 不同。
 - **precision**：覆盖 profile 的精度档位。
 - **calibration_path**：静态 FP8 与 AWQ 所需的校准文件。
 
@@ -56,9 +56,9 @@
 | 选项 | 当前默认 | 作用 | 限制 |
 |---|---|---|---|
 | `workload` | `ImageWAMWorkload.libero()` | 服务的工作负载；序列布局与 `vae_graph_input` 由它派生并校验 | 字段必须与 checkpoint 的结构一致（规则 R7） |
-| `profile` | `default` | 开关的具名集合；`fast` 为 `text_trim` + FA4 双位点 + 原生 VAE 进图（106.1 ms 对 203.3 ms，nvfp4，libero_spatial） | `fast` 标为 PROVISIONAL，待 T4/T5 决定；含 `text_trim`，ABI 与 native 路径被规则 R5 拒绝 |
+| `profile` | `default` | 开关的具名集合；`fast` 为 `text_trim` + FA4 双位点 + 原生 VAE 进图（`infer()` 93.2 ms、ABI 95.1 ms，对 `default` 的约 202 ms，nvfp4，libero_spatial） | `fast` 标为 PROVISIONAL，待 T4/T5 决定；含 `text_trim`，native 路径被规则 R5 拒绝 |
 | `precision` | `nvfp4` | 精度/速度档位 | `fp8_static*` 需要校准文件 |
-| `text_trim` | 关 | 按有效文本长度裁剪 | `runtime_surface()` / ABI 导出不支持（ABI 描述单一最大 shape 的图） |
+| `text_trim` | 关 | 按有效文本长度裁剪；开启后每个有效文本长度一张采纳图，Python `infer()` 与 ABI 都能服务 | native 路径被规则 R5 拒绝（原生管线只 replay 一张固定图） |
 | FA4（`FLASHRT_THOR_FA4`、`use_fa4_mot`） | 关 | 注意力 kernel | 首次调用编译，失败自动回退 |
 | `vae_encoder="native"` / `vae_graph_input` | 关（torch 编码器） | 原生 VAE / 进图 | — |
 | `nvfp4_awq` | 关 | NVFP4 精度补偿 | 需要校准文件；原生 runtime 不支持 |
@@ -77,7 +77,50 @@
 | 只开 FA4 backbone | 174.6 ms | 0.99751 |
 | `text_trim` + FA4 双位点 + 原生 VAE 进图 | **106.1 ms** | **0.99933**（min 0.99887） |
 
-三项叠加明显小于各项单独收益之和（−96 ms 对 −125 ms），`text_trim` 已经去掉了大部分 padding 上的注意力开销。
+三项叠加明显小于各项单独收益之和（−96 ms 对 −125 ms），`text_trim` 已经去掉了大部分 padding 上的注意力开销。表中叠满一行的 106.1 ms 属于 `c20f3a0` 一轮，见下。
+
+### `eccf14f` 轮：两个工作负载与三条服务路径（nvfp4，`infer()` P50）
+
+一次完整验证轮，commit `eccf14f`：Jetson AGX Thor、MAXN、GPC 1.575 GHz、`emc_locked=null`、GPU 独占；原始日志在 `/home/jingwu/thor_val/0919s/`。下面的数字都是端到端 `infer()` P50（ms），「vs official」是与官方模型的动作 cosine 中位数。
+
+LIBERO 配置（`--workload libero`）：
+
+| 任务 | 配置 | P50 | vs official（median） |
+|---|---|---:|---:|
+| libero_spatial | `default` | 202.4 / 202.1 / 202.0（三次重复） | — |
+| libero_spatial | `stack` | 93.1 / 92.8 / 93.3（三次重复） | 0.99931–0.99936 |
+| libero_goal | `default` | 203.0 | 0.99558 |
+| libero_goal | `vae_trim` | 118.7 | 0.99937 |
+| libero_goal | `stack` | 92.6 | 0.99930 |
+| libero_goal | `profile=fast` | 92.7 | — |
+| libero_10 | `default` | 202.0 | 0.99765 |
+| libero_10 | `vae_trim` | 103.0 | 0.99926 |
+| libero_10 | `stack` | 93.5 | 0.99925 |
+| libero_10 | `profile=fast` | 93.7 | — |
+
+Gate（nvfp4）：202.2 ms，通过。同轮同一会话内 `default` 连续三次重复的极差 0.4 ms、`stack` 0.5 ms；门禁、矩阵与路径基准的每一行都没有回退 FA4（`FA4 fallback=None`）。
+
+同一组开关（`stack` / `profile=fast`）在本轮是 92.6–93.7 ms，`c20f3a0` 一轮是 106.1 / 106.8 ms；两轮的机器状态不同——同配置 `default` 在 `c20f3a0` 一轮是 225.2–225.5 ms，本轮是 202.0–202.4 ms。
+
+叠满开关（`text_trim` + FA4 双位点 + 原生 VAE 进图）下换精度，libero_spatial 同一会话的 `default` / `stack` 两行：
+
+| 精度 | P50（`default` / `stack`） | vs official（`default` / `stack`） |
+|---|---|---|
+| `e0m3_hadamard` | 198.9 / 90.5 | 0.99786 / 0.99968 |
+| `fp8_static_cutlass` | 219.5 / 104.6 | — |
+| `fp16` | 273.7 / 223.5 | — |
+
+fp16 的链式复核：`default` 306.6 ms → `vae_trim` 234.9 ms → `stack` 222.9 ms。
+
+AWQ（nvfp4 + AWQ）：动作 cosine 对 fp16 为 0.99970，未加 AWQ 的 nvfp4 为 0.99939；P50 202.2–202.9 ms，没有增加。真实 FP8 校准：对 fp16 的 cosine 0.99997、MAE 比 1.000；占位校准约 0.90、MAE 比 1.77。
+
+三条服务路径（同一进程，LIBERO）：`default` 的 `infer()` 202.3 ms、ABI 184.2 ms、native 183.8 ms；`profile=fast` 在文本长度已预捕获时 `infer()` 93.2 ms、ABI 95.1 ms，native 按规则 R5 跳过。
+
+`text_trim` 的捕获开销：已预捕获的文本长度切换一张图用 0.000–0.012 s，首次使用时才捕获的长度用 0.42–0.58 s。
+
+### 目标工作负载（3 × 256×256，horizon 32）的状态
+
+同一个入口测目标配置（`--workload target`，同一轮 `eccf14f`）：序列布局与 ABI / native 两行已经测得——viewport 正确报出 `view_shape=(3,256,256)`，ABI 152.7 ms、native 154.5 ms（图像 token 用占位值）。它的 `infer()` 还跑不起来：布局派生 768 个图像 token（16×48），而 VAE 路径把每个视角缩到 224×224、只给出 588 个，图内 VAE 构造因此以 `(588,128)` 对 `(768,128)` 不匹配失败（ISSUE-086）。在该问题解决之前，目标配置不是受支持的配置。
 
 ### 新入口下的同一会话阶梯（`c20f3a0`，libero_spatial，nvfp4，`infer()` P50）
 
@@ -97,7 +140,7 @@
 
 FA4 两个位点都不回退（`FA4 fallback` 为 `None`）。按 C 节的判据，`stack` 相对 `vae_trim` 低 9.7 ms 且 vs official 不劣，达到「FA4 转默认」的工作门槛；原生 VAE 同理。默认值未改。
 
-读这张表的两个口径问题（ISSUE-082）：`default` 行的记录基线 202–203 ms 来自只跑 frontend 的 gate，与带官方对照的 e2e 不是同一口径，本 commit 没有同口径的 gate 数；同一组开关在同一会话里出现两次，93.2 与 106.8 ms 相差 13.6 ms，比 C 节用的 2 ms 工作阈值大。
+读这张表的两个口径问题（ISSUE-082）：`default` 行的记录基线 202–203 ms 来自只跑 frontend 的 gate，与带官方对照的 e2e 不是同一口径，`c20f3a0` 没有同口径的 gate 数；同一组开关在同一会话里出现两次，93.2 与 106.8 ms 相差 13.6 ms，比 C 节用的 2 ms 工作阈值大。`eccf14f` 轮回答了这两点：同轮 gate 202.2 ms 与 e2e `default` 202.0–202.4 ms 同口径且一致，同一会话内 `default` 三次重复的极差 0.4 ms、`stack` 0.5 ms；106.1 / 106.8 ms 属于 `c20f3a0` 那一轮偏高的会话状态。
 
 微基准（随机权重、不含 VAE）：融合项合计约 −9.7 ms；FA4 backbone −26.9 ms，backbone + mot −58.5 ms；VAE 编码 stage 19.4 → 8.3 ms（进图）；VAE 预处理 kernel 0.97 → 0.13 ms。
 
@@ -116,7 +159,7 @@ FA4 两个位点都不回退（`FA4 fallback` 为 `None`）。按 C 节的判据
 
 | 精度 | vs official median (min) | MAE vs GT median | P50 |
 |---|---|---:|---:|
-| **nvfp4** | 0.99933 (0.99887) | 0.186 | **106.1 ms** |
+| **nvfp4** | 0.99933 (0.99887) | 0.186 | **106.1 ms**（`c20f3a0`） |
 | fp8_static_cutlass（trim 校准） | 0.99995 (0.99990) | 0.186 | 115.3 ms |
 
 官方参考 MAE 中位数 0.1855。
@@ -129,7 +172,7 @@ FA4 两个位点都不回退（`FA4 fallback` 为 `None`）。按 C 节的判据
 |---|---:|---:|
 | 官方 bf16 eager，端到端 | 453.6 ms | 2.2× |
 | FlashRT nvfp4 默认 | 203.3 ms | 1.00× |
-| FlashRT nvfp4 叠满 | 106.1 ms | 0.52×（快 1.9×；相对官方约 4.3×） |
+| FlashRT nvfp4 叠满 | 106.1 ms（`c20f3a0`） | 0.52×（快 1.9×；相对官方约 4.3×） |
 
 官方侧 `torch.compile`：`inductor` 在 Thor 上无法编译；`cudagraphs` 比 eager 更慢（514.4 ms）。
 
