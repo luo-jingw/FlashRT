@@ -412,7 +412,8 @@ FIXTURE_FORMAT_VERSION = 1
     episode, frame, gt_actions (N,H,7) f32 (NaN-padded), gt_len (N,), prompts (T,),
     context_bf16_bits (T,L,D) u16, context_mask (T,L) bool, seeds (S,),
     noise (N,S,H,7) f32, official_actions (N,S,H,7) f32 (normalized),
-    fp16_reference_actions (N,S,H,7) f32 (normalized)
+    fp16_reference_actions (N,S,H,7) f32 (normalized),
+    text_trim bool  (whether both references were recorded trimmed; a gate run refuses a mismatch)
 class GateFixtureStore:  save(fixture, directory, metadata) -> FixtureManifest; load(directory, manifest) -> ImageWAMGateFixture
 @dataclass class FixtureManifest: name, format_version, files{name: sha256,bytes}, arrays{name: shape,dtype,sha256}, metadata
 
@@ -1370,6 +1371,14 @@ W0 addendum: names frozen while executing W6-W12, each one a plan edit:
   combination raises the resolver's `ConfigError` before anything is
   allocated. `**expert` carries the expert tier (`EXPERT_KEYS`) only; the
   tier-1 arguments above are named.
+- S3 (`imagewam_thor.py`, `config_resolver.py`):
+  `evict_lru(captures, *, active_x0, limit) -> tuple[int, ...]` is the pure
+  eviction decision (least recently used first, never the active capture, may
+  return fewer keys than the excess); `text_trim_cache_size` is a constructor
+  keyword and an expert option (default 32, rule V1 for a non-int or `< 1`);
+  `precapture_text_lengths` is a keyword of `from_config` and
+  `load_imagewam` taking `x0` values (valid tokens + 1 with proprio, the units
+  of `captured_text_lengths()`) and capturing them once at construction.
 - Runtime identity: `runtime_surface` `setup_identity` describes the
   workload explicitly, as `workload.<field>` entries beside the existing
   `dims.<key>` entries. The field list is
@@ -1616,7 +1625,12 @@ Phase Status: completed
   its frontend through `load_imagewam`.
 
 ### Phase W12: Thor validation on the new entry
-Phase Status: active
+Phase Status: blocked
+- Blocker: the two observations left in this phase are Thor runs on the
+  owner's schedule — the like-for-like `default` baseline (ISSUE-082 and
+  checklist item E2) and the target workload across the three service paths
+  (checklist item P), whose ABI row additionally needs phase S2. Everything
+  this phase could observe on the machine that ran W6-W11 is recorded below.
 - Goal: the recorded numbers reproduce through the new path, and the
   target workload (THOR_CHECKLIST D) runs as a `Workload`.
 - Modified files: `scripts/imagewam_thor_matrix.sh`,
@@ -1661,18 +1675,64 @@ Phase Status: pending
   `opportunities.md`, `issues.md`.
 - Observation: matrix CSV/MD per THOR_CHECKLIST.
 
-### Phase S1-S3: `text_trim` as a servable default
-Phase Status: pending
-- Goal: ISSUE-080 conditions 4, 5, 6 (fixture v2, per-length graphs in the
-  runtime surface / ABI / native, bounded graph cache with startup
-  pre-capture). Independent of W0-W12; until S2 lands, rule R5 refuses
-  `text_trim` for the ABI and native paths and a profile that needs those
-  paths cannot set `text_trim`.
-- Modified files: `benchmarks/imagewam_gate_fixture_generate.py`,
-  `tests/fixtures/imagewam_gate/`, `runtime_surface.py`,
-  `pipeline_resources.py`, `runtime_export.py`, `native_*.py`,
-  `imagewam_thor.py` (bounded cache).
-- Observation: ISSUE-080 conditions re-checked one by one.
+### Phase S1: a gate fixture whose `fp16` reference is recorded trimmed
+Phase Status: completed
+- Goal: ISSUE-080 condition 4. Fixture v1's `fp16` reference is untrimmed, so
+  a trimmed `fp16` run measures 0.99837 / 0.99579 against it, below the fp16
+  bounds 0.999 / 0.995, while being closer to official (0.99998 / 0.99992):
+  a trimmed configuration cannot pass the gate until a fixture recorded
+  trimmed exists.
+- Modified files: `benchmarks/imagewam_gate_fixture_generate.py` (the
+  `TEXT_TRIM` / `--text-trim` switch, the reference built through
+  `load_imagewam`), `flash_rt/datasets/imagewam_gate_fixture.py`
+  (`ImageWAMGateFixture.text_trim`, `FixtureManifest.text_trim`, absent means
+  untrimmed so v1 still loads), `tests/gate_imagewam_libero.py` (`--text-trim`;
+  a fixture recorded with the other value is refused before the checkpoint
+  hash), `tests/fixtures/imagewam_gate/fidelity_thresholds.json` (the
+  like-for-like rule stated, numbers unchanged),
+  `tests/test_imagewam_regression_gate.py`.
+- Observation: CPU round trip through `save`/`load` and the v1 manifest, the
+  refusal of either mismatch, and the generator's imports resolving against
+  the compare script (the check that caught the generator's own `REAL_DIMS`
+  breakage). The v2 fixture itself is generated on Thor (checklist item E3).
+
+### Phase S2: the ABI carries one graph per trimmed length
+Phase Status: active
+- Goal: ISSUE-080 condition 5. The exec layer already models a graph as a
+  `ShapeKey -> graph-exec` variant table with an LRU cap, so a trimmed
+  frontend's per-length graphs become keys of one declared graph, and `step`
+  replays the key of the length the prompt set. This is what lifts rule R5
+  for `consumer="abi"`; the native pipeline keeps its refusal until its own
+  phase.
+- Modified files: `flash_rt/models/imagewam/runtime_surface.py`,
+  `runtime_export.py`, `flash_rt/frontends/torch/imagewam_thor.py`,
+  `flash_rt/models/imagewam/config_resolver.py` (the R5 scope), their tests.
+- Observation: the key table and the active-key selection are checked on a
+  captured frontend, which needs a GPU; the Thor check is the ABI tick at two
+  prompt lengths against `infer()` (checklist item P).
+
+### Phase S3: a bounded per-length graph cache, precaptured at construction
+Phase Status: completed
+- Goal: ISSUE-080 condition 6; a trimmed frontend captured one graph per
+  distinct length with no bound, and `precapture_text_lengths` existed but
+  nothing called it.
+- Modified files: `flash_rt/frontends/torch/imagewam_thor.py` (`evict_lru`,
+  the `text_trim_cache_size` constructor keyword, `_touch_capture` /
+  `_store_capture`, the recency updates, the `precapture_text_lengths` keyword
+  on `from_config`/`load_imagewam`), `flash_rt/models/imagewam/config_resolver.py`
+  (`text_trim_cache_size` in `ImageWAMOptions` and `EXPERT_KEYS`, default 32,
+  rule V1), `tests/test_imagewam_text_trim_cache.py`.
+- Observation: `evict_lru` (order, the active capture never dropped, a bound
+  of 1, a cache whose only entry is active), the resolver option and its V1
+  cases, the constructor validation before any allocation, and the precapture
+  keyword reaching `precapture_text_lengths` once through a mocked
+  constructor. The live cache, the memory drop and the first-call latency are
+  Thor items (checklist item P).
+- Two decisions made while implementing: `precapture_text_lengths` refuses a
+  request with more distinct lengths than the bound (its refill loop would
+  otherwise recapture what eviction had just dropped, forever), and the cache
+  may stay above the bound when the only remaining candidate is the active
+  capture (that is what keeps the replayable graph alive).
 
 ## Execution record
 

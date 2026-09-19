@@ -29,7 +29,8 @@ actions = fe.infer({"view1": v1, "view2": v2, "proprio": state})
 `load_imagewam(ckpt_path, workload, *, structure=None, profile="default",
 precision=None, calibration_path=None, ae_model_path=None, flux2_src=None,
 qwen3_model_spec=None, dataset_stats_path=None, consumer="infer",
-allow_placeholder_calibration=False, vae_resize="area", **expert)`.
+allow_placeholder_calibration=False, vae_resize="area",
+precapture_text_lengths=None, **expert)`.
 
 - `structure=None` reads `ImageWAMStructure.from_checkpoint(ckpt_path)`:
   backbone widths come from the checkpoint's tensor shapes, the action-expert
@@ -38,12 +39,21 @@ allow_placeholder_calibration=False, vae_resize="area", **expert)`.
   `ckpt_path` is `None` (random-weight run).
 - `consumer` is what the configuration is for: `"infer"` (the frontend's own
   `infer()`), `"abi"` (`runtime_surface()` / `export_model_runtime(io="python")`),
-  `"native"` (`pipeline_resources()` / the native runtime). The ABI and native
-  paths describe one fixed graph, which is what makes rules R5 and R6 apply.
+  `"native"` (`pipeline_resources()` / the native runtime). Which
+  combinations they allow is rules R5 and R6: `text_trim` is served through
+  the ABI (one graph per trimmed length) and still refused for the native
+  pipeline, which describes one fixed graph.
+- `precapture_text_lengths` (x0 values, valid tokens + 1 with proprio, as
+  `captured_text_lengths()` reports them): the frontend captures a graph for
+  each of those lengths once at construction, so the first `set_prompt` of
+  one of them only switches graphs. It needs `text_trim=True`. The cache is
+  bounded by `text_trim_cache_size` (expert option, default 32): the least
+  recently used non-active length is dropped when the bound is reached, and a
+  dropped length captures again the next time it is used.
 - `**expert` carries the expert tier only (`config_resolver.EXPERT_KEYS`:
-  `use_fa4`, `use_fa4_mot`, `text_trim`, `vae_encoder`, `vae_graph`,
-  `nvfp4_awq`, `awq_alpha`, `awq_scope`, `gemm_variant_autotune`,
-  `gemm_runner`, `merge_qkv_mlp`, `merge_linear2`).
+  `use_fa4`, `use_fa4_mot`, `text_trim`, `text_trim_cache_size`,
+  `vae_encoder`, `vae_graph`, `nvfp4_awq`, `awq_alpha`, `awq_scope`,
+  `gemm_variant_autotune`, `gemm_runner`, `merge_qkv_mlp`, `merge_linear2`).
 - Every legality decision is `resolve_config`'s, and it runs before the
   frontend constructor: an illegal combination raises `ConfigError` whose
   message starts with the rule id, so nothing is allocated for a
@@ -51,7 +61,8 @@ allow_placeholder_calibration=False, vae_resize="area", **expert)`.
 
 `ImageWAMTorchFrontendThor.__init__` keeps its own signature and behaviour
 (`dims_override=`, the same switches), so callers that pass dims by hand are
-unaffected. `from_config(resolved, *, workload=None, **kwargs)` is the
+unaffected. `from_config(resolved, *, workload=None,
+precapture_text_lengths=None, **kwargs)` is the
 resolved path; `frontend_kwargs_from_config(resolved, **kwargs)` is the one
 place that maps a `ResolvedConfig` onto constructor arguments. A frontend
 built through `from_config` records what it was built from: `workload` and
