@@ -1236,3 +1236,87 @@ exists), and a frontend built by the constructor with hand-passed dims keeps
 today's value. Then check, on a target workload (section D), that the exported
 runtime's `image_views` verb list and its declared frame shape follow the
 workload, and that a LIBERO export is unchanged.
+
+# ISSUE-082
+
+Status: open
+
+Area: Thor latency baselines and the configuration matrix's thresholds —
+`tests/gate_imagewam_libero.py` (gate) versus
+`benchmarks/imagewam_e2e_official_compare.py` through
+`scripts/imagewam_thor_matrix.sh` (matrix), and
+`tests/fixtures/imagewam_gate/latency_baselines.json`
+
+## Observation
+
+On `c20f3a0`, `SUITE=libero_spatial PRECS=nvfp4 PROFILES="default fast"`
+measured `infer()` P50 225.2 ms for `profile=default` and 106.8 ms for
+`profile=fast`. The flag-row ladder in the same session measured
+`default` 225.5, `vae` 190.1, `vae_trim` 102.9, `vae_trim_fa4bb` 99.0 and
+`stack` 93.2 ms; `fast` and `stack` are the same switch set (the C2 check
+showed the same resolved `effective_config`, character for character).
+
+Two recorded baselines are used as if they were commensurate with those
+matrix rows:
+
+- `THOR_STATUS_SUMMARY.md` records the current default as "约 202–203 ms
+  （gate 203.3）", and the stacked configuration as 106.1 ms.
+- `plan.md` W12's criterion is "matrix rows `default` and `stack` within
+  run-to-run noise of the recorded 203.3 / 106.1 ms".
+
+203.3 ms is a gate number (`tests/gate_imagewam_libero.py`, the frontend
+alone); the matrix rows are the end-to-end compare, which also loads the
+official model, encodes the official text context and runs both sides per
+frame. In the same session the ABI path (frontend alone) measured 226 ms,
+which is consistent with the matrix's 225.2 ms for `default`.
+
+The same configuration measured twice in one session — `profile=fast`
+106.8 ms and the ladder's `stack` 93.2 ms — differs by 13.6 ms.
+
+## Impact
+
+Two questions cannot be answered from this round:
+
+1. Whether the default path is slower on `c20f3a0` than the recorded
+   baseline. No gate number exists for this commit, so a 203.3 -> 225
+   reading mixes two measurement scopes; a regression is neither shown nor
+   excluded. (The `fast`/`stack` rows moved the other way, 106.1 -> 106.8
+   and 93.2 ms, which is what a session-state difference would also look
+   like.)
+2. How large the spread of one row is. The 13.6 ms between two instances of
+   the same configuration is larger than the 2 ms working threshold
+   `THOR_CHECKLIST.md` section C uses for the FA4-into-the-default
+   criterion, which was judged on `stack` - `vae_trim` = 9.7 ms in one
+   ladder pass.
+
+## Evidence
+
+- This round: `$OUT/matrix_libero_spatial_nvfp4_profiles_default+fast.{csv,md}`
+  and the ladder's `matrix_libero_spatial_nvfp4_<row>.log` under
+  `/home/jingwu/thor_val/c20f3a0`.
+- `THOR_STATUS_SUMMARY.md`, "逐项收益" and "各精度" tables (the 202-203 ms
+  and 106.1 ms entries name their own measurement), and the 231.6 ms
+  baseline that `latency_baselines.json`'s 243 ms nvfp4 threshold was
+  derived from.
+- `THOR_CHECKLIST.md` section C's criteria ("阈值是工作值，按跑间波动调整")
+  and item E2.
+
+## Hypotheses
+
+The Thor runs in its existing MAXN power mode with DVFS-managed clocks and
+is shared (`PROJECT.md`, "Project-Specific Constraints"), so a row's
+duration carries the machine's power and thermal state at that moment; the
+matrix runs one process per row in a fixed order, so row order and state
+are correlated. The gate and the compare differ in what else is resident
+and in how many times the graph is replayed per measurement.
+
+## Next Experiment
+
+1. Run `tests/gate_imagewam_libero.py` on `c20f3a0` in a recorded clock
+   state and compare with the 203.3 ms gate number; if they differ, run the
+   same gate on the pre-change commit `1ff6034` in the same session, so the
+   default path is compared against itself.
+2. Repeat one configuration three times in a single session (and once in a
+   second session) and record the spread next to the clock state; use it to
+   reset section C's threshold and the Thor entries of
+   `tests/fixtures/imagewam_gate/latency_baselines.json` (item E2).

@@ -18,13 +18,15 @@
 解析链是 `workload + structure + profile + precision + calibration_path` → `resolve_config(...)` → `(dims, options)` → `from_config` → frontend；解析在构造后不再改变。
 
 - **workload**：服务的工作负载，由 `ImageWAMWorkload` 描述。部署方给出相机数、每视角图像尺寸、文本长度、action horizon、动作维度、proprio 维度、去噪步数、调度 shift；序列布局由它派生：`x0`、`img_len`、`a0`、`total`、`ref_h`、`ref_w`、`dt`，以及原生 VAE 进图时的 `vae_graph_input`。派生值互相矛盾时在解析阶段报错，不再手填这些整数。LIBERO 工作负载是 `ImageWAMWorkload.libero()`：两个 224×224 视角、512 token 文本、horizon 64、7 维动作、8 维 proprio、10 步去噪、shift=5.0，派生 `x0=513`、`img_len=392`、`a0=905`、`total=969`、`ref_h×ref_w=14×28`。
-- **profile**：一组开关的具名集合，按名字选用。`default` 复现今天的构造函数默认值：nvfp4、不裁文本、FA4 由 `FLASHRT_THOR_FA4` 决定、torch VAE 编码器在图外、无 AWQ。`fast` 是 `text_trim` + FA4 backbone + FA4 mot + 原生 VAE 进图，实测 106.1 ms 对 `default` 的 203.3 ms（nvfp4，libero_spatial），标为 PROVISIONAL，内容与是否转默认待 T4/T5 决定。
+- **profile**：一组开关的具名集合，按名字选用。`default` 复现今天的构造函数默认值：nvfp4、不裁文本、FA4 由 `FLASHRT_THOR_FA4` 决定、torch VAE 编码器在图外、无 AWQ。`fast` 是 `text_trim` + FA4 backbone + FA4 mot + 原生 VAE 进图，实测 106.8 ms 对 `default` 的 225.2 ms（`c20f3a0`，nvfp4，libero_spatial，`infer()` P50），标为 PROVISIONAL，内容与是否转默认待 T4/T5 决定。
 - **precision**：覆盖 profile 的精度档位。
 - **calibration_path**：静态 FP8 与 AWQ 所需的校准文件。
 
 `resolve_config` 是唯一的合法性判定点，非法组合抛一条带规则编号（R1–R11，以及值域规则 V1）的错误。日志里的 `effective_config` 行由 `config_resolver.format_effective_config` 产出，比较脚本、矩阵脚本与 runtime 身份打印同一个字符串，因此 profile 与精度是一份可记录的部署身份。
 
 同一 workload 也是 runtime 与校准文件身份的一部分：ABI 描述与 `setup_identity` 在 `dims.<key>` 之外带 `workload.<field>`（`num_views`、`image_h`、`image_w`、`text_max_len`、`action_horizon`、`action_dim`、`proprio_dim`、`num_steps`、`shift`）；这些条目是附加描述，已记录的校准文件仍然有效。
+
+新入口在 Thor 上验证过（`c20f3a0`）：同一配置下运行时打印的 `effective_config` 与 `config_resolver` 逐字符一致（`default` 与 `fast` 两行都比对过）；导出的 runtime identity 带全部九个 `workload.<field>`，其 ABI 与 `infer()` bit-exact，native schema 与 golden 一致。
 
 ## 用了哪些优化
 
@@ -76,6 +78,26 @@
 | `text_trim` + FA4 双位点 + 原生 VAE 进图 | **106.1 ms** | **0.99933**（min 0.99887） |
 
 三项叠加明显小于各项单独收益之和（−96 ms 对 −125 ms），`text_trim` 已经去掉了大部分 padding 上的注意力开销。
+
+### 新入口下的同一会话阶梯（`c20f3a0`，libero_spatial，nvfp4，`infer()` P50）
+
+一次矩阵运行，`N_TASKS=10 FRAMES=0,60 SEEDS=0,1`，真实 checkpoint；`profile_*` 两行经 `load_imagewam` 构建，开关行经同一入口加对应 expert 覆盖。`fast` 与 `stack` 是同一组开关。
+
+| 行 | P50 | 边际 | vs official（median） |
+|---|---:|---:|---:|
+| `default` | 225.5 | — | — |
+| `vae` | 190.1 | −35.4 | — |
+| `vae_trim` | 102.9 | **−87.2** | — |
+| `vae_trim_fa4bb` | 99.0 | −3.9 | — |
+| `stack` | **93.2** | −5.8 | 0.99934 |
+| `stack_no_vae` | 104.8 | 相对 `stack` +11.6 | — |
+| `stack_no_trim` | 131.4 | 相对 `stack` +38.2 | — |
+| `profile=fast`（同 `stack` 开关） | 106.8 | — | 0.99936 |
+| `profile=default`（同 `default` 开关） | 225.2 | — | 0.99764 |
+
+FA4 两个位点都不回退（`FA4 fallback` 为 `None`）。按 C 节的判据，`stack` 相对 `vae_trim` 低 9.7 ms 且 vs official 不劣，达到「FA4 转默认」的工作门槛；原生 VAE 同理。默认值未改。
+
+读这张表的两个口径问题（ISSUE-082）：`default` 行的记录基线 202–203 ms 来自只跑 frontend 的 gate，与带官方对照的 e2e 不是同一口径，本 commit 没有同口径的 gate 数；同一组开关在同一会话里出现两次，93.2 与 106.8 ms 相差 13.6 ms，比 C 节用的 2 ms 工作阈值大。
 
 微基准（随机权重、不含 VAE）：融合项合计约 −9.7 ms；FA4 backbone −26.9 ms，backbone + mot −58.5 ms；VAE 编码 stage 19.4 → 8.3 ms（进图）；VAE 预处理 kernel 0.97 → 0.13 ms。
 

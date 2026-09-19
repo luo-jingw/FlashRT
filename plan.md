@@ -6977,6 +6977,32 @@ Phase Status: active
   of the recorded 203.3 / 106.1 ms (same commit conditions, GPU
   exclusivity recorded), `vs official` not below recorded values; the
   target workload table filled.
+- Result on Thor at `c20f3a0` (Jetson AGX Thor, MAXN, DVFS-managed
+  clocks, logs under `/home/jingwu/thor_val/c20f3a0`):
+  - The two identity checks pass. `effective_config` is character for
+    character what `config_resolver.format_effective_config` produces for
+    the same resolved configuration, for `default` and for `fast`; the
+    exported runtime identity carries all nine `workload.<field>` entries
+    with `ImageWAMWorkload.libero()`'s values, its ABI is bit-exact
+    against `infer()`, and the native schema matches the golden records.
+    `THOR_CHECKLIST.md`'s C1-C3 items are closed and removed.
+  - `profile=fast` measured 106.8 ms (`vs official` median 0.99936)
+    against the recorded 106.1 ms, and the ladder's `stack` row (the same
+    switches) 93.2 ms; no row fell back from FA4. `profile=default`
+    measured 225.2 ms and the ladder's `default` row 225.5 ms, against a
+    recorded 203.3 ms that is a gate number (the frontend alone) while
+    the matrix is the end-to-end compare; the same session's
+    frontend-only ABI path measured 226 ms. Whether the default path is
+    slower on this commit is therefore not decided by this round
+    (ISSUE-082), and the ladder's switch marginals carry an in-session
+    spread of 13.6 ms between two instances of the same configuration.
+  - The switch ladder and the FA4 / native-VAE criterion outcomes are
+    recorded in `opportunities.md` OPT-019, OPT-021 and OPT-030. Section
+    C's 2 ms working threshold and the gate baseline need the two
+    measurements item E2 now spells out.
+  - Still open in this phase: the like-for-like `default` baseline, and
+    running the target workload of `THOR_CHECKLIST.md` section D as an
+    `ImageWAMWorkload`.
 
 ### Phase T1-T5: Thor line
 Phase Status: pending
@@ -7020,7 +7046,7 @@ claimed here.
 | W9 | `vae_graph_input` and `use_fa4_mot` come from the resolved options | `tests/test_imagewam_frontend_from_config.py` |
 | W10 | `workload_identity()` renders the nine `workload.<field>` pairs; `runtime_surface()` adds them for a frontend built from a resolved configuration | `tests/test_imagewam_public_entry.py`; the identity on a real exported runtime is the W12 Thor item |
 | W11 | `load_imagewam` signature, `ConfigError` before construction, structure read only when given | `tests/test_imagewam_public_entry.py` |
-| W12 | not run | see `THOR_CHECKLIST.md` sections C1-C3 |
+| W12 | run on Thor at `c20f3a0`; the identity checks pass and `fast`/`stack` reproduce their recorded values, `default`'s like-for-like baseline is open | see the phase's own "Result on Thor" block, `THOR_CHECKLIST.md` item E2 and ISSUE-082 |
 
 The CPU test set used for every phase above, green at the last commit of
 this work (242 passed, 3 skipped; the skips are the CUDA guards):
@@ -7039,10 +7065,11 @@ not built or installed on this machine).
 
 Not done, and why:
 
-- W12 and T1-T5 are Thor runs; the Thor is a separate shared machine.
-  `THOR_CHECKLIST.md` carries the commands, each item's 判据 and where its
-  conclusion goes, so one pass covers the configuration consolidation and
-  the items that were already pending.
+- T1-T5 and the rest of W12 are Thor runs; the Thor is a separate shared
+  machine. `THOR_CHECKLIST.md` carries the commands, each item's 判据 and
+  where its conclusion goes, so one pass covers what is still pending. The
+  `c20f3a0` round closed the new-entry checks and the nvfp4 `libero_spatial`
+  ladder; sections A and B, the remaining C rows, D and E2 are not run.
 - S1-S3 are untouched: S1 needs the fixture data regenerated on a GPU (the
   generator's own `fp16` reference), S2 and S3 change the runtime surface
   and the capture cache, whose only observation is a captured graph. Their
@@ -7050,20 +7077,34 @@ Not done, and why:
 
 ## Decisions pending (owner)
 
-- Profile contents (T4): whether `fast` = `text_trim` + FA4 (bb+mot) +
-  native VAE in graph, and whether any of these become the default.
+Standing recommendations from the `c20f3a0` Thor round, with the measured
+basis in `opportunities.md` OPT-019, OPT-021 and OPT-030. No default has
+been changed.
+
+- Profile contents (T4): keep `fast` as `text_trim` + FA4 (backbone and mot)
+  + native VAE in graph. The FA4 criterion was met in that round (`stack`
+  9.7 ms below `vae_trim`, agreement with official not worse) and so was the
+  native-VAE criterion; `text_trim` remains the largest single step.
+- Whether any of it becomes the default (T5): the Python `infer()` path can
+  take it, the ABI and native paths cannot while rule R5 refuses
+  `text_trim` (ISSUE-080 condition 5), so a single default cannot cover both.
 - Whether `text_trim` may be part of a profile used with the ABI before
   S2 (rule R5 says no).
 - Whether `libero_dims.py` stays as a module or is removed once the
   workload test pins the equality.
-- Whether the calibration file's identity gains the workload fields.
-  `calibration_file.IDENTITY_DIM_KEYS` already carries every dims entry a
-  workload changes (`x0`, `a0`, `num_action`, `action_dim`,
+- Whether the calibration file's identity gains the workload fields:
+  recommendation is to keep it as it is. `IDENTITY_DIM_KEYS` already carries
+  every dims entry a workload changes (`x0`, `a0`, `num_action`, `action_dim`,
   `num_denoise_steps`, `shift`, `proprio_dim`, `ref_h`, `ref_w`), so a file
   recorded for another workload is already refused with the differing field
-  named. Naming the workload as `workload.<field>` there instead would
-  refuse every file recorded before the change, so it needs a format
-  version and a migration rule for the files on Thor.
-- The target-workload table in `THOR_CHECKLIST.md` section D: `action_dim`,
-  `shift` and the padded `text_max_len` are deployment facts, not derivable
-  from the checkpoint; the remaining rows come from the owner.
+  named, and the `workload.<field>` entries added to the runtime identity are
+  additional description. Naming the workload in the calibration identity
+  instead would refuse every file recorded before the change, so it needs a
+  format version and a migration rule for the files on Thor.
+- The target-workload table in `THOR_CHECKLIST.md` section D: the owner
+  supplied `num_views=3`, `image_h=image_w=256`, `action_horizon=32`,
+  `action_dim=7`, `proprio_dim=8`, `num_steps=10`, `shift=5.0`,
+  `text_max_len=512` as the candidate of the three-view 256 measurement,
+  entered in the table as candidates; the instruction-token distribution,
+  the latency budget, the serving path, the checkpoint and calibration
+  files and the graph memory budget are still open.

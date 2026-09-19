@@ -4403,6 +4403,27 @@ chain's. Report it with the reason.
    key mask in any kernel, fused or not. That fix belongs to a separate
    stream.
 
+## Thor, one matrix session (`c20f3a0`, libero_spatial, nvfp4)
+
+FA4 at both sites inside the captured graph, real checkpoint, end to end,
+which is the state the note above recorded as missing:
+
+| row | P50 ms | marginal | vs official median | FA4 fallback |
+|---|---:|---:|---:|---|
+| vae_trim (FA4 off) | 102.9 | — | — | — |
+| vae_trim_fa4bb (backbone only) | 99.0 | -3.9 | — | None |
+| stack (backbone + mot) | 93.2 | -5.8 | 0.99934 | None |
+| stack_no_vae (FA4 on, native VAE off) | 104.8 | — | — | None |
+
+The backbone site is 3.9 ms below the no-FA4 row and adding the `mot` site
+takes another 5.8 ms, so the section C criterion for making FA4 the default
+(at least 2 ms of P50 against the FA4-off row, and not worse against
+official) held in this pass, with no fallback on any row. `use_fa4` and
+`use_fa4_mot` therefore remain profile switches; the default is unchanged
+and the decision is the owner's (plan.md "Decisions pending"). ISSUE-082
+applies to the size of these marginals.
+
+
 # OPT-016: single-stream `linear2` merge (roadmap item 4)
 
 Status: implemented and locally verified (H100, `fp16`); default on for
@@ -4771,6 +4792,19 @@ eager-native 114.3 ms (512x512 views).
   kernel time); the three (0,1,0,1) zero pads before the stride-2
   convolutions and the conv_in input layout conversion are the next
   copy-elimination candidates.
+
+## Thor, one matrix session (`c20f3a0`, libero_spatial, nvfp4)
+
+The `vae` row (native NHWC encoder captured into the main graph, everything
+else at the default configuration) measured 190.1 ms against `default`
+225.5 ms, and removing the switch from the full stack costs +11.6 ms
+(`stack_no_vae` 104.8 against `stack` 93.2). Both readings are below the
+corresponding row without it, so the section C criterion for the native VAE
+(lower P50 than `default`, not worse against official) holds; the served
+default stays `vae_encoder="torch"` with the VAE outside the graph, and the
+decision is the owner's (plan.md "Decisions pending"). ISSUE-082 applies to
+the size of these marginals.
+
 
 # OPT-024: Hadamard-rotated INT4 (E0M3) precision tier, `e0m3_hadamard`
 
@@ -5579,6 +5613,34 @@ gain.
   bounds 0.999 / 0.995, while vs official it is 0.99998 / 0.99992. A
   trimmed default needs a regenerated fixture (ISSUE-080).
 - Owner decision: serve `text_trim=True` by default (ISSUE-080).
+
+## Thor, one matrix session (`c20f3a0`, libero_spatial, nvfp4)
+
+`scripts/imagewam_thor_matrix.sh`, `N_TASKS=10 FRAMES=0,60 SEEDS=0,1`, real
+checkpoint, `infer()` P50. The `profile_*` rows ran through `load_imagewam`
+(plan.md W12); `fast` and `stack` are the same switch set. GPU co-tenancy
+and the clock state are recorded in that round's logs.
+
+| row | P50 ms | marginal | vs official median |
+|---|---:|---:|---:|
+| default | 225.5 | — | — |
+| vae | 190.1 | -35.4 | — |
+| vae_trim | 102.9 | -87.2 | — |
+| vae_trim_fa4bb | 99.0 | -3.9 | — |
+| stack | 93.2 | -5.8 | 0.99934 |
+| stack_no_vae | 104.8 | +11.6 vs stack | — |
+| stack_no_trim | 131.4 | +38.2 vs stack | — |
+| profile_fast (same switches as stack) | 106.8 | — | 0.99936 |
+| profile_default (same switches as default) | 225.2 | — | 0.99764 |
+
+`text_trim` is the largest single step from `vae` (-87.2 ms) and removing it
+from the full stack costs +38.2 ms, more than the other three switches
+together; the two numbers differ because FA4 also shortens the padded-key
+work the trim already removes. Agreement with official improves rather than
+degrades (0.99934-0.99936 stacked against 0.99764 for the default row).
+Read the marginals with ISSUE-082: the same configuration appears twice in
+this session, 93.2 and 106.8 ms.
+
 
 # OPT-031: derive the remaining per-benchmark shape tables from the workload
 
