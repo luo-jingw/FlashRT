@@ -1280,12 +1280,14 @@ Two questions cannot be answered from this round:
 1. Whether the default path is slower on `c20f3a0` than the recorded
    baseline. No gate number exists for this commit, so a 203.3 -> 225
    reading mixes two measurement scopes; a regression is neither shown nor
-   excluded. (The `fast`/`stack` rows moved the other way, 106.1 -> 106.8
-   and 93.2 ms, which is what a session-state difference would also look
-   like.)
-2. How large the spread of one row is. The 13.6 ms between two instances of
-   the same configuration is larger than the 2 ms working threshold
-   `THOR_CHECKLIST.md` section C uses for the FA4-into-the-default
+   excluded. The same round argues against a machine-wide slowdown: the
+   `profile=fast` row (106.8 ms) reproduces the recorded end-to-end 106.1 ms
+   to within 0.7 ms, so the end-to-end scope is comparable across sessions
+   on this machine. The ladder's `stack` row — the same switches, later in
+   the same session — is the outlier at 93.2 ms.
+2. How large the spread of one row is. The 13.6 ms between those two
+   instances of the same configuration is larger than the 2 ms working
+   threshold `THOR_CHECKLIST.md` section C uses for the FA4-into-the-default
    criterion, which was judged on `stack` - `vae_trim` = 9.7 ms in one
    ladder pass.
 
