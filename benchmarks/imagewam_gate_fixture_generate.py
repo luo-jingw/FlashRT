@@ -16,16 +16,37 @@ only one model is resident at a time:
    action chunk.
 2. FlashRT ``fp16`` (real checkpoint, real VAE, dataset stats; no Qwen3):
    the served ``infer(obs, action_noise=noise)`` with the stored context,
-   renormalized, as the FlashRT fp16 reference.
+   renormalized, as the FlashRT fp16 reference. The frontend is built by
+   the deployment entry ``load_imagewam`` on ``ImageWAMWorkload.libero()``
+   with the ``default`` profile and ``precision="fp16"``, so the reference
+   runs the path a served configuration runs, and the dims it records are
+   the ones the resolver derived.
+
+The trimming switch is ``TEXT_TRIM``, the spelling
+``imagewam_e2e_official_compare.py`` uses (``1`` = ``text_trim=True``), or
+the ``--text-trim`` flag; a run that sets both must set them to the same
+value. The switch reaches the frontend as the ``text_trim`` expert
+override, and both the fixture and the manifest record the value the
+reference was produced with (``manifest.text_trim``, ``metadata``
+``fp16_reference.text_trim``), because the gate compares a run against
+that reference and refuses a configuration that resolves ``text_trim``
+differently.
 
 Required env: as ``imagewam_e2e_official_compare.py`` (FLUX2_SRC,
 CKPT_PATH, FLUX2_MODEL_PATH, FLUX2_AE_MODEL_PATH, QWEN3_MODEL_SPEC,
-DATA_ROOT, ImageWAM ``src/`` on PYTHONPATH). Fixture v1:
+DATA_ROOT, ImageWAM ``src/`` on PYTHONPATH). Untrimmed fixture v1
+(``imagewam_libero_gate_v1``) and its trimmed counterpart, which a
+``text_trim=True`` configuration needs (issues.md ISSUE-080 condition 4):
 
     N_TASKS=10 FRAMES=0,60 SEEDS=0,1 SUITE=libero_spatial \\
     python benchmarks/imagewam_gate_fixture_generate.py \\
         --name imagewam_libero_gate_v1 \\
         --output-dir /home/user1/workspace/jingwu/artifacts/deploy-gates/imagewam_libero_gate_v1
+
+    TEXT_TRIM=1 N_TASKS=10 FRAMES=0,60 SEEDS=0,1 SUITE=libero_spatial \\
+    python benchmarks/imagewam_gate_fixture_generate.py \\
+        --name imagewam_libero_gate_v2 \\
+        --output-dir /home/user1/workspace/jingwu/artifacts/deploy-gates/imagewam_libero_gate_v2
 """
 from __future__ import annotations
 
@@ -38,6 +59,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping
 
 import numpy as np
 import torch
@@ -47,7 +69,6 @@ from imagewam_e2e_official_compare import (
     FRAMES,
     HORIZON,
     N_TASKS,
-    REAL_DIMS,
     SEEDS,
     SHIFT,
     STATS,
@@ -60,14 +81,35 @@ from imagewam_e2e_official_compare import (
 
 from flash_rt.core.parity import parity_metrics
 from flash_rt.datasets.imagewam_gate_fixture import GateFixtureStore, ImageWAMGateFixture
-from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor
+from flash_rt.frontends.torch.imagewam_thor import load_imagewam
 from flash_rt.models.imagewam.dataset_stats import load_real_normalizers
+from flash_rt.models.imagewam.workload import ImageWAMWorkload
 
 DEV = "cuda"
 BF16 = torch.bfloat16
 VIEW_SIZE = 224
+PROFILE = "default"
 REPO = Path(__file__).resolve().parents[1]
 MANIFEST_DIR = REPO / "tests" / "fixtures" / "imagewam_gate"
+
+
+def resolve_text_trim(flag: bool, environment: Mapping[str, str]) -> bool:
+    """The trimming switch the reference is recorded with.
+
+    ``TEXT_TRIM=1`` (the spelling ``imagewam_e2e_official_compare.py``
+    uses) and ``--text-trim`` are the same switch on two surfaces: a run
+    that sets both must set them to the same value, and an unset variable
+    with no flag means untrimmed.
+    """
+    raw = environment.get("TEXT_TRIM")
+    if raw is None:
+        return bool(flag)
+    if raw not in ("0", "1"):
+        raise ValueError(f"TEXT_TRIM={raw!r} must be 0 or 1")
+    if flag and raw == "0":
+        raise ValueError("--text-trim is passed and TEXT_TRIM=0 is set: pass one of them, or make "
+                         "them agree on the value the fixture records")
+    return bool(flag) or raw == "1"
 
 
 def official_noise(seed: int, action_dim: int) -> torch.Tensor:
@@ -123,17 +165,21 @@ def masked_mae(pred_real: np.ndarray, gt: np.ndarray, gt_len: int) -> float:
 @torch.no_grad()
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--name", required=True, help="fixture name, e.g. imagewam_libero_gate_v1")
+    parser.add_argument("--name", required=True, help="fixture name, e.g. imagewam_libero_gate_v2")
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--manifest-out", type=Path, default=None,
                         help="copy of the manifest for git (default tests/fixtures/imagewam_gate/<name>.manifest.json)")
+    parser.add_argument("--text-trim", action="store_true",
+                        help="record the fp16 reference with text_trim=True ($TEXT_TRIM=1 does the same)")
     args = parser.parse_args()
+    text_trim = resolve_text_trim(args.text_trim, os.environ)
     manifest_out = args.manifest_out or MANIFEST_DIR / f"{args.name}.manifest.json"
     if (args.output_dir / "fixture.npz").exists():
         raise FileExistsError(f"{args.output_dir}/fixture.npz exists; fixtures are immutable, pick a new name")
 
     generator_git = git_state()
     generator_sha256 = file_sha256(__file__)
+    print(f"fp16 reference: text_trim={text_trim} (profile {PROFILE})", flush=True)
     samples = load_samples()
     print(f"samples: {len(samples)} ({SUITE}, tasks {N_TASKS}, frames {FRAMES}, seeds {SEEDS})", flush=True)
     prompts: list[str] = []
@@ -184,13 +230,15 @@ def main() -> int:
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
 
-    # Phase 2: FlashRT fp16 served path.
+    # Phase 2: FlashRT fp16 through the deployment entry.
     t0 = time.time()
-    fe = ImageWAMTorchFrontendThor(
-        precision="fp16", dims_override=dict(REAL_DIMS), ckpt_path=CKPT,
+    workload = ImageWAMWorkload.libero()
+    fe = load_imagewam(
+        CKPT, workload, profile=PROFILE, precision="fp16",
         ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
-        dataset_stats_path=STATS)
-    print(f"flashrt fp16 constructed in {time.time() - t0:.1f}s", flush=True)
+        dataset_stats_path=STATS, text_trim=text_trim)
+    print(f"flashrt fp16 (text_trim={text_trim}) constructed in {time.time() - t0:.1f}s", flush=True)
+    reference_dims = dict(fe.resolved_config.dims)
     fp16_reference = np.zeros_like(official_actions)
     current_task = None
     for i, s in enumerate(samples):
@@ -222,6 +270,7 @@ def main() -> int:
     print(json.dumps(reference_summary, indent=1), flush=True)
 
     fixture = ImageWAMGateFixture(
+        text_trim=text_trim,
         view1=view1, view2=view2, state=state,
         task_index=np.array([prompts.index(s["task"]) for s in samples], dtype=np.int64),
         episode=np.array([s["ep"] for s in samples], dtype=np.int64),
@@ -244,8 +293,10 @@ def main() -> int:
         "checkpoint": {"path": CKPT, "bytes": os.path.getsize(CKPT), "sha256": file_sha256(CKPT)},
         "dataset_stats": {"path": STATS, "sha256": file_sha256(STATS)},
         "official": {"dtype": "bfloat16", "qwen3_model_spec": os.environ.get("QWEN3_MODEL_SPEC", "")},
-        "fp16_reference": {"precision": "fp16", "frontend": "ImageWAMTorchFrontendThor.infer(action_noise=...)",
-                           "dims": {k: v for k, v in REAL_DIMS.items()}},
+        "fp16_reference": {"precision": "fp16", "text_trim": text_trim, "profile": PROFILE,
+                           "frontend": "load_imagewam(ckpt, ImageWAMWorkload.libero(), profile='default', "
+                                       "precision='fp16', text_trim=<text_trim>).infer(action_noise=...)",
+                           "dims": reference_dims},
         "device": torch.cuda.get_device_name(0),
         "torch": torch.__version__,
         "peak_gib": {"official": round(official_peak_gib, 2), "flashrt_fp16": round(flashrt_peak_gib, 2)},

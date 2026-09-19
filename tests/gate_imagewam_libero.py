@@ -32,6 +32,16 @@ official Qwen3 context. Gate policy: ``flash_rt/core/regression_gate.py``;
 fixture format: ``flash_rt/datasets/imagewam_gate_fixture.py``; fixture
 generation: ``benchmarks/imagewam_gate_fixture_generate.py``.
 
+The fixture's ``text_trim`` must match the configuration under test
+(``--text-trim``, absent = untrimmed): the ``fp16`` reference was recorded
+with that switch, and comparing a run against a reference recorded the
+other way measures the switch, not the precision (issues.md ISSUE-080).
+A mismatch is ``blocked``, naming the fixture, the fixture's value and the
+one under test, before the checkpoint is hashed. Fixture v1
+(``imagewam_libero_gate_v1``) is untrimmed and runs untrimmed exactly as
+before; a trimmed configuration needs fixture v2 and its manifest
+(``--manifest`` defaults to v1's).
+
 ``fp8_static`` (thresholds marked ``requires_calibration``) is gated only
 with a real activation-calibration file, given by ``--fp8-calibration``
 or ``$IMAGEWAM_FP8_CALIBRATION``:
@@ -66,6 +76,14 @@ Required env: ``CKPT_PATH`` (``dataset_stats.json`` beside it),
 
     python tests/gate_imagewam_libero.py --precision nvfp4 \\
         --fixture-dir /path/to/imagewam_libero_gate_v1
+
+and, for a trimmed configuration, the same run against a fixture recorded
+trimmed (``--text-trim`` plus that fixture's manifest, since ``--manifest``
+defaults to v1's)::
+
+    python tests/gate_imagewam_libero.py --precision nvfp4 --text-trim \\
+        --manifest tests/fixtures/imagewam_gate/imagewam_libero_gate_v2.manifest.json \\
+        --fixture-dir /path/to/imagewam_libero_gate_v2
 """
 from __future__ import annotations
 
@@ -157,6 +175,24 @@ def explicit_constructor_params() -> set[str]:
     """Keywords ``ImageWAMTorchFrontendThor.__init__`` declares by name (not ``**kwargs``)."""
     return {name for name, p in inspect.signature(ImageWAMTorchFrontendThor.__init__).parameters.items()
             if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
+
+
+def text_trim_mismatch(manifest: FixtureManifest, text_trim: bool) -> str | None:
+    """Compare the fixture's trimming switch with the configuration under test.
+
+    The gate's ``fp16`` reference was recorded with the fixture's own
+    ``text_trim`` (``manifest.text_trim``; a manifest without the field is
+    untrimmed, which is fixture v1). A run of the other value is a
+    different computation, so it is refused rather than measured against a
+    reference of the other kind. Returns a reason on mismatch, ``None``
+    when the two agree.
+    """
+    if manifest.text_trim == text_trim:
+        return None
+    return (f"fixture {manifest.name} was recorded with text_trim={manifest.text_trim}, the "
+            f"configuration under test runs text_trim={text_trim}: the fixture's fp16 reference is "
+            f"compared against a run of the same switch (ISSUE-080); use a fixture recorded "
+            f"text_trim={text_trim} (benchmarks/imagewam_gate_fixture_generate.py)")
 
 
 def verify_checkpoint(ckpt: str, stats: str, manifest: FixtureManifest, skip_hash: bool,
@@ -288,6 +324,9 @@ def main() -> int:
     parser.add_argument("--fixture-dir", type=Path, default=os.environ.get(FIXTURE_DIR_ENV),
                         help=f"directory holding {FIXTURE_FILE} (default ${FIXTURE_DIR_ENV})")
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--text-trim", action="store_true",
+                        help="run the configuration under test with text_trim=True; must equal the "
+                             "fixture's own text_trim (absent: untrimmed)")
     parser.add_argument("--thresholds", type=Path, default=CONFIG_DIR / "fidelity_thresholds.json")
     parser.add_argument("--baselines", type=Path, default=CONFIG_DIR / "latency_baselines.json")
     parser.add_argument("--fp8-calibration", type=Path, default=os.environ.get(FP8_CALIBRATION_ENV))
@@ -325,22 +364,27 @@ def main() -> int:
         "clock_state": clock_state.to_dict(),
         "fixture": {"name": manifest.name, "manifest": str(args.manifest.resolve()),
                     "manifest_sha256": file_sha256(args.manifest), "dir": str(args.fixture_dir),
-                    "file_sha256": manifest.files[FIXTURE_FILE].sha256},
+                    "file_sha256": manifest.files[FIXTURE_FILE].sha256,
+                    "text_trim": manifest.text_trim},
         "checkpoint": {"path": ckpt, "bytes": os.path.getsize(ckpt)},
         "latency_policy": {"device": policy.device, "gated": policy.gated, "reason": policy.reason},
         "config": {"warmup": args.warmup, "iters": args.iters, "use_fa4": False,
-                   "require_latency": args.require_latency},
+                   "text_trim": args.text_trim, "require_latency": args.require_latency},
     }
 
+    mismatch = text_trim_mismatch(manifest, args.text_trim)
+    if mismatch is not None:
+        return emit(GateReport.not_run(args.precision, policy.device, VERDICT_BLOCKED, mismatch,
+                                       context), output_dir)
     thresholds = FidelityThresholdTable.load(args.thresholds).for_precision(args.precision)
     if thresholds is None:
         return emit(GateReport.not_run(args.precision, policy.device, VERDICT_BLOCKED,
                                        f"no fidelity thresholds for precision {args.precision!r} in {args.thresholds}",
                                        context), output_dir)
-    mismatch = verify_checkpoint(ckpt, stats, manifest, args.skip_checkpoint_hash, context)
-    if mismatch is not None:
-        return emit(GateReport.not_run(args.precision, policy.device, VERDICT_BLOCKED, mismatch, context),
-                    output_dir)
+    checkpoint_mismatch = verify_checkpoint(ckpt, stats, manifest, args.skip_checkpoint_hash, context)
+    if checkpoint_mismatch is not None:
+        return emit(GateReport.not_run(args.precision, policy.device, VERDICT_BLOCKED, checkpoint_mismatch,
+                                       context), output_dir)
 
     frontend_kwargs: dict[str, object] = {}
     if thresholds.requires_calibration:
@@ -366,7 +410,8 @@ def main() -> int:
         fe = ImageWAMTorchFrontendThor(
             precision=args.precision, dims_override=dims, ckpt_path=ckpt,
             ae_model_path=os.environ.get("FLUX2_AE_MODEL_PATH", os.environ.get("AE_MODEL_PATH")),
-            flux2_src=os.environ["FLUX2_SRC"], dataset_stats_path=stats, **frontend_kwargs)
+            flux2_src=os.environ["FLUX2_SRC"], dataset_stats_path=stats,
+            text_trim=args.text_trim, **frontend_kwargs)
     except (RuntimeError, ValueError) as exc:
         return emit(GateReport.not_run(args.precision, policy.device, VERDICT_BLOCKED,
                                        f"frontend construction failed: {type(exc).__name__}: {exc}",
