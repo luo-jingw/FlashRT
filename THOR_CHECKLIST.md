@@ -153,18 +153,27 @@ OUT=$OUT/C_profile SUITE=libero_10     PRECS=nvfp4 PROFILES="default fast" bash 
 
 `benchmarks/imagewam_thor_path_bench.py`：不设 `CKPT_PATH` 时用随机权重、随机帧、随机 context，因此只测延迟；每个 workload 一个表，`infer()` / ABI（`io="python"`）/ native（`io="native"`）各一行 P10/P50/P90 与 n，另打印 workload 字段、派生布局、`effective_config` 行与 Jetson 时钟状态。构不出来的路径会打出原因并跳过，不影响其余路径。
 
+`--valid-tokens` 决定每个 prompt 的有效文本 token 数，也就是 trim 对比真正在比的东西：开 trim 时序列是 `valid+1` 行，关 trim 时永远是 `text_max_len+1` 行。给一个逗号列表就扫一遍（每换一个长度会触发一次捕获，打印里带 `set_prompt` 耗时）。默认值按 workload 取（LIBERO 24，目标 32）。
+
 ```
 # LIBERO workload（2 × 224×224，text 512，horizon 64）
-python benchmarks/imagewam_thor_path_bench.py
-python benchmarks/imagewam_thor_path_bench.py --profile fast
-python benchmarks/imagewam_thor_path_bench.py --paths infer,abi          # 没建 native 时
+python benchmarks/imagewam_thor_path_bench.py                                   # profile default
+python benchmarks/imagewam_thor_path_bench.py --profile fast                    # trim + FA4 + VAE 进图
+python benchmarks/imagewam_thor_path_bench.py --text-trim on --valid-tokens 16,24,31
+python benchmarks/imagewam_thor_path_bench.py --paths infer,abi                 # 没建 native 时
 
-# 目标 workload（3 × 256×256，horizon 32）
-python benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 512
+# 目标 workload（3 × 256×256，horizon 32，指令 16–128 token）
 python benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 128
+python benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 128 --text-trim on \
+  --valid-tokens 16,72,128
+python benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 512 --text-trim on
 ```
 
-ABI 一行需要 `exec/` 构建，native 一行需要 `runtime/` 与 `flashrt_imagewam_native`（见 `scripts/imagewam_thor_validation.sh` 文件头）。
+ABI 一行需要 `exec/` 构建，native 一行需要 `runtime/` 与 `flashrt_imagewam_native`（见 `scripts/imagewam_thor_validation.sh` 文件头）。**开 trim 的配置下 ABI 与 native 两行今天会被跳过**（规则 R5，ABI/native 还没有"按长度一张图"的支持，见 S2）；等 S2 落地后同样的命令会给出三条路径的数。
+
+判据：每条的 rc；被跳过路径打出的原因；三条路径的 P50 记在案。**不设阈值、不判定好坏**——目标配置没有延迟预算。
+另外读三行：目标 workload 的 `view_shape`（默认 profile 下 VAE 在图外，应为 `(3, 256, 256)` 而不是 `(2, 224, 224)`，ABI 的 `images` 端口与 `views` 名单随之变成三路，见 ISSUE-081 的 Resolution）；`--workload target --text-max-len 128` 时 context 若是 `(1, 128, 7680)` 就满足 `x0 == text_len + 1`（ISSUE-083）；LIBERO 两路的 VAE token 与改动前逐位相同（跑一次 `tests/test_imagewam_vae_stage.py` 与一次 e2e 即可）。
+去向：ABI 与 native 的数字进 `opportunities.md` 的 OPT-028 / OPT-029，汇总进 `THOR_STATUS_SUMMARY.md`。
 
 判据：每条的 rc；被跳过路径打出的原因；三条路径的 P50 记在案。**不设阈值、不判定好坏**——目标配置没有延迟预算。
 另外读三行：目标 workload 的 `view_shape`（默认 profile 下 VAE 在图外，应为 `(3, 256, 256)` 而不是 `(2, 224, 224)`，ABI 的 `images` 端口与 `views` 名单随之变成三路，见 ISSUE-081 的 Resolution）；`--workload target --text-max-len 128` 时 context 若是 `(1, 128, 7680)` 就满足 `x0 == text_len + 1`（ISSUE-083）；LIBERO 两路的 VAE token 与改动前逐位相同（跑一次 `tests/test_imagewam_vae_stage.py` 与一次 e2e 即可）。

@@ -7092,25 +7092,32 @@ Decided (owner, after the `c20f3a0` Thor round):
 - The service paths are compared as configurations of their own (Python
   `infer()`, ABI, native) rather than one path being picked.
 
-- `text_trim` is a required capability, not an option: the target
-  deployment's instructions are short, so the padded text block is pure
-  overhead, and trimming also removes the padding-key deviation from the
-  official model (ISSUE-020). What remains is how it reaches all three
-  service paths, and that is engineering, not a choice: the ABI and the
-  native pipeline must carry a graph per trimmed length (ISSUE-080
-  condition 5), and the regression gate needs a fixture whose `fp16`
-  reference was recorded trimmed (condition 4).
-- Shape of the per-length graphs: bucket the trimmed length to a multiple of
-  16 and capture the whole range at startup (the deployment's text spans
-  16-128 tokens, so that is 8 graphs, 32 to 144 rows; exact lengths would
-  span up to 113 distinct `x0` and as many captures and graphs). The
-  in-bucket padding rows must be masked at both attention sites, because the
-  official model masks padded text keys and an unmasked run would change the
-  softmax; the backbone's masked reference kernel exists, the `mot` site
-  already builds that mask, and FA4 has no mask parameter today, which is
-  the work this shape needs. The alternative, exact lengths with a bounded
-  cache, needs no kernel work and stays available for a deployment whose
-  prompt lengths are few and known.
+- `text_trim` is the served default, not an option: the deployment's
+  instructions are short, so the padded text block is overhead on every
+  call, and trimming also removes the padding-key deviation from the
+  official model (ISSUE-020). It is what the Python `infer()` path runs
+  with; the ABI and native paths get it as soon as they carry a graph per
+  trimmed length (the S2 phase below), and the regression gate needs a
+  fixture whose `fp16` reference was recorded trimmed (S1).
+- The per-length graphs are the exact trimmed lengths, precaptured at
+  startup from the lengths the deployment declares, with a bounded cache
+  (S3). 16-token buckets are not needed for a fixed instruction set: they
+  would bound the graph count for an open-ended one, and they cost a mask
+  over the in-bucket padding rows at both attention sites (the official
+  model masks padded text keys, so an unmasked bucketed run changes the
+  softmax), including in FA4, which has no mask parameter today. The
+  comparison is recorded in ISSUE-080.
+- Framework first: the configuration surface (`load_imagewam`, `Workload`,
+  `Structure`, profiles) must serve any deployment, not one checkpoint. A
+  specific target checkpoint is an input, not a design constraint;
+  `proprio_dim` and the camera count come from the deployment and are
+  validated against the checkpoint's own weights at construction.
+- Two workloads are first-class and both stay measured: the served LIBERO
+  configuration (`ImageWAMWorkload.libero()`, two 224x224 views, 512 text
+  tokens, horizon 64) and the target (`TARGET_WORKLOAD`: three views of
+  256x256, instructions of 16-128 tokens, horizon 32, 10 steps, proprio 8).
+  `benchmarks/imagewam_thor_path_bench.py --workload libero|target` measures
+  either one on all three service paths.
 
 Open:
 
@@ -7119,16 +7126,15 @@ Open:
   (`stack` 9.7 ms below `vae_trim`, agreement with official not worse) and
   so was the native-VAE criterion; `text_trim` remains the largest single
   step on the LIBERO workload.
-- `text_trim` towards the default (owner direction: with short instructions
-  it is close to a must-have): two constraints decide how far it can go.
-  Rule R5 refuses it for the `abi`/`native` consumers until the per-length
-  graphs are implemented (ISSUE-080 condition 5, the S2 item; the refusal is
-  an unimplemented guard, not a property of the ABI), and ISSUE-080
-  condition 4 (a gate fixture whose `fp16` reference is recorded trimmed) is
-  needed before any trimmed configuration can pass the regression gate. A
-  third point to settle is the target workload's text length: with
-  `text_max_len=128` the trimmed sequence saves at most 112 of about 897
-  backbone rows, so the gain is a fraction of the LIBERO one (ISSUE-083).
+- Nothing is blocking `text_trim` as the default now; what is left is code
+  in the S phases: S1 (a gate fixture whose `fp16` reference is recorded
+  trimmed, so a trimmed configuration can pass the regression gate), S2 (the
+  ABI and the native pipeline carry one graph per trimmed length, which also
+  lifts rule R5), S3 (a bounded per-length cache filled by
+  `precapture_text_lengths` at startup). With `text_max_len=128` the trimmed
+  sequence saves at most 112 of about 897 backbone rows, so the gain there is
+  a fraction of the LIBERO one (ISSUE-083) — the trim is still the right
+  default, it is just a smaller number on that workload.
 - Whether the calibration file's identity gains the workload fields
   (`num_views`, `image_h`, `image_w`): with no compatibility requirement
   this is a format version bump and a re-recorded file. It closes the one

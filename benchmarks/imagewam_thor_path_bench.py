@@ -109,7 +109,7 @@ if _TESTS_DIR not in sys.path:
 
 from _helpers.model_runtime_consumer import ModelRuntimeConsumer, exec_library_path  # noqa: E402
 from _imagewam_workload_cli import (  # noqa: E402
-    add_workload_args, random_context, random_observation, view_frames, workload_from_args,
+    VALID_TOKENS, add_workload_args, random_context, random_observation, view_frames, workload_from_args,
 )
 
 from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state
@@ -325,6 +325,23 @@ def bench_native(fe: ImageWAMTorchFrontendThor, inputs_factory: Callable[[], Tic
         native.close()
 
 
+def parse_valid_tokens(spec: str | None, workload_name: str) -> list[int]:
+    """`--valid-tokens` -> the counts to measure: the named workload's own
+    representative count when the option is absent, else every value of the
+    comma-separated list, in the order given."""
+    if spec is None:
+        return [VALID_TOKENS[workload_name]]
+    counts = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part.isdigit() or int(part) <= 0:
+            raise ValueError(f"valid tokens must be positive integers, got {part!r}")
+        counts.append(int(part))
+    if not counts:
+        raise ValueError("--valid-tokens needs at least one count")
+    return counts
+
+
 def run_path(path: str, fe: ImageWAMTorchFrontendThor, observation: dict[str, object],
              noise: torch.Tensor, workload: ImageWAMWorkload, *, warmup: int, iters: int) -> PathResult:
     """Measure one requested path. Everything a path needs is built inside its
@@ -366,6 +383,10 @@ def main() -> int:
     ap.add_argument("--warmup", type=int, default=5)
     ap.add_argument("--seed", type=int, default=0,
                     help="seed of the random frames, proprio, context and initial action noise")
+    ap.add_argument("--valid-tokens", default=None,
+                    help="valid text tokens per prompt, comma-separated to sweep (default: the named "
+                         "workload's own, benchmarks/_imagewam_workload_cli.VALID_TOKENS); this is what a "
+                         "--text-trim comparison turns on")
     ap.add_argument("--text-trim", choices=("on", "off"), default=None)
     ap.add_argument("--use-fa4", choices=("on", "off"), default=None)
     ap.add_argument("--use-fa4-mot", choices=("on", "off"), default=None)
@@ -377,6 +398,7 @@ def main() -> int:
         ap.error("--bench-iters must be > 0 and --warmup >= 0")
     try:
         paths = parse_paths(args.paths)
+        valid_counts = parse_valid_tokens(args.valid_tokens, args.workload)
     except ValueError as e:
         ap.error(str(e))
 
@@ -419,29 +441,40 @@ def main() -> int:
 
     report_jetson_clock_state()
 
-    context, context_mask = random_context(workload, int(fe.dims["joint_attention_dim"]), args.seed)
-    fe.set_prompt(context=context, context_mask=context_mask)
-    torch.cuda.synchronize()
-    print(f"ready in {time.time() - started:.1f}s; active context rows x0={fe.active_dims['x0']} "
-          f"(dims x0={fe.dims['x0']}, device {torch.cuda.get_device_name()})")
-
     observation = random_observation(workload, args.seed)
     torch.manual_seed(args.seed)
     noise = torch.empty_like(fe._action_latent).normal_().mul_(0.01)
+    joint_attention_dim = int(fe.dims["joint_attention_dim"])
+    print(f"ready in {time.time() - started:.1f}s (device {torch.cuda.get_device_name()}); "
+          f"dims x0={fe.dims['x0']} (text_max_len={workload.text_max_len} + the proprio row)")
     print(f"inputs: seed={args.seed}, {workload.num_views} random "
           f"{workload.image_h}x{workload.image_w} frames, random context "
-          f"({workload.text_max_len} x {fe.dims['joint_attention_dim']}), 0.01 * N(0, 1) action latent "
+          f"({workload.text_max_len} x {joint_attention_dim}), 0.01 * N(0, 1) action latent "
           f"-- latency only, no LIBERO data and no Qwen3")
 
-    print(f"\npaths (warmup {args.warmup}, {args.bench_iters} timed ticks each):")
-    results = [run_path(path, fe, observation, noise, workload, warmup=args.warmup, iters=args.bench_iters)
-               for path in paths]
+    print(f"\npaths (warmup {args.warmup}, {args.bench_iters} timed ticks each, "
+          f"valid text tokens {valid_counts}):")
+    results: list[tuple[int, int, PathResult]] = []
+    for valid_tokens in valid_counts:
+        context, context_mask = random_context(workload, joint_attention_dim, args.seed,
+                                               valid_tokens=valid_tokens)
+        t0 = time.perf_counter()
+        fe.set_prompt(context=context, context_mask=context_mask)
+        torch.cuda.synchronize()
+        x0 = int(fe.active_dims["x0"])
+        print(f"prompt: valid_tokens={valid_tokens} -> active x0={x0} "
+              f"(set_prompt {time.perf_counter() - t0:.3f}s, a new length captures a graph here)")
+        for path in paths:
+            results.append((valid_tokens, x0,
+                            run_path(path, fe, observation, noise, workload,
+                                     warmup=args.warmup, iters=args.bench_iters)))
 
-    print("\nsummary (one line per path):")
-    for result in results:
+    print("\nsummary (one line per valid-token count per path):")
+    for valid_tokens, x0, result in results:
         fields = [f"path={result.path}", f"status={'ok' if result.measured else 'skipped'}",
                   f"profile={args.profile}", f"precision={resolved.options.precision.value}",
-                  f"workload={args.workload}", format_workload(workload), format_layout(layout)]
+                  f"workload={args.workload}", format_workload(workload), format_layout(layout),
+                  f"valid_tokens={valid_tokens}", f"x0={x0}"]
         if result.percentile is None:
             fields.append(f"reason={result.reason!r}")
         else:
@@ -449,7 +482,7 @@ def main() -> int:
                           f"P90={result.percentile.p90:.2f} n={result.percentile.n}")
         print(SUMMARY_PREFIX + " ".join(fields))
 
-    measured = [result for result in results if result.measured]
+    measured = [result for _, _, result in results if result.measured]
     if not measured:
         print("no requested path could be built in this process", file=sys.stderr)
         return 1

@@ -56,6 +56,13 @@ WORKLOADS: dict[str, ImageWAMWorkload] = {
     TARGET: TARGET_WORKLOAD,
 }
 
+# A representative valid instruction length per named workload, for a bench
+# that has no real prompts (`random_context`'s `valid_tokens`). LIBERO's
+# served instructions carry 16-31 valid tokens; the target's are 16-128, so
+# the short end of each is the representative one. A trim comparison sweeps
+# this (`imagewam_thor_path_bench.py --valid-tokens`).
+VALID_TOKENS: dict[str, int] = {LIBERO: 24, TARGET: 32}
+
 _T = TypeVar("_T")
 
 
@@ -130,25 +137,31 @@ def view_frames(observation: dict[str, object], num_views: int) -> list[np.ndarr
     return [np.ascontiguousarray(observation[f"view{i + 1}"]) for i in range(num_views)]
 
 
-def random_context(workload: ImageWAMWorkload, joint_attention_dim: int, seed: int
-                   ) -> tuple[torch.Tensor, torch.Tensor]:
+def random_context(workload: ImageWAMWorkload, joint_attention_dim: int, seed: int,
+                   *, valid_tokens: int | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """`(context, mask)` for `set_prompt(context=..., context_mask=...)`:
     `context` is a BF16 CUDA `(text_max_len, joint_attention_dim)` tensor and
-    `mask` a bool `(text_max_len,)` all-valid mask, both on the current CUDA
-    device.
+    `mask` a bool `(text_max_len,)`, both on the current CUDA device.
 
     `text_max_len` rows is what the frontend requires of a precomputed
     context: `dims["x0"]` is `text_max_len + 1`, and
     `_set_context_with_optional_proprio` raises unless the context length is
-    exactly that when `dims["proprio_dim"]` is set. An all-valid mask puts
-    the proprio row at `x0 - 1`, where the frontend's own random-fill
-    `set_prompt()` path puts it; with `text_trim` it makes the active length
-    the full `text_max_len + 1` rows.
+    exactly that when `dims["proprio_dim"]` is set.
+
+    `valid_tokens`: how many of those rows are marked valid (`None` = all of
+    them). This is what a `text_trim` comparison turns on: with the trim the
+    active sequence is `valid_tokens + 1` rows, without it the full
+    `text_max_len + 1`, so an all-valid mask measures the trim as a no-op.
     """
+    if valid_tokens is None:
+        valid_tokens = workload.text_max_len
+    if not 0 < valid_tokens <= workload.text_max_len:
+        raise ValueError(f"valid_tokens={valid_tokens} must be in 1..{workload.text_max_len}")
     generator = torch.Generator().manual_seed(seed)
     context = torch.randn(workload.text_max_len, joint_attention_dim, generator=generator
                           ).to(device=CUDA_DEVICE, dtype=BF16)
-    mask = torch.ones(workload.text_max_len, dtype=torch.bool, device=CUDA_DEVICE)
+    mask = torch.zeros(workload.text_max_len, dtype=torch.bool, device=CUDA_DEVICE)
+    mask[:valid_tokens] = True
     return context, mask
 
 
