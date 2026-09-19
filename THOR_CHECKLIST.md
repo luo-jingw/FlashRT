@@ -48,7 +48,7 @@ python -m pytest tests/test_imagewam_*.py tests/test_jetson_clock_state.py -x -q
 python -m pytest tests/test_imagewam_fa4_dispatch.py -x -q 2>&1 | tee $OUT/A1_fa4_dispatch.log
 python -m pytest tests/test_imagewam_fa4_dispatch.py -k capture_sync tests/test_imagewam_frontend.py -q 2>&1 | tee $OUT/A1_cascade.log
 python -m pytest tests/test_imagewam_awq.py -q 2>&1 | tee $OUT/A1_awq.log
-python -m pytest tests/test_imagewam_graph_recover.py -q 2>&1 | tee $OUT/A1_graph_recover.log
+python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q 2>&1 | tee $OUT/A1_graph_recover.log
 TRIM_PRECISION=nvfp4 TRIM_FA4=on python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s -k capture_failure 2>&1 | tee $OUT/A1_fa4_recover.log
 ```
 假设（未证实）：`test_imagewam_fa4_dispatch.py` 的 `capture_sync` 模式在捕获中调用 `torch.cuda.synchronize()`，使捕获状态失效，其后的 module 级 fixture 构造失败，表现为大量 `ERROR at setup`。
@@ -63,7 +63,8 @@ TRIM_PRECISION=nvfp4 TRIM_FA4=on python -m pytest tests/test_imagewam_text_trim_
 `fidelity_thresholds.json` 现在有 `e0m3_hadamard`（与 nvfp4 同界）与 `fp8_static_cutlass`（与 fp8_static 同界）两条；此前 gate 报 blocked 只是因为按名字查不到条目。
 ```
 python tests/gate_imagewam_libero.py --precision e0m3_hadamard --fixture-dir "$BUNDLE/imagewam_libero_gate_v1" --output-dir $OUT/B1_gate_e0m3 2>&1 | tee $OUT/B1_gate.log
-python tests/gate_imagewam_libero.py --precision fp8_static_cutlass --calibration "$CAL" --fixture-dir "$BUNDLE/imagewam_libero_gate_v1" --output-dir $OUT/B1_gate_fp8cutlass 2>&1 | tee $OUT/B1_gate_fp8cutlass.log
+python tests/gate_imagewam_libero.py --precision fp8_static_cutlass --fp8-calibration "$CAL" \
+  --fixture-dir "$BUNDLE/imagewam_libero_gate_v1" --output-dir $OUT/B1_gate_fp8cutlass 2>&1 | tee $OUT/B1_gate_fp8cutlass.log
 ```
 判据：两条都过（不再出现 "no fidelity thresholds for precision"），并记录各行的 vs official 中位数与 P50；`e0m3_hadamard` 的 vs official 中位数不低于 nvfp4 的门 0.99744。
 去向：OPT-024、OPT-022。
