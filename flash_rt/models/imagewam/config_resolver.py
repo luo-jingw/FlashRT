@@ -33,7 +33,8 @@ them):
     R2  gemm_variant_autotune with a precision that has no switchable tile
     R3  a real VAE encoder / VAE in the graph without ae_model_path
     R4  nvfp4_awq with a non-AWQ precision or without a calibration file
-    R5  text_trim with a consumer that needs one fixed graph (abi, native)
+    R5  text_trim with a consumer whose path carries no per-length graph
+        (native; the ABI carries one graph per captured length)
     R6  native consumer with something the native pipeline does not carry
         (AWQ, a precision it cannot describe, FA4, the VAE stage)
     R7  workload layout inconsistent with the structure
@@ -180,8 +181,8 @@ PROFILES: dict[str, ProfileSpec] = {
             "CUDA graph (vae_graph_input from the workload). Measured on Thor at 106.1 ms vs "
             "203.3 ms for the default configuration (THOR_STATUS_SUMMARY.md, nvfp4). The owner "
             "has not approved it as the default (plan.md 'Decisions pending', T4/T5): it stays "
-            "opt-in by name. text_trim is refused with the abi/native consumers (rule R5) until "
-            "ISSUE-080 condition 5 lands; it needs ae_model_path (rule R3); use_fa4=True "
+            "opt-in by name. text_trim is refused with the native consumer (rule R5); the abi and "
+            "infer consumers serve it. It needs ae_model_path (rule R3); use_fa4=True "
             "raises at construction when the FA4 runtime is missing (unlike the env-auto "
             "default)."),
         precision=Precision.NVFP4, text_trim=True, use_fa4=True, use_fa4_mot=True,
@@ -325,7 +326,8 @@ def resolve_config(workload: "ImageWAMWorkload", structure: "ImageWAMStructure",
     AWQ statistics file. `ae_model_path`: the FLUX.2 autoencoder (a real VAE
     encoder needs it, rule R3; it is not stored in the options).
     `consumer`: what the configuration will be used for (`CONSUMERS`); the
-    ABI and native consumers describe one fixed graph (rules R5, R6).
+    native consumer describes one fixed graph (rules R5, R6), while the ABI
+    consumer carries one graph per captured text length.
     `allow_placeholder_calibration`: permit a static-FP8 precision without a
     calibration file (the old constructor path logs a warning and uses
     N(0, 0.1) placeholder scales; this resolver refuses it by default,
@@ -460,11 +462,13 @@ def resolve_config(workload: "ImageWAMWorkload", structure: "ImageWAMStructure",
             text_trim)
 
     # -- R5 / R6: consumers that describe one fixed graph -------------------------
-    if consumer in ("abi", "native") and text_trim:
+    if consumer == "native" and text_trim:
         raise ConfigError(
-            "R5", f"text_trim=True with consumer={consumer!r}: runtime_surface() / pipeline_resources() "
-                  f"/ the ABI export describe one graph at the max dims, while a trimmed frontend runs "
-                  f"one graph per prompt length (ISSUE-080 condition 5)")
+            "R5", f"text_trim=True with consumer={consumer!r}: the native pipeline replays one graph at "
+                  f"one context length and has no per-length variant table, while a trimmed frontend runs "
+                  f"one graph per prompt length (ISSUE-080 condition 5). consumer='abi' serves a trimmed "
+                  f"frontend: runtime_surface() and the export carry one graph per captured length, "
+                  f"keyed by that length")
     if consumer == "native":
         # pipeline_resources() / export_model_runtime(io="native") refusals.
         if nvfp4_awq:
