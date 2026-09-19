@@ -126,7 +126,7 @@ OUT=$OUT/C_profile SUITE=libero_10     PRECS=nvfp4 PROFILES="default fast" bash 
 | 文本缓冲长度 `text_max_len` | 128（待确认，见 ISSUE-083：live Qwen3 固定输出 512 行） |
 | action horizon | 32 |
 | 去噪步数 | 10 |
-| proprio 维度 | 8 |
+| proprio 维度 | 8：必须等于目标 checkpoint 的 `proprio_encoder` 宽度（LIBERO 微调是 7 关节 + 1 夹爪）。双臂 29 DoF 需要与它匹配的 checkpoint；模型其余部分与这一维无关，前端会用真实权重形状校验 |
 | 延迟预算 | 不设：只记录数字，不做判别 |
 | 服务路径 | 三条都测（Python `infer()` / ABI / native），作为三个配置对比 |
 | checkpoint 与校准文件 | checkpoint 复用 FLUX.2-4B 的 `model.pt`；校准文件待目标数据 |

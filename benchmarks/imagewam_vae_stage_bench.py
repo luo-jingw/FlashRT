@@ -249,12 +249,12 @@ def section_preprocess(ae: torch.nn.Module, v1: np.ndarray, v2: np.ndarray, iter
         ab_time(variants, iters)
         report_gpu(variants)
         with torch.no_grad():
-            t_old = encode_to_tokens(ae, a, b)
-            t_new = encode_to_tokens(ae, a, b, preprocessor=pre)
+            t_old = encode_to_tokens(ae, [a, b])
+            t_new = encode_to_tokens(ae, [a, b], preprocessor=pre)
         print(f"  encode_to_tokens tokens bit-identical (legacy vs kernel preprocess): {torch.equal(t_old, t_new)}")
         with torch.no_grad():
-            ab_time({"encode_to_tokens, torch preprocess": lambda: encode_to_tokens(ae, a, b),
-                     "encode_to_tokens, kernel preprocess": lambda: encode_to_tokens(ae, a, b, preprocessor=pre)},
+            ab_time({"encode_to_tokens, torch preprocess": lambda: encode_to_tokens(ae, [a, b]),
+                     "encode_to_tokens, kernel preprocess": lambda: encode_to_tokens(ae, [a, b], preprocessor=pre)},
                     max(iters // 4, 10))
 
 
@@ -294,10 +294,10 @@ def build_stage_variants(ae: torch.nn.Module, encoders: dict[str, VaeEncoder], v
     ref_raw = torch.zeros(spec.img_len, 128, dtype=BF16, device=DEV)
 
     def legacy() -> None:
-        ref_raw.copy_(encode_to_tokens(ae, *views_cpu)[0])
+        ref_raw.copy_(encode_to_tokens(ae, list(views_cpu))[0])
 
     def kernel_pre() -> None:
-        ref_raw.copy_(encode_to_tokens(ae, *views_cpu, preprocessor=pre)[0])
+        ref_raw.copy_(encode_to_tokens(ae, list(views_cpu), preprocessor=pre)[0])
 
     variants: dict[str, Callable[[], object]] = {
         "legacy: encode_to_tokens, torch preprocess": legacy,

@@ -1203,7 +1203,7 @@ graph set data-dependent.
 
 # ISSUE-081
 
-Status: open
+Status: resolved
 
 Area: `ImageWAMTorchFrontendThor.runtime_surface().view_shape`
 (`flash_rt/frontends/torch/imagewam_thor.py`), consumed by
@@ -1353,7 +1353,7 @@ and in how many times the graph is replayed per measurement.
 
 # ISSUE-083
 
-Status: open
+Status: resolved
 
 Area: `ImageWAMWorkload.text_max_len` against the live Qwen3 text encoder
 (`flash_rt/models/imagewam/text_encoder.py`) and the frontend's context
@@ -1434,7 +1434,7 @@ context rows. Record the cosine per row count.
 
 # ISSUE-084
 
-Status: open
+Status: resolved
 
 Area: the served observation and VAE-encode paths are two-view only —
 `ImageWAMTorchFrontendThor._observation_views`, `stage_images`,
@@ -1503,3 +1503,39 @@ Make the view count the workload's, in the same three places:
 - Keep the LIBERO path bit-identical: two views must produce exactly the
   same tokens as today (`benchmarks/imagewam_e2e_official_compare.py` and
   the gate fixtures are the check).
+
+## Resolution
+
+Fixed with the workload-owned view shape: `ImageWAMTorchFrontendThor._input_view_shape()`
+is the single owner (the resolved workload's `vae_graph_input()` -> the
+in-graph stage's spec -> `(2, 224, 224)` for a caller that passed dims by
+hand) and `runtime_surface()` passes it as `view_shape`, so the ABI's
+declared frame shape and the observation path cannot diverge
+(commit `780ac11`). The ABI round trip at a three-view workload still has to
+be observed on Thor (`THOR_CHECKLIST.md`, item P).
+
+## Resolution
+
+The view count is the workload's now: `observation_views(observation,
+num_views)`, a read-only `num_views` property, `stage_images` taking exactly
+that many views, and `encode_to_tokens(ae, views: Sequence[Tensor], ...)`
+encoding N views as one horizontally concatenated image (commit `780ac11`).
+The LIBERO two-view path keeps its construction line unchanged; that it is
+bit-identical is a Thor check (`tests/test_imagewam_vae_stage.py`,
+`benchmarks/imagewam_e2e_official_compare.py`).
+
+## Resolution
+
+`encode_prompts(model, tokenizer, prompts, *, max_length=512)` takes the
+length, and the frontend's live-Qwen3 branch passes the workload's own
+(`dims["x0"] - 1` with proprio, else `dims["x0"]`; 512 for LIBERO, 128 for
+the three-view target workload). The encoder runs once per prompt outside the
+captured graph, so this decides the context width and nothing about the
+steady-state latency.
+
+What is not measured yet: whether the actions of a workload served at
+`text_max_len=128` match the official model given the same 128 context rows,
+and whether the first 128 rows of a 512-padded encoding equal a 128-padded
+encoding (they should, the padding being masked, but the checkpoint and the
+official serving path were built around 512). That needs the target data and
+the official side, and stays part of the target workload's fidelity gap.

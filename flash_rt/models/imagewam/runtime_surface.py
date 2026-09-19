@@ -60,8 +60,11 @@ class ImageWAMRuntimeSurface:
       f32 min/max normalization constants from `dataset_stats.json`
       (`None` when not loaded).
     - `view_shape`: `(views, H, W)` of the uint8 frames `stage_images`
-      takes: `(2, 224, 224)` with the VAE outside the graph, the
-      frontend's `vae_graph_input` with the VAE inside it.
+      takes, as the frontend resolves it
+      (`ImageWAMTorchFrontendThor._input_view_shape`): the resolved
+      workload's `vae_graph_input()` when the frontend has a workload,
+      else the in-graph VAE stage's own spec, else `(2, 224, 224)` for a
+      caller that passed dims by hand.
     - `views_u8`: the graph's `(views, H, W, 3)` uint8 view buffer when
       the VAE runs inside the graph (the graph then writes `img_raw`
       itself), else `None`.

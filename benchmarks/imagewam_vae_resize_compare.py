@@ -126,8 +126,8 @@ def main() -> None:
     for views in samples:
         tv = [torch.from_numpy(np.ascontiguousarray(v)) for v in views]
         tok = {
-            "area": encode_to_tokens(ae, *tv, preprocessor=area)[0],
-            "pil": encode_to_tokens(ae, *tv, preprocessor=pil)[0],
+            "area": encode_to_tokens(ae, list(tv), preprocessor=area)[0],
+            "pil": encode_to_tokens(ae, list(tv), preprocessor=pil)[0],
             "official": ae.encode(official_image(views)).permute(0, 2, 3, 1).reshape(-1, 128),
             "training": ae.encode(training_image(views)).permute(0, 2, 3, 1).reshape(-1, 128),
         }

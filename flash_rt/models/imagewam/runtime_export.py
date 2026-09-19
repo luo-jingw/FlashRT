@@ -22,10 +22,12 @@ deployment are skipped, the rest keep this relative order):
   actions_raw   OUT  SWAP    TENSOR  f32   (num_action, action_dim)  action_latent
   prompt        IN   SETUP   TEXT    u8    (-1,)               [Qwen3 loaded]
 
-`(views, H, W)` is `(2, 224, 224)` when the VAE runs outside the graph
-and the frontend's `vae_graph_input` when it runs inside it; in that mode
-the graph writes `img_raw` itself, so `image_tokens` is replaced by the
-graph's uint8 view buffer.
+`(views, H, W)` is the frontend's resolved view shape
+(`ImageWAMTorchFrontendThor._input_view_shape`): the workload's
+`vae_graph_input()` when the frontend has a workload, else the in-graph VAE
+stage's spec, else `(2, 224, 224)` for a caller that passed dims by hand.
+With the VAE in the graph the graph writes `img_raw` itself, so
+`image_tokens` is replaced by the graph's uint8 view buffer.
 
 `noise` is the initial action latent consumed exactly as written; the
 graph integrates it in place, so the same window holds the normalized

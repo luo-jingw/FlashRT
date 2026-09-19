@@ -7092,6 +7092,26 @@ Decided (owner, after the `c20f3a0` Thor round):
 - The service paths are compared as configurations of their own (Python
   `infer()`, ABI, native) rather than one path being picked.
 
+- `text_trim` is a required capability, not an option: the target
+  deployment's instructions are short, so the padded text block is pure
+  overhead, and trimming also removes the padding-key deviation from the
+  official model (ISSUE-020). What remains is how it reaches all three
+  service paths, and that is engineering, not a choice: the ABI and the
+  native pipeline must carry a graph per trimmed length (ISSUE-080
+  condition 5), and the regression gate needs a fixture whose `fp16`
+  reference was recorded trimmed (condition 4).
+- Shape of the per-length graphs: bucket the trimmed length to a multiple of
+  16 and capture the whole range at startup (the deployment's text spans
+  16-128 tokens, so that is 8 graphs, 32 to 144 rows; exact lengths would
+  span up to 113 distinct `x0` and as many captures and graphs). The
+  in-bucket padding rows must be masked at both attention sites, because the
+  official model masks padded text keys and an unmasked run would change the
+  softmax; the backbone's masked reference kernel exists, the `mot` site
+  already builds that mask, and FA4 has no mask parameter today, which is
+  the work this shape needs. The alternative, exact lengths with a bounded
+  cache, needs no kernel work and stays available for a deployment whose
+  prompt lengths are few and known.
+
 Open:
 
 - Profile contents (T4): keep `fast` as `text_trim` + FA4 (backbone and mot)

@@ -1,6 +1,6 @@
 """ImageWAM VAE input preprocessing on the GPU (roadmap item 2, `plan.md`).
 
-`VaePreprocessor` turns one or two `(H, W, 3)` uint8 camera views into
+`VaePreprocessor` turns one or more `(H, W, 3)` uint8 camera views into
 the VAE input, `(1, 3, out_h, num_views * out_w)` BF16 NCHW, normalized
 to `x * 2 / 255 - 1`, with one `imagewam_vae_preprocess_bf16` launch per
 view (`csrc/kernels/imagewam_vae_preprocess.cu`).

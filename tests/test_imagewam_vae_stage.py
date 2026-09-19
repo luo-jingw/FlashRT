@@ -90,8 +90,8 @@ def test_stage_eager_and_graph_match_encode_to_tokens(ae):
     stage = ImageWAMVaeStage(ae, pre, spec, img_raw)
 
     with torch.no_grad():
-        ref1 = encode_to_tokens(ae, *first)[0]
-        ref2 = encode_to_tokens(ae, *second)[0]
+        ref1 = encode_to_tokens(ae, list(first))[0]
+        ref2 = encode_to_tokens(ae, list(second))[0]
     stage.stage(first)
     stage.run()
     torch.cuda.synchronize()
@@ -169,7 +169,7 @@ def test_native_encoder_tokens_near_exact(ae):
     graph = _graph(stage.run)
     for views in ([frames[0], frames[2]], [frames[1], frames[3]]):
         with torch.no_grad():
-            ref = encode_to_tokens(ae, *views)[0]
+            ref = encode_to_tokens(ae, list(views))[0]
         stage.stage(views)
         stage.run()
         torch.cuda.synchronize()
@@ -212,7 +212,7 @@ def test_frontend_vae_in_graph_matches_eager_reference(vae_encoder):
             fe.infer({"view1": v1.numpy(), "view2": v2.numpy()}, action_noise=noise)["actions"])
         assert torch.equal(fe._img_raw, graph_tokens)
         with torch.no_grad():
-            ref_tokens = encode_to_tokens(fe._ae, v1, v2, preprocessor=fe._vae_pre, encoder=fe._vae_encoder)[0]
+            ref_tokens = encode_to_tokens(fe._ae, [v1, v2], preprocessor=fe._vae_pre, encoder=fe._vae_encoder)[0]
         _cmp(f"frontend graph[{vae_encoder}] img_raw vs encode_to_tokens (same encoder)", graph_tokens, ref_tokens)
         assert torch.equal(graph_tokens, ref_tokens)
 
@@ -245,7 +245,8 @@ def test_frontend_eager_native_matches_encode_to_tokens():
     frames = [torch.from_numpy(f) for f in _frames(4)]
     fe.infer({"view1": frames[0].numpy(), "view2": frames[2].numpy()})  # numpy views, as in the graph path
     with torch.no_grad():
-        ref = encode_to_tokens(fe._ae, frames[0], frames[2], preprocessor=fe._vae_pre, encoder=fe._vae_encoder)[0]
+        ref = encode_to_tokens(fe._ae, [frames[0], frames[2]], preprocessor=fe._vae_pre,
+                                  encoder=fe._vae_encoder)[0]
     _cmp("frontend eager[native] img_raw vs encode_to_tokens (native)", fe._img_raw, ref)
     assert torch.equal(fe._img_raw, ref)
 
