@@ -27,10 +27,26 @@ array                    shape           meaning
                                          normalized space
 ======================== =============== ==========================================
 
+One flag sits beside the arrays: ``text_trim`` records whether
+``fp16_reference_actions`` was produced by a frontend running
+``text_trim=True`` (the flag removes the padded text keys, issues.md
+ISSUE-020), so a run is compared against a reference recorded the same
+way. It is not an array and is not stored in the ``.npz``: the manifest
+carries it (``FixtureManifest.text_trim``), ``GateFixtureStore.save``
+copies the fixture's own value into the manifest, and
+``GateFixtureStore.load`` copies the manifest's value back into the
+fixture.
+
+``text_trim`` is additive to format 1, which stays the format version: a
+manifest written before the field means untrimmed, and that is what
+fixture v1 is (``imagewam_libero_gate_v1``, an untrimmed ``fp16``
+reference).
+
 A ``FixtureManifest`` records the SHA-256 of the file and of every
-array (bytes, shape, dtype), plus generation metadata. The manifest is
-committed to git; the ``.npz`` is not. ``GateFixtureStore.load`` refuses
-a fixture whose file or arrays do not match the manifest.
+array (bytes, shape, dtype), the ``text_trim`` flag, plus generation
+metadata. The manifest is committed to git; the ``.npz`` is not.
+``GateFixtureStore.load`` refuses a fixture whose file or arrays do not
+match the manifest.
 
 Manifest ``metadata`` written by ``benchmarks/imagewam_gate_fixture_generate.py``:
 ``generator`` (script path), ``generator_sha256`` (SHA-256 of the
@@ -39,8 +55,8 @@ generator file that ran), ``git`` (HEAD at the start of generation;
 ``untracked_count`` and ``clean``, so an uncommitted generator shows),
 ``source``, ``sampler``, ``checkpoint`` (path, bytes, SHA-256),
 ``dataset_stats`` (path, SHA-256), ``official``, ``fp16_reference``
-(precision, frontend call, dims), ``device``, ``torch``, ``peak_gib`` and
-``reference_summary``.
+(precision, ``text_trim``, profile, frontend call, dims), ``device``,
+``torch``, ``peak_gib`` and ``reference_summary``.
 
 ``imagewam_libero_gate_v1`` predates ``generator_sha256`` and the
 untracked-file record. It was produced by the generator content
@@ -56,7 +72,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -69,8 +85,14 @@ _HASH_CHUNK = 1 << 20
 
 @dataclass
 class ImageWAMGateFixture:
-    """In-memory fixture; see the module docstring for every array."""
+    """In-memory fixture; see the module docstring for every array.
 
+    ``text_trim`` is not an array: it is the trimming switch
+    ``fp16_reference_actions`` was recorded with, and the value
+    ``GateFixtureStore`` writes into and reads from the manifest.
+    """
+
+    text_trim: bool
     view1: np.ndarray
     view2: np.ndarray
     state: np.ndarray
@@ -89,7 +111,10 @@ class ImageWAMGateFixture:
 
     @classmethod
     def array_names(cls) -> tuple[str, ...]:
-        return tuple(f.name for f in fields(cls))
+        """The fixture's array fields, in field order (every field but ``text_trim``)."""
+        return ("view1", "view2", "state", "task_index", "episode", "frame", "gt_actions",
+                "gt_len", "prompts", "context_bf16_bits", "context_mask", "seeds", "noise",
+                "official_actions", "fp16_reference_actions")
 
     @property
     def num_observations(self) -> int:
@@ -103,17 +128,20 @@ class ImageWAMGateFixture:
         return {name: getattr(self, name) for name in self.array_names()}
 
     def validate(self) -> None:
-        """Raise ``ValueError`` on any dtype or shape inconsistency."""
+        """Raise ``ValueError`` on any dtype or shape inconsistency, or on a
+        ``text_trim`` that is not a bool."""
         n, s = self.num_observations, self.num_seeds
         t = int(self.prompts.shape[0])
+        problems = [] if isinstance(self.text_trim, bool) else [
+            f"text_trim: {self.text_trim!r} is not a bool"]
         expect_dtype = {
             "view1": np.uint8, "view2": np.uint8, "state": np.float32, "task_index": np.int64,
             "episode": np.int64, "frame": np.int64, "gt_actions": np.float32, "gt_len": np.int64,
             "context_bf16_bits": np.uint16, "context_mask": np.bool_, "seeds": np.int64,
             "noise": np.float32, "official_actions": np.float32, "fp16_reference_actions": np.float32,
         }
-        problems = [f"{name}: dtype {getattr(self, name).dtype} != {np.dtype(dtype)}"
-                    for name, dtype in expect_dtype.items() if getattr(self, name).dtype != dtype]
+        problems += [f"{name}: dtype {getattr(self, name).dtype} != {np.dtype(dtype)}"
+                     for name, dtype in expect_dtype.items() if getattr(self, name).dtype != dtype]
         if self.prompts.dtype.kind != "U":
             problems.append(f"prompts: dtype {self.prompts.dtype} is not a unicode string array")
         if self.view1.ndim != 4 or self.view1.shape[-1] != 3 or self.view2.shape != self.view1.shape:
@@ -166,18 +194,28 @@ class FileRecord:
 
 @dataclass(frozen=True)
 class FixtureManifest:
-    """Identity of one generated fixture."""
+    """Identity of one generated fixture.
+
+    ``text_trim`` is the manifest's record of the flag the fixture's
+    ``fp16_reference_actions`` were recorded with. A manifest written
+    before the field exists means untrimmed: ``from_json`` applies that
+    rule. The field has no Python default, so a caller that builds a
+    manifest states the value, and ``GateFixtureStore.save`` always writes
+    the fixture's own.
+    """
 
     name: str
     format_version: int
     files: dict[str, FileRecord]
     arrays: dict[str, ArrayRecord]
     metadata: dict[str, object]
+    text_trim: bool
 
     def to_json(self) -> str:
         record = {
             "name": self.name,
             "format_version": self.format_version,
+            "text_trim": self.text_trim,
             "files": {k: asdict(v) for k, v in self.files.items()},
             "arrays": {k: dict(asdict(v), shape=list(v.shape)) for k, v in self.arrays.items()},
             "metadata": self.metadata,
@@ -192,7 +230,7 @@ class FixtureManifest:
             files={k: FileRecord(sha256=v["sha256"], bytes=int(v["bytes"])) for k, v in record["files"].items()},
             arrays={k: ArrayRecord(shape=tuple(v["shape"]), dtype=v["dtype"], sha256=v["sha256"])
                     for k, v in record["arrays"].items()},
-            metadata=dict(record["metadata"]))
+            metadata=dict(record["metadata"]), text_trim=bool(record.get("text_trim", False)))
 
     @classmethod
     def read(cls, path: Path) -> FixtureManifest:
@@ -213,20 +251,29 @@ class GateFixtureStore:
         return self.directory / FIXTURE_FILE
 
     def save(self, fixture: ImageWAMGateFixture, name: str, metadata: dict[str, object]) -> FixtureManifest:
-        """Write ``fixture.npz`` and ``manifest.json``; return the manifest."""
+        """Write ``fixture.npz`` and ``manifest.json``; return the manifest.
+
+        The manifest's ``text_trim`` is the fixture's own value, so the
+        recorded flag and the data it describes cannot disagree.
+        """
         fixture.validate()
         self.directory.mkdir(parents=True, exist_ok=True)
         arrays = fixture.arrays()
         np.savez(self.fixture_path, **arrays)
         manifest = FixtureManifest(
-            name=name, format_version=FIXTURE_FORMAT_VERSION,
+            name=name, format_version=FIXTURE_FORMAT_VERSION, text_trim=fixture.text_trim,
             files={FIXTURE_FILE: FileRecord.of(self.fixture_path)},
             arrays={k: ArrayRecord.of(v) for k, v in arrays.items()}, metadata=metadata)
         manifest.write(self.directory / MANIFEST_FILE)
         return manifest
 
     def load(self, manifest: FixtureManifest) -> ImageWAMGateFixture:
-        """Load the fixture after checking it against ``manifest``."""
+        """Load the fixture after checking it against ``manifest``.
+
+        ``text_trim`` is read from the manifest (the ``.npz`` does not hold
+        it), so a loaded fixture reports the flag its reference was recorded
+        with and a caller can compare it with the configuration it runs.
+        """
         if manifest.format_version != FIXTURE_FORMAT_VERSION:
             raise ValueError(f"fixture format {manifest.format_version} != supported {FIXTURE_FORMAT_VERSION}")
         if not self.fixture_path.is_file():
@@ -244,6 +291,6 @@ class GateFixtureStore:
         mismatched = [name for name, array in arrays.items() if ArrayRecord.of(array) != manifest.arrays[name]]
         if mismatched:
             raise ValueError(f"fixture arrays differ from the manifest: {mismatched}")
-        fixture = ImageWAMGateFixture(**arrays)
+        fixture = ImageWAMGateFixture(text_trim=manifest.text_trim, **arrays)
         fixture.validate()
         return fixture

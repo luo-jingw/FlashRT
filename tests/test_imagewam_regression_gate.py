@@ -2,11 +2,19 @@
 
 The gate runner itself (``tests/gate_imagewam_libero.py``) needs a GPU
 and a generated fixture; everything it decides with is tested here on
-synthetic inputs and on the committed config files.
+synthetic inputs and on the committed config files. Its ``text_trim``
+check is the exception: it is decided from the manifest alone, so the
+committed v1 manifest exercises it.
 """
 from __future__ import annotations
 
+import ast
+import dataclasses
+import importlib
+import importlib.util
 import json
+import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +52,24 @@ from flash_rt.datasets.imagewam_gate_fixture import (
 )
 
 CONFIG_DIR = Path(__file__).resolve().parent / "fixtures" / "imagewam_gate"
+GATE_RUNNER = Path(__file__).resolve().parent / "gate_imagewam_libero.py"
+BENCHMARKS = Path(__file__).resolve().parents[1] / "benchmarks"
+GENERATOR = BENCHMARKS / "imagewam_gate_fixture_generate.py"
+COMPARE = BENCHMARKS / "imagewam_e2e_official_compare.py"
+V1_MANIFEST = CONFIG_DIR / "imagewam_libero_gate_v1.manifest.json"
+
+
+def gate_runner() -> types.ModuleType:
+    """The gate runner as a module (it is a script, not a package module)."""
+    name = "imagewam_gate_runner_under_test"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, GATE_RUNNER)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
 THRESHOLDS = FidelityThresholds(
     vs_official_median_min=0.997, vs_official_min_min=0.993,
     vs_fp16_reference_median_min=0.999, vs_fp16_reference_min_min=0.995,
@@ -208,15 +234,102 @@ def test_committed_fixture_manifests_are_well_formed():
         assert manifest.name == path.name.removesuffix(".manifest.json")
 
 
+# ── the fixture generator's imports ─────────────────────────────────────
+
+
+def _module_level_names(path: Path) -> set[str]:
+    """Names a module binds at its top level, read from the source (no import)."""
+    names: set[str] = set()
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names |= {(a.asname or a.name).split(".")[0] for a in node.names}
+    return names
+
+
+def test_generator_imports_names_that_exist():
+    """Every name the generator imports resolves, without running it.
+
+    The generator needs a GPU, a LIBERO dataset and the end-to-end script's
+    environment, so nothing here imports it: its names come from the
+    compare script (checked against that script's own source) and from
+    ``flash_rt`` (checked by importing the modules, which is CPU-safe).
+    """
+    tree = ast.parse(GENERATOR.read_text())
+    compare_names = _module_level_names(COMPARE)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.module is None:
+            continue
+        if node.module == "imagewam_e2e_official_compare":
+            missing = [a.name for a in node.names if a.name not in compare_names]
+        elif node.module.startswith("flash_rt."):
+            module = importlib.import_module(node.module)
+            missing = [a.name for a in node.names if not hasattr(module, a.name)]
+        else:
+            continue
+        assert not missing, f"{node.module}: {missing}"
+
+
+# ── the fixture's text_trim against the gate's configuration ─────────────
+
+
+def test_committed_v1_manifest_predates_the_text_trim_field():
+    record = json.loads(V1_MANIFEST.read_text())
+    assert "text_trim" not in record
+    assert "text_trim" not in record["metadata"]["fp16_reference"]
+    assert FixtureManifest.read(V1_MANIFEST).text_trim is False
+
+
+def test_absent_text_trim_in_a_manifest_means_untrimmed():
+    record = json.loads(V1_MANIFEST.read_text())
+    assert FixtureManifest.from_json(json.dumps(record)).text_trim is False
+    assert FixtureManifest.from_json(json.dumps(record | {"text_trim": True})).text_trim is True
+
+
+def test_gate_accepts_the_committed_v1_manifest_untrimmed():
+    manifest = FixtureManifest.read(V1_MANIFEST)
+    assert gate_runner().text_trim_mismatch(manifest, False) is None
+
+
+def test_gate_refuses_a_text_trim_mismatch_naming_both_values():
+    runner = gate_runner()
+    untrimmed = FixtureManifest.read(V1_MANIFEST)
+    trimmed = dataclasses.replace(untrimmed, text_trim=True)
+    reason = runner.text_trim_mismatch(untrimmed, True)
+    assert "imagewam_libero_gate_v1" in reason
+    assert "text_trim=False" in reason and "text_trim=True" in reason
+    other = runner.text_trim_mismatch(trimmed, False)
+    assert "imagewam_libero_gate_v1" in other and "text_trim=True" in other and "text_trim=False" in other
+    assert runner.text_trim_mismatch(trimmed, True) is None
+
+
+def test_gate_runs_the_switch_it_checks():
+    """The value compared with the fixture is the value handed to the frontend."""
+    tree = ast.parse(GATE_RUNNER.read_text())
+    strings = {node.value for node in ast.walk(tree)
+               if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+    assert "--text-trim" in strings
+    constructor_calls = [node for node in ast.walk(tree)
+                         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                         and node.func.id == "ImageWAMTorchFrontendThor"]
+    assert constructor_calls
+    assert all("text_trim" in {kw.arg for kw in call.keywords} for call in constructor_calls)
+
+
 # ── fixture IO ──────────────────────────────────────────────────────────
 
 
-def _tiny_fixture(n: int = 3, seeds: int = 2, horizon: int = 4, tasks: int = 2) -> ImageWAMGateFixture:
+def _tiny_fixture(n: int = 3, seeds: int = 2, horizon: int = 4, tasks: int = 2,
+                  text_trim: bool = False) -> ImageWAMGateFixture:
     rng = np.random.default_rng(0)
     chunk = (n, seeds, horizon, 7)
     gt = rng.standard_normal((n, horizon, 7)).astype(np.float32)
     gt[-1, -1] = np.nan
     return ImageWAMGateFixture(
+        text_trim=text_trim,
         view1=rng.integers(0, 256, (n, 8, 8, 3), dtype=np.uint8),
         view2=rng.integers(0, 256, (n, 8, 8, 3), dtype=np.uint8),
         state=rng.standard_normal((n, 8)).astype(np.float32),
@@ -232,6 +345,11 @@ def _tiny_fixture(n: int = 3, seeds: int = 2, horizon: int = 4, tasks: int = 2) 
         fp16_reference_actions=rng.standard_normal(chunk).astype(np.float32))
 
 
+def test_fixture_array_names_are_every_field_but_text_trim():
+    fields = tuple(f.name for f in dataclasses.fields(ImageWAMGateFixture) if f.name != "text_trim")
+    assert ImageWAMGateFixture.array_names() == fields
+
+
 def test_fixture_round_trip(tmp_path):
     fixture = _tiny_fixture()
     store = GateFixtureStore(tmp_path)
@@ -242,6 +360,23 @@ def test_fixture_round_trip(tmp_path):
     for name, array in fixture.arrays().items():
         np.testing.assert_array_equal(getattr(loaded, name), array)
     assert loaded.prompts.tolist() == ["task 0", "task 1"]
+
+
+@pytest.mark.parametrize("text_trim", [False, True])
+def test_text_trim_round_trips_through_the_manifest(tmp_path, text_trim):
+    fixture = _tiny_fixture(text_trim=text_trim)
+    store = GateFixtureStore(tmp_path)
+    manifest = store.save(fixture, "tiny_v1", {"suite": "synthetic"})
+    assert manifest.text_trim is text_trim
+    assert json.loads((tmp_path / "manifest.json").read_text())["text_trim"] is text_trim
+    assert store.load(FixtureManifest.read(tmp_path / "manifest.json")).text_trim is text_trim
+
+
+def test_fixture_validation_rejects_a_non_bool_text_trim():
+    fixture = _tiny_fixture()
+    fixture.text_trim = 1
+    with pytest.raises(ValueError, match="text_trim"):
+        fixture.validate()
 
 
 def test_fixture_file_tamper_is_rejected(tmp_path):
@@ -261,7 +396,8 @@ def test_fixture_array_mismatch_is_rejected(tmp_path):
         _tiny_fixture(n=3, seeds=2), "tiny_v1", {})
     doctored = FixtureManifest(
         name=manifest.name, format_version=manifest.format_version, files=manifest.files,
-        arrays=dict(manifest.arrays, noise=other.arrays["official_actions"]), metadata={})
+        arrays=dict(manifest.arrays, noise=other.arrays["official_actions"]), metadata={},
+        text_trim=manifest.text_trim)
     with pytest.raises(ValueError, match="noise"):
         store.load(doctored)
 

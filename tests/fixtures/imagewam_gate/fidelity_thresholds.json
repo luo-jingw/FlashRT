@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "space": "Cosine per (observation, seed) over the (64, 7) action chunk in normalized action space (dataset_stats.json min/max to [-1, 1]); MAE against ground truth in real action units over the valid ground-truth rows. References: official ImageWAM bf16 and FlashRT fp16, both stored in the fixture. Every run starts from the fixture's fixed N(0,1) initial noise (the official sampler's per-seed draw), not the served 0.01 * N(0,1) draw (issues.md ISSUE-002).",
+  "space": "Cosine per (observation, seed) over the (64, 7) action chunk in normalized action space (dataset_stats.json min/max to [-1, 1]); MAE against ground truth in real action units over the valid ground-truth rows. References: official ImageWAM bf16 and FlashRT fp16, both stored in the fixture. Every run starts from the fixture's fixed N(0,1) initial noise (the official sampler's per-seed draw), not the served 0.01 * N(0,1) draw (issues.md ISSUE-002). The fp16 reference carries the fixture's own text_trim (the manifest field; absent means untrimmed), and the gate refuses a configuration whose text_trim differs from it (issues.md ISSUE-080), so the vs_fp16_reference_* bounds always compare like for like: a trimmed configuration against a reference recorded trimmed, an untrimmed one against an untrimmed reference, with the same bounds either way.",
   "precisions": {
     "fp16": {
       "vs_official_median_min": 0.997,
@@ -9,7 +9,7 @@
       "vs_fp16_reference_min_min": 0.995,
       "mae_vs_gt_ratio_max": 1.02,
       "requires_calibration": false,
-      "note": "H100 end-to-end baseline for fp16 vs official: median 0.99840, min 0.99567, mean MAE 0.18359 (issues.md ISSUE-002). The fp16 reference is generated on H100; on another device this check measures cross-device drift of the same math."
+      "note": "H100 end-to-end baseline for fp16 vs official on fixture v1, whose reference is untrimmed: median 0.99840, min 0.99567, mean MAE 0.18359 (issues.md ISSUE-002). The fp16 reference is generated on H100; on another device this check measures cross-device drift of the same math. The same bounds apply to a trimmed fixture (imagewam_libero_gate_v2): its reference is recorded trimmed, so the comparison is the same like-for-like one. A trimmed run against the untrimmed v1 reference is not measured: it reads 0.99837 / 0.99579 cosine with mean MAE ratio 1.0115 rather than the precision's own error (issues.md ISSUE-080), which is why the manifest check refuses that combination."
     },
     "nvfp4": {
       "vs_official_median_min": 0.995,
