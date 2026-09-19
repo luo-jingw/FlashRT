@@ -167,6 +167,7 @@ python benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 1
 ABI 一行需要 `exec/` 构建，native 一行需要 `runtime/` 与 `flashrt_imagewam_native`（见 `scripts/imagewam_thor_validation.sh` 文件头）。
 
 判据：每条的 rc；被跳过路径打出的原因；三条路径的 P50 记在案。**不设阈值、不判定好坏**——目标配置没有延迟预算。
+另外读三行：目标 workload 的 `view_shape`（默认 profile 下 VAE 在图外，应为 `(3, 256, 256)` 而不是 `(2, 224, 224)`，ABI 的 `images` 端口与 `views` 名单随之变成三路，见 ISSUE-081 的 Resolution）；`--workload target --text-max-len 128` 时 context 若是 `(1, 128, 7680)` 就满足 `x0 == text_len + 1`（ISSUE-083）；LIBERO 两路的 VAE token 与改动前逐位相同（跑一次 `tests/test_imagewam_vae_stage.py` 与一次 e2e 即可）。
 去向：ABI 与 native 的数字进 `opportunities.md` 的 OPT-028 / OPT-029，汇总进 `THOR_STATUS_SUMMARY.md`。
 
 ---
