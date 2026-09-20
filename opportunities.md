@@ -5356,6 +5356,19 @@ this entry left open therefore hold on real hardware: the cosines improve over
 plain `nvfp4` and the P50 does not move.
 
 
+## Thor, LIBERO (`0920`)
+
+The folded path adds no kernels of its own, measured with the AWQ test's own
+counter after the profiler warm-up region is discarded:
+`kernels per eager forward: plain=285 awq=285` (Jetson AGX Thor, MAXN, GPC
+1.575 GHz, `emc_locked=null`, GPU exclusive, log
+`/home/jingwu/thor_val/0920/R_awq.log`). The plain side previously read `0`
+because the first `torch.profiler` CUDA region in a process is blind, not
+because the call was a graph replay; `run_eager` is eager with and without a
+`weights` argument. The equality is the property this entry is about: the
+fold moves work into the quantizer, it does not add a per-forward kernel.
+
+
 # OPT-028: ImageWAM through `frt_model_runtime_v1` (Python producer)
 
 Status: implemented and verified on H100 (fp16, real checkpoint,
@@ -5972,6 +5985,18 @@ Eviction, `text_trim_cache_size=2` with no precapture, lengths 16 -> 24 -> 31 ->
 16 valid tokens: `set_prompt` takes 0.636 / 0.503 / 0.468 / 0.465 s, so the
 revisited length captures again, LRU having evicted it. The same three lengths
 precaptured at `text_trim_cache_size=8` switch in 0.012 / 0.000 / 0.000 s.
+
+
+## Thor, LIBERO (`0920`)
+
+The multi-length safety check passes with FA4 on as well as off, and the
+recovery case reports the recovered length equal to a like-for-like chain
+reference: `after a failed capture, n_valid=5 vs fresh equal=True cosine=1
+max_abs=0` (log `/home/jingwu/thor_val/0920/R_fa4_recover.log`; Jetson AGX
+Thor, MAXN, GPC 1.575 GHz, `emc_locked=null`, GPU exclusive). The capture-path
+defect behind the earlier failure — the cuBLAS fallback reusing the capture
+pool an invalidated capture had left recording — is fixed in the frontend
+(issues.md ISSUE-085).
 
 
 # OPT-031: derive the remaining per-benchmark shape tables from the workload

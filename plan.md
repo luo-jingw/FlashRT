@@ -1898,9 +1898,10 @@ Open:
   multi-length safety check passes with FA4 off (4 tests), the ABI tick at two
   captured lengths is bit-exact, the trimmed gate fixture exists and passes,
   the cache is bounded and precaptured, and the per-length memory cost is one
-  shared pool. The technical blockers left are the FA4-**on** recovery test
-  (ISSUE-085) and the native face's own phase S4. Changing a profile is a plan
-  edit and is the owner's call.
+  shared pool. The FA4-**on** multi-length check now passes too (Thor `0920`,
+  4 tests, `equal=True cosine=1 max_abs=0` on the recovered length), so the
+  only technical gap left is the native face's own phase S4. Changing a
+  profile is a plan edit and is the owner's call.
 - Profile contents (T4): keep `fast` as `text_trim` + FA4 (backbone and mot)
   + native VAE in graph. The FA4 criterion was met in the `c20f3a0` round
   (`stack` 9.7 ms below `vae_trim`, agreement with official not worse) and
