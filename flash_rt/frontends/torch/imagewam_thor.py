@@ -368,9 +368,15 @@ class ImageWAMTorchFrontendThor:
         # cache (`self._captures`), so a deployment with many distinct
         # prompt lengths cannot grow it without limit. 32 is the working
         # default: LIBERO's four suites use 15 distinct lengths, so it
-        # covers them with headroom, and one captured graph costs 10-16 MiB
-        # on H100 (NVML, per process). Applied only by the trimmed path;
-        # without trim the cache holds the one padded length.
+        # covers them with headroom. The memory is paid by the FIRST
+        # capture, not by each one: measured on Thor at those 15 lengths
+        # (nvfp4, FA4 off; the Thor round at a84916a), the first captured
+        # graph costs +218.0 MiB reserved / +206.3 MiB allocated and every
+        # capture after it +0.0 MiB reserved / +0.1 MiB allocated, because
+        # they all share the one capture pool -- so 15 lengths cost the
+        # first graph plus ~nothing, and the default bound of 32 is of the
+        # order of 221 MiB rather than 32 x 218 MiB. Applied only by the
+        # trimmed path; without trim the cache holds the one padded length.
         if (isinstance(text_trim_cache_size, bool) or not isinstance(text_trim_cache_size, int)
                 or text_trim_cache_size < 1):
             raise ValueError(f"text_trim_cache_size={text_trim_cache_size!r} -- must be an int >= 1")

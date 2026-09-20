@@ -13,6 +13,11 @@ same tick must fail:
   graph's uint8 view buffer, and the same buffer written raw through the
   `image_views` SWAP window.
 
+Both placements drive those 224x224 frames, the size the workload delivers a
+view at and the size it is encoded at, so the two differ only in where the
+encode happens: the declared `images` shape, the in-graph `views_u8` and the
+`image_views` window, and the 392 tokens in `img_raw` are the same in both.
+
 Needs the real AE (`AE_MODEL_PATH` / `FLUX2_AE_MODEL_PATH`), a `flux2`
 clone (`FLUX2_SRC`) and the exec/ + runtime/ builds; skips otherwise.
 """
@@ -37,7 +42,13 @@ pytestmark = pytest.mark.skipif(not (os.path.isdir(_FLUX2_SRC) and os.path.isfil
                                 reason="real flux2 clone / AE checkpoint not present")
 
 IMG_DIMS = {"x0": 3, "a0": 3 + 392, "total": 3 + 392 + 4, "ref_h": 14, "ref_w": 28}
-RAW_HW = (256, 256)
+# Both placements take LIBERO's own per-view size: a view is encoded at the
+# size it is delivered at (`VaeStageSpec.encode_hw`, the frontend's
+# `_input_view_shape()`), so the in-graph stage built from `(2, 224, 224)`
+# has `encode_hw` `(224, 224)`, `views_u8` `(2, 224, 224, 3)` and the 392
+# tokens `IMG_DIMS` carries. Frames of another size encode at that size
+# instead: 256x256 views are a 16 x 32 grid, i.e. 512 tokens.
+FRAME_HW = (224, 224)
 SEED = 11
 
 
@@ -47,11 +58,10 @@ def _frames(hw: tuple[int, int]) -> list[np.ndarray]:
 
 
 def _build(vae_graph_input):
-    hw = RAW_HW if vae_graph_input else (224, 224)
     fe = ImageWAMTorchFrontendThor(precision="fp16", dims_override=dict(IMG_DIMS), ae_model_path=_AE_PATH,
                                    flux2_src=_FLUX2_SRC, vae_graph_input=vae_graph_input)
     fe.set_prompt("pick up the red cup")
-    frames = _frames(hw)
+    frames = _frames(FRAME_HW)
     obs = {"view1": torch.from_numpy(frames[0]), "view2": torch.from_numpy(frames[1])}
     noise = torch.randn(4, 7, device="cuda") * 0.01
     ref = fe.infer(obs, action_noise=noise)["actions"]
@@ -108,7 +118,7 @@ def test_vae_outside_graph_images_port():
 
 
 def test_vae_inside_graph_images_and_image_views_ports():
-    names, ref, ref_tokens, staged, staged_tokens, swap, identity = _run((2, *RAW_HW))
+    names, ref, ref_tokens, staged, staged_tokens, swap, identity = _run((2, *FRAME_HW))
     print(f"ports={names}; images STAGED: tokens array_equal={np.array_equal(staged_tokens, ref_tokens)} "
           f"actions array_equal={np.array_equal(staged, ref)}; image_views SWAP: actions "
           f"array_equal={np.array_equal(swap, ref)} max_abs={np.abs(swap - ref).max():.3g}")
