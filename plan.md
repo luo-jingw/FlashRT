@@ -1625,13 +1625,15 @@ Phase Status: completed
   its frontend through `load_imagewam`.
 
 ### Phase W12: Thor validation on the new entry
-Phase Status: blocked
-- Blocker: the target workload's `infer()` cannot run until the VAE encode
-  geometry follows the workload's per-view size (ISSUE-086: the layout asks
-  for 768 image tokens, the VAE path produces 588). Its ABI and native rows
-  measure already (152.7 ms and 154.5 ms with placeholder image tokens), so
-  the remaining item is one re-run after that fix (`THOR_CHECKLIST.md` item
-  P).
+Phase Status: completed
+- Closed: the blocker was the VAE encode geometry (ISSUE-086), fixed and
+  verified on Thor at `0919e` — the target workload serves on all three paths
+  (`default` `infer()` 216.93 / ABI 173.55 / native 173.27 ms; `profile=fast`
+  with precaptured lengths 137.64 / 139.35 / native refused by R5; the trimmed
+  sweep at 16 / 72 / 128 valid tokens 197.00 / 207.06 / 217.50 ms on `infer()`
+  and 153.51 / 161.68 / 172.05 ms on the ABI), and the LIBERO rows are
+  fidelity-identical to the previous round (`libero_spatial` nvfp4 `default`:
+  vs official min 0.99418 / median 0.99764, MAE 0.18290, P50 202.6 ms).
 - Result on Thor at `eccf14f` (Jetson AGX Thor, MAXN, GPC 1.575 GHz,
   `emc_locked=null`, GPU exclusive, logs under `/home/jingwu/thor_val/0919s/`):
   the recorded numbers reproduce through the new entry. The gate measures
@@ -1782,8 +1784,14 @@ Phase Status: completed
   keyword reaching `precapture_text_lengths` once through a mocked
   constructor. On Thor a precaptured length switches in 0.000-0.012 s where a
   length captured on first use takes 0.42-0.58 s, over three swept lengths
-  (16, 24, 31 valid tokens). The per-length graph memory increment is the one
-  number still missing (checklist item B3).
+  (16, 24, 31 valid tokens), and eviction behaves as designed: with the bound
+  at 2 and no precapture, revisiting an evicted length captures again
+  (0.636 / 0.503 / 0.468 / 0.465 s for 16 -> 24 -> 31 -> 16). The memory
+  measurement corrected this phase's own assumption: the first captured graph
+  costs +218.0 MiB reserved / +206.3 MiB allocated and every following one
+  +0.0 / +0.1 MiB (the captures share the pool), so 15 lengths sit under one
+  graph's fixed cost and the default bound of 32 is on the order of 221 MiB,
+  not 32 x 218 MiB.
 - Two decisions made while implementing: `precapture_text_lengths` refuses a
   request with more distinct lengths than the bound (its refill loop would
   otherwise recapture what eviction had just dropped, forever), and the cache
@@ -1885,6 +1893,14 @@ Decided (owner, after the `c20f3a0` Thor round):
 
 Open:
 
+- Whether `text_trim` becomes the default of the `default` profile for the
+  Python `infer()` and ABI paths. Everything it needs is verified: the
+  multi-length safety check passes with FA4 off (4 tests), the ABI tick at two
+  captured lengths is bit-exact, the trimmed gate fixture exists and passes,
+  the cache is bounded and precaptured, and the per-length memory cost is one
+  shared pool. The technical blockers left are the FA4-**on** recovery test
+  (ISSUE-085) and the native face's own phase S4. Changing a profile is a plan
+  edit and is the owner's call.
 - Profile contents (T4): keep `fast` as `text_trim` + FA4 (backbone and mot)
   + native VAE in graph. The FA4 criterion was met in the `c20f3a0` round
   (`stack` 9.7 ms below `vae_trim`, agreement with official not worse) and

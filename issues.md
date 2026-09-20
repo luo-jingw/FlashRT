@@ -1173,8 +1173,12 @@ Status of the six conditions after the `eccf14f` round:
 
 1. satisfied (Thor, three suites: trimmed agreement with official at or
    above untrimmed, lower P50).
-2. open, and the only one left for the Python path: the FA4-on branch of the
-   multi-length safety check depends on ISSUE-085's `capture_sync` result.
+2. open, and the only one left for the Python path: the multi-length
+   safety check passes with FA4 **off** (4 tests) and fails with FA4 **on**,
+   where the fallback swallows the injected failure and the test's own
+   `torch.equal` then mismatches (ISSUE-085, one of its two remaining
+   defects). The `capture_sync` cascade of the previous round is not the
+   cause.
 3. satisfied (a failed capture leaves no graph active).
 4. satisfied: fixture v2 with a trimmed `fp16` reference was generated
    (`text_trim=true`) and a trimmed nvfp4 gate run passes against it (vs
@@ -1188,7 +1192,16 @@ Status of the six conditions after the `eccf14f` round:
 6. satisfied: the per-length cache is bounded (`text_trim_cache_size`,
    default 32) and `precapture_text_lengths` fills it at construction. On
    Thor a precaptured length switches in 0.000-0.012 s where a length
-   captured on first use takes 0.42-0.58 s.
+   captured on first use takes 0.42-0.58 s. Eviction behaves as designed: with
+   the bound at 2 and no precapture, `set_prompt` for the lengths 16 -> 24 ->
+   31 -> 16 costs 0.636 / 0.503 / 0.468 / **0.465 s**, i.e. the revisited
+   length captures again, against 0.012 / 0.000 / 0.000 s for the same three
+   lengths precaptured under a bound of 8. The memory claim in this issue's
+   own text (10-16 MiB per captured graph on H100) is wrong for Thor: the
+   first captured graph costs +218.0 MiB reserved / +206.3 MiB allocated and
+   every following one +0.0 / +0.1 MiB, because the captures share the pool -
+   15 LIBERO lengths together sit under one graph's worth of fixed cost, and
+   the default bound of 32 is on the order of 221 MiB, not 32 x 218 MiB.
 
 The design question in "Shape of condition 5" is settled for this
 deployment: exact trimmed lengths, precaptured at construction and bounded by
@@ -1588,51 +1601,70 @@ gate's own repeated-row spread is the number to compare against.
 
 Status: open
 
-Area: three test-level failures on Thor that are not the served path —
-`tests/test_imagewam_awq.py` (kernel accounting), the FA4 dispatch test's
-`capture_sync` mode, and the graph-recovery test
+Area: two independent test-level defects on Thor, neither on the served path —
+the FA4 dispatch test's `capture_sync` mode (capture-pool allocation) and
+`tests/test_imagewam_awq.py`'s kernel accounting; plus the FA4-enabled
+graph-recovery test that the first one masks
 
 ## Observation
 
-The `eccf14f` round finds the same three symptoms as the previous round, with
-the served path unaffected (end-to-end FA4 does not fall back on any row of
-the configuration matrix):
+The `0919e` round ran each of the three symptoms in isolation:
 
-- the AWQ test's kernel count for the plain path is `0`;
-- the FA4 dispatch test's `capture_sync` mode still shows the mempool
-  behaviour noted last round;
-- the graph-recovery test's `torch.equal` comparison still fails.
-
-`THOR_CHECKLIST.md` item A1 carries the commands that separate a real failure
-from an ordering cascade.
+- `tests/test_imagewam_fa4_dispatch.py -k capture_sync`: fails with
+  `beginAllocateToPool: already recording to mempool_id`. **A real defect**:
+  something allocates into the capture pool while the stream is already
+  recording, which is what invalidates the capture state the earlier round saw
+  as a cascade.
+- `tests/test_imagewam_awq.py`: fails with the plain path's kernel count `0`
+  against the AWQ path's `285`. **An independent defect** (the accounting is
+  not wired for the plain path), not a consequence of the capture problem.
+- `tests/test_imagewam_text_trim_graph_safety.py` with FA4 **off**: 4 passed.
+  The `torch.equal` failure reported in the previous round was therefore the
+  `capture_sync` cascade, not a defect of its own.
+- the same file's recovery test with FA4 **on**: fails, because the fallback
+  swallows the test's stand-in and the subsequent `torch.equal` comparison
+  then fails. **An independent defect**, again not a cascade.
 
 ## Impact
 
-None observed on the served results: the matrix, the gate and the path
-benchmark all run with FA4 active when asked for and never fall back
-(`FA4 fallback=None` on every row of the `eccf14f` round). The three tests
-stay red on Thor, so a regression elsewhere in those areas would be hidden
-until they are explained.
+None observed on the served results: the configuration matrix, the gate and
+the path benchmark all run with FA4 active and never fall back
+(`FA4 fallback=None` on every row of both Thor rounds). Two defects remain,
+and the FA4-enabled multi-length recovery case is the one that keeps
+ISSUE-080's condition 2 red, which is the last technical blocker for serving
+`text_trim` by default on the Python and ABI paths.
 
 ## Evidence
 
-- The `eccf14f` round's `A1_*.log` files under
-  `/home/jingwu/thor_val/0919s/`.
-- `THOR_CHECKLIST.md` item A1 (the commands and the cascade criterion).
+- The `0919e` round's `A1_*.log` files under
+  `/home/jingwu/thor_val/0919e/`: `A1_fa4_dispatch.log` (the mempool message),
+  `A1_awq.log` (`plain=0` vs `awq=285`), `A1_graph_recover.log` (FA4 off, 4
+  passed), `A1_fa4_recover.log` (FA4 on, the swallowed stand-in and the
+  `torch.equal` mismatch).
+- `THOR_CHECKLIST.md` item A1 carries the commands and the cascade criterion.
 
 ## Hypotheses
 
-Not restated: the previous round's hypothesis about `capture_sync` calling
-`torch.cuda.synchronize()` during capture is still the one to test first
-(`THOR_CHECKLIST.md` item A1 states it and how to falsify it).
+- `capture_sync`: a buffer (the FA4 output staging or a lazily built scratch)
+  is allocated inside the recording region; the allocation must happen before
+  `begin` or through a separate pool. The error names the pool state, so the
+  first step is to run the capture under a synchronize/bisect that names the
+  allocating call.
+- AWQ: the plain-path counter is probably a kernel-group gate that the AWQ
+  path satisfies and the plain path does not; the assertion compares counts
+  that the two paths do not both produce.
+- FA4-on recovery: the fallback turns the injected failure into a successful
+  capture, so the test's stand-in never fires and `torch.equal` compares
+  against the wrong reference.
 
 ## Next Experiment
 
-Run item A1's commands in the order given: the isolated
-`test_imagewam_fa4_dispatch.py` run decides whether `capture_sync` is a real
-failure or the cascade source, and the AWQ and graph-recovery tests are then
-run isolated. Record each first failure text.
-
+Per defect: (1) `capture_sync` — record which allocation lands inside the
+recording region and move it out; (2) AWQ — make the plain path's kernel count
+observable (or assert the property that actually differs between the paths);
+(3) the FA4-on recovery test — make the injected failure survive the fallback
+(or assert the fallback reason instead of the tensor identity). Then re-run the
+three files on Thor.
 # ISSUE-086
 
 Status: resolved
@@ -1732,3 +1764,18 @@ Verified on CPU: the spec geometry per workload against
 To be observed on Thor (`THOR_CHECKLIST.md` item P):
 `--workload target --text-max-len 128` on all three paths, and the LIBERO rows
 for the bit-identity of the two-view tokens.
+
+## Verified on Thor
+
+`0919e`: the target workload serves. `view_shape` is `(3, 256, 256)`,
+`img_len` is 768, `infer()` runs instead of being skipped, and all three paths
+produce numbers (`default` `infer()` 216.93 / ABI 173.55 / native 173.27 ms).
+The LIBERO rows are unchanged in fidelity (`libero_spatial` nvfp4 `default`:
+vs official min 0.99418 / median 0.99764, MAE 0.18290, exactly the values the
+previous round recorded; P50 202.6 ms against 202.0-202.4 ms), so the two-view
+path is faithful to the geometry change.
+
+One test did not follow the change: `tests/test_imagewam_model_runtime_vae.py`'s
+in-graph port test still drives 256x256 frames with LIBERO-shaped dims, so its
+expected token geometry moved. That is a test-side follow-up, not a served-path
+defect.
