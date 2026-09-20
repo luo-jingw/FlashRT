@@ -140,10 +140,12 @@ def test_option_field_reaches_its_target(field_name):
         assert got == expected
 
 
-def test_default_profile_maps_to_the_constructor_defaults():
-    """The `default` profile through the mapping equals `__init__`'s own
-    defaults (the resolved path and the legacy path agree)."""
-    kwargs = frontend_kwargs_from_config(resolved())
+def test_native_profile_maps_to_the_constructor_defaults():
+    """The `native` profile through the mapping is `__init__`'s own untrimmed
+    default set (FA4 stated off rather than left to the environment). The
+    served `default` no longer maps to those defaults, and this test asserts
+    the divergence instead of assuming the two agree."""
+    kwargs = frontend_kwargs_from_config(resolved(profile="native"))
     defaults = {name: parameter.default for name, parameter in
                 inspect.signature(ImageWAMTorchFrontendThor.__init__).parameters.items()
                 if name not in NOT_A_RESOLVED_ARGUMENT
@@ -151,7 +153,7 @@ def test_default_profile_maps_to_the_constructor_defaults():
     assert kwargs["precision"] == defaults["precision"] == "nvfp4"
     assert kwargs["text_trim"] is defaults["text_trim"] is False
     assert kwargs["text_trim_cache_size"] == defaults["text_trim_cache_size"] == 32
-    assert kwargs["use_fa4"] is defaults["use_fa4"] is None   # resolved at construction
+    assert kwargs["use_fa4"] is False and defaults["use_fa4"] is None   # stated off, not env-resolved
     assert kwargs["use_fa4_mot"] is defaults["use_fa4_mot"] is False
     assert kwargs["vae_encoder"] == defaults["vae_encoder"] == "torch"
     assert kwargs["vae_graph_input"] is defaults["vae_graph_input"] is None
@@ -162,6 +164,14 @@ def test_default_profile_maps_to_the_constructor_defaults():
     assert kwargs["gemm_variant_autotune"] is defaults["gemm_variant_autotune"] is False
     assert kwargs["gemm_runner"] is defaults["gemm_runner"] is None
     assert kwargs["vae_resize"] == defaults["vae_resize"] == "area"
+
+    # the served default differs from both, in exactly the two switches that
+    # make it the served set: text_trim on, FA4 left to the environment
+    served = frontend_kwargs_from_config(resolved())
+    assert served["text_trim"] is True and defaults["text_trim"] is False
+    assert served["use_fa4"] is None
+    differing = sorted(key for key, value in served.items() if value != kwargs[key])
+    assert differing == ["text_trim", "use_fa4"], differing
 
 
 def test_path_arguments_are_passed_through():

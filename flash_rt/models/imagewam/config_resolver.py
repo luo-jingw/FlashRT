@@ -20,9 +20,14 @@ loaded by path (`importlib.util.spec_from_file_location`, as
 tests/test_imagewam_config_resolver.py does in one subprocess test) there is
 no package, and `precision.py` is loaded by path from the same directory.
 
-Profiles (`PROFILES`) map a name to option values. `default` reproduces
-today's constructor defaults of `ImageWAMTorchFrontendThor` (pinned against
-the constructor source by the test). `fast` is PROVISIONAL, see its
+Profiles (`PROFILES`) map a name to option values. The profiles carry the
+**served** configuration, which is deliberately not the constructor's own
+history: `ImageWAMTorchFrontendThor.__init__` keeps its historical defaults
+for a caller that passes dims and switches by hand, and those defaults leave
+`text_trim` off, while served `default` trims. The two paths therefore
+diverge in exactly that switch. `native` is the non-trimming set the
+one-graph native pipeline can serve (rule R5) and equals what `default` was
+before `text_trim` became served. `fast` is PROVISIONAL, see its
 `ProfileSpec.description`. `precision=` overrides the profile's precision;
 `**expert` overrides individual options (`EXPERT_KEYS`).
 
@@ -34,7 +39,8 @@ them):
     R3  a real VAE encoder / VAE in the graph without ae_model_path
     R4  nvfp4_awq with a non-AWQ precision or without a calibration file
     R5  text_trim with a consumer whose path carries no per-length graph
-        (native; the ABI carries one graph per captured length)
+        (native; the ABI carries one graph per captured length), and the
+        non-trimming set to resolve for that consumer is `profile="native"`
     R6  native consumer with something the native pipeline does not carry
         (AWQ, a precision it cannot describe, FA4, the VAE stage)
     R7  workload layout inconsistent with the structure
@@ -172,24 +178,39 @@ PROFILES: dict[str, ProfileSpec] = {
     "default": ProfileSpec(
         name="default",
         description=(
-            "Today's constructor defaults of ImageWAMTorchFrontendThor: nvfp4, no text trim, "
-            "FA4 backbone as the frontend resolves it (opt-in through FLASHRT_THOR_FA4), no FA4 "
-            "mot, torch VAE encoder outside the graph, no AWQ."),
-        precision=Precision.NVFP4, text_trim=False, use_fa4=None, use_fa4_mot=False,
+            "The served configuration: nvfp4, text_trim (one graph per prompt length), FA4 "
+            "backbone as the frontend resolves it (opt-in through FLASHRT_THOR_FA4), no FA4 "
+            "mot, torch VAE encoder outside the graph, no AWQ. The frontend constructor's own "
+            "defaults differ in one switch: they leave text_trim off, which is the set "
+            "profile=\"native\" carries."),
+        precision=Precision.NVFP4, text_trim=True, use_fa4=None, use_fa4_mot=False,
         vae_encoder="torch", vae_graph=False, nvfp4_awq=False),
     "fast": ProfileSpec(
         name="fast",
         description=(
             "PROVISIONAL. text_trim + FA4 backbone + FA4 mot + native VAE encoder inside the "
             "CUDA graph (vae_graph_input from the workload). Measured on Thor at 106.1 ms vs "
-            "203.3 ms for the default configuration (THOR_STATUS_SUMMARY.md, nvfp4). The owner "
-            "has not approved it as the default (plan.md 'Decisions pending', T4/T5): it stays "
-            "opt-in by name. text_trim is refused with the native consumer (rule R5); the abi and "
-            "infer consumers serve it. It needs ae_model_path (rule R3); use_fa4=True "
+            "203.3 ms for the untrimmed configuration (THOR_STATUS_SUMMARY.md, nvfp4). FA4 "
+            "(both sites) and the in-graph native VAE encoder stay the opt-in tier on top of a "
+            "`default` that already trims. The owner has not approved them as part of the "
+            "served default (plan.md 'Decisions pending', T4/T5): they stay opt-in by name. "
+            "text_trim is refused with the native consumer (rule R5); the abi and infer "
+            "consumers serve it. It needs ae_model_path (rule R3); use_fa4=True "
             "raises at construction when the FA4 runtime is missing (unlike the env-auto "
             "default)."),
         precision=Precision.NVFP4, text_trim=True, use_fa4=True, use_fa4_mot=True,
         vae_encoder="native", vae_graph=True, nvfp4_awq=False),
+    "native": ProfileSpec(
+        name="native",
+        description=(
+            "The native/one-graph consumer's profile until plan.md phase S4: nvfp4, no text "
+            "trim, FA4 explicitly off, no FA4 mot, torch VAE encoder outside the graph, no AWQ. "
+            "The native pipeline replays one graph at one context length, so rule R5 refuses a "
+            "trimmed frontend and rule R6 refuses FA4; use_fa4=False here keeps the "
+            "FLASHRT_THOR_FA4 opt-in from switching FA4 on behind the caller's back. Its "
+            "contents are what profile=\"default\" was before text_trim became served."),
+        precision=Precision.NVFP4, text_trim=False, use_fa4=False, use_fa4_mot=False,
+        vae_encoder="torch", vae_graph=False, nvfp4_awq=False),
 }
 
 # Options an expert may override per call (`resolve_config(**expert)`).
@@ -469,9 +490,11 @@ def resolve_config(workload: "ImageWAMWorkload", structure: "ImageWAMStructure",
         raise ConfigError(
             "R5", f"text_trim=True with consumer={consumer!r}: the native pipeline replays one graph at "
                   f"one context length and has no per-length variant table, while a trimmed frontend runs "
-                  f"one graph per prompt length (ISSUE-080 condition 5). consumer='abi' serves a trimmed "
-                  f"frontend: runtime_surface() and the export carry one graph per captured length, "
-                  f"keyed by that length")
+                  f"one graph per prompt length (ISSUE-080 condition 5). A native caller that serves "
+                  f"exactly one context length resolves profile=\"native\" (or text_trim=False), the "
+                  f"non-trimming set that pipeline carries -- `default` trims. consumer='abi' serves a "
+                  f"trimmed frontend: runtime_surface() and the export carry one graph per captured "
+                  f"length, keyed by that length")
     if consumer == "native":
         # pipeline_resources() / export_model_runtime(io="native") refusals.
         if nvfp4_awq:

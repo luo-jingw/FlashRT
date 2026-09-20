@@ -2,8 +2,13 @@
 
 Pins, against the frontend SOURCE (`ast`, no frontend import):
 
-* the `default` profile equals the constructor defaults of
-  `ImageWAMTorchFrontendThor`;
+* the served `default` profile trims, and the `native` profile is the
+  non-trimming set with FA4 pinned off, so a native/one-graph caller does not
+  trip rule R5 on the served default;
+* the profiles are the SERVED configuration while
+  `ImageWAMTorchFrontendThor.__init__` keeps its historical untrimmed defaults,
+  and the divergence between the two is exactly the `text_trim` switch (plus
+  the explicitly stated `use_fa4` of `native`);
 * every `dims` key the frontend and pipeline read with a string subscript is
   either produced by the resolver or filled by the frontend itself;
 * the `effective_config` line has the key order of the compare script's
@@ -58,6 +63,11 @@ def resolve(**kw) -> cr.ResolvedConfig:
     return resolve_config(LIBERO, LIBERO_STRUCT, **kw)
 
 
+def resolve_native(**kw) -> cr.ResolvedConfig:
+    """The non-trimming set a native/one-graph caller resolves."""
+    return resolve_config(LIBERO, LIBERO_STRUCT, profile="native", **kw)
+
+
 def rule_of(**kw) -> str:
     with pytest.raises(ConfigError) as ei:
         resolve(**kw)
@@ -94,13 +104,18 @@ def _subscript_keys(path: Path) -> set[str]:
 # -- profiles ----------------------------------------------------------------
 
 
-def test_default_profile_equals_frontend_constructor_defaults():
+def test_native_profile_is_the_untrimmed_set():
+    """`native` is the set the native/one-graph pipeline can serve until
+    plan.md phase S4: the constructor's own untrimmed defaults, with FA4
+    stated off instead of left to the environment (rule R6 refuses FA4 there,
+    and `False` keeps the `FLASHRT_THOR_FA4` opt-in from switching it on
+    behind the caller's back)."""
     fd = _frontend_init_defaults()
-    o = resolve().options
+    o = resolve_native().options
     assert o.precision == fd["precision"] == "nvfp4"
     assert o.text_trim is fd["text_trim"] is False
     assert o.text_trim_cache_size == fd["text_trim_cache_size"] == 32
-    assert o.use_fa4 is fd["use_fa4"] is None       # None: resolved at construction (env FLASHRT_THOR_FA4)
+    assert o.use_fa4 is False                    # the profile states it; the constructor leaves it None
     assert o.use_fa4_mot is fd["use_fa4_mot"] is False
     assert o.vae_encoder == fd["vae_encoder"] == "torch"
     assert o.vae_graph_input is fd["vae_graph_input"] is None
@@ -111,6 +126,40 @@ def test_default_profile_equals_frontend_constructor_defaults():
     assert o.awq_alpha == fd["awq_alpha"] == 0.5
     assert o.awq_scope == fd["awq_scope"] == "adaln+down"
     assert o.merge_qkv_mlp is True and o.merge_linear2 is True   # frontend: precision != "fp16_cutlass"
+    # the native consumer accepts it: no R5, no R6
+    assert resolve_native(consumer="native").options.text_trim is False
+
+
+def test_the_served_default_is_the_native_set_plus_text_trim():
+    """The profiles carry what is SERVED, and the two named sets differ in
+    exactly the two switches that make the served default different from the
+    native one: text_trim on, FA4 left to the frontend's env resolution."""
+    served, native = resolve().options, resolve_native().options
+    assert served.text_trim is True and native.text_trim is False
+    assert served.use_fa4 is None and native.use_fa4 is False
+    other = [f.name for f in dataclasses.fields(ImageWAMOptions)
+             if f.name not in ("text_trim", "use_fa4")
+             and getattr(served, f.name) != getattr(native, f.name)]
+    assert other == [], f"the profiles differ in more than text_trim/use_fa4: {other}"
+
+
+def test_the_profiles_diverge_from_the_constructor_defaults_in_text_trim():
+    """`ImageWAMTorchFrontendThor.__init__` keeps the historical untrimmed
+    defaults for a caller that passes dims and switches by hand; the profiles
+    carry the served configuration. That divergence in `text_trim` is the
+    point of the change (and is why `native` exists as a named set), so it is
+    pinned rather than assumed."""
+    fd = _frontend_init_defaults()
+    assert fd["text_trim"] is False and fd["use_fa4"] is None
+    assert resolve().options.text_trim is True
+    # everything else the constructor defaults to, the served profile does too
+    served = resolve().options
+    for key in ("precision", "text_trim_cache_size", "use_fa4_mot", "vae_encoder", "nvfp4_awq",
+                "calibration_path", "gemm_variant_autotune", "gemm_runner", "awq_alpha", "awq_scope"):
+        assert getattr(served, key) == fd[key], key
+    assert served.vae_graph_input is fd["vae_graph_input"] is None
+    assert served.use_fa4 is fd["use_fa4"] is None    # still env-resolved, not stated
+    assert served.merge_qkv_mlp is True and served.merge_linear2 is True
 
 
 def test_merge_flags_follow_the_frontend_precision_rule():
@@ -129,9 +178,12 @@ def test_use_fa4_none_is_the_frontends_env_resolution():
 
 
 def test_profile_table_and_fast_contents():
-    assert tuple(PROFILES) == ("default", "fast")
+    assert tuple(PROFILES) == ("default", "fast", "native")
     assert cr.CONSUMERS == ("infer", "abi", "native")
     assert PROFILES["default"].precision == "nvfp4"
+    assert PROFILES["default"].text_trim is True
+    assert PROFILES["native"].precision == "nvfp4"
+    assert PROFILES["native"].text_trim is False and PROFILES["native"].use_fa4 is False
     fast = resolve(profile="fast", ae_model_path=AE).options
     assert fast.precision == "nvfp4"
     assert fast.text_trim is True
@@ -139,11 +191,29 @@ def test_profile_table_and_fast_contents():
     assert fast.vae_encoder == "native"
     assert fast.vae_graph_input == LIBERO.vae_graph_input() == (2, 224, 224)
     assert fast.nvfp4_awq is False
-    # provisional and not the default
+    # provisional, and FA4 + the in-graph native VAE stay the opt-in tier
     desc = PROFILES["fast"].description
     assert "PROVISIONAL" in desc and "106.1" in desc and "203.3" in desc
     assert "not approved" in desc
+    assert "opt-in tier" in desc
+    # the native profile names the consumer it is for, and until when
+    ndesc = PROFILES["native"].description
+    assert "native" in ndesc and "S4" in ndesc
     assert resolve_config.__kwdefaults__["profile"] == "default"
+
+
+def test_default_profile_resolves_trimmed_for_the_serving_consumers():
+    """The served default: text_trim on, and the two consumers that carry one
+    graph per length serve it. `fast` is unchanged by this (it already
+    trimmed)."""
+    served = resolve().options
+    assert served.text_trim is True and served.use_fa4 is None
+    assert served.vae_encoder == "torch" and served.vae_graph_input is None
+    assert resolve(consumer="infer").options.text_trim is True
+    assert resolve(consumer="abi").options.text_trim is True
+    fast = resolve(profile="fast", ae_model_path=AE, consumer="abi").options
+    assert (fast.text_trim, fast.use_fa4, fast.use_fa4_mot) == (True, True, True)
+    assert fast.vae_encoder == "native" and fast.vae_graph_input == (2, 224, 224)
 
 
 def test_fast_vae_graph_input_follows_the_workload():
@@ -182,7 +252,7 @@ def test_expert_override_and_unknown_key():
 def test_options_are_frozen():
     o = resolve().options
     with pytest.raises(dataclasses.FrozenInstanceError):
-        o.text_trim = True
+        o.text_trim = False
 
 
 # -- dims ----------------------------------------------------------------------
@@ -266,7 +336,8 @@ def test_R4_awq_needs_an_awq_precision_and_a_calibration_file():
 def test_R5_text_trim_needs_a_per_length_graph_consumer():
     """The ABI consumer carries one graph per captured text length, so
     `text_trim` is legal there; the native consumer replays one graph at
-    one context length and stays refused."""
+    one context length and stays refused. Since the served `default` trims,
+    the refusal is now what a native caller meets when it resolves `default`."""
     assert rule_of(text_trim=True, consumer="native") == "R5"
     assert rule_of(profile="fast", ae_model_path=AE, consumer="native") == "R5"
     assert resolve(text_trim=True, consumer="infer").options.text_trim
@@ -274,24 +345,50 @@ def test_R5_text_trim_needs_a_per_length_graph_consumer():
     fast = resolve(profile="fast", ae_model_path=AE, consumer="infer")
     assert fast.options.text_trim
     assert resolve(profile="fast", ae_model_path=AE, consumer="abi").options.text_trim
-    assert not resolve(consumer="abi").options.text_trim
-    assert not resolve(consumer="native").options.text_trim
+    # the served default now trims, so both serving consumers get it and the
+    # native consumer refuses it; `native` is the set that serves the native path
+    assert resolve().options.text_trim and resolve(consumer="abi").options.text_trim
+    assert rule_of(consumer="native") == "R5"
+    assert not resolve_native(consumer="abi").options.text_trim
+    assert not resolve_native(consumer="native").options.text_trim
+
+
+def test_R5_message_names_the_profile_that_serves_the_native_path():
+    """A native caller that trips R5 is told the fix by name, so the served
+    default's trim is not a dead end for the ABI/native consumer path."""
+    with pytest.raises(ConfigError, match=r"^R5: ") as ei:
+        resolve_config(LIBERO, LIBERO_STRUCT, profile="default", consumer="native")
+    assert ei.value.rule == "R5"
+    assert 'profile="native"' in str(ei.value), str(ei.value)
+    assert "text_trim=False" in str(ei.value), str(ei.value)
+    with pytest.raises(ConfigError, match=r"^R5: ") as ei:
+        resolve_config(LIBERO, LIBERO_STRUCT, consumer="native")
+    assert ei.value.rule == "R5" and 'profile="native"' in str(ei.value)
+    # the named fix resolves
+    assert resolve_native(consumer="native").options.text_trim is False
 
 
 def test_R6_native_consumer_limits():
-    assert rule_of(nvfp4_awq=True, calibration_path=CAL, consumer="native") == "R6"
+    # every native case resolves the non-trimming set, so R6 is what is
+    # reached (R5 is checked first, see the ordering assertion at the end)
+    assert rule_of(profile="native", nvfp4_awq=True, calibration_path=CAL, consumer="native") == "R6"
     for p in ("fp16_cutlass", "fp8", "e0m3_hadamard", "nvfp4_sim"):
-        assert rule_of(precision=p, consumer="native") == "R6", p
-    assert rule_of(use_fa4=True, consumer="native") == "R6"
-    assert rule_of(use_fa4_mot=True, consumer="native") == "R6"
-    assert rule_of(vae_encoder="native", vae_graph=True, ae_model_path=AE, consumer="native") == "R6"
-    assert resolve(precision="nvfp4", consumer="native").options.precision is Precision.NVFP4
-    assert resolve(precision="fp16", consumer="native").options.precision is Precision.FP16
+        assert rule_of(profile="native", precision=p, consumer="native") == "R6", p
+    assert rule_of(profile="native", use_fa4=True, consumer="native") == "R6"
+    assert rule_of(profile="native", use_fa4_mot=True, consumer="native") == "R6"
+    assert rule_of(profile="native", vae_encoder="native", vae_graph=True, ae_model_path=AE,
+                   consumer="native") == "R6"
+    assert resolve_native(precision="nvfp4", consumer="native").options.precision is Precision.NVFP4
+    assert resolve_native(precision="fp16", consumer="native").options.precision is Precision.FP16
     # the same options are fine for the ABI (python io) and for infer()
     assert resolve(nvfp4_awq=True, calibration_path=CAL, consumer="abi").options.nvfp4_awq
     assert resolve(precision="fp8", consumer="abi").options.precision is Precision.FP8
-    assert resolve(use_fa4=False, use_fa4_mot=False, consumer="native").options.use_fa4 is False
-    assert resolve(consumer="native").options.use_fa4 is None    # decided at construction
+    assert resolve_native(use_fa4=False, use_fa4_mot=False, consumer="native").options.use_fa4 is False
+    assert resolve_native(consumer="native").options.use_fa4 is False   # the profile states it off
+    assert resolve().options.use_fa4 is None                           # the served default leaves it to the env
+    # R5 precedes R6: on the served default a native caller is told to switch
+    # profile first, not told about FA4
+    assert rule_of(use_fa4=True, consumer="native") == "R5"
 
 
 def test_R7_layout_inconsistent_with_the_structure():
@@ -322,20 +419,20 @@ def _write_calibration(path: str, dims: dict, *, text_trim: bool) -> None:
 def test_R8_calibration_identity(tmp_path):
     ok = str(tmp_path / "ok.safetensors")
     base = resolve(precision="fp8_static", calibration_path=CAL)
-    _write_calibration(ok, base.frontend_dims(), text_trim=False)
+    _write_calibration(ok, base.frontend_dims(), text_trim=True)
     r = resolve(precision="fp8_static", calibration_path=ok)               # legal: identity matches
     assert r.options.calibration_path == ok
 
-    # text_trim mismatch: file recorded untrimmed, configuration trims
+    # text_trim mismatch: file recorded trimmed, configuration untrimmed
     with pytest.raises(ConfigError, match=r"^R8: .*text_trim") as ei:
-        resolve(precision="fp8_static", calibration_path=ok, text_trim=True)
+        resolve(precision="fp8_static", calibration_path=ok, text_trim=False)
     assert ei.value.rule == "R8"
 
     # dims mismatch: a file recorded for another workload (different text length -> x0/a0)
     other = str(tmp_path / "other.safetensors")
     w = dataclasses.replace(LIBERO, text_max_len=256)
     _write_calibration(other, resolve_config(w, LIBERO_STRUCT, precision="fp8_static",
-                                             calibration_path=CAL).frontend_dims(), text_trim=False)
+                                             calibration_path=CAL).frontend_dims(), text_trim=True)
     with pytest.raises(ConfigError, match=r"^R8: .*dims differ.*'x0'") as ei:
         resolve(precision="fp8_static", calibration_path=other)
     assert ei.value.rule == "R8"
@@ -343,7 +440,7 @@ def test_R8_calibration_identity(tmp_path):
     # merge flags are part of the identity: a file recorded with the split linear2
     split = str(tmp_path / "split.safetensors")
     _write_calibration(split, resolve(precision="fp8_static", calibration_path=CAL, merge_linear2=False)
-                       .frontend_dims(), text_trim=False)
+                       .frontend_dims(), text_trim=True)
     with pytest.raises(ConfigError, match=r"^R8: .*merge_linear2"):
         resolve(precision="fp8_static", calibration_path=split)
     assert resolve(precision="fp8_static", calibration_path=split, merge_linear2=False)
@@ -421,8 +518,11 @@ def test_effective_config_keeps_the_compare_scripts_format():
                                               "calibration", "awq")
     line = resolve().effective_config
     assert "\n" not in line
-    assert line == ("effective_config precision=nvfp4 text_trim=False vae_encoder=torch vae_graph=False "
+    assert line == ("effective_config precision=nvfp4 text_trim=True vae_encoder=torch vae_graph=False "
                     "use_fa4=auto use_fa4_mot=False fa4_fallback_reason=None calibration=None awq=False")
+    assert resolve(profile="native").effective_config == (
+        "effective_config precision=nvfp4 text_trim=False vae_encoder=torch vae_graph=False "
+        "use_fa4=False use_fa4_mot=False fa4_fallback_reason=None calibration=None awq=False")
 
 
 def test_effective_config_takes_runtime_values():

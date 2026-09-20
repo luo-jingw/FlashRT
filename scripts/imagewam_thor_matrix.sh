@@ -5,8 +5,13 @@
 # Two modes, selected by whether PROFILES is set:
 #
 #   flag rows (PROFILES unset, the default): one row per switch set in
-#   ROWS, each relative to the precision under test.
-#     default          served defaults
+#   ROWS, each relative to the precision under test. A row is the `default`
+#   profile plus its own CFG switches below, so the row's CFG entry states
+#   every switch the row means, TEXT_TRIM included: no row inherits
+#   text_trim from the profile, because the served `default` profile trims
+#   and a row that left it unstated would silently become trimmed and
+#   collapse the recorded ladder.
+#     default          text_trim off: the untrimmed baseline of the ladder
 #     vae              + native VAE encoder captured into the main graph
 #     vae_trim         + text_trim
 #     vae_trim_fa4bb   + FA4 on the backbone attention
@@ -14,7 +19,10 @@
 #     stack_no_vae     stack without the native VAE   (leave-one-out)
 #     stack_no_trim    stack without text_trim        (leave-one-out)
 #   Leaving FA4 out of the stack is vae_trim; leaving only the mot site out
-#   is vae_trim_fa4bb, so those two are ladder rows and not repeated.
+#   is vae_trim_fa4bb, so those two are ladder rows and not repeated. Every
+#   flag row that states TEXT_TRIM=0 carries the contents of the `native`
+#   profile (the non-trimming set); the rows that state TEXT_TRIM=1 are
+#   trimmed.
 #
 #   profile rows (PROFILES="default fast"): one row per named profile, row
 #   name `profile_<name>`, exporting PROFILE=<name> to the compare script.
@@ -65,13 +73,13 @@ mkdir -p "$OUT"
 cd "$(dirname "$0")/.."
 
 declare -A CFG=(
-  [default]=""
-  [vae]="VAE_ENCODER=native VAE_GRAPH=1"
+  [default]="TEXT_TRIM=0"
+  [vae]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=0"
   [vae_trim]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=1"
   [vae_trim_fa4bb]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=1 FLASHRT_THOR_FA4=1"
   [stack]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=1 FLASHRT_THOR_FA4=1 FA4_MOT=1"
   [stack_no_vae]="TEXT_TRIM=1 FLASHRT_THOR_FA4=1 FA4_MOT=1"
-  [stack_no_trim]="VAE_ENCODER=native VAE_GRAPH=1 FLASHRT_THOR_FA4=1 FA4_MOT=1"
+  [stack_no_trim]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=0 FLASHRT_THOR_FA4=1 FA4_MOT=1"
 )
 
 # The rows this run walks: the named profiles, or the switch sets in ROWS.
