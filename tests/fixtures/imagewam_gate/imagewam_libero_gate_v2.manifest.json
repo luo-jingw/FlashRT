@@ -1,0 +1,292 @@
+{
+  "arrays": {
+    "context_bf16_bits": {
+      "dtype": "<u2",
+      "sha256": "770ec3d348843ab972d0dfce65c41854ecf44d9ad60a9c62133ac0a9e71e2c1a",
+      "shape": [
+        10,
+        512,
+        7680
+      ]
+    },
+    "context_mask": {
+      "dtype": "|b1",
+      "sha256": "33fc624794aa4dd06ca0f3146b474ab2ae488079fa985932522b846325c17056",
+      "shape": [
+        10,
+        512
+      ]
+    },
+    "episode": {
+      "dtype": "<i8",
+      "sha256": "60e2cada8cf06fa68cb9016cc04dbedb29a2db058f8e65a9f472e2534cb9d1b7",
+      "shape": [
+        20
+      ]
+    },
+    "fp16_reference_actions": {
+      "dtype": "<f4",
+      "sha256": "aeb1adcbac4649ac5c8f9d2f96b0dc88b2caec721878014f1edcfa2397d025c2",
+      "shape": [
+        20,
+        2,
+        64,
+        7
+      ]
+    },
+    "frame": {
+      "dtype": "<i8",
+      "sha256": "39d8bbd12c57914ca427739bbe76b5b28144f38cff76ab252bb954ea08e11623",
+      "shape": [
+        20
+      ]
+    },
+    "gt_actions": {
+      "dtype": "<f4",
+      "sha256": "3b1e2d77f571b4edd1c6fcf307969d0d29e58b71223ecd8aa25553c145c05fd1",
+      "shape": [
+        20,
+        64,
+        7
+      ]
+    },
+    "gt_len": {
+      "dtype": "<i8",
+      "sha256": "acd94069da2b33d3f62416e4cd696456ef5413e401f88342c6ed51ef2d63e06a",
+      "shape": [
+        20
+      ]
+    },
+    "noise": {
+      "dtype": "<f4",
+      "sha256": "ae85631f6af1964b8781f1f89b452ea46e69fe65dd47e87a275881b37418aebd",
+      "shape": [
+        20,
+        2,
+        64,
+        7
+      ]
+    },
+    "official_actions": {
+      "dtype": "<f4",
+      "sha256": "936c542b2b9625fb71a9eaa31564314a2b7847999732fc5866202584c902a82b",
+      "shape": [
+        20,
+        2,
+        64,
+        7
+      ]
+    },
+    "prompts": {
+      "dtype": "<U88",
+      "sha256": "3c0f9b994942af0b7316cf634ead0513d74986a34df21a29e2a36766571cd299",
+      "shape": [
+        10
+      ]
+    },
+    "seeds": {
+      "dtype": "<i8",
+      "sha256": "9d34149fbd1fe777eb238799054c8cbfbce372255f219f8740838def9bfd02db",
+      "shape": [
+        2
+      ]
+    },
+    "state": {
+      "dtype": "<f4",
+      "sha256": "f9e5f9b8a39eefc4bb56633d722cc57e9a061c9819661a6839e79f2d4cd35f8c",
+      "shape": [
+        20,
+        8
+      ]
+    },
+    "task_index": {
+      "dtype": "<i8",
+      "sha256": "a1c493ce37b2209a8f4234a22cb942b862b0c81ee8a5d85b33487151568eb1fc",
+      "shape": [
+        20
+      ]
+    },
+    "view1": {
+      "dtype": "|u1",
+      "sha256": "db5dc4b508ec70e54af5186ae8d71b37106af22cf307e5b0a095243e5d70860f",
+      "shape": [
+        20,
+        224,
+        224,
+        3
+      ]
+    },
+    "view2": {
+      "dtype": "|u1",
+      "sha256": "9fc870ced286fded165bdf76919dedb7f0cd4b0a014d5d5c4e232600d61fc5fe",
+      "shape": [
+        20,
+        224,
+        224,
+        3
+      ]
+    }
+  },
+  "files": {
+    "fixture.npz": {
+      "bytes": 84928912,
+      "sha256": "322a2a3b483004484f6843de2062c6caa89fc49dc3ad795b94887126f8a0dca6"
+    }
+  },
+  "format_version": 1,
+  "metadata": {
+    "checkpoint": {
+      "bytes": 9035379577,
+      "path": "/home/jingwu/workspace/pi0.5/FlashRT/checkpoints/imagewam_release/libero/flux2_klein_4b/model.pt",
+      "sha256": "53620f93f8772d2047f27f9ca9b4a1f56cdd7932de566282e0f4a80cfff21cb5"
+    },
+    "created_utc": "2026-09-19T17:54:03.718726+00:00",
+    "dataset_stats": {
+      "path": "/home/jingwu/workspace/pi0.5/FlashRT/checkpoints/imagewam_release/libero/flux2_klein_4b/dataset_stats.json",
+      "sha256": "5770ca032724314814dce0db828f2c3eb402bcf75933bd6e6f4a516831f3f3e8"
+    },
+    "device": "NVIDIA Thor",
+    "fp16_reference": {
+      "dims": {
+        "HD": 128,
+        "NH": 24,
+        "a0": 905,
+        "action_attn_width": 3072,
+        "action_dim": 7,
+        "action_hidden_dim": 1024,
+        "action_mlp_hidden": 4096,
+        "action_num_layers_double": 5,
+        "action_num_layers_single": 20,
+        "dt": 0.1,
+        "hidden": 3072,
+        "joint_attention_dim": 7680,
+        "mlp_hidden": 9216,
+        "num_action": 64,
+        "num_denoise_steps": 10,
+        "num_layers_double": 5,
+        "num_layers_single": 20,
+        "num_train_timesteps": 1000,
+        "proprio_dim": 8,
+        "ref_h": 14,
+        "ref_w": 28,
+        "shift": 5.0,
+        "total": 969,
+        "x0": 513
+      },
+      "frontend": "load_imagewam(ckpt, ImageWAMWorkload.libero(), profile='default', precision='fp16', text_trim=<text_trim>).infer(action_noise=...)",
+      "precision": "fp16",
+      "profile": "default",
+      "text_trim": true
+    },
+    "generator": "benchmarks/imagewam_gate_fixture_generate.py",
+    "generator_sha256": "343011788c9c9baa8a649b53e222bda59e39245de9067f226c6f23aa96c0b130",
+    "git": {
+      "clean": false,
+      "commit": "eccf14f09c16bbc352f1199d9a680d5d69546a53",
+      "tracked_changed_files": [
+        "benchmarks/imagewam_thor_path_bench.py"
+      ],
+      "tracked_changes": true,
+      "untracked_count": 5180,
+      "untracked_files": [
+        "checkpoints/Qwen3-4B/.gitattributes",
+        "checkpoints/Qwen3-4B/LICENSE",
+        "checkpoints/Qwen3-4B/README.md",
+        "checkpoints/Qwen3-4B/config.json",
+        "checkpoints/Qwen3-4B/generation_config.json",
+        "checkpoints/Qwen3-4B/merges.txt",
+        "checkpoints/Qwen3-4B/model.safetensors.index.json",
+        "checkpoints/Qwen3-4B/tokenizer.json",
+        "checkpoints/Qwen3-4B/tokenizer_config.json",
+        "checkpoints/Qwen3-4B/vocab.json",
+        "checkpoints/imagewam_release/libero/flux2_klein_4b/.gitattributes",
+        "checkpoints/imagewam_release/libero/flux2_klein_4b/README.md",
+        "checkpoints/imagewam_release/libero/flux2_klein_4b/config.yaml",
+        "checkpoints/imagewam_release/libero/flux2_klein_4b/dataset_stats.json",
+        "checkpoints/imagewam_release/libero/flux2_klein_4b/model.pt",
+        "checkpoints/libero_fastwam/lerobot_v30/libero_spatial_no_noops_lerobot/data/chunk-000/file-000.parquet",
+        "checkpoints/libero_fastwam/lerobot_v30/libero_spatial_no_noops_lerobot/meta/episodes/chunk-000/file-000.parquet",
+        "checkpoints/libero_fastwam/lerobot_v30/libero_spatial_no_noops_lerobot/meta/info.json",
+        "checkpoints/libero_fastwam/lerobot_v30/libero_spatial_no_noops_lerobot/meta/stats.json",
+        "checkpoints/libero_fastwam/lerobot_v30/libero_spatial_no_noops_lerobot/meta/tasks.parquet",
+        "checkpoints/libero_fastwam/lerobot_v30/libero_spatial_no_noops_lerobot/videos/observation.images.image/chunk-000/file-000.mp4",
+        "checkpoints/libero_fastwam/lerobot_v30/libero_spatial_no_noops_lerobot/videos/observation.images.wrist_image/chunk-000/file-000.mp4",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot.tar.gz",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000000.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000001.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000002.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000003.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000004.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000005.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000006.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000007.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000008.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000009.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000010.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000011.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000012.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000013.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000014.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000015.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000016.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000017.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000018.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000019.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000020.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000021.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000022.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000023.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000024.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000025.parquet",
+        "checkpoints/libero_fastwam/libero_10_no_noops_lerobot/data/chunk-000/episode_000026.parquet"
+      ]
+    },
+    "official": {
+      "dtype": "bfloat16",
+      "qwen3_model_spec": "/home/jingwu/workspace/pi0.5/FlashRT/checkpoints/Qwen3-4B"
+    },
+    "peak_gib": {
+      "flashrt_fp16": 9.62,
+      "official": 17.38
+    },
+    "reference_summary": {
+      "official_seed_spread_median": 0.9963460731551784,
+      "official_seed_spread_min": 0.9719798980186696,
+      "seed_0": {
+        "fp16_mae_vs_gt_mean": 0.18565234467387198,
+        "fp16_vs_official_median": 0.9999773698730821,
+        "fp16_vs_official_min": 0.9999361955556674,
+        "official_mae_vs_gt_mean": 0.18543981537222862
+      },
+      "seed_1": {
+        "fp16_mae_vs_gt_mean": 0.1860969252884388,
+        "fp16_vs_official_median": 0.9999735490756255,
+        "fp16_vs_official_min": 0.9999283999183013,
+        "official_mae_vs_gt_mean": 0.1859627604484558
+      }
+    },
+    "sampler": {
+      "horizon": 64,
+      "noise": "torch.randn((1,H,A), CPU generator seeded per seed, float32) -> bfloat16 -> float32",
+      "num_inference_steps": 10,
+      "sigma_shift": 5.0
+    },
+    "source": {
+      "dataset": "yuanty/LIBERO-fastwam (LeRobot v2.1)",
+      "frames": [
+        0,
+        60
+      ],
+      "n_tasks": 10,
+      "seeds": [
+        0,
+        1
+      ],
+      "suite": "libero_spatial",
+      "views": "observation.images.image, observation.images.wrist_image; official center-crop resize to 224x224 each"
+    },
+    "torch": "2.9.1+cu130"
+  },
+  "name": "imagewam_libero_gate_v2",
+  "text_trim": true
+}

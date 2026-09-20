@@ -47,40 +47,16 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 数字与结论在 `opportunities.md`、`THOR_STATUS_SUMMARY.md`、`issues.md`（ISSUE-080/085/086）。
 
 ---
-
-## R. ISSUE-085 修完后的回归（代码侧修完再跑）
-
-`0919e` 把三个测试级现象拆成两个独立缺陷：FA4 dispatch 的 `capture_sync` 在录制中往捕获池分配（`beginAllocateToPool: already recording to mempool_id`），以及 AWQ 测试 plain 路径 kernel 计数为 0（AWQ 路径 285）；FA4 关的 graph-safety 是 4 passed（旧的红是 `capture_sync` 级联），FA4 开的 recover 仍红（fallback 吞掉 stand-in 后 `torch.equal` 失败），是另一个独立缺陷。三者都不影响服务路径（e2e `FA4 fallback=None`）。
-
-```
-python -m pytest tests/test_imagewam_fa4_dispatch.py -k capture_sync -q 2>&1 | tee $OUT/R_fa4_dispatch.log
-python -m pytest tests/test_imagewam_awq.py -q 2>&1 | tee $OUT/R_awq.log
-TRIM_PRECISION=nvfp4 TRIM_FA4=on python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s 2>&1 | tee $OUT/R_fa4_recover.log
-python -m pytest tests/test_imagewam_model_runtime_vae.py -q 2>&1 | tee $OUT/R_vae_ports.log
-```
-判据：四个文件全绿（`R_vae_ports.log` 是 ISSUE-086 的测试侧跟进，几何改成跟随 workload 后它期望的 token 数变了）。任一条仍红就写回 `issues.md` ISSUE-085。
-去向：`issues.md` ISSUE-085（关闭或补充）。
+- `0920`：**R 四条全绿**（`capture_sync` 1 passed、AWQ 6 passed 且 `plain=285 awq=285`、FA4 开 graph-safety 4 passed 且恢复后 `equal=True cosine=1 max_abs=0`、`model_runtime_vae` 2 passed）→ ISSUE-085 已关闭，ISSUE-080 条件 2 满足。**E2 的 v2 manifest 已按原字节入库**（sha256 `a69a86ac…`，10954 字节，`test_committed_fixture_manifests_are_well_formed` 通过）。
 
 ---
 
 ## E. 收尾
 
-### E1 `text_trim` 转默认（ISSUE-080 条件 2 与 native 一半）
+### E1 `text_trim` 转默认（owner 决定）
 
-六条条件里 1、3、4、5 的 ABI 一半、6 已完成；未完成的是条件 2 的 FA4 开分支（依赖上面 R 节）与条件 5 的 native 一半（C++，`plan.md` 的 S4 相位）。Python `infer()` 与 ABI 两条路径在 R 节转绿后即可把 `text_trim` 写进 `default` profile。这一条不是 Thor 测试，是 owner 改 `default` profile 的决定（`plan.md` 的 "Decisions pending"）。
+ISSUE-080 的六条条件现在只剩 **条件 5 的 native 一半**（C++ `NativeRuntime` 单图/单 `context_rows`，`plan.md` 的 S4 相位）：条件 1、2、3、4、6 都已满足，ABI 也已经能带 trim。
 
-### E2 fixture v2 的 manifest 带回入库
+也就是说 **Python `infer()` 与 ABI 两条路径已经可以服务 `text_trim`**，剩下的只是要不要把它写进 `default` profile、以及要不要为它新增/调整具名 profile。改 profile 是 plan 编辑，按规矩由 owner 拍板（`plan.md` 的 "Decisions pending"）。这一条不是 Thor 测试。
 
-v2 的 fixture 已生成、trim gate 已过，只有 manifest 还没入库；Thor 上不推送，所以这一步是**把文件带回来**，不是在那儿提交。
-
-在 Thor 上：
-
-```
-sha256sum tests/fixtures/imagewam_gate/imagewam_libero_gate_v2.manifest.json
-base64 -w0 tests/fixtures/imagewam_gate/imagewam_libero_gate_v2.manifest.json
-```
-
-把 `base64` 的输出（约 15 KB，单行）连同 `sha256sum` 一起带回。**用 base64 而不是贴 JSON**：这个 manifest 里带生成时的 `git.untracked_files` 列表，重新排版/截断过的 JSON 无法与 sha256 对上，base64 可以按字节还原并当场核对。
-
-判据：有凭据的一方按原字节提交该文件，`sha256sum` 与 Thor 上的一致，并且 `tests/test_imagewam_regression_gate.py::test_committed_fixture_manifests_are_well_formed` 在有 GPU 与无 GPU 的机器上都过（它遍历 `tests/fixtures/imagewam_gate/*.manifest.json`）。数据目录继续留在 `$BUNDLE/imagewam_libero_gate_v2/`；若把它加进了 bundle，记得在 Thor 上重生成 `$BUNDLE/SHA256SUMS`。
-去向：manifest 入 git；`issues.md` ISSUE-080 条件 4 的 Resolution 补一句"manifest 已入库"。
+清单到这里没有待跑的 Thor 项；新的项在下一轮产生（例如 S4 落地后要测 native 的多长度 tick）。

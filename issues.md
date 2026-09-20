@@ -1173,13 +1173,12 @@ Status of the six conditions after the `eccf14f` round:
 
 1. satisfied (Thor, three suites: trimmed agreement with official at or
    above untrimmed, lower P50).
-2. open, and the only one left for the Python path. The multi-length safety
-   check passes with FA4 off (4 tests). With FA4 on it failed because the
-   test compared the post-fallback cuBLAS chain against the pre-failure FA4
-   capture (ISSUE-085); the capture defect that the `capture_sync` mode
-   exposed has been fixed in the frontend, and the comparison is now
-   like-for-like. The Thor re-run of `THOR_CHECKLIST.md` item R decides
-   whether condition 2 is satisfied.
+2. satisfied at `0920`: the multi-length safety check passes with FA4 off
+   (4 tests) and with FA4 on (4 tests), the recovery case reporting
+   `equal=True cosine=1 max_abs=0` against a chain reference. The work behind
+   it is ISSUE-085: one real capture-path defect (the fallback reusing an
+   invalidated pool) plus two tests that compared across attention chains or
+   through a blind profiler region.
 3. satisfied (a failed capture leaves no graph active).
 4. satisfied: fixture v2 with a trimmed `fp16` reference was generated
    (`text_trim=true`) and a trimmed nvfp4 gate run passes against it (vs
@@ -1600,7 +1599,7 @@ gate's own repeated-row spread is the number to compare against.
 
 # ISSUE-085
 
-Status: open (three fixes landed; the Thor re-run of item R decides)
+Status: resolved
 
 Area: two independent test-level defects on Thor, neither on the served path —
 the FA4 dispatch test's `capture_sync` mode (capture-pool allocation) and
@@ -1720,9 +1719,21 @@ So ISSUE-080's condition 2 redness was, on this reading, test-side rather than
 a serving defect — subject to the Thor re-run, which is what keeps this issue
 open.
 
-What the Thor re-run must show (`THOR_CHECKLIST.md` item R): all four files
-green, `plain=<n> awq=<n>` equal and non-zero, and the FA4-on recovery test's
-`equal=True` against the chain reference.
+## Resolution
+
+The Thor re-run at `0920` (logs `/home/jingwu/thor_val/0920/`, MAXN, GPC
+1.575 GHz, `emc_locked=null`, GPU exclusive) is green on all four files:
+
+| file | result |
+|---|---|
+| `fa4_dispatch -k capture_sync` | 1 passed, 22 deselected — i.e. on Thor's torch 2.9.1 the retry does capture on a fresh pool after an invalidated capture |
+| `test_imagewam_awq.py` | 6 passed, printing `kernels per eager forward: plain=285 awq=285` — the folded path adds no kernels, and the plain side is no longer read through a blind profiler region |
+| graph-safety with `TRIM_FA4=on` | 4 passed, the recovery case reporting `after a failed capture, n_valid=5 vs fresh equal=True cosine=1 max_abs=0` |
+| `test_imagewam_model_runtime_vae.py` | 2 passed (the geometry follow-up from ISSUE-086) |
+
+So of the three symptoms the round split out: one was a real capture-path defect
+and is fixed; the other two were the tests' own comparisons, with no served-path
+behaviour behind them. ISSUE-080's condition 2 is satisfied by this run.
 # ISSUE-086
 
 Status: resolved
