@@ -145,9 +145,26 @@ void* frt_imagewam_native_stream(frt_imagewam_native* h) {
     return h ? static_cast<void*>(h->runtime->stream()) : nullptr;
 }
 
-int frt_imagewam_native_use_graph(frt_imagewam_native* h, void* graph_exec) {
+int frt_imagewam_native_use_graph(frt_imagewam_native* h, uint64_t key, void* graph_exec) {
     if (!h) return kInvalid;
-    return h->runtime->use_graph(static_cast<cudaGraphExec_t>(graph_exec));
+    return h->runtime->use_graph(key, static_cast<cudaGraphExec_t>(graph_exec));
+}
+
+int frt_imagewam_native_has_variant(frt_imagewam_native* h, uint64_t key) {
+    return h ? h->runtime->has_variant(key) : 0;
+}
+
+void* frt_imagewam_native_variant_exec(frt_imagewam_native* h, uint64_t key) {
+    return h ? static_cast<void*>(h->runtime->variant_exec(key)) : nullptr;
+}
+
+int frt_imagewam_native_set_text_length(frt_imagewam_native* h, uint64_t key) {
+    if (!h) return kInvalid;
+    return h->runtime->set_text_length(key);
+}
+
+uint64_t frt_imagewam_native_text_length(frt_imagewam_native* h) {
+    return h ? h->runtime->text_length() : 0;
 }
 
 void* frt_imagewam_native_graph_exec(frt_imagewam_native* h) {

@@ -57,8 +57,19 @@ typedef struct frt_imagewam_io_config {
     uint32_t num_action;           /* action chunk rows (64)                  */
     uint32_t action_dim;           /* action chunk columns (7)                */
     uint32_t proprio_dim;          /* raw robot state width; 0 = no proprio   */
-    uint32_t context_rows;         /* x0                                      */
+    uint32_t context_rows;         /* x0 of the length active at creation     */
     uint32_t context_width;        /* joint_attention_dim                     */
+    /* The text lengths (x0) this deployment serves: the graph variant keys
+     * the handle accepts, in the key space the exec contract uses for this
+     * model (`ShapeKey = x0`, the Python side's `GraphVariants`). 0 = one
+     * length, `context_rows`; otherwise `text_lengths` points at
+     * `num_text_lengths` values, distinct, `context_rows` among them, and
+     * copied by frt_imagewam_native_create. `context_rows` is the active
+     * length at creation (the variant default key): it bounds
+     * set_proprio_row and set_pipeline until set_text_length selects
+     * another declared length. */
+    uint32_t num_text_lengths;
+    const uint32_t* text_lengths;
     /* Borrowed device windows. */
     void* img_raw;                 /* bf16 (img_len, token_dim)               */
     void* context;                 /* bf16 (context_rows, context_width)      */
@@ -81,8 +92,9 @@ typedef struct frt_imagewam_io_config {
 FLASHRT_IMAGEWAM_C_API void frt_imagewam_native_abi_sizes(uint64_t out[4]);
 
 /* Create a handle with one reference. Validates the config, copies the
- * normalization constants, creates the native stream and the proprio
- * projection plan. */
+ * normalization constants, the declared text lengths, creates the native
+ * stream and the proprio projection plan. A declared length table must
+ * contain `context_rows` (the active length at creation). */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_create(
     const frt_imagewam_io_config* config, frt_imagewam_native** out);
 
@@ -107,16 +119,44 @@ FLASHRT_IMAGEWAM_C_API const char* frt_imagewam_native_last_error(
 FLASHRT_IMAGEWAM_C_API void* frt_imagewam_native_stream(frt_imagewam_native* h);
 
 /* Replay `graph_exec` (a cudaGraphExec_t captured by the setup producer
- * over the borrowed windows) on the native stream in `step`. The exec is
- * borrowed. Destroys a graph this handle captured. */
+ * over the borrowed windows) on the native stream in `step` for the text
+ * length `key` (the context length x0 the exec was captured for, one of
+ * the config's declared lengths). The exec is borrowed; a graph this handle
+ * captured for the same key is destroyed. The handle's active length is
+ * unchanged: select the key with set_text_length. */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_use_graph(
-    frt_imagewam_native* h, void* graph_exec);
+    frt_imagewam_native* h, uint64_t key, void* graph_exec);
 
-/* The graph exec `step` replays (null before use_graph/capture). */
+/* 1 when the handle holds a graph for the text length `key`, 0 when not. */
+FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_has_variant(
+    frt_imagewam_native* h, uint64_t key);
+
+/* The graph exec the handle holds for the text length `key` (null when it
+ * holds none). Adopted execs are the producer's, captured ones this
+ * handle's. */
+FLASHRT_IMAGEWAM_C_API void* frt_imagewam_native_variant_exec(
+    frt_imagewam_native* h, uint64_t key);
+
+/* Select the text length (x0) the next ticks serve: the graph `step`
+ * replays, the bound of set_proprio_row and the x0 set_pipeline checks
+ * against. Setup only, and legal while a model runtime is live: the setup
+ * producer calls it after every prompt change, next to set_proprio_row
+ * (C++ cannot see the Python prompt). -2 for a length the handle has no
+ * variant for. */
+FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_set_text_length(
+    frt_imagewam_native* h, uint64_t key);
+
+/* The text length (x0) the next ticks serve. */
+FLASHRT_IMAGEWAM_C_API uint64_t frt_imagewam_native_text_length(
+    frt_imagewam_native* h);
+
+/* The graph exec `step` replays now, i.e. the one of the active text
+ * length (null when the handle holds none). */
 FLASHRT_IMAGEWAM_C_API void* frt_imagewam_native_graph_exec(frt_imagewam_native* h);
 
-/* The context row the proprio token is written to. Setup only: the
- * producer calls it after every prompt change. */
+/* The context row the proprio token is written to; it must be a row of the
+ * active text length's context block. Setup only: the producer calls it
+ * after every prompt change, after set_text_length. */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_set_proprio_row(
     frt_imagewam_native* h, int32_t row);
 
@@ -287,11 +327,13 @@ FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_run(
     frt_imagewam_native* h, uint32_t segment, int32_t index);
 
 /* Warm up once eagerly, then capture prefill + denoise on the native stream
- * into a graph the handle owns (replacing a previous one); `step` replays
- * it from then on. */
+ * into a graph the handle owns (replacing the one it holds, if it captured
+ * one) for the ACTIVE text length; `step` replays it from then on. -4 when
+ * the active text length differs from the installed pipeline's x0. */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_capture(frt_imagewam_native* h);
 
-/* Number of kernel nodes in the captured graph (0 before capture). */
+/* Number of kernel nodes in the graph `step` replays, when this handle
+ * captured it (0 before capture, and for an exec the producer adopted). */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_graph_nodes(
     const frt_imagewam_native* h, uint64_t* count);
 

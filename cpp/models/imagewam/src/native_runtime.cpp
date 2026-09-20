@@ -52,6 +52,47 @@ std::string cuda_message(const char* what, cudaError_t rc) {
     return std::string(what) + ": " + cudaGetErrorString(rc);
 }
 
+// The deployment's text lengths (x0): the io config's table, or the one
+// length `context_rows` when it declares none. Distinct, and the length
+// active at creation among them.
+bool take_text_lengths(const frt_imagewam_io_config& c, std::vector<uint32_t>* out,
+                       std::string* error) {
+    if (!c.num_text_lengths) {
+        if (c.text_lengths) {
+            *error = "frt_imagewam_io_config has text_lengths without num_text_lengths";
+            return false;
+        }
+        out->assign(1, c.context_rows);
+        return true;
+    }
+    if (!c.text_lengths) {
+        *error = "frt_imagewam_io_config has num_text_lengths without text_lengths";
+        return false;
+    }
+    out->assign(c.text_lengths, c.text_lengths + c.num_text_lengths);
+    for (size_t i = 0; i < out->size(); ++i) {
+        if ((*out)[i] == 0) {
+            *error = "frt_imagewam_io_config declares the text length 0";
+            return false;
+        }
+        for (size_t j = i + 1; j < out->size(); ++j) {
+            if ((*out)[i] == (*out)[j]) {
+                *error = "frt_imagewam_io_config declares the text length " +
+                         std::to_string((*out)[i]) + " twice";
+                return false;
+            }
+        }
+    }
+    bool active_declared = false;
+    for (uint32_t length : *out) active_declared = active_declared || length == c.context_rows;
+    if (!active_declared) {
+        *error = "frt_imagewam_io_config.context_rows " + std::to_string(c.context_rows) +
+                 " is not one of the declared text lengths";
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 std::unique_ptr<NativeRuntime> NativeRuntime::create(const frt_imagewam_io_config& c,
@@ -77,6 +118,7 @@ std::unique_ptr<NativeRuntime> NativeRuntime::create(const frt_imagewam_io_confi
     rt->dims_ = {c.img_len, c.token_dim, c.num_action, c.action_dim, c.proprio_dim};
     rt->context_rows_ = c.context_rows;
     rt->context_width_ = c.context_width;
+    if (!take_text_lengths(c, &rt->text_lengths_, error)) return nullptr;
     rt->img_raw_ = c.img_raw;
     rt->context_ = c.context;
     rt->action_latent_ = c.action_latent;
@@ -111,7 +153,9 @@ std::unique_ptr<NativeRuntime> NativeRuntime::create(const frt_imagewam_io_confi
 
 NativeRuntime::~NativeRuntime() {
     if (stream_) cudaStreamSynchronize(stream_);
-    if (owned_graph_) cudaGraphExecDestroy(owned_graph_);
+    for (const GraphVariant& variant : variants_) {
+        if (variant.owned) cudaGraphExecDestroy(variant.exec);
+    }
     pipeline_.reset();
     if (proprio_device_) cudaFree(proprio_device_);
     if (stream_) cudaStreamDestroy(stream_);
@@ -128,20 +172,97 @@ int NativeRuntime::refuse_while_exported(const char* what) {
                               ": a model runtime exported over this handle is live; release it first");
 }
 
-void NativeRuntime::drop_owned_graph() {
-    if (!owned_graph_) return;
-    cudaStreamSynchronize(stream_);
-    if (graph_ == owned_graph_) graph_ = nullptr;
-    cudaGraphExecDestroy(owned_graph_);
-    owned_graph_ = nullptr;
-    graph_nodes_ = 0;
+int NativeRuntime::variant_index(uint64_t key) const {
+    for (size_t i = 0; i < variants_.size(); ++i) {
+        if (variants_[i].key == key) return static_cast<int>(i);
+    }
+    return -1;
 }
 
-int NativeRuntime::use_graph(cudaGraphExec_t graph_exec) {
+bool NativeRuntime::is_declared(uint64_t key) const {
+    for (uint32_t length : text_lengths_) {
+        if (uint64_t(length) == key) return true;
+    }
+    return false;
+}
+
+std::string NativeRuntime::declared_keys() const {
+    if (text_lengths_.empty()) return "none";
+    std::string keys;
+    for (size_t i = 0; i < text_lengths_.size(); ++i) {
+        keys += (i ? ", " : "") + std::to_string(text_lengths_[i]);
+    }
+    return keys;
+}
+
+std::string NativeRuntime::adopted_keys() const {
+    if (variants_.empty()) return "none";
+    std::string keys;
+    for (size_t i = 0; i < variants_.size(); ++i) {
+        keys += (i ? ", " : "") + std::to_string(variants_[i].key);
+    }
+    return keys;
+}
+
+int NativeRuntime::has_variant(uint64_t key) const { return variant_index(key) >= 0 ? 1 : 0; }
+
+cudaGraphExec_t NativeRuntime::variant_exec(uint64_t key) const {
+    const int at = variant_index(key);
+    return at < 0 ? nullptr : variants_[at].exec;
+}
+
+void NativeRuntime::drop_owned_graphs() {
+    bool any_owned = false;
+    for (const GraphVariant& variant : variants_) any_owned = any_owned || variant.owned;
+    if (!any_owned) return;
+    cudaStreamSynchronize(stream_);
+    std::vector<GraphVariant> kept;
+    for (const GraphVariant& variant : variants_) {
+        if (variant.owned) {
+            cudaGraphExecDestroy(variant.exec);
+            continue;
+        }
+        kept.push_back(variant);
+    }
+    variants_.swap(kept);
+}
+
+int NativeRuntime::use_graph(uint64_t key, cudaGraphExec_t graph_exec) {
     if (int rc = refuse_while_exported("use_graph")) return rc;
     if (!graph_exec) return fail(kInvalid, "use_graph: null graph exec");
-    drop_owned_graph();
-    graph_ = graph_exec;
+    if (!is_declared(key)) {
+        return fail(kNotFound, "use_graph: text length x0=" + std::to_string(key) +
+                                  " is not a declared text length; this handle declares [" +
+                                  declared_keys() + "]");
+    }
+    const int at = variant_index(key);
+    if (at < 0) {
+        variants_.push_back(GraphVariant{key, graph_exec, false, 0});
+    } else {
+        // A graph this handle captured for the key is superseded by the
+        // producer's exec: destroy it before the pipeline behind it goes.
+        if (variants_[at].owned) {
+            cudaStreamSynchronize(stream_);
+            cudaGraphExecDestroy(variants_[at].exec);
+        }
+        variants_[at] = GraphVariant{key, graph_exec, false, 0};
+    }
+    return kOk;
+}
+
+int NativeRuntime::set_text_length(uint64_t key) {
+    if (!is_declared(key)) {
+        return fail(kNotFound, "set_text_length: text length x0=" + std::to_string(key) +
+                                  " is not a declared text length; this handle declares [" +
+                                  declared_keys() + "]");
+    }
+    if (!has_variant(key)) {
+        return fail(kNotFound, "set_text_length: no graph variant for text length x0=" +
+                                  std::to_string(key) + "; this handle holds [" +
+                                  adopted_keys() +
+                                  "]. Adopt it with use_graph (or capture) before selecting it");
+    }
+    context_rows_ = uint32_t(key);
     return kOk;
 }
 
@@ -157,16 +278,19 @@ int NativeRuntime::set_pipeline(const frt_imagewam_pipeline_config& config) {
         config.joint_attention_dim != int32_t(context_width_) ||
         config.a0 - config.x0 != int32_t(dims_.img_len) ||
         config.head_dim != int32_t(dims_.token_dim)) {
-        return fail(kShape, "set_pipeline: dimensions differ from the runtime's IO config");
+        return fail(kShape, "set_pipeline: dimensions differ from the runtime's IO config (the "
+                            "active text length is x0=" + std::to_string(context_rows_) + ")");
     }
     std::string error;
     std::unique_ptr<NativePipeline> pipeline = NativePipeline::create(config, &error);
     if (!pipeline) return fail(kInvalid, "set_pipeline: " + error);
     // A graph captured from the current pipeline records its GEMM handles,
-    // workspace and resource pointers: drop it before the pipeline goes.
-    // `step` then fails until the next capture.
-    drop_owned_graph();
+    // workspace and resource pointers: drop every captured variant before
+    // the pipeline goes. `step` then fails for a captured length until the
+    // next capture.
+    drop_owned_graphs();
     pipeline_ = std::move(pipeline);
+    pipeline_x0_ = uint32_t(config.x0);
     return kOk;
 }
 
@@ -228,6 +352,15 @@ int NativeRuntime::run(uint32_t segment, int32_t index) {
 int NativeRuntime::capture() {
     if (int rc = refuse_while_exported("capture")) return rc;
     if (!pipeline_) return fail(kInvalid, "capture: set_pipeline first");
+    // The graph bakes the pipeline's own dims: captured under any other
+    // active text length it would replay the wrong length's context.
+    if (context_rows_ != pipeline_x0_) {
+        return fail(kShape, "capture: the active text length x0=" + std::to_string(context_rows_) +
+                                " differs from the installed pipeline's x0=" +
+                                std::to_string(pipeline_x0_) +
+                                "; set_text_length to the pipeline's or set_pipeline for the "
+                                "active length first");
+    }
     // Warm-up: lazy cuBLAS/cuBLASLt initialisation must not happen under capture.
     int rc = run(FRT_IMAGEWAM_SEGMENT_FULL, 0);
     if (rc != kOk) return rc;
@@ -253,10 +386,16 @@ int NativeRuntime::capture() {
     err = cudaGraphInstantiate(&exec, graph, 0);
     cudaGraphDestroy(graph);
     if (err != cudaSuccess) return fail(kBackend, cuda_message("cudaGraphInstantiate", err));
-    if (owned_graph_) cudaGraphExecDestroy(owned_graph_);
-    owned_graph_ = exec;
-    graph_ = exec;
-    graph_nodes_ = nodes;
+    const int at = variant_index(context_rows_);
+    if (at >= 0) {
+        if (variants_[at].owned) {
+            cudaStreamSynchronize(stream_);
+            cudaGraphExecDestroy(variants_[at].exec);
+        }
+        variants_[at] = GraphVariant{context_rows_, exec, true, nodes};
+    } else {
+        variants_.push_back(GraphVariant{context_rows_, exec, true, nodes});
+    }
     return kOk;
 }
 
@@ -264,7 +403,8 @@ int NativeRuntime::set_proprio_row(int32_t row) {
     if (!dims_.proprio_dim) return fail(kUnsupported, "set_proprio_row: no proprio port");
     if (row < 0 || uint32_t(row) >= context_rows_) {
         return fail(kInvalid, "set_proprio_row: row " + std::to_string(row) +
-                                  " outside the context rows");
+                                  " outside the context rows of the active text length x0=" +
+                                  std::to_string(context_rows_));
     }
     proprio_row_ = row;
     return kOk;
@@ -385,8 +525,13 @@ int NativeRuntime::read_actions(void* out, uint64_t capacity, uint64_t* written)
 }
 
 int NativeRuntime::step() {
-    if (!graph_) return fail(kInvalid, "step: no graph (use_graph or capture first)");
-    const cudaError_t rc = cudaGraphLaunch(graph_, stream_);
+    const int at = variant_index(context_rows_);
+    if (at < 0) {
+        return fail(kNotFound, "step: no graph variant for text length x0=" +
+                                   std::to_string(context_rows_) + "; this handle holds [" +
+                                   adopted_keys() + "]. Adopt one with use_graph (or capture) first");
+    }
+    const cudaError_t rc = cudaGraphLaunch(variants_[at].exec, stream_);
     if (rc != cudaSuccess) return fail(kBackend, cuda_message("cudaGraphLaunch", rc));
     return kOk;
 }
