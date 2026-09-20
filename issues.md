@@ -1173,12 +1173,13 @@ Status of the six conditions after the `eccf14f` round:
 
 1. satisfied (Thor, three suites: trimmed agreement with official at or
    above untrimmed, lower P50).
-2. open, and the only one left for the Python path: the multi-length
-   safety check passes with FA4 **off** (4 tests) and fails with FA4 **on**,
-   where the fallback swallows the injected failure and the test's own
-   `torch.equal` then mismatches (ISSUE-085, one of its two remaining
-   defects). The `capture_sync` cascade of the previous round is not the
-   cause.
+2. open, and the only one left for the Python path. The multi-length safety
+   check passes with FA4 off (4 tests). With FA4 on it failed because the
+   test compared the post-fallback cuBLAS chain against the pre-failure FA4
+   capture (ISSUE-085); the capture defect that the `capture_sync` mode
+   exposed has been fixed in the frontend, and the comparison is now
+   like-for-like. The Thor re-run of `THOR_CHECKLIST.md` item R decides
+   whether condition 2 is satisfied.
 3. satisfied (a failed capture leaves no graph active).
 4. satisfied: fixture v2 with a trimmed `fp16` reference was generated
    (`text_trim=true`) and a trimmed nvfp4 gate run passes against it (vs
@@ -1599,7 +1600,7 @@ gate's own repeated-row spread is the number to compare against.
 
 # ISSUE-085
 
-Status: open
+Status: open (three fixes landed; the Thor re-run of item R decides)
 
 Area: two independent test-level defects on Thor, neither on the served path —
 the FA4 dispatch test's `capture_sync` mode (capture-pool allocation) and
@@ -1685,8 +1686,43 @@ like-for-like or assert the documented post-fallback state, keeping "a failed
 capture leaves no graph active and the frontend recovers". Then re-run the
 four files on Thor (`THOR_CHECKLIST.md` item R).
 
-Implementation note: the three fixes are in review; ISSUE-085 stays open until
-the Thor re-run is green.
+Implementation, and a correction to two of this record's own readings:
+
+- `capture_sync` was a **real defect in the capture path** and is fixed: the
+  fallback re-captured into the stream and pool the invalidated attempt had
+  left recording, because `_capture_graph` reuses both whenever they are
+  non-None. `_capture_graph_or_fall_back` now abandons them
+  (`_abandon_capture_state`) before the FA4 decision, so the retry is a first
+  capture in every respect; the healthy path is untouched. Cost, documented in
+  the method: the abandoned pool is not released, and a fallback happens at
+  most once per frontend (it clears `use_fa4`/`use_fa4_mot` for good).
+- The AWQ bullet's reading was **wrong**: `run_eager` is genuinely eager with
+  and without a `weights` argument (the same file's other test compares the two
+  pipelines' `_backbone_hidden` at cosine > 0.9999). The `0` was what the
+  **first** `torch.profiler` CUDA region in the process reported, while the
+  region right after it reported the 285 this study already recorded for both
+  paths. The code is right; the test now discards one region as profiler
+  warm-up, keeps the equality assertion, and adds `assert n_plain > 0` so a
+  blind profiler cannot satisfy the equality on its own.
+- The FA4-on recovery bullet's reading was also **wrong**: with FA4 on the
+  injected stand-in *is* a capture failure, and the documented contract is to
+  log, record `fa4_fallback_reason`, switch both sites to the cuBLAS chain and
+  capture again — which is what happened. The old `torch.equal` compared that
+  chain against the pre-failure **FA4** capture, chains that differ in the last
+  bits by construction. The test now pins the post-failure state
+  (`fa4_fallback_reason` present exactly when FA4 is on, `use_fa4` off, the
+  reason carrying the stand-in's message, no graph active, `infer()` refusing)
+  and compares like-for-like: bit-exact against the first capture when the
+  fallback was not consulted, against a chain-captured fresh frontend sharing
+  the same `GemmRunner` when it was.
+
+So ISSUE-080's condition 2 redness was, on this reading, test-side rather than
+a serving defect — subject to the Thor re-run, which is what keeps this issue
+open.
+
+What the Thor re-run must show (`THOR_CHECKLIST.md` item R): all four files
+green, `plain=<n> awq=<n>` equal and non-zero, and the FA4-on recovery test's
+`equal=True` against the chain reference.
 # ISSUE-086
 
 Status: resolved
