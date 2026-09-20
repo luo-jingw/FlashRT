@@ -146,10 +146,14 @@ GPU stack.
 
 `PROFILES` maps a name to a set of tier-2 options:
 
+A profile is the **served** configuration; the frontend constructor keeps its
+own historical defaults (untrimmed) for a caller that passes dims by hand.
+
 | Profile | Contents |
 |---|---|
-| `default` | the frontend's own defaults: `nvfp4`, no text trim, FA4 backbone as the frontend resolves it (`FLASHRT_THOR_FA4`, off unless set), no FA4 mot, torch VAE encoder outside the graph, no AWQ |
-| `fast` | `text_trim` + FA4 backbone + FA4 mot + native VAE encoder inside the graph. PROVISIONAL: the contents and whether any switch becomes the default are an owner decision (measured 106.1 ms against 203.3 ms for `default`, `nvfp4`, `libero_spatial`); `text_trim` is served through the `abi` consumer (one graph per trimmed length) and refused for `native` (rule R5) |
+| `default` | the served configuration: `nvfp4`, **`text_trim` on**, FA4 backbone as the frontend resolves it (`FLASHRT_THOR_FA4`, off unless set), no FA4 mot, torch VAE encoder outside the graph, no AWQ |
+| `fast` | `default` plus FA4 at both attention sites and the native VAE encoder inside the graph. Opt-in: FA4 compiles on first use and can fall back, and the in-graph VAE changes the graph |
+| `native` | the native/one-graph consumer's set until phase S4: `nvfp4`, `text_trim` off, FA4 explicitly off, no FA4 mot, torch VAE outside the graph, no AWQ. It is what `default` used to be, and it exists because rule R5 refuses a trimmed frontend for those consumers (the native pipeline holds one graph and one context length) |
 
 `resolve_config` raises `ConfigError("<rule id>: <combination>")`:
 
@@ -175,7 +179,7 @@ fa4_fallback_reason=None)` produces the one line every log and matrix row
 carries:
 
 ```
-effective_config precision=nvfp4 text_trim=False vae_encoder=torch vae_graph=False use_fa4=auto use_fa4_mot=False fa4_fallback_reason=None calibration=None awq=False
+effective_config precision=nvfp4 text_trim=True vae_encoder=torch vae_graph=False use_fa4=auto use_fa4_mot=False fa4_fallback_reason=None calibration=None awq=False
 ```
 
 The key order is `EFFECTIVE_CONFIG_FIELDS`. `use_fa4` is resolved at

@@ -53,10 +53,10 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## E. 收尾
 
-### E1 `text_trim` 转默认（owner 决定）
+### E1 `text_trim` 转默认 —— 已决定（E1 = (c)）
 
-ISSUE-080 的六条条件现在只剩 **条件 5 的 native 一半**（C++ `NativeRuntime` 单图/单 `context_rows`，`plan.md` 的 S4 相位）：条件 1、2、3、4、6 都已满足，ABI 也已经能带 trim。
+`default` profile 现在带 `text_trim=True`，FA4 与原生 VAE 留在 `fast`；新增 `native` profile（不 trim、FA4 显式关、torch VAE 图外，内容等于旧的 `default`），给 S4 之前的 ABI/native 调用按名字切换，避免踩 R5。改 profile 是 plan 编辑，已记入 `plan.md` 的 "Decisions pending"。
 
-也就是说 **Python `infer()` 与 ABI 两条路径已经可以服务 `text_trim`**，剩下的只是要不要把它写进 `default` profile、以及要不要为它新增/调整具名 profile。改 profile 是 plan 编辑，按规矩由 owner 拍板（`plan.md` 的 "Decisions pending"）。这一条不是 Thor 测试。
+配套已做/已记：矩阵脚本的开关行现在显式写 `TEXT_TRIM`（否则 `default` 行会悄悄变成 `vae_trim` 行，阶梯失去意义）；门禁自己的默认口径仍是"未裁剪参考配置"，要门禁服务默认就是 `--text-trim --manifest ...v2`（那条已经跑过并通过，P50 远低于未裁剪的延迟基线，不需要重测）。
 
-清单到这里没有待跑的 Thor 项；新的项在下一轮产生（例如 S4 落地后要测 native 的多长度 tick）。
+**本轮没有新的 Thor 项。** S4（native 按长度带图）落地后要加的 Thor 项：native 多长度 tick 逐位一致，以及门禁默认口径若改成服务默认，再跑一次 `--text-trim --manifest ...v2` 记录数字。

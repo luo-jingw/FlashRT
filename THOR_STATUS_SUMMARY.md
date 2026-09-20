@@ -18,7 +18,7 @@
 解析链是 `workload + structure + profile + precision + calibration_path` → `resolve_config(...)` → `(dims, options)` → `from_config` → frontend；解析在构造后不再改变。
 
 - **workload**：服务的工作负载，由 `ImageWAMWorkload` 描述。部署方给出相机数、每视角图像尺寸、文本长度、action horizon、动作维度、proprio 维度、去噪步数、调度 shift；序列布局由它派生：`x0`、`img_len`、`a0`、`total`、`ref_h`、`ref_w`、`dt`，以及原生 VAE 进图时的 `vae_graph_input`。派生值互相矛盾时在解析阶段报错，不再手填这些整数。LIBERO 工作负载是 `ImageWAMWorkload.libero()`：两个 224×224 视角、512 token 文本、horizon 64、7 维动作、8 维 proprio、10 步去噪、shift=5.0，派生 `x0=513`、`img_len=392`、`a0=905`、`total=969`、`ref_h×ref_w=14×28`。
-- **profile**：一组开关的具名集合，按名字选用。`default` 复现今天的构造函数默认值：nvfp4、不裁文本、FA4 由 `FLASHRT_THOR_FA4` 决定、torch VAE 编码器在图外、无 AWQ。`fast` 是 `text_trim` + FA4 backbone + FA4 mot + 原生 VAE 进图，实测 `infer()` 93.2 ms、ABI 95.1 ms，对 `default` 的约 202 ms（`eccf14f`，nvfp4，libero_spatial），标为 PROVISIONAL，内容与是否转默认待 T4/T5 决定。上一轮（`c20f3a0`）同一组开关是 106.8 ms 对 225.2 ms，那一轮的机器状态与 `eccf14f` 不同。
+- **profile**：一组开关的具名集合，按名字选用，代表**服务配置**（构造函数保留自己的历史默认：不裁文本）。`default` 是服务默认：nvfp4、**裁文本**、FA4 由 `FLASHRT_THOR_FA4` 决定、torch VAE 编码器在图外、无 AWQ。`fast` 在 `default` 之上再加 FA4 双位点与原生 VAE 进图（opt-in：FA4 首次调用要编译且可能回退，进图 VAE 改的是图结构）。`native` 是不裁文本的具名集合（FA4 显式关、torch VAE 图外），内容等于旧的 `default`，给 S4 落地前的 native/ABI 单图调用按名字切换，避免 `profile="default"` 踩规则 R5。
 - **precision**：覆盖 profile 的精度档位。
 - **calibration_path**：静态 FP8 与 AWQ 所需的校准文件。
 
@@ -56,7 +56,7 @@
 | 选项 | 当前默认 | 作用 | 限制 |
 |---|---|---|---|
 | `workload` | `ImageWAMWorkload.libero()` | 服务的工作负载；序列布局与 `vae_graph_input` 由它派生并校验 | 字段必须与 checkpoint 的结构一致（规则 R7） |
-| `profile` | `default` | 开关的具名集合；`fast` 为 `text_trim` + FA4 双位点 + 原生 VAE 进图（`infer()` 93.2 ms、ABI 95.1 ms，对 `default` 的约 202 ms，nvfp4，libero_spatial） | `fast` 标为 PROVISIONAL，待 T4/T5 决定；含 `text_trim`，native 路径被规则 R5 拒绝 |
+| `profile` | `default` | 开关的具名集合；`default` 含 `text_trim`（故 native 路径被规则 R5 拒绝），`fast` = 再加 FA4 双位点 + 原生 VAE 进图（93.2 ms 对 default 的约 115 ms，nvfp4，libero_spatial） |`native` = 不裁文本 + FA4 显式关，给 native/ABI 单图调用；`fast` 的 FA4 首次调用编译、失败回退 |
 | `precision` | `nvfp4` | 精度/速度档位 | `fp8_static*` 需要校准文件 |
 | `text_trim` | 关 | 按有效文本长度裁剪；开启后每个有效文本长度一张采纳图，Python `infer()` 与 ABI 都能服务 | native 路径被规则 R5 拒绝（原生管线只 replay 一张固定图） |
 | `text_trim_cache_size` | 32 | `text_trim` 预捕获图的张数上限，超出按 LRU 淘汰 | 显存只在首次捕获付出：首图 +218.0 MiB reserved / +206.3 MiB allocated，其后每张 +0.0 / +0.1 MiB，默认上限 32 的总代价在 221 MiB 量级（`a84916a`，nvfp4，15 个 LIBERO 长度） |

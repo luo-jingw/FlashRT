@@ -1891,17 +1891,35 @@ Decided (owner, after the `c20f3a0` Thor round):
   `benchmarks/imagewam_thor_path_bench.py --workload libero|target` measures
   either one on all three service paths.
 
+Decided after the `0920` re-run (E1, `text_trim` as the served default):
+
+- **`default` trims; FA4 and the native VAE stay in `fast`.** The option is
+  the owner's, on the measured basis: trimming is the largest single step
+  (LIBERO `infer()` about 202 ms untrimmed against about 115 ms trimmed, and
+  agreement with official improves rather than degrades on every suite), while
+  FA4 and the native VAE pass their criteria with smaller margins and change
+  more (FA4 compiles on first use and can fall back; the in-graph VAE changes
+  the graph). `fast` keeps the three together.
+- **A new `native` profile** carries the non-trimming set the ABI and native
+  consumer paths can still serve (rule R5; the native pipeline holds one graph
+  and one context length until phase S4). Its contents are what `default` used
+  to be, so a native caller switches by name instead of falling into R5.
+- The profiles therefore mean **the served configuration**, while the
+  constructor keeps its own historical defaults (untrimmed) for a caller that
+  passes dims by hand. That divergence is deliberate.
+- Consequences recorded rather than solved: the configuration matrix's flag
+  rows now state their trim explicitly (otherwise the `default` row would
+  silently become the `vae_trim` row); the regression gate's own default is
+  still the untrimmed reference configuration, and gating the served default
+  means `--text-trim --manifest ...v2` (the trimmed gate run already passes,
+  and its P50 stays far under the untrimmed latency baseline, so nothing needs
+  re-measuring for it).
+
 Open:
 
-- Whether `text_trim` becomes the default of the `default` profile for the
-  Python `infer()` and ABI paths. Everything it needs is verified: the
-  multi-length safety check passes with FA4 off (4 tests), the ABI tick at two
-  captured lengths is bit-exact, the trimmed gate fixture exists and passes,
-  the cache is bounded and precaptured, and the per-length memory cost is one
-  shared pool. The FA4-**on** multi-length check now passes too (Thor `0920`,
-  4 tests, `equal=True cosine=1 max_abs=0` on the recovered length), so the
-  only technical gap left is the native face's own phase S4. Changing a
-  profile is a plan edit and is the owner's call.
+- Whether the regression gate's *default* invocation should follow the served
+  configuration (trimmed, fixture v2) instead of staying the untrimmed
+  reference. Either answer is measured; only the gate's own defaults change.
 - Profile contents (T4): keep `fast` as `text_trim` + FA4 (backbone and mot)
   + native VAE in graph. The FA4 criterion was met in the `c20f3a0` round
   (`stack` 9.7 ms below `vae_trim`, agreement with official not worse) and
