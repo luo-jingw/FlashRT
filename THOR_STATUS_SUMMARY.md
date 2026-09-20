@@ -59,6 +59,7 @@
 | `profile` | `default` | 开关的具名集合；`fast` 为 `text_trim` + FA4 双位点 + 原生 VAE 进图（`infer()` 93.2 ms、ABI 95.1 ms，对 `default` 的约 202 ms，nvfp4，libero_spatial） | `fast` 标为 PROVISIONAL，待 T4/T5 决定；含 `text_trim`，native 路径被规则 R5 拒绝 |
 | `precision` | `nvfp4` | 精度/速度档位 | `fp8_static*` 需要校准文件 |
 | `text_trim` | 关 | 按有效文本长度裁剪；开启后每个有效文本长度一张采纳图，Python `infer()` 与 ABI 都能服务 | native 路径被规则 R5 拒绝（原生管线只 replay 一张固定图） |
+| `text_trim_cache_size` | 32 | `text_trim` 预捕获图的张数上限，超出按 LRU 淘汰 | 显存只在首次捕获付出：首图 +218.0 MiB reserved / +206.3 MiB allocated，其后每张 +0.0 / +0.1 MiB，默认上限 32 的总代价在 221 MiB 量级（`a84916a`，nvfp4，15 个 LIBERO 长度） |
 | FA4（`FLASHRT_THOR_FA4`、`use_fa4_mot`） | 关 | 注意力 kernel | 首次调用编译，失败自动回退 |
 | `vae_encoder="native"` / `vae_graph_input` | 关（torch 编码器） | 原生 VAE / 进图 | — |
 | `nvfp4_awq` | 关 | NVFP4 精度补偿 | 需要校准文件；原生 runtime 不支持 |
@@ -118,9 +119,38 @@ AWQ（nvfp4 + AWQ）：动作 cosine 对 fp16 为 0.99970，未加 AWQ 的 nvfp4
 
 `text_trim` 的捕获开销：已预捕获的文本长度切换一张图用 0.000–0.012 s，首次使用时才捕获的长度用 0.42–0.58 s。
 
-### 目标工作负载（3 × 256×256，horizon 32）的状态
+### `a84916a` 轮：目标工作负载可服务、LIBERO 回归与精度 gate（nvfp4，`infer()` P50）
 
-同一个入口测目标配置（`--workload target`，同一轮 `eccf14f`）：序列布局与 ABI / native 两行已经测得——viewport 正确报出 `view_shape=(3,256,256)`，ABI 152.7 ms、native 154.5 ms（图像 token 用占位值）。它的 `infer()` 还跑不起来：布局派生 768 个图像 token（16×48），而 VAE 路径把每个视角缩到 224×224、只给出 588 个，图内 VAE 构造因此以 `(588,128)` 对 `(768,128)` 不匹配失败（ISSUE-086）。在该问题解决之前，目标配置不是受支持的配置。
+commit `a84916a`：Jetson AGX Thor、MAXN、GPC 1.575 GHz、`emc_locked=null`、GPU 独占；原始日志在 `/home/jingwu/thor_val/0919e/`。本节数字都是端到端 `infer()` P50（ms），「vs official」是与官方模型的动作 cosine 中位数。
+
+目标配置（`--workload target`，3 × 256×256、horizon 32）现在是受支持的配置：VAE 编码几何按工作负载的每视角尺寸走，`view_shape=(3,256,256)` 与 `img_len=768`（16×48）在同一路径上一致成立，`infer()` 跑通。同一进程三条服务路径：
+
+| 配置 | `infer()` | ABI | native |
+|---|---:|---:|---:|
+| `default` | 216.93 | 173.55 | 173.27 |
+| `fast`（预捕获） | 137.64 | 139.35 | 跳过（R5） |
+
+`fast` 相对 `default` 省 79.3 ms；文本长度已预捕获，因此 `fast` 的行不含首次捕获开销。
+
+同一目标配置在 `text_trim` 下按有效文本 token 数取三个点（同一进程，每个长度一张采纳图）：
+
+| 有效文本 token | `infer()` | ABI | native |
+|---|---:|---:|---:|
+| 16 | 197.00 | 153.51 | 跳过（R5） |
+| 72 | 207.06 | 161.68 | 跳过（R5） |
+| 128 | 217.50 | 172.05 | 跳过（R5） |
+
+ABI 面能服务裁剪后的 prompt（每个长度一张采纳图），native 面还不能（规则 R5）。
+
+上一轮（`eccf14f`）测得的布局与两行仍成立：viewport 正确报出 `view_shape=(3,256,256)`，ABI 152.7 ms、native 154.5 ms（图像 token 用占位值）。
+
+LIBERO 回归：VAE 几何改动是保真中性的——`libero_spatial` nvfp4 `default` 复现上一轮的数值完全一致（vs official min 0.99418 / median 0.99764、MAE 0.18290），P50 202.6 ms，对上一轮的 202.0–202.4 ms。
+
+精度 gate：此前被阻塞的两个 gate 现在都能跑且通过——`e0m3_hadamard` vs official 0.99781 / min 0.99434、P50 222.2 ms（该精度没有 Thor 延迟 baseline，延迟部分不设门禁）；`fp8_static_cutlass`（真实校准）vs official 0.99830 / min 0.99557、P50 233.5 ms（同样不设门禁）。
+
+`text_trim` 的显存代价：在 Thor 上实测（nvfp4、FA4 关、15 个 LIBERO 长度），第一张捕获图付出 +218.0 MiB reserved / +206.3 MiB allocated，其后每张 +0.0 / +0.1 MiB——后续图共用同一个捕获池。因此默认 `text_trim_cache_size=32` 的总代价在 221 MiB 量级，不是 32 倍的首图代价。
+
+淘汰的代价（缓存上限 2、不预捕获）：重新访问一个已被淘汰的长度时 `set_prompt` 用 0.636 / 0.503 / 0.468 / 0.465 s；已预捕获的情形是 0.012 / 0.000 / 0.000 s。
 
 ### 新入口下的同一会话阶梯（`c20f3a0`，libero_spatial，nvfp4，`infer()` P50）
 
