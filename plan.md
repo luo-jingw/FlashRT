@@ -1748,7 +1748,7 @@ Phase Status: completed
   S4.
 
 ### Phase S4: the native pipeline carries one graph per trimmed length
-Phase Status: pending
+Phase Status: active
 - Goal: ISSUE-080 condition 5's remaining half. The ABI face serves trimmed
   prompts now; the native C++ pipeline refuses them explicitly at both entry
   points (`ImageWAMNativeRuntime.create`, `export_model_runtime(io="native")`).
@@ -1765,7 +1765,12 @@ Phase Status: pending
 - Modified files: `cpp/models/imagewam/**`, `flash_rt/models/imagewam/native_runtime.py`,
   `native_resources.py`, `runtime_export.py`, the native gates.
 - Observation: a native tick at two prompt lengths, bit-exact against
-  `infer()`, next to the ABI row that S2 already added.
+  `infer()`, next to the ABI row that S2 already added. The implementation
+  mirrors S2 on the C++ side (one keyed variant table instead of the single
+  `graph_` handle, a per-key context length for the proprio bound and the
+  `set_pipeline` dims check, and a host-visible key on the prompt/proprio
+  path), so the two faces read as one design; the Thor run list is in
+  `THOR_CHECKLIST.md` once the code lands.
 
 ### Phase S3: a bounded per-length graph cache, precaptured at construction
 Phase Status: completed
