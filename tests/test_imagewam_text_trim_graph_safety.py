@@ -126,8 +126,13 @@ def _mask(n_valid: int) -> torch.Tensor:
     return m
 
 
-def _build(gemm_runner=None, *, vae: bool = False) -> ImageWAMTorchFrontendThor:
-    if FA4 and fa4_backend.fa4_fwd() is None:
+def _build(gemm_runner=None, *, vae: bool = False,
+           fa4: bool | None = None) -> ImageWAMTorchFrontendThor:
+    """A frontend for this module's configuration. `fa4` overrides the
+    environment's `TRIM_FA4`, for a reference frontend that has to capture
+    on the same attention chain as another one (see the recovery test)."""
+    use_fa4 = FA4 if fa4 is None else fa4
+    if use_fa4 and fa4_backend.fa4_fwd() is None:
         pytest.skip(f"TRIM_FA4=on needs an FA4 runtime: {fa4_backend.status()}")
     kw: dict[str, object] = {}
     if vae:
@@ -139,7 +144,7 @@ def _build(gemm_runner=None, *, vae: bool = False) -> ImageWAMTorchFrontendThor:
     torch.manual_seed(0)  # the same random weights for every frontend
     try:
         return ImageWAMTorchFrontendThor(precision=PRECISION, dims_override=dict(DIMS), text_trim=True,
-                                         gemm_runner=gemm_runner, use_fa4=FA4, use_fa4_mot=FA4, **kw)
+                                         gemm_runner=gemm_runner, use_fa4=use_fa4, use_fa4_mot=use_fa4, **kw)
     except (RuntimeError, AttributeError) as exc:
         reason = _environment_gap(exc)
         if reason is None:
@@ -194,8 +199,8 @@ def _owned_tensor_ptrs(fe: ImageWAMTorchFrontendThor) -> dict[str, int]:
     return out
 
 
-def _fresh(n_valid: int, gemm_runner, *, vae: bool = False) -> torch.Tensor:
-    fresh = _build(gemm_runner, vae=vae)
+def _fresh(n_valid: int, gemm_runner, *, vae: bool = False, fa4: bool | None = None) -> torch.Tensor:
+    fresh = _build(gemm_runner, vae=vae, fa4=fa4)
     out = _run(fresh, n_valid, vae=vae)
     assert fresh.captured_text_lengths == (n_valid + 1,)
     del fresh
@@ -308,6 +313,7 @@ def test_capture_failure_leaves_no_graph_and_recovers(monkeypatch):
     lengths = sorted(set(SEQUENCE))[:3]
     fe = _build()
     first = _run(fe, lengths[0])
+    assert fe._graph is not None and fe.captured_text_lengths == (lengths[0] + 1,)
     real_capture = fe._capture_graph
 
     def boom() -> None:
@@ -319,10 +325,32 @@ def test_capture_failure_leaves_no_graph_and_recovers(monkeypatch):
     assert fe._graph is None and fe._current_prompt is None
     with pytest.raises(RuntimeError, match="set_prompt"):
         fe.infer({"proprio": PROPRIO})
+    # With FA4 on, `_capture_graph_or_fall_back` reads ANY capture failure as an
+    # FA4 failure, records it and switches this frontend to the cuBLAS chain for
+    # good -- its documented contract, since FA4 is the compiled site. With FA4
+    # off there is no fallback and the stand-in's error just propagates. Either
+    # way the frontend now serves the cuBLAS chain (`use_fa4` off).
+    assert (fe.fa4_fallback_reason is not None) == FA4
+    assert fe.use_fa4 is False and fe.use_fa4_mot is False
+    if FA4:
+        assert "stand-in" in fe.fa4_fallback_reason
     monkeypatch.setattr(fe, "_capture_graph", real_capture)
-    assert torch.equal(_run(fe, lengths[0]), first)
+    recovered = _run(fe, lengths[0])
+    if not FA4:
+        # The failure never consulted the fallback: `lengths[0]` replay its own
+        # cached graph, on the chain both were captured on, bit for bit.
+        assert torch.equal(recovered, first), f"n_valid={lengths[0]}: {_stats(recovered, first)}"
+    else:
+        # `first` is an FA4 capture and the re-capture runs the cuBLAS chain the
+        # fallback switched to, so the two differ in the last bits by
+        # construction -- comparing them would measure FA4 against cuBLAS, not
+        # the recovery (the dispatch tests measure that same gap). Like for
+        # like, the reference is a frontend that captured on the chain this one
+        # now serves.
+        chain_first = _fresh(lengths[0], fe._gemm, fa4=False)
+        assert torch.equal(recovered, chain_first), f"n_valid={lengths[0]}: {_stats(recovered, chain_first)}"
     out = _run(fe, lengths[1])
-    fresh = _fresh(lengths[1], fe._gemm)
+    fresh = _fresh(lengths[1], fe._gemm, fa4=False)
     print(f"\nprecision={PRECISION} fa4={FA4}: after a failed capture, n_valid={lengths[1]} vs fresh {_stats(out, fresh)}")
     assert torch.equal(out, fresh)
 
