@@ -186,6 +186,7 @@ def test_pipeline_with_awq_folds_matches_unscaled_fp16(dims_override):
 
 
 def _count_kernels(fn) -> int:
+    """CUDA kernel events CUPTI reports for one call of `fn`."""
     from torch.profiler import ProfilerActivity, profile
     torch.cuda.synchronize()
     with profile(activities=[ProfilerActivity.CUDA]) as prof:
@@ -213,7 +214,22 @@ def test_fold_a_adds_no_kernels_after_first_call():
                                 lin.n, lin.k, (1.0 / plan.input_scale) if plan.fold_input else None)
     fe.run_eager()
     fe.run_eager(weights)  # warmup: fills the fold caches
+    # The first profiled region in a process can report nothing at all: on Thor
+    # (0919e, torch 2.9.1) the region profiling `fe.run_eager` read 0 CUDA events
+    # while the region right after it read the 285 this study recorded for both
+    # paths (docs/imagewam_nvfp4_awq.md). Both calls run the same `run_eager` --
+    # it is eager with and without `weights` (the two differ only in the weight
+    # dict) -- and `test_pipeline_with_awq_folds_matches_unscaled_fp16` shows the
+    # no-weights call does the real pipeline, so that 0 is the measurement, not
+    # the pipeline: a first region's count is not a kernel count. Which CUPTI
+    # state makes the first region blind is not pinned down here (torch's own
+    # profiler carries a CUPTI teardown / lazy-re-init workaround for CUDA
+    # graphs); the test discards one region as a profiler warm-up and counts the
+    # two that follow. `n_plain > 0` keeps a blind profiler from satisfying the
+    # equality below on its own.
+    _count_kernels(fe.run_eager)
     n_plain = _count_kernels(fe.run_eager)
     n_awq = _count_kernels(lambda: fe.run_eager(weights))
     print(f"kernels per eager forward: plain={n_plain} awq={n_awq}")
+    assert n_plain > 0, "no CUDA events reported for the plain eager forward -- profiler not live"
     assert n_awq == n_plain
