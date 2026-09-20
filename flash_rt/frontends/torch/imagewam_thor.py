@@ -1639,7 +1639,10 @@ class ImageWAMTorchFrontendThor:
 
         An invalidated capture (for example a device sync inside it)
         makes `torch.cuda.graph`'s exit raise before it restores the
-        caller's stream, so the current stream is restored here first.
+        caller's stream, so the current stream is restored here first, and
+        the capture state the failed attempt left behind (its stream and
+        its pool) is dropped by `_abandon_capture_state`, so the capture
+        below starts from the same state a first capture does.
         """
         caller_stream = torch.cuda.current_stream()
         try:
@@ -1647,6 +1650,7 @@ class ImageWAMTorchFrontendThor:
             return
         except Exception as exc:  # FA4 compile/launch/capture errors are not one exception type
             torch.cuda.set_stream(caller_stream)
+            self._abandon_capture_state()
             if not (self.use_fa4 or self.use_fa4_mot):
                 raise
             reason = f"{type(exc).__name__}: {exc}"
@@ -1672,6 +1676,36 @@ class ImageWAMTorchFrontendThor:
         # (and their RoPE tables) stay alive until the replacement graph
         # exists; after a second failure no graph is left at all.
         self._captures.clear()
+
+    def _abandon_capture_state(self) -> None:
+        """After a capture attempt raised: drop the capture stream and the
+        graph pool, so the next `_capture_graph` builds fresh ones.
+
+        A capture CUDA invalidates -- a device sync inside the recording
+        region, or a launch it rejects -- leaves the pool's allocation
+        recording open: measured on Thor (torch 2.9.1), the retry into the
+        same pool raises `beginAllocateToPool: already recording to
+        mempool_id` at `torch.cuda.graph(..., pool=...)` instead of
+        capturing, so the FA4 fallback could never re-capture
+        (ISSUE-085).
+
+        The pool is dropped rather than repaired: there is no torch API
+        that ends a recording without also requiring it to be open, and
+        `_capture_graph` already creates the stream and the pool when
+        `_graph_stream` is None, so clearing both makes the retry a first
+        capture in every respect. The stream and the pool handle are
+        capture-path state only -- replay reads the captured graph, which
+        keeps the pool the CUDA graph itself holds -- so graphs of other
+        lengths are unaffected until the caller drops them.
+
+        The abandoned pool is never recorded into again and is not
+        released, so whatever the invalidated capture allocated from it
+        stays allocated. A fallback happens at most once per frontend: it
+        clears `use_fa4`/`use_fa4_mot`, and a later failure with FA4 off
+        propagates instead of retrying.
+        """
+        self._graph_stream = None
+        self._graph_pool = None
 
     def _set_context_with_optional_proprio(self, text_ctx: torch.Tensor, text_mask: torch.Tensor) -> None:
         """`text_ctx`: `(text_len, joint_attention_dim)` BF16 -- the
