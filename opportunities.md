@@ -4057,6 +4057,20 @@ for v1, the fixture data itself stays out of git: the generator writes
 `fixture.npz` and the manifest to a data directory and copies only the manifest
 into `tests/fixtures/imagewam_gate/`.
 
+## Thor, LIBERO (`0919e`)
+
+`0919e`, commit `a84916a`, Jetson AGX Thor, MAXN, GPC 1.575 GHz,
+`emc_locked=null`, GPU exclusive; raw logs under
+`/home/jingwu/thor_val/0919e/`. Latency is end-to-end `infer()` P50 in ms and
+`vs official` is the median action cosine against the official model.
+
+The VAE encode geometry change (issues.md ISSUE-086) is fidelity-neutral for the
+gate's LIBERO configuration: the `libero_spatial` nvfp4 `default` row measures
+vs official min 0.99418 / median 0.99764 and MAE 0.18290, the values the
+`eccf14f` round recorded for that row, at P50 202.6 ms against 202.0-202.4 ms in
+the `eccf14f` session. The fixture-v2 gate (`imagewam_libero_gate_v2`) still
+passes.
+
 
 # OPT-018: ActionDiT small-M CUTLASS tile selection (roadmap item 1)
 
@@ -5130,6 +5144,23 @@ The LIBERO gate for this precision reported `blocked` in this round:
 `e0m3_hadamard` entry, so the gate did not measure this tier and the
 `vs official` column above is the round's accuracy evidence for it.
 
+## Thor, LIBERO (`0919e`)
+
+`0919e`, commit `a84916a`, Jetson AGX Thor, MAXN, GPC 1.575 GHz,
+`emc_locked=null`, GPU exclusive; raw logs under
+`/home/jingwu/thor_val/0919e/`. Latency is end-to-end `infer()` P50 in ms and
+`vs official` is the median action cosine against the official model.
+
+The gate runs for `e0m3_hadamard` now, the thresholds file having gained an
+entry for the precision, and passes: vs official median 0.99781 / min 0.99434,
+`infer()` P50 222.2 ms. The latency half of the gate does not apply to this
+precision: the latency policy in
+`tests/fixtures/imagewam_gate/latency_baselines.json` holds no Thor baseline for
+it, the same as for `fp8_static_cutlass`.
+
+That median is at or above nvfp4's own gate median 0.99744, the criterion this
+precision's gate was set against.
+
 
 # OPT-022: real activation calibration for `fp8_static*` (roadmap item 7)
 
@@ -5241,6 +5272,19 @@ heading with `e0m3_hadamard` and `fp16`; the two vs-official medians that table
 carries, 0.99786 (`default`) and 0.99968 (`stack`), belong to its
 `e0m3_hadamard` row and are not `fp8_static_cutlass` values (they are
 recorded under OPT-024).
+
+## Thor, LIBERO (`0919e`)
+
+`0919e`, commit `a84916a`, Jetson AGX Thor, MAXN, GPC 1.575 GHz,
+`emc_locked=null`, GPU exclusive; raw logs under
+`/home/jingwu/thor_val/0919e/`. Latency is end-to-end `infer()` P50 in ms and
+`vs official` is the median action cosine against the official model.
+
+The LIBERO gate ran `fp8_static_cutlass` with the real calibration file and
+passes: vs official median 0.99830 / min 0.99557, `infer()` P50 233.5 ms. The
+latency half of the gate does not apply to this precision: the latency policy in
+`tests/fixtures/imagewam_gate/latency_baselines.json` holds no Thor baseline for
+`fp8_static_cutlass`.
 
 
 # OPT-023: AWQ per-channel scales folded into the NVFP4 weights (roadmap item 8)
@@ -5444,6 +5488,31 @@ Target workload (three views of 256x256, horizon 32), `default`: the ABI tick
 measures 152.7 ms. That row is layout-only: it was measured with placeholder
 image tokens, because the VAE path refuses this workload.
 
+## Thor, both workloads (`0919e`)
+
+`0919e`, commit `a84916a`, Jetson AGX Thor, MAXN, GPC 1.575 GHz,
+`emc_locked=null`, GPU exclusive; raw logs under
+`/home/jingwu/thor_val/0919e/`. Latency is P50 in ms on one wall-clock timer per
+path, every path in the same process, real checkpoint.
+
+Target workload (three views of 256x256, horizon 32, `text_max_len=128`):
+
+| row | `infer()` | ABI tick (`io="python"`) | native tick (`io="native"`) |
+|---|---:|---:|---:|
+| `default` | 216.93 | 173.55 | 173.27 |
+| `profile=fast`, lengths precaptured | 137.64 | 139.35 | skipped (rule R5) |
+| `text_trim`, 16 valid tokens | 197.00 | 153.51 | skipped (rule R5) |
+| `text_trim`, 72 valid tokens | 207.06 | 161.68 | skipped (rule R5) |
+| `text_trim`, 128 valid tokens | 217.50 | 172.05 | skipped (rule R5) |
+
+The workload serves with its own VAE encode geometry now (issues.md ISSUE-086),
+so these rows carry the workload's own image geometry rather than the
+placeholder image tokens of the layout-only rows the section above records.
+
+The ABI serves the trimmed lengths: one adopted graph exec per text length,
+selected by the replay key, so every swept length produced a number. The native
+face still refuses them (rule R5).
+
 
 # OPT-029: ImageWAM native C++ overlay (`io="native"`)
 
@@ -5570,6 +5639,30 @@ and the ABI tick 184.2 ms in the same process.
 Target workload (three views of 256x256, horizon 32): the native tick measures
 154.5 ms, also measured with placeholder image tokens, so it is a layout-only
 number as well. `text_trim` remains refused for this face (rule R5).
+
+## Thor, both workloads (`0919e`)
+
+`0919e`, commit `a84916a`, Jetson AGX Thor, MAXN, GPC 1.575 GHz,
+`emc_locked=null`, GPU exclusive; raw logs under
+`/home/jingwu/thor_val/0919e/`. Latency is P50 in ms on one wall-clock timer per
+path, every path in the same process, real checkpoint.
+
+Target workload (three views of 256x256, horizon 32, `text_max_len=128`), the
+same process as the ABI rows:
+
+| row | native tick (`io="native"`) | ABI tick (`io="python"`) | `infer()` |
+|---|---:|---:|---:|
+| `default` | 173.27 | 173.55 | 216.93 |
+| `profile=fast`, lengths precaptured | skipped (rule R5) | 139.35 | 137.64 |
+| `text_trim`, 16 valid tokens | skipped (rule R5) | 153.51 | 197.00 |
+| `text_trim`, 72 valid tokens | skipped (rule R5) | 161.68 | 207.06 |
+| `text_trim`, 128 valid tokens | skipped (rule R5) | 172.05 | 217.50 |
+
+The `default` row is the workload served with its own VAE encode geometry; the
+native row the section above records for this workload is the earlier
+layout-only measurement with placeholder image tokens. `text_trim` stays
+refused for this face: rule R5 gives the native pipeline one graph and one
+context length, so the trimmed rows have no native number.
 
 
 # OPT-030: text context trimmed to the prompt's valid length (issues.md ISSUE-020)
@@ -5850,6 +5943,35 @@ Capture cost on Thor, three lengths swept (16, 24 and 31 valid tokens):
 (precapture) and 0.42-0.58 s for a length captured on first use, both at or
 below the H100 capture-cost table above (0.61-1.97 s for each later new
 length, 12 ms for a cached one).
+
+## Thor, LIBERO (`0919e`)
+
+`0919e`, commit `a84916a`, Jetson AGX Thor, MAXN, GPC 1.575 GHz,
+`emc_locked=null`, GPU exclusive; raw logs under
+`/home/jingwu/thor_val/0919e/`. Latency is end-to-end `infer()` P50 in ms.
+
+Per-length graph memory, `benchmarks/imagewam_text_trim_bench.py`, `nvfp4`, FA4
+off, 15 distinct LIBERO lengths, as deltas of the process's reserved and
+allocated memory (NVML and `torch.cuda.max_memory_allocated()`):
+
+| capture | reserved | allocated |
+|---|---:|---:|
+| first captured graph | +218.0 MiB | +206.3 MiB |
+| each following capture | +0.0 MiB | +0.1 MiB |
+
+The process's reserved total is 11.79 GiB after the 15-length sweep. The
+captures after the first share the capture pool, so the default
+`text_trim_cache_size=32` costs on the order of 221 MiB in total, not 32 times
+the first graph.
+
+Trimmed against full in one frontend at trimmed `x0 = 21`, same benchmark,
+`nvfp4`, FA4 off: `infer()` P50 123.0 ms against 203.7 ms for the full length,
+ratio 0.604.
+
+Eviction, `text_trim_cache_size=2` with no precapture, lengths 16 -> 24 -> 31 ->
+16 valid tokens: `set_prompt` takes 0.636 / 0.503 / 0.468 / 0.465 s, so the
+revisited length captures again, LRU having evicted it. The same three lengths
+precaptured at `text_trim_cache_size=8` switch in 0.012 / 0.000 / 0.000 s.
 
 
 # OPT-031: derive the remaining per-benchmark shape tables from the workload
