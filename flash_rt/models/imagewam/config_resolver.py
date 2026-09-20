@@ -123,8 +123,11 @@ class ImageWAMOptions:
     `text_trim_cache_size`: the bound on the frontend's per-length
     `text_trim` graph cache (`>= 1`). It is the constructor's own default:
     LIBERO's four suites use 15 distinct lengths, so 32 covers them with
-    headroom, and one captured graph costs 10-16 MiB on H100 (NVML, per
-    process; ISSUE-080).
+    headroom. The memory is paid by the first capture, not per length: on
+    Thor at 15 lengths (nvfp4, FA4 off) the first captured graph costs
+    +218.0 MiB reserved / +206.3 MiB allocated and every following one
+    +0.0 / +0.1 MiB, because the captures share one pool, so this bound is of
+    the order of 221 MiB rather than 32 x 218 MiB (ISSUE-080).
 
     The last block is the expert tier: constructor-only switches that a
     deployment does not set.
