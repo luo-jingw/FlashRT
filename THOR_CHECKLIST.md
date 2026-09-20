@@ -77,9 +77,10 @@ v2 的 fixture 已生成、trim gate 已过，只有 manifest 还没入库；Tho
 
 ```
 sha256sum tests/fixtures/imagewam_gate/imagewam_libero_gate_v2.manifest.json
+base64 -w0 tests/fixtures/imagewam_gate/imagewam_libero_gate_v2.manifest.json
 ```
 
-把该文件的**内容**（约 6 KB JSON）贴回会话，或复制到双方都能取到的位置，连同上一步的 `sha256sum` 一起。
+把 `base64` 的输出（约 15 KB，单行）连同 `sha256sum` 一起带回。**用 base64 而不是贴 JSON**：这个 manifest 里带生成时的 `git.untracked_files` 列表，重新排版/截断过的 JSON 无法与 sha256 对上，base64 可以按字节还原并当场核对。
 
 判据：有凭据的一方按原字节提交该文件，`sha256sum` 与 Thor 上的一致，并且 `tests/test_imagewam_regression_gate.py::test_committed_fixture_manifests_are_well_formed` 在有 GPU 与无 GPU 的机器上都过（它遍历 `tests/fixtures/imagewam_gate/*.manifest.json`）。数据目录继续留在 `$BUNDLE/imagewam_libero_gate_v2/`；若把它加进了 bundle，记得在 Thor 上重生成 `$BUNDLE/SHA256SUMS`。
 去向：manifest 入 git；`issues.md` ISSUE-080 条件 4 的 Resolution 补一句"manifest 已入库"。

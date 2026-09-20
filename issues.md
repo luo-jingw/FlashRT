@@ -1640,8 +1640,25 @@ ISSUE-080's condition 2 red, which is the last technical blocker for serving
   `/home/jingwu/thor_val/0919e/`: `A1_fa4_dispatch.log` (the mempool message),
   `A1_awq.log` (`plain=0` vs `awq=285`), `A1_graph_recover.log` (FA4 off, 4
   passed), `A1_fa4_recover.log` (FA4 on, the swallowed stand-in and the
-  `torch.equal` mismatch).
-- `THOR_CHECKLIST.md` item A1 carries the commands and the cascade criterion.
+  `torch.equal` mismatch). Item R of `THOR_CHECKLIST.md` lists the four
+  commands.
+- Where each one dies, from that round:
+  - `capture_sync`: inside `_capture_graph`, at
+    `torch.cuda.graph(..., pool=self._graph_pool)`, with
+    `RuntimeError: beginAllocateToPool: already recording to mempool_id`, and
+    `cudaErrorStreamCaptureInvalidated` in the fallback log that follows — the
+    invalidated capture's pool recording is never ended before the fallback
+    opens a new capture on the same pool.
+  - AWQ: with `torch.profiler(activities=[ProfilerActivity.CUDA])`, the
+    no-weights `fe.run_eager` sees 0 CUDA events after warmup while
+    `fe.run_eager(weights)` sees 285 — the no-weights call is replaying the
+    captured graph, which that profiler mode does not see.
+  - FA4-on recovery: the fallback reports `stand-in: capture failed on a new
+    length -- falling back to the cuBLAS attention chain`, the injected
+    `pytest.raises` still matches, and the later `torch.equal` compares an
+    FA4-captured graph against a cuBLAS re-capture of the same length
+    (`0.7887` against `0.7886`), which differ in the last bits by
+    construction.
 
 ## Hypotheses
 
@@ -1659,12 +1676,17 @@ ISSUE-080's condition 2 red, which is the last technical blocker for serving
 
 ## Next Experiment
 
-Per defect: (1) `capture_sync` — record which allocation lands inside the
-recording region and move it out; (2) AWQ — make the plain path's kernel count
-observable (or assert the property that actually differs between the paths);
-(3) the FA4-on recovery test — make the injected failure survive the fallback
-(or assert the fallback reason instead of the tensor identity). Then re-run the
-three files on Thor.
+Per defect: (1) `capture_sync` — end or abandon the invalidated pool's
+recording before the cuBLAS fallback starts a new capture, keeping the healthy
+path unchanged; (2) AWQ — make the two sides comparable (the property under
+test is "the fold adds no kernels after the first call", so both sides must
+measure the same kind of call); (3) the FA4-on recovery test — compare
+like-for-like or assert the documented post-fallback state, keeping "a failed
+capture leaves no graph active and the frontend recovers". Then re-run the
+four files on Thor (`THOR_CHECKLIST.md` item R).
+
+Implementation note: the three fixes are in review; ISSUE-085 stays open until
+the Thor re-run is green.
 # ISSUE-086
 
 Status: resolved
