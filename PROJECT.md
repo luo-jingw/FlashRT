@@ -244,6 +244,13 @@ Do not record token values or other secrets here.
 
 ## Project-Specific Constraints
 
+- The Thor used for validation has **no GitHub credentials**: it is pull-only.
+  Nothing is committed or pushed there, and a local commit on that machine is
+  a backup, not a route into the repository. Anything the repository must
+  track that is produced on Thor (today: a gate fixture manifest) is carried
+  back by hand — the file's contents plus its `sha256sum` — and committed from
+  a machine that has credentials. `THOR_CHECKLIST.md`'s 用法 section states the
+  same rule for the operator.
 - The Thor used for validation is shared. Scripts, tests and
   benchmarks must not change its global state:
   - no `sudo`;
