@@ -8,6 +8,11 @@ the tick must fail when the consumer skips the proprio verb or `step`), a
 tick that enters no Python frame, the status codes, and setup calls
 refused while the model runtime is live. Skips when exec/, runtime/ or the native library is not
 built (docs/imagewam_native_cpp.md).
+
+`text_trim=True`: the handle holds one graph per captured text length
+(`use_graph(key, exec)`, `set_text_length(key)`), and the tick at either
+length is bit-exact against `infer()` at that length — the native mirror of
+`tests/test_imagewam_model_runtime_export.py::test_abi_tick_matches_infer_at_every_captured_length`.
 """
 import json
 import os
@@ -38,6 +43,14 @@ SEED = 99
 # Buffers a tick leaves behind besides the actions.
 TICK_STATE = ("backbone_hidden", "K_cache", "V_cache")
 
+# text_trim=True: two captured text lengths. `x0 = valid + 1` (the proprio
+# row), `a0 = x0 + 10` and `total = a0 + num_action` keep the image and
+# action blocks at their default lengths (the ABI test's own rows).
+TRIM_TEXT_ROWS = 16
+TRIM_DIMS = dict(x0=TRIM_TEXT_ROWS + 1, a0=TRIM_TEXT_ROWS + 1 + 10, total=TRIM_TEXT_ROWS + 1 + 10 + 4,
+                 proprio_dim=PROPRIO_DIM)
+TRIM_LENGTHS = (5, 13)          # valid text tokens, i.e. x0 = 6 and 14
+
 
 @pytest.fixture(scope="module")
 def frontend(tmp_path_factory):
@@ -59,7 +72,7 @@ def frontend(tmp_path_factory):
 def native_runtime(frontend):
     surface = frontend.runtime_surface()
     native = ImageWAMNativeRuntime.create(surface, LIBRARY)
-    native.use_graph(surface.graph_exec)
+    native.use_graph(surface.graph_variants.active_key, surface.graph_exec)
     mr = frontend.export_model_runtime(io="native", native=native,
                                        identity={"test": "imagewam_native_runtime"})
     consumer = ModelRuntimeConsumer(mr.ptr, exec_library_path())
@@ -232,10 +245,12 @@ def test_bind_rejects_the_python_face(frontend, native_runtime):
 
 def test_setup_refused_while_exported(frontend, native_runtime):
     """The live model runtime adopted the current graph exec: replacing the
-    graph or the pipeline under it is refused."""
+    graph or the pipeline under it is refused. Selecting another length is
+    not: `set_text_length` and `set_proprio_row` serve the hot path."""
     native, _, _ = native_runtime
     graph_exec = frontend.runtime_surface().graph_exec
-    for what, call in (("use_graph", lambda: native.use_graph(graph_exec)),
+    key = native.text_length
+    for what, call in (("use_graph", lambda: native.use_graph(key, graph_exec)),
                        ("set_pipeline", lambda: native.set_pipeline(frontend)),
                        ("capture", native.capture)):
         with pytest.raises(ImageWAMNativeError) as exc:
@@ -243,3 +258,125 @@ def test_setup_refused_while_exported(frontend, native_runtime):
         print(f"{what} while exported: {exc.value}")
         assert exc.value.status == -1 and "release it first" in str(exc.value)
     assert native.graph_producer == "python" and native.graph_exec == graph_exec
+
+
+# -- text_trim=True: one native graph per captured length -----------------
+
+def _set_trimmed_prompt(fe: ImageWAMTorchFrontendThor, valid: int) -> None:
+    """One precomputed prompt of `valid` real text tokens; the trimmed
+    context length is `valid + 1` (the proprio row)."""
+    mask = torch.zeros(TRIM_TEXT_ROWS, dtype=torch.bool)
+    mask[:valid] = True
+    torch.manual_seed(valid)
+    fe.set_prompt(context=torch.randn(TRIM_TEXT_ROWS, 64).to(torch.bfloat16), context_mask=mask)
+
+
+@pytest.fixture(scope="module")
+def trimmed(tmp_path_factory):
+    """A `text_trim=True` frontend with two captured prompt lengths, over
+    the same dataset stats as `frontend` (so the native proprio verb
+    normalizes where `infer()` does)."""
+    stats = {
+        "state": {"default": {"global_min": [-1.0 - 0.1 * i for i in range(PROPRIO_DIM)],
+                              "global_max": [1.0 + 0.2 * i for i in range(PROPRIO_DIM)]}},
+        "action": {"default": {"global_min": [-0.5 - 0.05 * i for i in range(7)],
+                               "global_max": [0.5 + 0.1 * i for i in range(7)]}},
+    }
+    path = tmp_path_factory.mktemp("imagewam_stats_trim") / "dataset_stats.json"
+    path.write_text(json.dumps(stats))
+    fe = ImageWAMTorchFrontendThor(precision=PRECISION, dims_override=dict(TRIM_DIMS), text_trim=True,
+                                   dataset_stats_path=str(path))
+    for valid in TRIM_LENGTHS:
+        _set_trimmed_prompt(fe, valid)
+    return fe
+
+
+def test_native_tick_matches_infer_at_every_captured_length(trimmed):
+    """The native tick at both captured prompt lengths, bit-exact against
+    `infer()` at that same length: the C `step` replays the key the setup
+    producer selected (`set_text_length`), not the key active at export,
+    while `context_rows` — the proprio row bound and the pipeline's dims
+    check — follows it.
+
+    The ticks run at the shorter length first, which is not the export-time
+    default, so a `step` replaying the default key would fail here. The
+    handle's own `text_length` follows the key, and the manifest states the
+    adopted table."""
+    keys = tuple(valid + 1 for valid in TRIM_LENGTHS)
+    surface = trimmed.runtime_surface()
+    assert tuple(entry.key for entry in surface.graph_variants.entries) == keys
+    native = ImageWAMNativeRuntime.create(surface, LIBRARY)
+    try:
+        for entry in surface.graph_variants.entries:
+            native.use_graph(entry.key, entry.graph_exec)
+        native.set_text_length(surface.graph_variants.active_key)
+        mr = trimmed.export_model_runtime(io="native", native=native)
+        try:
+            manifest = json.loads(mr.manifest)
+            print(f"trimmed native manifest graphs={manifest['graphs']} "
+                  f"text_lengths={manifest['text_lengths']}")
+            assert manifest["text_lengths"] == {"default_key": keys[-1], "keys": list(keys),
+                                                "per_prompt_length": True}
+            assert manifest["graphs"][0] == {"name": "infer", "default_key": keys[-1],
+                                             "keys": list(keys), "stream": "main"}
+            consumer = ModelRuntimeConsumer(mr.ptr, exec_library_path())
+            proprio = np.linspace(-0.7, 0.9, PROPRIO_DIM, dtype=np.float32)
+            chunk = (trimmed.dims["num_action"], trimmed.dims["action_dim"])
+            try:
+                for valid in (TRIM_LENGTHS[0], TRIM_LENGTHS[1]):
+                    key = valid + 1
+                    assert native.has_variant(key), f"no exec adopted for x0={key}"
+                    _set_trimmed_prompt(trimmed, valid)
+                    surface = trimmed.runtime_surface()
+                    # The prompt changed: the length reaches the handle
+                    # before the proprio row it bounds is set again.
+                    native.set_text_length(key)
+                    native.set_proprio_row(surface.proprio_row)
+                    assert native.text_length == key
+                    assert native.graph_exec == native.variant_exec(key)
+                    # infer() draws its own img_raw; reproduce both draws.
+                    torch.manual_seed(SEED)
+                    ref_actions = trimmed.infer({"proprio": proprio})["actions"]
+                    ref_raw = trimmed._action_latent.detach().cpu().numpy().copy()
+                    torch.manual_seed(SEED)
+                    tokens = torch.empty_like(trimmed._img_raw).normal_()
+                    noise = torch.empty_like(trimmed._action_latent).normal_().mul_(0.01)
+                    poison_tick_state(trimmed)
+                    consumer.write_swap("image_tokens", bits(tokens))
+                    consumer.set_input("proprio", proprio.tobytes())
+                    consumer.write_swap("noise", noise.cpu().numpy())
+                    consumer.step()
+                    actions = consumer.get_output("actions", np.float32, chunk)
+                    raw = consumer.read_swap("actions_raw", np.float32, chunk)
+                    print(f"x0={key}: actions array_equal={np.array_equal(actions, ref_actions)} "
+                          f"max_abs={float(np.max(np.abs(actions - ref_actions))):.3g}; actions_raw "
+                          f"array_equal={np.array_equal(raw, ref_raw)}")
+                    assert np.array_equal(actions, ref_actions)
+                    assert np.array_equal(raw, ref_raw)
+            finally:
+                consumer.close()
+        finally:
+            mr.release()
+    finally:
+        native.close()
+
+
+def test_set_text_length_refuses_a_length_without_a_graph(trimmed):
+    """A captured length the handle holds no graph for is refused before any
+    tick: the deployment adopts every length it serves (`use_graph`), and
+    adoption is refused once the export is live."""
+    surface = trimmed.runtime_surface()
+    key = surface.graph_variants.active_key
+    native = ImageWAMNativeRuntime.create(surface, LIBRARY)
+    try:
+        print(f"declared={native.text_length} adopted={native.has_variant(key)}")
+        assert native.has_variant(key) is False
+        with pytest.raises(ImageWAMNativeError) as exc:
+            native.set_text_length(key)
+        print(f"set_text_length({key}) with no graph: {exc.value}")
+        assert exc.value.status == -2
+        with pytest.raises(ImageWAMNativeError) as exc:
+            native.set_text_length(key + 1000)
+        assert exc.value.status == -2
+    finally:
+        native.close()

@@ -142,7 +142,7 @@ def main() -> int:
     def build_native(source) -> ImageWAMNativeRuntime:
         native = ImageWAMNativeRuntime.create(surface)
         if args.graph == "python":
-            native.use_graph(surface.graph_exec)
+            native.use_graph(surface.graph_variants.active_key, surface.graph_exec)
         else:
             native.set_pipeline(source)
             native.capture()

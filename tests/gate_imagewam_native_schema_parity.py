@@ -53,7 +53,7 @@ def main() -> int:
     fe.set_prompt("pick up the black bowl")
     surface = fe.runtime_surface()
     native = ImageWAMNativeRuntime.create(surface)
-    native.use_graph(surface.graph_exec)
+    native.use_graph(surface.graph_variants.active_key, surface.graph_exec)
     mr = fe.export_model_runtime(io="native", native=native, identity={"gate": "native_schema_parity"})
     try:
         python_records = [line for line in mr.identity.splitlines()

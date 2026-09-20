@@ -25,6 +25,8 @@ class ImageWAMIoConfig(ctypes.Structure):
         ("proprio_dim", ctypes.c_uint32),
         ("context_rows", ctypes.c_uint32),
         ("context_width", ctypes.c_uint32),
+        ("num_text_lengths", ctypes.c_uint32),
+        ("text_lengths", ctypes.POINTER(ctypes.c_uint32)),
         ("img_raw", ctypes.c_void_p),
         ("context", ctypes.c_void_p),
         ("action_latent", ctypes.c_void_p),
@@ -175,8 +177,16 @@ class ImageWAMNativeLibrary:
         lib.frt_imagewam_native_last_error.restype = ctypes.c_char_p
         lib.frt_imagewam_native_stream.argtypes = [handle_p]
         lib.frt_imagewam_native_stream.restype = ctypes.c_void_p
-        lib.frt_imagewam_native_use_graph.argtypes = [handle_p, ctypes.c_void_p]
+        lib.frt_imagewam_native_use_graph.argtypes = [handle_p, ctypes.c_uint64, ctypes.c_void_p]
         lib.frt_imagewam_native_use_graph.restype = ctypes.c_int
+        lib.frt_imagewam_native_has_variant.argtypes = [handle_p, ctypes.c_uint64]
+        lib.frt_imagewam_native_has_variant.restype = ctypes.c_int
+        lib.frt_imagewam_native_variant_exec.argtypes = [handle_p, ctypes.c_uint64]
+        lib.frt_imagewam_native_variant_exec.restype = ctypes.c_void_p
+        lib.frt_imagewam_native_set_text_length.argtypes = [handle_p, ctypes.c_uint64]
+        lib.frt_imagewam_native_set_text_length.restype = ctypes.c_int
+        lib.frt_imagewam_native_text_length.argtypes = [handle_p]
+        lib.frt_imagewam_native_text_length.restype = ctypes.c_uint64
         lib.frt_imagewam_native_graph_exec.argtypes = [handle_p]
         lib.frt_imagewam_native_graph_exec.restype = ctypes.c_void_p
         lib.frt_imagewam_native_set_proprio_row.argtypes = [handle_p, ctypes.c_int32]

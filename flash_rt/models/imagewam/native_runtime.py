@@ -2,15 +2,23 @@
 
 `ImageWAMNativeRuntime` creates an `frt_imagewam_native` from a captured
 frontend's runtime surface and exposes the setup calls (`use_graph`,
-`set_pipeline`, `capture`, `set_proprio_row`, `schema_records`,
-`bind_declaration`). It holds one reference to the handle, the surface
-(whose `owner`, the frontend, owns the graph exec, weights and buffers the
-handle borrows), the source of the installed pipeline, and the tensors
-and host arrays its handoff structs point to, so the handle stays valid
-without other references to the frontend. The hot-path
-verbs are the library's C functions; `runtime_export.py` installs them
-on the `io="native"` declaration. Interface record:
+`set_text_length`, `set_pipeline`, `capture`, `set_proprio_row`,
+`schema_records`, `bind_declaration`). It holds one reference to the
+handle, the surface (whose `owner`, the frontend, owns the graph execs,
+weights and buffers the handle borrows), the source of the installed
+pipeline, and the tensors and host arrays its handoff structs point to, so
+the handle stays valid without other references to the frontend. The
+hot-path verbs are the library's C functions; `runtime_export.py` installs
+them on the `io="native"` declaration. Interface record:
 docs/imagewam_native_cpp.md.
+
+One graph per text length: the handle holds a graph variant table keyed by
+the context length `x0` (the same key space the ABI face's `GraphVariants`
+uses), filled by `use_graph(key, exec)` for every captured length of the
+surface — or by `capture()` for the active length when this handle records
+the graph itself. `set_text_length(key)` selects the length the next ticks
+serve; `step` (a C function) replays that key's exec, so the active length
+is carried by the handle and not by the declaration.
 """
 from __future__ import annotations
 
@@ -45,20 +53,16 @@ class ImageWAMNativeRuntime:
     @classmethod
     def create(cls, surface: ImageWAMRuntimeSurface,
                library: ImageWAMNativeLibrary | None = None) -> "ImageWAMNativeRuntime":
-        """One handle over `surface`'s buffers and weights.
+        """One handle over `surface`'s buffers, weights and text length
+        table.
 
-        A `text_trim=True` surface is refused: this handle borrows one
-        context geometry (`frt_imagewam_io_config.context_rows`, which its
-        own `set_proprio_row` and the pipeline's dims are validated
-        against) and replays one graph exec
-        (`cpp/models/imagewam/src/native_runtime.cpp`), while a trimmed
-        frontend runs one graph per prompt length (rule R5, ISSUE-080
-        condition 5)."""
-        if surface.graph_variants.per_prompt_length:
-            raise ValueError(
-                "ImageWAMNativeRuntime does not support a text_trim=True surface: the native handle "
-                "holds one context geometry and one graph exec, while a trimmed frontend runs one "
-                "graph per prompt length (rule R5)")
+        The io config carries the lengths `surface.graph_variants` names
+        (the same key table the ABI declaration adopts), with
+        `surface.context_rows` — the active length — as the length the
+        handle starts on. A `text_trim=True` surface is served by adopting
+        one exec per captured length (`use_graph(key, exec)`) and selecting
+        the length the prompt set (`set_text_length(key)`, which is legal
+        while a model runtime over this handle is live; adoption is not)."""
         library = library or ImageWAMNativeLibrary()
         handoff = build_io_config(surface)
         out = ctypes.c_void_p()
@@ -84,19 +88,51 @@ class ImageWAMNativeRuntime:
 
     @property
     def graph_exec(self) -> int:
+        """The exec `step` replays: the active text length's graph variant
+        (0 while the handle holds none)."""
         return int(self.library.lib.frt_imagewam_native_graph_exec(self.handle) or 0)
 
     @property
+    def text_length(self) -> int:
+        """The context length (`x0`) the next ticks serve."""
+        return int(self.library.lib.frt_imagewam_native_text_length(self.handle))
+
+    @property
     def graph_producer(self) -> str:
-        """Who recorded the graph `step` replays: "python" after `use_graph`,
+        """Who recorded the graphs `step` replays: "python" after `use_graph`,
         "native" after `capture`, "" while there is none (before either, or
-        after `set_pipeline` replaced the pipeline a captured graph came from)."""
+        after `set_pipeline` dropped the graphs captured from the previous
+        pipeline)."""
         return self._graph_producer
 
-    def use_graph(self, graph_exec: int) -> None:
-        """Replay a graph the Python frontend captured (borrowed exec)."""
-        self._check("use_graph", self.library.lib.frt_imagewam_native_use_graph(self.handle, graph_exec))
+    def use_graph(self, key: int, graph_exec: int) -> None:
+        """Replay a graph the Python frontend captured, for the text length
+        `key` (the context length `x0` of the capture); the exec is
+        borrowed. Setup only: refused while a model runtime over this handle
+        is live, so every length a deployment serves is adopted before its
+        export."""
+        self._check("use_graph", self.library.lib.frt_imagewam_native_use_graph(
+            self.handle, int(key), graph_exec))
         self._graph_producer = "python"
+
+    def has_variant(self, key: int) -> bool:
+        """Whether the handle holds a graph for the text length `key`."""
+        return bool(self.library.lib.frt_imagewam_native_has_variant(self.handle, int(key)))
+
+    def variant_exec(self, key: int) -> int:
+        """The exec the handle holds for the text length `key` (0 when it
+        holds none): what `step` replays once `key` is the active length."""
+        return int(self.library.lib.frt_imagewam_native_variant_exec(self.handle, int(key)) or 0)
+
+    def set_text_length(self, key: int) -> None:
+        """Select the text length (`x0`) the next ticks serve: the graph
+        `step` replays and the row bound of `set_proprio_row`. Legal while a
+        model runtime over this handle is live, like `set_proprio_row`: the
+        setup producer calls both after every prompt change, since C++
+        cannot see the Python prompt. Refused (-2) for a length the handle
+        holds no graph for."""
+        self._check("set_text_length",
+                    self.library.lib.frt_imagewam_native_set_text_length(self.handle, int(key)))
 
     def set_pipeline(self, source: ImageWAMPipelineSource) -> None:
         """Install the native pipeline over `source`'s resources and hand off
@@ -132,12 +168,15 @@ class ImageWAMNativeRuntime:
                     self.library.lib.frt_imagewam_native_run(self.handle, segment, index))
 
     def capture(self) -> None:
-        """Warm up and capture prefill + denoise; `step` replays it."""
+        """Warm up and capture prefill + denoise for the active text length
+        into a graph this handle owns; `step` replays it."""
         self._check("capture", self.library.lib.frt_imagewam_native_capture(self.handle))
         self._graph_producer = "native"
 
     @property
     def graph_nodes(self) -> int:
+        """Node count of the graph `step` replays, when this handle captured
+        it (0 for an adopted exec)."""
         count = ctypes.c_uint64(0)
         self.library.lib.frt_imagewam_native_graph_nodes(self.handle, ctypes.byref(count))
         return int(count.value)

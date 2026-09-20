@@ -15,8 +15,9 @@ served tick three ways, for any `ImageWAMWorkload`:
           noise, calls `step()` and reads `actions`
           (`tests/gate_imagewam_model_runtime_export.py`).
   native  `fe.runtime_surface()` -> `ImageWAMNativeRuntime.create(surface)` ->
-          `native.use_graph(surface.graph_exec)` (the graph the Python
-          frontend captured, replayed from the native handle:
+          `native.use_graph(surface.graph_variants.active_key,
+          surface.graph_exec)` (the graph the Python frontend captured for the surface's
+          active text length, replayed from the native handle:
           `tests/gate_imagewam_native_parity.py --graph python`) ->
           `fe.export_model_runtime(io="native", native=native)`. The graph
           producer the native handle reports is printed.
@@ -302,14 +303,15 @@ def bench_abi(fe: ImageWAMTorchFrontendThor, inputs_factory: Callable[[], TickIn
 def bench_native(fe: ImageWAMTorchFrontendThor, inputs_factory: Callable[[], TickInputs],
                  *, warmup: int, iters: int) -> Percentiles:
     """The native face: `frt_imagewam_native` over the runtime surface, with
-    the graph the Python frontend captured installed by `use_graph` and the
-    C verbs installed on the `io="native"` declaration."""
+    the graph the Python frontend captured installed by `use_graph` for the
+    surface's active text length and the C verbs installed on the
+    `io="native"` declaration."""
     from flash_rt.models.imagewam.native_runtime import ImageWAMNativeRuntime
 
     surface = fe.runtime_surface()
     native = ImageWAMNativeRuntime.create(surface)
     try:
-        native.use_graph(surface.graph_exec)
+        native.use_graph(surface.graph_variants.active_key, surface.graph_exec)
         print(f"  native: graph_producer={native.graph_producer} nodes={native.graph_nodes} "
               f"view_shape={surface.view_shape}")
         mr = fe.export_model_runtime(io="native", native=native,

@@ -2184,20 +2184,22 @@ class ImageWAMTorchFrontendThor:
 
     def _refuse_text_trim(self, what: str) -> None:
         """`pipeline_resources()` describes the native C++ pipeline, which
-        replays one graph at one context length: `frt_imagewam_native` holds
-        a single graph exec and a single `context_rows`
-        (`cpp/models/imagewam/src/native_runtime.cpp`), so it has no place
-        to put a graph per prompt length. The ABI face carries one
-        (`runtime_surface().graph_variants`); the native pipeline keeps
-        refusing `text_trim` until it does too (ISSUE-080 condition 5,
-        plan.md phase S3)."""
+        records one graph at one context length from one resource table: the
+        pipeline's own dims, GEMM workspace and capture are built for one
+        `x0`, so this frontend's resources describe one length per install
+        (`cpp/models/imagewam/src/native_pipeline.cpp`). The native model
+        runtime carries one graph per prompt length
+        (`runtime_surface().graph_variants`, adopted with
+        `ImageWAMNativeRuntime.use_graph`); the pipeline's own capture keeps
+        refusing `text_trim` until it has a resource table per length
+        (ISSUE-080 condition 5, plan.md phase S4)."""
         if self._text_trim:
-            raise ValueError(f"{what} does not support text_trim=True: the native pipeline replays one "
-                             f"graph at one context length and has no per-length variant table, while a "
-                             f"trimmed frontend runs one graph per prompt length (active_dims). The ABI "
-                             f"face serves a trimmed frontend (runtime_surface() and "
-                             f"export_model_runtime(io='python')); construct with text_trim=False for "
-                             f"the native pipeline")
+            raise ValueError(f"{what} does not support text_trim=True: the native pipeline records one "
+                             f"graph at one context length from one resource table, while a trimmed "
+                             f"frontend runs one graph per prompt length (active_dims). The native model "
+                             f"runtime serves a trimmed frontend (one adopted graph per captured length, "
+                             f"selected with set_text_length); construct with text_trim=False for the "
+                             f"native pipeline")
 
     def _captured_length_graphs(self) -> tuple[TextLengthGraph, ...]:
         """The graph of every captured text length, ascending, for the
@@ -2219,8 +2221,11 @@ class ImageWAMTorchFrontendThor:
         the active length is `active_dims["x0"]` and `context_rows` is that
         length; `graph_variants` carries the exec of every captured length,
         so the export adopts one variant per key and `step` replays the
-        length the prompt set. `pipeline_resources()` stays refused for a
-        trimmed frontend (the native pipeline has no per-length table)."""
+        length the prompt set — on the ABI face and on the native one,
+        whose handle the keys are adopted into
+        (`ImageWAMNativeRuntime.use_graph`). `pipeline_resources()` stays
+        refused for a trimmed frontend (the native pipeline records one
+        graph at one context length from one resource table)."""
         if self._graph is None:
             raise RuntimeError("call set_prompt() before runtime_surface()")
         d = self._active_dims
@@ -2280,11 +2285,14 @@ class ImageWAMTorchFrontendThor:
         (`dims["fuse_res_norm"]`).
 
         Not available with `text_trim=True` (`ValueError`,
-        `_refuse_text_trim`): the native pipeline replays one graph at one
-        context length, so this describes `self.dims` and the max-size
-        RoPE table only. A trimmed frontend serves through `infer()` and
-        through the ABI face; the native pipeline gets its per-length table
-        in a later phase (plan.md phase S3)."""
+        `_refuse_text_trim`): the native pipeline records one graph at one
+        context length from this resource table, so this describes
+        `self.dims` — the buffer sizes, which with `text_trim=True` are the
+        largest length's — and the max-size RoPE table only. A trimmed
+        frontend serves through `infer()`, through the ABI face and through
+        the native model runtime (one adopted graph per captured length);
+        the native pipeline's own capture gets its per-length resource
+        table in a later phase."""
         self._refuse_text_trim("pipeline_resources()")
         if self._graph is None:
             raise RuntimeError("call set_prompt() before pipeline_resources()")
@@ -2404,8 +2412,10 @@ class ImageWAMTorchFrontendThor:
 
         `io="python"` serves a trimmed frontend: it adopts one graph
         variant per captured text length (`runtime_surface()`). `io="native"`
-        needs a single fixed context length and so refuses `text_trim=True`
-        (`ValueError`)."""
+        adopts the native handle's graph for every captured length, so it
+        serves a trimmed frontend too; the handle must hold one graph per
+        length (`ImageWAMNativeRuntime.use_graph`), and the length the
+        prompt sets reaches it through `set_text_length`."""
         from flash_rt.models.imagewam.runtime_export import export_model_runtime
         return export_model_runtime(self, identity=identity, io=io, native=native)
 

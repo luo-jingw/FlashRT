@@ -46,9 +46,12 @@ ISSUE-002). The ABI applies no scale.
 `images` and `prompt`, whose transforms (VAE, Qwen3) stay in Python.
 Its verbs are the C functions of `libflashrt_imagewam_native.so`
 (docs/imagewam_native_cpp.md), installed over the declaration with
-`frt_model_runtime_override_verbs`; the declaration's stream and graph are
-the native handle's. The native handle holds one graph at one context
-geometry, so this face refuses a `text_trim=True` frontend (rule R5).
+`frt_model_runtime_override_verbs`; the declaration's stream and graphs are
+the native handle's. The handle carries the same graph variant table this
+face does — one exec per captured text length `x0`, the setup producer's
+(`use_graph(key, exec)`) or the handle's own (`capture()`) — and its C
+`step` replays the active length, which the producer selects with
+`set_text_length` next to `set_proprio_row` after every prompt change.
 """
 from __future__ import annotations
 
@@ -291,21 +294,18 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
     manifest's `text_lengths` states the adopted table.
 
     `io="native"`: `native` (an `ImageWAMNativeRuntime` with a graph, from
-    `use_graph` or `capture`) supplies the stream, the graph and the C
-    verbs; the declaration is checked by `native.bind_declaration` and
-    never published with placeholder verbs. The native handle holds one
-    graph at one context geometry, so a `text_trim=True` frontend is
-    refused (rule R5).
+    `use_graph` or `capture`) supplies the stream, the graphs and the C
+    verbs; the declaration adopts the handle's graph for every captured
+    text length, `GraphSpec.default_key` is the length the handle serves
+    now (`native.text_length`, checked against the surface), and the
+    declaration is checked by `native.bind_declaration` and never published
+    with placeholder verbs. A length the handle holds no graph for is
+    refused here, at export, rather than by the C `step` at tick time.
     """
     if io not in ("python", "native"):
         raise ValueError(f"unknown ImageWAM model-runtime io face {io!r} (supported: 'python', 'native')")
     surface = source.runtime_surface()
     plan = graph_variant_plan(surface.graph_variants)
-    if io == "native" and surface.graph_variants.per_prompt_length:
-        raise ValueError("io='native' does not support text_trim=True (rule R5): the native handle "
-                         "replays one graph at one context geometry, while a trimmed frontend runs one "
-                         "graph per prompt length (ISSUE-080 condition 5); the ABI face "
-                         "(io='python') serves a trimmed frontend")
     if io == "native" and (native is None or not native.graph_exec):
         raise ValueError("io='native' requires native=ImageWAMNativeRuntime with a graph "
                          "(use_graph or capture first)")
@@ -324,12 +324,24 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
         for variant in surface.graph_variants.entries:
             graph.adopt(variant.key, variant.graph_exec)
     else:
-        # The native handle owns its one graph, at the context geometry the
-        # surface had when the handle was created.
-        default_key = plan.default_key
-        keys = (default_key,)
-        graph = ctx.graph("imagewam_infer", 1)
-        graph.adopt(default_key, native.graph_exec)
+        # The same table, out of the handle that replays it: one entry per
+        # captured length, and the active length the C `step` serves.
+        default_key, keys = plan.default_key, plan.keys
+        missing = [key for key in keys if not native.has_variant(key)]
+        if missing:
+            raise ValueError(
+                f"io='native' needs native (an ImageWAMNativeRuntime) holding a graph for every "
+                f"captured text length: it holds none for {missing} (it holds "
+                f"{[key for key in keys if native.has_variant(key)]}). Adopt each length with "
+                f"use_graph(key, exec) before exporting")
+        if native.text_length != default_key:
+            raise ValueError(
+                f"io='native' declares the length the handle serves now as the default key: the "
+                f"surface's active text length is x0={default_key} and the handle's is "
+                f"x0={native.text_length}; call set_text_length({default_key}) before exporting")
+        graph = ctx.graph("imagewam_infer", plan.max_variants)
+        for key in keys:
+            graph.adopt(key, native.variant_exec(key))
 
     def wrap(name: str, tensor: torch.Tensor) -> frt_exec.Buffer:
         return ctx.wrap(name, tensor.data_ptr(), tensor.numel() * tensor.element_size())
@@ -358,9 +370,10 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
         "actions": {"denormalized": surface.action_denormalized},
         # The deployment's record of which text lengths the runtime can
         # serve: one adopted graph per `keys` entry, `default_key` the
-        # length active at export (`step` replays the length the prompt
-        # set, so a host must not assume the key is fixed while
-        # `per_prompt_length` is true).
+        # length active at export. `step` replays the length the prompt set
+        # — the source's active dims on this face, the native handle's
+        # active length on `io="native"` (`set_text_length`) — so a host must
+        # not assume the key is fixed while `per_prompt_length` is true.
         "text_lengths": {
             "default_key": default_key,
             "keys": list(keys),
@@ -368,7 +381,8 @@ def export_model_runtime(source: ImageWAMRuntimeSource, *, identity: Mapping[str
         },
     }
     if io == "native":
-        manifest["prompt"] = "set through the setup producer; set_proprio_row after a prompt change"
+        manifest["prompt"] = ("set through the setup producer; set_text_length(key) and "
+                              "set_proprio_row(row) after every prompt change")
     common = dict(
         streams=[frt_export.StreamSpec("main", stream_id, native_handle=stream_handle)],
         graphs=[frt_export.GraphSpec("infer", graph, default_key, keys)],

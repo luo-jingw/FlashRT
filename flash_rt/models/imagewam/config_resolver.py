@@ -25,9 +25,10 @@ Profiles (`PROFILES`) map a name to option values. The profiles carry the
 history: `ImageWAMTorchFrontendThor.__init__` keeps its historical defaults
 for a caller that passes dims and switches by hand, and those defaults leave
 `text_trim` off, while served `default` trims. The two paths therefore
-diverge in exactly that switch. `native` is the non-trimming set the
-one-graph native pipeline can serve (rule R5) and equals what `default` was
-before `text_trim` became served. `fast` is PROVISIONAL, see its
+diverge in exactly that switch. `native` is the non-trimming set the native
+pipeline can serve (rule R5: the pipeline's resource table and capture
+describe one context length) and equals what `default` was before
+`text_trim` became served. `fast` is PROVISIONAL, see its
 `ProfileSpec.description`. `precision=` overrides the profile's precision;
 `**expert` overrides individual options (`EXPERT_KEYS`).
 
@@ -38,9 +39,10 @@ them):
     R2  gemm_variant_autotune with a precision that has no switchable tile
     R3  a real VAE encoder / VAE in the graph without ae_model_path
     R4  nvfp4_awq with a non-AWQ precision or without a calibration file
-    R5  text_trim with a consumer whose path carries no per-length graph
-        (native; the ABI carries one graph per captured length), and the
-        non-trimming set to resolve for that consumer is `profile="native"`
+    R5  text_trim with a consumer whose pipeline carries no per-length
+        resource table (native; the model runtime carries one graph per
+        captured length on both faces), and the non-trimming set to resolve
+        for that consumer is `profile="native"`
     R6  native consumer with something the native pipeline does not carry
         (AWQ, a precision it cannot describe, FA4, the VAE stage)
     R7  workload layout inconsistent with the structure
@@ -203,12 +205,15 @@ PROFILES: dict[str, ProfileSpec] = {
     "native": ProfileSpec(
         name="native",
         description=(
-            "The native/one-graph consumer's profile until plan.md phase S4: nvfp4, no text "
-            "trim, FA4 explicitly off, no FA4 mot, torch VAE encoder outside the graph, no AWQ. "
-            "The native pipeline replays one graph at one context length, so rule R5 refuses a "
-            "trimmed frontend and rule R6 refuses FA4; use_fa4=False here keeps the "
-            "FLASHRT_THOR_FA4 opt-in from switching FA4 on behind the caller's back. Its "
-            "contents are what profile=\"default\" was before text_trim became served."),
+            "The explicit non-trimming set: nvfp4, no text trim, FA4 explicitly off, no FA4 mot, "
+            "torch VAE encoder outside the graph, no AWQ. A caller resolves it when it wants the "
+            "untrimmed pipeline explicitly; it is what profile=\"default\" was before text_trim "
+            "became served. The native model runtime carries one graph per captured text length "
+            "(plan.md phase S4: ImageWAMNativeRuntime adopts one exec per length, the declaration "
+            "keys them by that length, set_text_length selects the active one), but the native "
+            "pipeline's own resource table and capture describe one context length, so rule R5 "
+            "keeps refusing text_trim with this consumer. use_fa4=False here keeps the "
+            "FLASHRT_THOR_FA4 opt-in from switching FA4 on behind the caller's back (rule R6)."),
         precision=Precision.NVFP4, text_trim=False, use_fa4=False, use_fa4_mot=False,
         vae_encoder="torch", vae_graph=False, nvfp4_awq=False),
 }
@@ -350,8 +355,10 @@ def resolve_config(workload: "ImageWAMWorkload", structure: "ImageWAMStructure",
     AWQ statistics file. `ae_model_path`: the FLUX.2 autoencoder (a real VAE
     encoder needs it, rule R3; it is not stored in the options).
     `consumer`: what the configuration will be used for (`CONSUMERS`); the
-    native consumer describes one fixed graph (rules R5, R6), while the ABI
-    consumer carries one graph per captured text length.
+    native consumer describes one fixed graph (rules R5, R6: the native
+    pipeline's resource table and capture are per context length), while the
+    ABI consumer and the native model runtime carry one graph per captured
+    text length.
     `allow_placeholder_calibration`: permit a static-FP8 precision without a
     calibration file (the old constructor path logs a warning and uses
     N(0, 0.1) placeholder scales; this resolver refuses it by default,
@@ -485,18 +492,19 @@ def resolve_config(workload: "ImageWAMWorkload", structure: "ImageWAMStructure",
             calibration_path, dict(dims, merge_qkv_mlp=merge_qkv_mlp, merge_linear2=merge_linear2),
             text_trim)
 
-    # -- R5 / R6: consumers that describe one fixed graph -------------------------
+    # -- R5 / R6: consumers whose native pipeline describes one graph --------------
     if consumer == "native" and text_trim:
         raise ConfigError(
-            "R5", f"text_trim=True with consumer={consumer!r}: the native pipeline replays one graph at "
-                  f"one context length and has no per-length variant table, while a trimmed frontend runs "
-                  f"one graph per prompt length (ISSUE-080 condition 5). A native caller that serves "
-                  f"exactly one context length resolves profile=\"native\" (or text_trim=False), the "
-                  f"non-trimming set that pipeline carries -- `default` trims. consumer='abi' serves a "
-                  f"trimmed frontend: runtime_surface() and the export carry one graph per captured "
-                  f"length, keyed by that length")
+            "R5", f"text_trim=True with consumer={consumer!r}: the native pipeline records one graph at "
+                  f"one context length from one resource table (pipeline_resources(), "
+                  f"frt_imagewam_native_set_pipeline), so it cannot carry a trimmed frontend. The native "
+                  f"model runtime and the ABI face both carry one graph per captured text length, keyed "
+                  f"by that length (ImageWAMNativeRuntime.use_graph per length + set_text_length). A "
+                  f"native caller that serves exactly one context length resolves profile=\"native\" (or "
+                  f"text_trim=False), the non-trimming set that pipeline carries -- `default` trims")
     if consumer == "native":
-        # pipeline_resources() / export_model_runtime(io="native") refusals.
+        # pipeline_resources() refusals (the native model runtime's own
+        # refusals are its declarations' / the export's).
         if nvfp4_awq:
             raise ConfigError("R6", "the native pipeline has no AWQ input-scale fold; nvfp4_awq must be off")
         if not prec.supports_native_runtime:

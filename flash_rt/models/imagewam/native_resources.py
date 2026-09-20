@@ -3,8 +3,9 @@ captured frontend's `ImageWAMRuntimeSurface`.
 
 Every device pointer in a struct is borrowed from the frontend; tensors
 this module materializes for the handoff (the transposed proprio weight)
-and the host arrays behind float pointers are returned in the keepalive
-list, which the caller holds for as long as the native handle lives.
+and the host arrays behind pointers (normalization constants, the text
+length table) are returned in the keepalive list, which the caller holds
+for as long as the native handle lives.
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ from flash_rt.models.imagewam.pipeline_resources import (
     ImageWAMPipelineResources,
     LinearResource,
 )
-from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSurface
+from flash_rt.models.imagewam.runtime_surface import ImageWAMRuntimeSurface, graph_variant_plan
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,10 @@ def _host_f32(t: torch.Tensor | None, keep: list) -> ctypes.POINTER(ctypes.c_flo
 
 
 def build_io_config(surface: ImageWAMRuntimeSurface) -> NativeHandoff:
+    """`frt_imagewam_io_config` over `surface`'s windows, with the text
+    length table the handle's graph variant keys come from (the same
+    `GraphVariantPlan` the model-runtime declaration adopts, one key per
+    captured length, `context_rows` the active one)."""
     keep: list = []
     c = ImageWAMIoConfig()
     c.struct_size = ctypes.sizeof(ImageWAMIoConfig)
@@ -61,6 +66,10 @@ def build_io_config(surface: ImageWAMRuntimeSurface) -> NativeHandoff:
     c.proprio_dim = surface.proprio_dim or 0
     c.context_rows = surface.context_rows
     c.context_width = surface.context_width
+    lengths = np.ascontiguousarray(graph_variant_plan(surface.graph_variants).keys, dtype=np.uint32)
+    keep.append(lengths)
+    c.num_text_lengths = len(lengths)
+    c.text_lengths = lengths.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
     c.img_raw = surface.img_raw.data_ptr()
     c.context = surface.context.data_ptr()
     c.action_latent = surface.action_latent.data_ptr()
