@@ -352,7 +352,7 @@ class ImageWAMTorchFrontendThor:
                  calibration_path: str | None = None,
                  nvfp4_awq: bool = False, awq_alpha: float = 0.5, awq_scope: str = "adaln+down",
                  gemm_variant_autotune: bool = False,
-                 use_fa4_mot: bool = False,
+                 use_fa4_mot: bool | None = False,
                  gemm_runner: object | None = None,
                  vae_resize: str = "area",
                  vae_encoder: str = "torch",
@@ -397,7 +397,7 @@ class ImageWAMTorchFrontendThor:
         # Roadmap item 6 (opportunities.md OPT-019): resolved attention
         # kernel choice, fixed for this frontend's lifetime.
         self.use_fa4: bool = self._resolve_use_fa4(use_fa4)
-        self.use_fa4_mot: bool = bool(use_fa4_mot)
+        self.use_fa4_mot: bool = self._resolve_use_fa4(use_fa4_mot)
         # Set when FA4 failed during warmup or capture and the frontend
         # fell back to the cuBLAS chain (see `_capture_graph_or_fall_back`).
         self.fa4_fallback_reason: str | None = None
@@ -847,7 +847,8 @@ class ImageWAMTorchFrontendThor:
 
     @staticmethod
     def _resolve_use_fa4(use_fa4: bool | None) -> bool:
-        """`use_fa4` constructor argument -> the backbone-site FA4 choice.
+        """`use_fa4` / `use_fa4_mot` constructor argument -> that site's FA4
+        choice (one rule for both sites).
 
         - `True`: FA4; `ImageWAMAttnBackend` raises if the runtime is missing.
         - `False`: the cuBLAS chain.

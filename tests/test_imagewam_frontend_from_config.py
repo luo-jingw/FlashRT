@@ -168,13 +168,14 @@ def test_native_profile_maps_to_the_constructor_defaults_plus_the_trim():
     assert kwargs["gemm_runner"] is defaults["gemm_runner"] is None
     assert kwargs["vae_resize"] == defaults["vae_resize"] == "area"
 
-    # the served default differs from the native set in exactly the one
-    # switch that makes the native set native: FA4 left to the environment
+    # the served default differs from the native set in exactly the switches
+    # that make the native set native: FA4 at both sites, left to the
+    # machine in the default and stated off here
     served = frontend_kwargs_from_config(resolved())
     assert served["text_trim"] is True and kwargs["text_trim"] is True
-    assert served["use_fa4"] is None
+    assert served["use_fa4"] is None and served["use_fa4_mot"] is None
     differing = sorted(key for key, value in served.items() if value != kwargs[key])
-    assert differing == ["use_fa4"], differing
+    assert differing == ["use_fa4", "use_fa4_mot"], differing
 
 
 def test_use_fa4_none_resolves_on_the_machine(monkeypatch):
@@ -193,6 +194,17 @@ def test_use_fa4_none_resolves_on_the_machine(monkeypatch):
     monkeypatch.setattr(fa4_backend, "thor_default_enabled", lambda: False)
     assert ImageWAMTorchFrontendThor._resolve_use_fa4(None) is False
     assert ImageWAMTorchFrontendThor._resolve_use_fa4(True) is True
+
+
+def test_use_fa4_mot_none_takes_the_same_machine_rule_as_the_backbone_site():
+    """The served profile leaves the mot site auto too, so the constructor
+    resolves `use_fa4_mot` through the one rule `_resolve_use_fa4` states for
+    both sites (an explicit True/False still wins)."""
+    import inspect
+
+    src = inspect.getsource(ImageWAMTorchFrontendThor.__init__)
+    assert "self.use_fa4_mot: bool = self._resolve_use_fa4(use_fa4_mot)" in src
+    assert "use_fa4_mot: bool | None = False" in src   # the constructor's own default stays off
 
 
 def test_path_arguments_are_passed_through():
@@ -271,11 +283,12 @@ def test_fast_profile_carries_the_derived_flags():
 
 
 def test_no_vae_graph_input_without_the_vae_in_graph_profile():
-    """The default profile runs the VAE outside the graph: `None`, and no
-    `(num_views, h, w)` is invented for it."""
+    """The default profile without an autoencoder has no VAE stage to put in
+    the graph: `None`, and no `(num_views, h, w)` is invented for it. FA4 mot
+    is left to the machine (`None`), as the backbone site is."""
     kwargs = frontend_kwargs_from_config(resolved())
     assert kwargs["vae_graph_input"] is None
-    assert kwargs["use_fa4_mot"] is False
+    assert kwargs["use_fa4_mot"] is None
 
 
 # -- illegal combinations ----------------------------------------------------

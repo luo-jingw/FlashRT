@@ -236,7 +236,12 @@ def main() -> int:
     fe = load_imagewam(
         CKPT, workload, profile=PROFILE, precision="fp16",
         ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
-        dataset_stats_path=STATS, text_trim=text_trim)
+        dataset_stats_path=STATS, text_trim=text_trim,
+        # The reference is the plain fp16 pipeline: the cuBLAS attention chain and the
+        # torch VAE encoder outside the graph, whatever the served default runs
+        # (the default profile is the fastest configuration: FA4 at both sites, the
+        # native VAE in the graph).
+        use_fa4=False, use_fa4_mot=False, vae_encoder="torch", vae_graph=False)
     print(f"flashrt fp16 (text_trim={text_trim}) constructed in {time.time() - t0:.1f}s", flush=True)
     reference_dims = dict(fe.resolved_config.dims)
     fp16_reference = np.zeros_like(official_actions)
@@ -295,7 +300,8 @@ def main() -> int:
         "official": {"dtype": "bfloat16", "qwen3_model_spec": os.environ.get("QWEN3_MODEL_SPEC", "")},
         "fp16_reference": {"precision": "fp16", "text_trim": text_trim, "profile": PROFILE,
                            "frontend": "load_imagewam(ckpt, ImageWAMWorkload.libero(), profile='default', "
-                                       "precision='fp16', text_trim=<text_trim>).infer(action_noise=...)",
+                                       "precision='fp16', text_trim=<text_trim>, use_fa4=False, use_fa4_mot=False, "
+                                       "vae_encoder='torch', vae_graph=False).infer(action_noise=...)",
                            "dims": reference_dims},
         "device": torch.cuda.get_device_name(0),
         "torch": torch.__version__,

@@ -172,9 +172,9 @@ own historical defaults (untrimmed) for a caller that passes dims by hand.
 
 | Profile | Contents |
 |---|---|
-| `default` | the served configuration: `nvfp4`, **`text_trim` on**, FA4 backbone as the frontend resolves it (`FLASHRT_THOR_FA4`, on where the machine can run FA4, the cuBLAS chain elsewhere; `FLASHRT_THOR_FA4=0` forces the chain), no FA4 mot, torch VAE encoder outside the graph, no AWQ |
-| `fast` | `default` plus FA4 at the `mot` site and the native VAE encoder inside the graph (FA4 stated `True` at both sites). Opt-in: FA4 compiles on first use and can fall back, and the in-graph VAE changes the graph |
-| `native` | the native consumer's set: the served default's contents (`nvfp4`, `text_trim` on, one graph per prompt length, torch VAE outside the graph, no AWQ) with FA4 explicitly off at both sites, because the native C++ pipeline has no FA4 attention (rule R6). The native pipeline carries one resource table and one captured graph per text length, so it serves the trim like the other two consumers |
+| `default` | the served configuration, the fastest one the machine and the inputs allow: `nvfp4`, **`text_trim` on**, FA4 at the backbone and the `mot` sites, the native VAE encoder inside the graph, no AWQ. FA4 and the VAE are "auto" and degrade instead of raising: FA4 at a site is used where the machine can run it (`use_fa4` / `use_fa4_mot` `None`, resolved at construction; the cuBLAS chain elsewhere, and a capture-time failure falls back to it; `FLASHRT_THOR_FA4=0` forces the chain at both sites), and the VAE is the native encoder inside the graph exactly when an `ae_model_path` is given (without one there is no VAE stage; the resolver sets `vae_graph_input` from the workload). An explicit value from the profile or `**expert` is never overridden. With `consumer="native"` every auto value resolves to off (the native pipeline has FA4 and no VAE stage), which is the `native` profile's set |
+| `fast` | the same switches as `default`, stated explicitly: FA4 `True` at both sites, the native VAE encoder inside the graph. It raises where `default` degrades (FA4 runtime missing at construction, no `ae_model_path`, rule R3), so a run fails instead of quietly measuring a fallback |
+| `native` | the native consumer's set: the served default's contents (`nvfp4`, `text_trim` on, one graph per prompt length, torch VAE outside the graph, no AWQ) with FA4 explicitly off at both sites and the VAE outside the graph, because the native C++ pipeline has no FA4 attention and no VAE stage (rule R6). The native pipeline carries one resource table and one captured graph per text length, so it serves the trim like the other two consumers |
 
 A capture that fails leaves the capture pool's allocation recording open; the
 frontend abandons that state before retrying, so the cuBLAS fallback's retry is
@@ -204,11 +204,11 @@ fa4_fallback_reason=None)` produces the one line every log and matrix row
 carries:
 
 ```
-effective_config precision=nvfp4 text_trim=True vae_encoder=torch vae_graph=False use_fa4=auto use_fa4_mot=False fa4_fallback_reason=None calibration=None awq=False
+effective_config precision=nvfp4 text_trim=True vae_encoder=native vae_graph=True use_fa4=auto use_fa4_mot=auto fa4_fallback_reason=None calibration=None awq=False
 ```
 
-The key order is `EFFECTIVE_CONFIG_FIELDS`. `use_fa4` is resolved at
-construction (it depends on the machine) and prints `auto` when it is not yet
+The key order is `EFFECTIVE_CONFIG_FIELDS`. `use_fa4` and `use_fa4_mot` are resolved at
+construction (they depend on the machine) and print `auto` when not yet
 known; the compare script and the matrix print the frontend's own resolved
 configuration (`frontend.resolved_config.options`) with the runtime-resolved
 `use_fa4`, `use_fa4_mot` and `fa4_fallback_reason`, which is what
@@ -238,6 +238,10 @@ constructor with hand-passed dims has no workload to name and reports only the
 The calibration file's identity (`calibration_file.IDENTITY_DIM_KEYS`) covers
 every dims entry that changes GEMM shapes or activation distributions,
 including the ones a workload changes (`x0`, `a0`, `num_action`, `action_dim`,
-`num_denoise_steps`, `shift`, `proprio_dim`, `ref_h`, `ref_w`), plus
-`text_trim` and the checkpoint hash; a file recorded for another workload is
-refused with the differing field named.
+`num_denoise_steps`, `shift`, `proprio_dim`, `ref_h`, `ref_w`) and its camera
+geometry (`num_views`, `image_h`, `image_w`, which tell workloads with the same
+`ref_h x ref_w` apart), plus `text_trim` and the checkpoint hash; a file
+recorded for another workload is refused with the differing field named. A
+frontend built by hand with `dims_override` that lacks the three camera keys
+(no workload) cannot validate a file (format version 3; earlier versions are
+not read, see `imagewam_calibration.md`).

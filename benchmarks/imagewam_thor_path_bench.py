@@ -30,8 +30,10 @@ as skipped with the reason and does not stop the run: `exec/build` (Python
 ABI) and `runtime/build` + the `flashrt_imagewam_native` target (native face)
 are separate builds (docs/imagewam_model_runtime.md). One refusal costs one row:
 the `io="native"` face takes the VAE tokens through `image_tokens` and so
-refuses the in-graph VAE (`views_u8`, `runtime_export.py:312-314`), so
-`--profile fast` measures `infer` and `abi` and skips the native row. FA4 is not
+refuses the in-graph VAE (`views_u8`, `runtime_export.py:312-314`), so a profile
+that puts the VAE in the graph (`fast`, and `default` when an autoencoder path is
+given) measures `infer` and `abi` and skips the native row; `--profile native`
+keeps the VAE outside the graph and measures all three. FA4 is not
 such a refusal: the native face replays the graph the Python frontend captured,
 an FA4 graph included; the FA4 refusal is the native pipeline's
 (`ImageWAMTorchFrontendThor.pipeline_resources()`, rule R6), which this bench
@@ -81,10 +83,12 @@ names the ImageWAM gates and `benchmarks/imagewam_e2e_official_compare.py`
 read. `--profile`, `--precision` and the switch flags are expert overrides on
 top of a named profile (`config_resolver.PROFILES`, `EXPERT_KEYS`): an unset
 flag leaves the profile's own value in place, so `--profile fast` alone runs
-the whole `fast` profile. `use_fa4` is `None` in `default`, which resolves at
-construction to FA4 where `fa4_backend.thor_default_enabled()` holds and the
-cuBLAS chain elsewhere (`FLASHRT_THOR_FA4=0` forces the chain); `--use-fa4
-on|off` is the explicit override. A static-FP8 precision needs a calibration
+the whole `fast` profile. `use_fa4` and `use_fa4_mot` are `None` in `default`,
+which resolves at construction to FA4 at that site where
+`fa4_backend.thor_default_enabled()` holds and the cuBLAS chain elsewhere
+(`FLASHRT_THOR_FA4=0` forces the chain), and `default` runs the native VAE inside
+the graph when an autoencoder path is given; `--use-fa4 on|off` is the explicit
+override. A static-FP8 precision needs a calibration
 file (rule R1) and this bench takes none, so `--precision fp8_static*` raises
 the resolver's `R1` before anything is allocated -- build one with
 `benchmarks/imagewam_build_calibration.py` and run the comparison through

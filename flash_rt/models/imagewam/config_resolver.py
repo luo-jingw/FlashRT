@@ -23,12 +23,20 @@ no package, and `precision.py` is loaded by path from the same directory.
 Profiles (`PROFILES`) map a name to option values. The profiles carry the
 **served** configuration, which is deliberately not the constructor's own
 history: `ImageWAMTorchFrontendThor.__init__` keeps its historical defaults
-for a caller that passes dims and switches by hand, and those defaults leave
-`text_trim` off, while every named profile trims. The two paths therefore
-diverge in exactly that switch. `native` is the native consumer's set: the
-served default's switches with FA4 explicitly off. `fast` is PROVISIONAL,
-see its `ProfileSpec.description`. `precision=` overrides the profile's
-precision; `**expert` overrides individual options (`EXPERT_KEYS`).
+for a caller that passes dims and switches by hand (text_trim off, FA4 mot
+off, torch VAE outside the graph), while `default` is the fastest
+configuration the machine and the inputs allow: text_trim, FA4 at both
+attention sites, the native VAE encoder inside the graph. Three of those are
+"auto": FA4 at either site is used where the machine can run it (and falls
+back to the cuBLAS chain at capture time otherwise), and the VAE goes native
+and into the graph exactly when an autoencoder path is given (`ae_model_path`;
+without one there is no VAE stage at all). An explicit value, from the
+profile or from `**expert`, is never overridden; `fast` states the same
+switches explicitly, so it raises where `default` degrades. `native` is the
+native consumer's set: the same trimming with FA4 and the VAE stage off,
+which is also what `default` resolves to when `consumer="native"`.
+`precision=` overrides the profile's precision; `**expert` overrides
+individual options (`EXPERT_KEYS`).
 
 Rules (each moves a check that exists today; ids are stable, tests pin
 them):
@@ -113,9 +121,10 @@ class ConfigError(ValueError):
 class ImageWAMOptions:
     """Every optimisation switch of the frontend, resolved.
 
-    `use_fa4`: `None` means "resolve at construction", exactly what
-    `ImageWAMTorchFrontendThor._resolve_use_fa4(None)` does today (FA4 when
-    the machine that constructs the frontend can run it, the cuBLAS chain
+    `use_fa4` / `use_fa4_mot`: the backbone and the ActionDiT (mot)
+    attention sites. `None` means "resolve at construction", exactly what
+    `ImageWAMTorchFrontendThor._resolve_use_fa4(None)` does (FA4 when the
+    machine that constructs the frontend can run it, the cuBLAS chain
     otherwise; `FLASHRT_THOR_FA4=0` forces the chain); it depends on that
     machine, so it is not decided here. `True` / `False` are explicit.
 
@@ -138,7 +147,7 @@ class ImageWAMOptions:
     text_trim: bool
     text_trim_cache_size: int
     use_fa4: bool | None
-    use_fa4_mot: bool
+    use_fa4_mot: bool | None
     vae_encoder: str
     vae_graph_input: tuple[int, int, int] | None
     nvfp4_awq: bool
@@ -157,16 +166,21 @@ class ProfileSpec:
     """A named set of profile-controlled options (tier 2 of the plan).
 
     `vae_graph`: run the VAE inside the CUDA graph; the resolver then sets
-    `vae_graph_input` from `workload.vae_graph_input()`.
+    `vae_graph_input` from `workload.vae_graph_input()`. `vae_encoder` may be
+    `"auto"` and `vae_graph` `None` (auto): native encoder, inside the graph,
+    when an `ae_model_path` is given and the consumer is not native;
+    otherwise the torch encoder outside the graph. `use_fa4` /
+    `use_fa4_mot` `None` are resolved at construction (see
+    `ImageWAMOptions`), or to off for the native consumer.
     """
     name: str
     description: str
     precision: Precision
     text_trim: bool
     use_fa4: bool | None
-    use_fa4_mot: bool
+    use_fa4_mot: bool | None
     vae_encoder: str
-    vae_graph: bool
+    vae_graph: bool | None
     nvfp4_awq: bool
 
 
@@ -174,38 +188,36 @@ PROFILES: dict[str, ProfileSpec] = {
     "default": ProfileSpec(
         name="default",
         description=(
-            "The served configuration: nvfp4, text_trim (one graph per prompt length), FA4 "
-            "backbone as the frontend resolves it (on where the machine can run it, the cuBLAS "
-            "chain elsewhere; FLASHRT_THOR_FA4=0 forces the chain), no FA4 "
-            "mot, torch VAE encoder outside the graph, no AWQ. The frontend constructor's own "
-            "defaults differ in one switch: they leave text_trim off."),
-        precision=Precision.NVFP4, text_trim=True, use_fa4=None, use_fa4_mot=False,
-        vae_encoder="torch", vae_graph=False, nvfp4_awq=False),
+            "The served configuration, the fastest one the machine and the inputs allow: nvfp4, "
+            "text_trim (one graph per prompt length), FA4 at the backbone and the mot attention "
+            "sites (auto: on where the machine can run FA4, the cuBLAS chain elsewhere, and a "
+            "capture-time failure falls back to the chain; FLASHRT_THOR_FA4=0 forces the chain), "
+            "the native VAE encoder inside the CUDA graph when an ae_model_path is given (the "
+            "torch encoder outside the graph otherwise), no AWQ. For consumer=\"native\" the "
+            "auto values resolve to off (the native pipeline has FA4 and no VAE stage). The "
+            "frontend constructor's own defaults differ: text_trim off, FA4 mot off, torch VAE."),
+        precision=Precision.NVFP4, text_trim=True, use_fa4=None, use_fa4_mot=None,
+        vae_encoder="auto", vae_graph=None, nvfp4_awq=False),
     "fast": ProfileSpec(
         name="fast",
         description=(
-            "PROVISIONAL. text_trim + FA4 backbone + FA4 mot + native VAE encoder inside the "
-            "CUDA graph (vae_graph_input from the workload). Measured on Thor at 106.1 ms vs "
-            "203.3 ms for the untrimmed configuration (THOR_STATUS_SUMMARY.md, nvfp4). The FA4 "
-            "mot site and the in-graph native VAE encoder stay the opt-in tier on top of a "
-            "`default` that already trims and already runs FA4 at the backbone site where the "
-            "machine can; this profile states both FA4 sites explicitly True. The owner has not "
-            "approved FA4 mot or the in-graph native VAE as part of the "
-            "served default (plan.md 'Decisions pending', T4/T5): they stay opt-in by name. "
-            "It needs ae_model_path (rule R3); use_fa4=True "
-            "raises at construction when the FA4 runtime is missing (unlike the env-auto "
-            "default)."),
+            "The same switches as `default` stated explicitly: text_trim + FA4 backbone + FA4 mot "
+            "+ native VAE encoder inside the CUDA graph (vae_graph_input from the workload). It "
+            "raises where `default` degrades: use_fa4=True raises at construction when the FA4 "
+            "runtime is missing, and it needs ae_model_path (rule R3). Use it to make a run fail "
+            "instead of quietly measuring a fallback (the matrix's `stack` row). Measured on Thor "
+            "at 93.2-106.8 ms against 202.0-225.5 ms for the untrimmed configuration "
+            "(THOR_STATUS_SUMMARY.md, nvfp4)."),
         precision=Precision.NVFP4, text_trim=True, use_fa4=True, use_fa4_mot=True,
         vae_encoder="native", vae_graph=True, nvfp4_awq=False),
     "native": ProfileSpec(
         name="native",
         description=(
-            "The native consumer's set: the served default's trimming configuration (nvfp4, "
-            "text_trim, one graph per prompt length, torch VAE encoder outside the graph, no AWQ) "
-            "with FA4 explicitly off at both sites, because the native C++ pipeline has no FA4 "
-            "attention. Its contents otherwise match profile=\"default\", whose use_fa4 is left to "
-            "the frontend's own resolution (the FLASHRT_THOR_FA4 opt-in); stating False here keeps "
-            "that opt-in from switching FA4 on behind the caller's back (rule R6). The native "
+            "The native consumer's set: nvfp4, text_trim (one graph per prompt length), torch VAE "
+            "encoder outside the graph, no AWQ, with FA4 explicitly off at both sites, because the "
+            "native C++ pipeline has no FA4 attention and no VAE stage. `default` with "
+            "consumer=\"native\" resolves to the same set; this profile states it without "
+            "the consumer argument (rule R6 refuses anything else for that consumer). The native "
             "pipeline carries one resource table and one captured graph per text length, so it "
             "serves the trim like the other two consumers."),
         precision=Precision.NVFP4, text_trim=True, use_fa4=False, use_fa4_mot=False,
@@ -220,7 +232,7 @@ EXPERT_KEYS = (
     "nvfp4_awq", "awq_alpha", "awq_scope", "gemm_variant_autotune", "gemm_runner",
     "merge_qkv_mlp", "merge_linear2",
 )
-_BOOL_KEYS = ("use_fa4_mot", "text_trim", "vae_graph", "nvfp4_awq", "gemm_variant_autotune",
+_BOOL_KEYS = ("text_trim", "nvfp4_awq", "gemm_variant_autotune",
               "merge_qkv_mlp", "merge_linear2")
 
 # Key order of the `effective_config` line of
@@ -236,7 +248,7 @@ def format_effective_config(options: ImageWAMOptions, *, use_fa4: bool | None = 
 
     `use_fa4` / `use_fa4_mot`: the runtime-resolved values (the frontend's
     `fe.use_fa4` / `fe.use_fa4_mot`); `None` falls back to `options`, and an
-    unresolved `options.use_fa4` prints `auto`. `fa4_fallback_reason`:
+    unresolved `options.use_fa4` / `options.use_fa4_mot` prints `auto`. `fa4_fallback_reason`:
     `fe.fa4_fallback_reason` (`None` when FA4 did not fall back, and the
     resolver's own placeholder).
     """
@@ -248,7 +260,7 @@ def format_effective_config(options: ImageWAMOptions, *, use_fa4: bool | None = 
         "vae_encoder": options.vae_encoder,
         "vae_graph": options.vae_graph_input is not None,
         "use_fa4": "auto" if fa4 is None else fa4,
-        "use_fa4_mot": mot,
+        "use_fa4_mot": "auto" if mot is None else mot,
         "fa4_fallback_reason": fa4_fallback_reason,
         "calibration": options.calibration_path,
         "awq": options.nvfp4_awq,
@@ -307,6 +319,11 @@ def _dims(workload, structure, lay) -> dict:
         dt=lay.dt, num_denoise_steps=workload.num_steps,
         ref_h=lay.ref_h, ref_w=lay.ref_w, proprio_dim=workload.proprio_dim,
         shift=workload.shift, num_train_timesteps=workload.num_train_timesteps,
+        # The camera geometry the layout above was derived from. The layout
+        # alone does not fix it (two 224x224 views and four 224x112 views
+        # both give ref_h x ref_w = 14 x 28), and a calibration file's
+        # statistics depend on what the VAE was fed.
+        num_views=workload.num_views, image_h=workload.image_h, image_w=workload.image_w,
     )
 
 
@@ -379,11 +396,12 @@ def resolve_config(workload: "ImageWAMWorkload", structure: "ImageWAMStructure",
     for key in _BOOL_KEYS:
         if key in expert:
             _bool(key, expert[key])
-    if "use_fa4" in expert and expert["use_fa4"] is not None:
-        _bool("use_fa4", expert["use_fa4"])
+    for key in ("use_fa4", "use_fa4_mot", "vae_graph"):   # None = auto
+        if key in expert and expert[key] is not None:
+            _bool(key, expert[key])
     vae_encoder = expert.get("vae_encoder", spec.vae_encoder)
-    if vae_encoder not in VAE_ENCODERS:
-        raise ConfigError("V1", f"vae_encoder={vae_encoder!r} -- must be one of {VAE_ENCODERS}")
+    if vae_encoder not in VAE_ENCODERS + ("auto",):
+        raise ConfigError("V1", f"vae_encoder={vae_encoder!r} -- must be one of {VAE_ENCODERS + ('auto',)}")
     awq_scope = expert.get("awq_scope", "adaln+down")
     if not isinstance(awq_scope, str):
         raise ConfigError("V1", f"awq_scope={awq_scope!r} must be a str")
@@ -421,6 +439,19 @@ def resolve_config(workload: "ImageWAMWorkload", structure: "ImageWAMStructure",
     use_fa4_mot = expert.get("use_fa4_mot", spec.use_fa4_mot)
     vae_graph = expert.get("vae_graph", spec.vae_graph)
     gemm_variant_autotune = expert.get("gemm_variant_autotune", False)
+    # Auto values. FA4 stays None (decided by the machine at construction)
+    # except for the native consumer, whose pipeline has no FA4: there it is
+    # off, so an FLASHRT_THOR_FA4 opt-in cannot switch it on afterwards.
+    if consumer == "native":
+        use_fa4 = False if use_fa4 is None else use_fa4
+        use_fa4_mot = False if use_fa4_mot is None else use_fa4_mot
+    # The VAE: native and inside the graph exactly when an autoencoder is
+    # available to build it from, and the consumer can carry a VAE stage.
+    auto_vae = ae_model_path is not None and consumer != "native"
+    if vae_encoder == "auto":
+        vae_encoder = "native" if auto_vae else "torch"
+    if vae_graph is None:
+        vae_graph = auto_vae and vae_encoder == "native"
     vae_graph_input = workload.vae_graph_input() if vae_graph else None
 
     # -- R2: switchable-tile autotune ------------------------------------------

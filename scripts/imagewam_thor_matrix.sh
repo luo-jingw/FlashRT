@@ -7,11 +7,16 @@
 #   flag rows (PROFILES unset, the default): one row per switch set in
 #   ROWS, each relative to the precision under test. A row is the `default`
 #   profile plus its own CFG switches below, so the row's CFG entry states
-#   every switch the row means, TEXT_TRIM included: no row inherits
-#   text_trim from the profile, because the served `default` profile trims
-#   and a row that left it unstated would silently become trimmed and
-#   collapse the recorded ladder.
-#     default          text_trim off: the untrimmed baseline of the ladder
+#   every switch the row means: text_trim, the VAE encoder and whether it
+#   is in the graph, FA4 at the backbone site (FLASHRT_THOR_FA4) and at the
+#   mot site (FA4_MOT). No row inherits any of them from the profile,
+#   because the served `default` profile is the fastest configuration (trim,
+#   FA4 at both sites, native VAE in the graph) and a row that left one
+#   unstated would silently take it and collapse the recorded ladder.
+#     default          text_trim off, torch VAE, FA4 off: the untrimmed
+#                      baseline of the ladder (NOT the `default` profile,
+#                      which is the top of the ladder; the row name is the
+#                      one the earlier records use)
 #     vae              + native VAE encoder captured into the main graph
 #     vae_trim         + text_trim
 #     vae_trim_fa4bb   + FA4 on the backbone attention
@@ -77,12 +82,12 @@ mkdir -p "$OUT"
 cd "$(dirname "$0")/.."
 
 declare -A CFG=(
-  [default]="TEXT_TRIM=0 FLASHRT_THOR_FA4=0"
-  [vae]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=0 FLASHRT_THOR_FA4=0"
-  [vae_trim]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=1 FLASHRT_THOR_FA4=0"
-  [vae_trim_fa4bb]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=1 FLASHRT_THOR_FA4=1"
+  [default]="VAE_ENCODER=torch VAE_GRAPH=0 TEXT_TRIM=0 FLASHRT_THOR_FA4=0 FA4_MOT=0"
+  [vae]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=0 FLASHRT_THOR_FA4=0 FA4_MOT=0"
+  [vae_trim]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=1 FLASHRT_THOR_FA4=0 FA4_MOT=0"
+  [vae_trim_fa4bb]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=1 FLASHRT_THOR_FA4=1 FA4_MOT=0"
   [stack]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=1 FLASHRT_THOR_FA4=1 FA4_MOT=1"
-  [stack_no_vae]="TEXT_TRIM=1 FLASHRT_THOR_FA4=1 FA4_MOT=1"
+  [stack_no_vae]="VAE_ENCODER=torch VAE_GRAPH=0 TEXT_TRIM=1 FLASHRT_THOR_FA4=1 FA4_MOT=1"
   [stack_no_trim]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=0 FLASHRT_THOR_FA4=1 FA4_MOT=1"
 )
 

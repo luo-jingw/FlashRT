@@ -131,34 +131,62 @@ def test_native_profile_is_the_native_consumers_set():
     assert resolve_native(consumer="native").options.text_trim is True
 
 
-def test_the_served_default_is_the_native_set_with_fa4_left_to_the_environment():
-    """The profiles carry what is SERVED, and the two named sets differ in
-    exactly the one switch that makes the native set native: FA4 stated off
-    there and left to the frontend's env resolution in `default`. Both trim."""
+def test_the_served_default_is_the_native_set_with_the_auto_switches_left_open():
+    """The profiles carry what is SERVED. `default` and `native` differ only in
+    the switches the native consumer cannot carry: FA4 at both sites (auto in
+    `default`, stated off in `native`) and, given an autoencoder, the VAE
+    stage. Both trim. For the native consumer `default` resolves to exactly
+    the `native` profile's options."""
     served, native = resolve().options, resolve_native().options
     assert served.text_trim is native.text_trim is True
-    assert served.use_fa4 is None and native.use_fa4 is False
+    assert served.use_fa4 is None and served.use_fa4_mot is None
+    assert native.use_fa4 is False and native.use_fa4_mot is False
     other = [f.name for f in dataclasses.fields(ImageWAMOptions)
-             if f.name not in ("use_fa4",)
+             if f.name not in ("use_fa4", "use_fa4_mot")
              and getattr(served, f.name) != getattr(native, f.name)]
-    assert other == [], f"the profiles differ in more than use_fa4: {other}"
+    assert other == [], f"the profiles differ in more than the FA4 sites: {other}"
+    assert resolve(consumer="native").options == native
+    assert resolve(consumer="native", ae_model_path=AE).options == native   # no VAE stage there
 
 
-def test_the_profiles_diverge_from_the_constructor_defaults_in_text_trim():
-    """`ImageWAMTorchFrontendThor.__init__` keeps the historical untrimmed
-    defaults for a caller that passes dims and switches by hand; the profiles
-    carry the served configuration. That divergence in `text_trim` is the
-    point of the change (and is why the trim is a profile, not a constructor
-    default), so it is pinned rather than assumed."""
+def test_the_default_is_the_fastest_configuration_the_inputs_allow():
+    """Auto values: with an autoencoder the default runs the native VAE inside
+    the graph (vae_graph_input from the workload); without one there is no VAE
+    stage. Explicit values are never overridden."""
+    o = resolve(ae_model_path=AE).options
+    assert (o.text_trim, o.use_fa4, o.use_fa4_mot) == (True, None, None)
+    assert o.vae_encoder == "native" and o.vae_graph_input == LIBERO.vae_graph_input() == (2, 224, 224)
+    assert o.precision is Precision.NVFP4 and o.nvfp4_awq is False
+    bare = resolve().options
+    assert bare.vae_encoder == "torch" and bare.vae_graph_input is None
+    # explicit values win over the auto ones
+    x = resolve(ae_model_path=AE, vae_encoder="torch").options
+    assert x.vae_encoder == "torch" and x.vae_graph_input is None
+    x = resolve(ae_model_path=AE, vae_graph=False).options
+    assert x.vae_encoder == "native" and x.vae_graph_input is None
+    x = resolve(ae_model_path=AE, use_fa4=False, use_fa4_mot=False).options
+    assert (x.use_fa4, x.use_fa4_mot) == (False, False)
+    # ... and an explicit FA4 request the native consumer cannot carry still raises
+    assert rule_of(use_fa4_mot=True, consumer="native") == "R6"
+    assert rule_of(ae_model_path=AE, vae_graph=True, consumer="native") == "R6"
+
+
+def test_the_profiles_diverge_from_the_constructor_defaults():
+    """`ImageWAMTorchFrontendThor.__init__` keeps the historical defaults for a
+    caller that passes dims and switches by hand (untrimmed, FA4 mot off, torch
+    VAE outside the graph); the profiles carry the served configuration. The
+    divergence is deliberate, so it is pinned rather than assumed."""
     fd = _frontend_init_defaults()
-    assert fd["text_trim"] is False and fd["use_fa4"] is None
-    assert resolve().options.text_trim is True
-    # everything else the constructor defaults to, the served profile does too
+    assert fd["text_trim"] is False and fd["use_fa4"] is None and fd["use_fa4_mot"] is False
+    assert fd["vae_encoder"] == "torch" and fd["vae_graph_input"] is None
     served = resolve().options
-    for key in ("precision", "text_trim_cache_size", "use_fa4_mot", "vae_encoder", "nvfp4_awq",
+    assert served.text_trim is True
+    assert served.use_fa4_mot is None                  # auto in the profile, off in the constructor
+    # everything else the constructor defaults to, the served profile does too
+    for key in ("precision", "text_trim_cache_size", "vae_encoder", "nvfp4_awq",
                 "calibration_path", "gemm_variant_autotune", "gemm_runner", "awq_alpha", "awq_scope"):
         assert getattr(served, key) == fd[key], key
-    assert served.vae_graph_input is fd["vae_graph_input"] is None
+    assert served.vae_graph_input is fd["vae_graph_input"] is None   # no autoencoder given
     assert served.use_fa4 is fd["use_fa4"] is None    # still env-resolved, not stated
     assert served.merge_qkv_mlp is True and served.merge_linear2 is True
 
@@ -187,6 +215,8 @@ def test_profile_table_and_fast_contents():
     assert cr.CONSUMERS == ("infer", "abi", "native")
     assert PROFILES["default"].precision == "nvfp4"
     assert PROFILES["default"].text_trim is True
+    assert (PROFILES["default"].use_fa4, PROFILES["default"].use_fa4_mot) == (None, None)
+    assert (PROFILES["default"].vae_encoder, PROFILES["default"].vae_graph) == ("auto", None)
     assert PROFILES["native"].precision == "nvfp4"
     assert PROFILES["native"].text_trim is True and PROFILES["native"].use_fa4 is False
     fast = resolve(profile="fast", ae_model_path=AE).options
@@ -196,14 +226,15 @@ def test_profile_table_and_fast_contents():
     assert fast.vae_encoder == "native"
     assert fast.vae_graph_input == LIBERO.vae_graph_input() == (2, 224, 224)
     assert fast.nvfp4_awq is False
-    # provisional, and FA4 + the in-graph native VAE stay the opt-in tier
-    desc = PROFILES["fast"].description
-    assert "PROVISIONAL" in desc and "106.1" in desc and "203.3" in desc
-    assert "not approved" in desc
-    assert "opt-in tier" in desc
+    # `fast` is `default` stated explicitly: with an autoencoder the two differ only
+    # in how the FA4 sites are stated (auto vs True)
+    d = resolve(ae_model_path=AE).options
+    assert [f.name for f in dataclasses.fields(ImageWAMOptions)
+            if getattr(d, f.name) != getattr(fast, f.name)] == ["use_fa4", "use_fa4_mot"]
+    assert "raises" in PROFILES["fast"].description
     # the native profile names the consumer it is for, and what it states off
     ndesc = PROFILES["native"].description
-    assert "native" in ndesc and "FA4" in ndesc and 'profile="default"' in ndesc
+    assert "native" in ndesc and "FA4" in ndesc and 'consumer="native"' in ndesc
     assert resolve_config.__kwdefaults__["profile"] == "default"
 
 
@@ -323,10 +354,12 @@ def test_R2_gemm_variant_autotune_needs_a_tiled_precision():
 
 def test_R3_real_vae_needs_the_autoencoder():
     assert rule_of(profile="fast") == "R3"                       # native + VAE in graph
-    assert rule_of(vae_encoder="native") == "R3"                 # real encoder outside the graph
+    assert rule_of(vae_encoder="native", vae_graph=False) == "R3"  # real encoder outside the graph
     assert rule_of(vae_graph=True) == "R3"                       # torch encoder in the graph
     assert resolve(profile="fast", ae_model_path=AE).options.vae_graph_input == (2, 224, 224)
-    assert resolve(vae_encoder="native", ae_model_path=AE).options.vae_graph_input is None
+    # native encoder with an autoencoder: inside the graph unless vae_graph=False says otherwise
+    assert resolve(vae_encoder="native", ae_model_path=AE).options.vae_graph_input == (2, 224, 224)
+    assert resolve(vae_encoder="native", vae_graph=False, ae_model_path=AE).options.vae_graph_input is None
     resolve()                                                    # torch encoder outside the graph: no AE needed
 
 
@@ -511,7 +544,10 @@ def test_effective_config_keeps_the_compare_scripts_format():
     line = resolve().effective_config
     assert "\n" not in line
     assert line == ("effective_config precision=nvfp4 text_trim=True vae_encoder=torch vae_graph=False "
-                    "use_fa4=auto use_fa4_mot=False fa4_fallback_reason=None calibration=None awq=False")
+                    "use_fa4=auto use_fa4_mot=auto fa4_fallback_reason=None calibration=None awq=False")
+    assert resolve(ae_model_path=AE).effective_config == (
+        "effective_config precision=nvfp4 text_trim=True vae_encoder=native vae_graph=True "
+        "use_fa4=auto use_fa4_mot=auto fa4_fallback_reason=None calibration=None awq=False")
     assert resolve(profile="native").effective_config == (
         "effective_config precision=nvfp4 text_trim=True vae_encoder=torch vae_graph=False "
         "use_fa4=False use_fa4_mot=False fa4_fallback_reason=None calibration=None awq=False")
@@ -554,7 +590,7 @@ def test_effective_config_round_trips_through_parse_log(tmp_path):
                                    fa4_fallback_reason="FA4 failed, using cuBLAS")
     assert parse(fell) == ["0.99887", "0.99933", "0.18600", "106.1", "False", "True", "FA4 failed; using cuBLAS"]
     # the resolver's own (pre-construction) line parses too
-    assert parse(resolve().effective_config)[3:] == ["106.1", "auto", "False", "None"]
+    assert parse(resolve().effective_config)[3:] == ["106.1", "auto", "auto", "None"]
 
 
 # -- import contract -----------------------------------------------------------------
