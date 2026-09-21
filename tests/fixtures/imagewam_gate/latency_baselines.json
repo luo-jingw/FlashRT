@@ -17,7 +17,7 @@
         "nvfp4": {
           "p50_ms": 202.2,
           "margin": 0.05,
-          "source": "opportunities.md OPT-030 / THOR_STATUS_SUMMARY.md: the UNTRIMMED reference configuration, eccf14f round, Jetson AGX Thor, MAXN, GPC 1.575 GHz, emc_locked=null, GPU exclusive; gate nvfp4 202.2 ms (pass), end-to-end default row 202.4/202.1/202.0 ms over three repeats (0.4 ms spread). The served default is now the trimmed configuration (profile `default`); its gate run is `--text-trim --manifest .../imagewam_libero_gate_v2.manifest.json` and measured P50 114.6 ms at 0919, so this one-sided bound still holds for both. Supersedes the 231.6 ms baseline, whose session's repeat spread was never measured (issues.md ISSUE-082)."
+          "source": "opportunities.md OPT-030 / THOR_STATUS_SUMMARY.md: the UNTRIMMED reference configuration, eccf14f round, Jetson AGX Thor, MAXN, GPC 1.575 GHz, emc_locked=null, GPU exclusive; gate nvfp4 202.2 ms (pass), end-to-end default row 202.4/202.1/202.0 ms over three repeats (0.4 ms spread). The served default is now the trimmed configuration (profile `default`, FA4 left to the machine); its gate run is `--text-trim --manifest .../imagewam_libero_gate_v2.manifest.json` and measured P50 125.86 ms in the 0920t round, so this one-sided bound holds for both configurations but leaves the served default about 69% of headroom (202.2 x 1.05 = 212.3 ms against 125.86 ms), where the row it was recorded from has about 11% (the untrimmed reference measured 191.79 ms in the same session). Re-seeding it per configuration is an open owner decision (plan.md, \"Open\"). Supersedes the 231.6 ms baseline, whose session's repeat spread was never measured (issues.md ISSUE-082)."
         }
       }
     },
