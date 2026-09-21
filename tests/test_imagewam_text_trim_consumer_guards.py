@@ -349,6 +349,37 @@ def test_native_handle_adopts_and_selects_one_graph_per_captured_length():
     native.close()
 
 
+def test_a_fresh_handle_reports_an_empty_gemm_handoff():
+    """The GEMM hand-off state of a handle with no pipeline installed is empty
+    rather than absent: a deployment reads it to tell whether a pipeline has
+    been installed at all, so the state exists from `create` on and `0`, `[]`
+    and `{}` are the answer before the first `set_pipeline` — an
+    `AttributeError` at that read would be an answer no consumer can act on.
+    Only the pre-install state is pinned here; the per-length values an
+    install records are the Thor rows of `tests/test_imagewam_native_pipeline.py`.
+    `gemm_installed_by_key` hands out a copy, so what a caller does with the
+    dict it returns cannot become the handle's state."""
+    library = _StubNativeLib()
+    native = ImageWAMNativeRuntime.create(_cpu_surface((SHORT_KEY, LONG_KEY)), library)
+    try:
+        print(f"fresh handle: algos={native.gemm_algos_installed} shapes={native.gemm_shapes} "
+              f"by_key={native.gemm_installed_by_key}")
+        assert not any(call[0] == "set_pipeline" for call in library.calls), \
+            "this is the state before the first set_pipeline"
+        assert native.gemm_algos_installed == 0
+        assert native.gemm_shapes == []
+        assert native.gemm_installed_by_key == {}
+
+        # The copy: a caller's write to the returned dict is not the handle's.
+        borrowed = native.gemm_installed_by_key
+        borrowed[SHORT_KEY] = (1, 1)
+        print(f"after writing {SHORT_KEY} into the returned dict: "
+              f"{native.gemm_installed_by_key}")
+        assert native.gemm_installed_by_key == {}
+    finally:
+        native.close()
+
+
 # -- the native pipeline's per-length path, without a GPU ------------------
 #
 # `pipeline_resources()` is the frontend's own method, bound to a stub

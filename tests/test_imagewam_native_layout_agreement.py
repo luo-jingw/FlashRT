@@ -74,16 +74,18 @@ _COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
 _TYPE_DEFINITION = re.compile(
     r"typedef\s+struct\s+(?P<name>[A-Za-z_]\w*)\s*\{(?P<body>[^{}]*)\}\s*(?P<alias>[A-Za-z_]\w*)\s*;",
     re.S)
-_MEMBER = re.compile(r"^(?P<type>(?:const\s+)?[A-Za-z_]\w*)\s*(?P<declarators>.+)$", re.S)
+_MEMBER = re.compile(
+    r"^(?P<type>(?:const\s+)?(?:(?:struct|union|enum)\s+)?[A-Za-z_]\w*)\s*(?P<declarators>.+)$", re.S)
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
 
 
 @dataclass(frozen=True)
 class _HeaderMember:
-    """One member a struct in the header declares: its name, the type name it
-    is declared with, whether its declarator is a pointer, and — when the
-    header declares that type as a struct — that struct's own members, so a
-    nested member expands into the subfields the header lists for it."""
+    """One member a struct in the header declares: its name, the type it is
+    declared with (qualifiers and `struct`/`union`/`enum` tags dropped),
+    whether its declarator is a pointer, and — when the header declares that
+    type as a struct — that struct's own members, so a nested member expands
+    into the subfields the header lists for it."""
 
     name: str
     type_name: str
@@ -104,8 +106,19 @@ def _struct_bodies(text: str) -> dict[str, str]:
             for match in _TYPE_DEFINITION.finditer(_strip_comments(text))}
 
 
+def _tagged_type(type_text: str) -> tuple[str, bool]:
+    """The type name one declaration starts with and whether it was written
+    with a tag: `const uint32_t` -> `("uint32_t", False)`,
+    `struct frt_imagewam_linear` -> `("frt_imagewam_linear", True)`."""
+    tagged = any(f" {tag} " in f" {type_text} " for tag in ("struct", "union", "enum"))
+    name = type_text
+    for qualifier in ("const ", "struct ", "union ", "enum "):
+        name = name.removeprefix(qualifier)
+    return name.strip(), tagged
+
+
 def _raw_members(body: str) -> tuple[tuple[str, str, bool], ...]:
-    """`(name, type name, is a pointer declarator)` per member of one struct
+    """`(name, type text, is a pointer declarator)` per member of one struct
     body, in declaration order: a statement declares one type and one or more
     declarators (`void *context, *img_raw, ...` declares all of them)."""
     members: list[tuple[str, str, bool]] = []
@@ -116,13 +129,13 @@ def _raw_members(body: str) -> tuple[tuple[str, str, bool], ...]:
         match = _MEMBER.match(statement)
         if match is None:
             raise AssertionError(f"cannot read the header member {statement!r}")
-        type_name = match.group("type").removeprefix("const").strip()
+        type_text = match.group("type").strip()
         for declarator in match.group("declarators").split(","):
             declarator = declarator.strip()
             names = _IDENTIFIER.findall(declarator)
             if not names:
                 raise AssertionError(f"cannot read the declarator {declarator!r} of {statement!r}")
-            members.append((names[-1], type_name, "*" in declarator))
+            members.append((names[-1], type_text, "*" in declarator))
     return tuple(members)
 
 
@@ -130,14 +143,24 @@ def _members_of(struct_name: str, raw: dict[str, tuple[tuple[str, str, bool], ..
                 stack: tuple[str, ...] = ()) -> tuple[_HeaderMember, ...]:
     """The members of one header struct; a member whose type name is another
     struct of the header carries that struct's members, resolved the same way,
-    so the header stays the source of truth for the nested layout too."""
+    so the header stays the source of truth for the nested layout too. A
+    member declared with a `struct` / `union` / `enum` tag the header declares
+    no body for is reported instead of being left unexpanded."""
     if struct_name in stack:
         raise AssertionError(f"the header nests {struct_name} inside itself: "
                              f"{' -> '.join((*stack, struct_name))}")
-    return tuple(_HeaderMember(name, type_name, pointer,
-                               _members_of(type_name, raw, (*stack, struct_name))
-                               if type_name in raw else None)
-                 for name, type_name, pointer in raw[struct_name])
+    members: list[_HeaderMember] = []
+    for name, type_text, pointer in raw[struct_name]:
+        type_name, tagged = _tagged_type(type_text)
+        if type_name in raw:
+            fields = _members_of(type_name, raw, (*stack, struct_name))
+        else:
+            if tagged:
+                raise AssertionError(f"{struct_name}.{name} is declared with the tag {type_text!r}, "
+                                     f"but the header declares no struct {type_name!r} to expand")
+            fields = None
+        members.append(_HeaderMember(name, type_name, pointer, fields))
+    return tuple(members)
 
 
 def _header_structs(text: str) -> dict[str, tuple[_HeaderMember, ...]]:
