@@ -5677,6 +5677,55 @@ layout-only measurement with placeholder image tokens. `text_trim` stays
 refused for this face: rule R5 gives the native pipeline one graph and one
 context length, so the trimmed rows have no native number.
 
+## Thor, native model runtime (`0920s4`, nvfp4)
+
+`0920s4`, commit `a4852be`, Jetson AGX Thor, MAXN, GPC 1.575 GHz,
+`emc_locked=null`, GPU exclusive; raw logs under
+`/home/jingwu/thor_val/0920s4/`. Latency is P50 in ms on one wall-clock timer
+per path. Only the native C++ was rebuilt (`c_api.cpp`, `native_runtime.cpp`,
+`native_pipeline.cpp`, `fp4_linear.cpp`); the kernels and the fp4 targets were
+already current, and the ctypes layout check passed silently.
+
+S4 lands on the native *model runtime*: the handle carries one adopted graph
+per trimmed text length (plan.md phase S4). `IMAGEWAM_NATIVE_PRECISION=nvfp4
+pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py
+-q`: 38 passed.
+
+| check | result |
+|---|---|
+| two-length tick, `x0 = 6` ticked first and then `14`: `actions` / `actions_raw` vs `infer()` | both `array_equal=True`, `max_abs=0` |
+| native manifest `text_lengths` | `{'default_key': 14, 'keys': [6, 14], 'per_prompt_length': True}` |
+| `set_text_length(14)` for a length that was never adopted | `rc=-2` |
+| `tests/test_imagewam_native_pipeline.py`, the untrimmed one-key capture path, whole file | green, including its native-vs-Python-graph `array_equal` rows |
+
+Gate `tests/gate_imagewam_native_schema_parity.py --precision nvfp4`: PASS. The
+Python declaration and the C++ native verbs carry 7 records each, byte-for-byte
+identical to the golden records; `x0` is not among the records, so nothing was
+re-baselined.
+
+Gate `tests/gate_imagewam_native_parity.py --precision nvfp4 --bench-iters 50`:
+
+| `--graph` | tick rows | mutants | P50 |
+|---|---|---|---|
+| `python` | every tick row `array_equal=True` | both call mutants detected (proprio verb and `step` not called) | python 207.53 ms, native 207.13 ms |
+| `native` | every tick row green | all six detected | python tick 206.21 ms, native tick 204.33 ms; graph replay python 205.74 ms, native 204.18 ms |
+
+Node counts: native 5324, Python 5348, the same as the previous round's
+`08_gate_native.log`.
+
+These P50s sit about 22 ms above that earlier `08_gate_native` round's ~182 ms.
+Measured in this round: the node counts are unchanged, and the untrimmed path's
+values are identical (the one-key file, including the
+native-vs-Python-graph rows). Not measured: any A/B of the same binary under
+both sessions' machine state, so the 22 ms carries no attribution and is
+recorded as a session difference rather than a measured regression.
+
+`text_trim` stays refused for the native *pipeline*: rule R5 gives it one graph
+and one context length from one resource table, so `consumer="native"` keeps
+refusing `text_trim` and the `native` profile remains the only resolved native
+set. The adopted per-length execs above come from the frontend's captures, which
+the native model runtime takes by key.
+
 
 # OPT-030: text context trimmed to the prompt's valid length (issues.md ISSUE-020)
 

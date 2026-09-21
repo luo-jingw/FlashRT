@@ -24,7 +24,7 @@
 
 `resolve_config` 是唯一的合法性判定点，非法组合抛一条带规则编号（R1–R11，以及值域规则 V1）的错误。日志里的 `effective_config` 行由 `config_resolver.format_effective_config` 产出，比较脚本、矩阵脚本与 runtime 身份打印同一个字符串，因此 profile 与精度是一份可记录的部署身份。
 
-同一组按长度捕获的图也由 native 侧承载：native model runtime（`io="native"`）按长度 adopt 前端的每张图（`use_graph(key, exec)`，key 就是 `x0`），服务时用 `set_text_length(x0)` 在热路径上选长度；native **pipeline** 自己的捕获（`pipeline_resources()` + `capture()`）仍是单长度，所以规则 R5 继续拒绝 `consumer="native"` 的 `text_trim`，`native` profile 仍是 native 路径唯一的具名集合。
+同一组按长度捕获的图也由 native 侧承载：native model runtime（`io="native"`）按长度 adopt 前端的每张图（`use_graph(key, exec)`，key 就是 `x0`），服务时用 `set_text_length(key)` 在热路径上选长度；native **pipeline** 自己的捕获（`pipeline_resources()` + `capture()`）仍是单长度，所以规则 R5 继续拒绝 `consumer="native"` 的 `text_trim`，`native` profile 仍是 native 路径唯一的具名集合。这条采纳路径不改动未裁剪的一 key 路径：节点数不变（native 5324 / Python 5348），native-vs-Python graph 的 `array_equal` 行仍全绿；schema 记录也不变（Python 声明与 C++ native verbs 各 7 条记录，与 golden 逐字节相同）。
 
 同一 workload 也是 runtime 与校准文件身份的一部分：ABI 描述与 `setup_identity` 在 `dims.<key>` 之外带 `workload.<field>`（`num_views`、`image_h`、`image_w`、`text_max_len`、`action_horizon`、`action_dim`、`proprio_dim`、`num_steps`、`shift`）；这些条目是附加描述，已记录的校准文件仍然有效。
 
@@ -153,6 +153,22 @@ LIBERO 回归：VAE 几何改动是保真中性的——`libero_spatial` nvfp4 `
 `text_trim` 的显存代价：在 Thor 上实测（nvfp4、FA4 关、15 个 LIBERO 长度），第一张捕获图付出 +218.0 MiB reserved / +206.3 MiB allocated，其后每张 +0.0 / +0.1 MiB——后续图共用同一个捕获池。因此默认 `text_trim_cache_size=32` 的总代价在 221 MiB 量级，不是 32 倍的首图代价。
 
 淘汰的代价（缓存上限 2、不预捕获）：重新访问一个已被淘汰的长度时 `set_prompt` 用 0.636 / 0.503 / 0.468 / 0.465 s；已预捕获的情形是 0.012 / 0.000 / 0.000 s。
+
+### `0920s4` 轮：native model runtime 每个文本长度一张采纳图（nvfp4）
+
+commit `a4852be`：Jetson AGX Thor、MAXN、GPC 1.575 GHz、`emc_locked=null`、GPU 独占；原始日志在 `/home/jingwu/thor_val/0920s4/`。本轮只重建了 native C++（`c_api.cpp`、`native_runtime.cpp`、`native_pipeline.cpp`、`fp4_linear.cpp`），kernel 与 fp4 目标本来就是当前的，ctypes 布局检查静默通过。延迟是每路径一个墙钟计时器的 P50（ms）。
+
+`IMAGEWAM_NATIVE_PRECISION=nvfp4 pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q`：38 passed。两个长度的 tick（`x0=6` 先 tick，再 `14`）的 `actions` 与 `actions_raw` 对 `infer()` 都是 `array_equal=True`、`max_abs=0`；native manifest 记 `text_lengths={'default_key': 14, 'keys': [6, 14], 'per_prompt_length': True}`；对没有采纳图的长度 `set_text_length(14)` 返回 `rc=-2`。未裁剪的一 key 路径（`tests/test_imagewam_native_pipeline.py`）整文件过。
+
+| gate | 结果 |
+|---|---|
+| `tests/gate_imagewam_native_schema_parity.py --precision nvfp4` | PASS；Python 声明与 C++ native verbs 各 7 条记录，与 golden 逐字节相同（`x0` 不在记录里，没有重新基线化） |
+| `tests/gate_imagewam_native_parity.py --precision nvfp4 --graph python --bench-iters 50` | 每个 tick 行 `array_equal=True`；两个调用 mutant 全检出；P50 python 207.53、native 207.13 |
+| `tests/gate_imagewam_native_parity.py --precision nvfp4 --graph native --bench-iters 50` | 每个 tick 行绿；六个 mutant 全检出；P50 python tick 206.21、native tick 204.33，graph replay python 205.74、native 204.18 |
+
+节点数 native 5324 / Python 5348，与上一轮 `08_gate_native.log` 相同。这轮的 P50 比那一轮 `08_gate_native` 的约 182 ms 高约 22 ms：本轮测到的是节点数不变、未裁剪路径的数值不变，没有测同一二进制在两轮机器状态下的 A/B，所以这 22 ms 记作会话差异，而不是实测到的回退。
+
+native **pipeline** 自己的捕获仍是单长度，所以这些长度上的 native 服务来自 model runtime 的采纳路径；`consumer="native"` 的 `text_trim` 仍被规则 R5 拒绝。
 
 ### 新入口下的同一会话阶梯（`c20f3a0`，libero_spatial，nvfp4，`infer()` P50）
 
