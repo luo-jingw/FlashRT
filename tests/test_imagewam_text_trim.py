@@ -359,9 +359,11 @@ def test_live_text_encoder_path_trims_and_caches_by_prompt(monkeypatch):
 
     lengths = {"short prompt": 4, "longer prompt": 11}
     calls: list[str] = []
+    widths: list[int] = []
 
-    def encode(model, tokenizer, prompts):
+    def encode(model, tokenizer, prompts, max_length=None):
         calls.append(prompts[0])
+        widths.append(max_length)
         return _context()[None].to(DEV), _mask(lengths[prompts[0]])[None].to(DEV)
 
     monkeypatch.setattr(text_encoder, "encode_prompts", encode)
@@ -370,9 +372,12 @@ def test_live_text_encoder_path_trims_and_caches_by_prompt(monkeypatch):
     for prompt in ("short prompt", "short prompt", "longer prompt", "short prompt"):
         fe.set_prompt(prompt)
         assert fe.active_dims["x0"] == lengths[prompt] + 1 and fe._proprio_row == lengths[prompt]
-    print(f"\nencoder calls {calls}; captured lengths {fe.captured_text_lengths}")
+    print(f"\nencoder calls {calls}; widths {widths}; captured lengths {fe.captured_text_lengths}")
     assert calls == ["short prompt", "longer prompt", "short prompt"]
     assert fe.captured_text_lengths == (5, 12)
+    # The frontend asks for its own context width (dims x0 minus the proprio
+    # row), not the encoder module's 512 default (ISSUE-083).
+    assert widths == [TEXT_LEN] * len(calls)
 
 
 @needs_gpu
