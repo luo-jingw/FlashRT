@@ -65,7 +65,7 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 ```
 cmake --build build -j --target flashrt_imagewam_native
 IMAGEWAM_NATIVE_PRECISION=nvfp4 python -m pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q -s 2>&1 | tee $OUT/S4p_native.log   # 期望 39 passed；不需要 FLASHRT_THOR_FA4
-IMAGEWAM_NATIVE_PRECISION=nvfp4 python -m pytest tests/test_imagewam_text_trim_consumer_guards.py -q 2>&1 | tee $OUT/S4p_guards.log
+IMAGEWAM_NATIVE_PRECISION=nvfp4 python -m pytest tests/test_imagewam_text_trim_consumer_guards.py -q 2>&1 | tee $OUT/S4p_guards.log   # 期望 12 passed（上一轮 11：新增一条 CPU 口径 pin，protocol / 前端 / 替身的成员种类必须一致）
 python tests/gate_imagewam_native_parity.py --precision nvfp4 --graph native --bench-iters 50 2>&1 | tee $OUT/S4p_parity_native.log
 python tests/gate_imagewam_native_schema_parity.py --precision nvfp4 2>&1 | tee $OUT/S4p_schema.log
 ```
