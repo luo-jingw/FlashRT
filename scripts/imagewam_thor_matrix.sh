@@ -20,8 +20,12 @@
 #     stack_no_trim    stack without text_trim        (leave-one-out)
 #   Leaving FA4 out of the stack is vae_trim; leaving only the mot site out
 #   is vae_trim_fa4bb, so those two are ladder rows and not repeated. Every
-#   flag row that states TEXT_TRIM=0 carries the contents of the `native`
-#   profile (the non-trimming set); the rows that state TEXT_TRIM=1 are
+#   flag row is the `default` profile plus its own CFG switches below, and
+#   every row states its FA4 choice: the backend site is now on wherever the
+#   machine can run it (`FLASHRT_THOR_FA4` defaults to "1"), so a row that
+#   means "FA4 off" must say FLASHRT_THOR_FA4=0. No named profile is
+#   untrimmed, `native` included, so a row that states TEXT_TRIM=0 is the
+#   untrimmed baseline of the ladder and the rows that state TEXT_TRIM=1 are
 #   trimmed.
 #
 #   profile rows (PROFILES="default fast"): one row per named profile, row
@@ -73,9 +77,9 @@ mkdir -p "$OUT"
 cd "$(dirname "$0")/.."
 
 declare -A CFG=(
-  [default]="TEXT_TRIM=0"
-  [vae]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=0"
-  [vae_trim]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=1"
+  [default]="TEXT_TRIM=0 FLASHRT_THOR_FA4=0"
+  [vae]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=0 FLASHRT_THOR_FA4=0"
+  [vae_trim]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=1 FLASHRT_THOR_FA4=0"
   [vae_trim_fa4bb]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=1 FLASHRT_THOR_FA4=1"
   [stack]="VAE_ENCODER=native VAE_GRAPH=1 TEXT_TRIM=1 FLASHRT_THOR_FA4=1 FA4_MOT=1"
   [stack_no_vae]="TEXT_TRIM=1 FLASHRT_THOR_FA4=1 FA4_MOT=1"

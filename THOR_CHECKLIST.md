@@ -62,6 +62,8 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 前置：把 `imagewam_libero_gate_v2` 的 fixture 目录放进 `$BUNDLE`（现在 bundle 里只有 v1）。
 
+另外注意：矩阵的开关行现在**每行都显式写 FA4**（`default`/`vae`/`vae_trim` 补了 `FLASHRT_THOR_FA4=0`），因为 FA4 默认已变成"能跑就开"。所以 C 节阶梯里的 `vae_trim` → `vae_trim_fa4bb` 这一步仍然是 FA4 的隔离边际；已记录的 `c20f3a0`/`eccf14f` 数字当时 unset 就等于关，仍然有效。
+
 ```
 # 1) 服务默认的门禁（不带任何 flag）：nvfp4 与 fp16 各一次
 python tests/gate_imagewam_libero.py --precision nvfp4 --fixture-dir "$BUNDLE/imagewam_libero_gate_v2" 2>&1 | tee $OUT/T_gate_nvfp4.log
