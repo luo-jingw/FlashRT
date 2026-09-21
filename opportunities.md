@@ -5426,7 +5426,11 @@ fold moves work into the quantizer, it does not add a per-forward kernel.
 # OPT-028: ImageWAM through `frt_model_runtime_v1` (Python producer)
 
 Status: implemented and verified on H100 (fp16, real checkpoint,
-bit-exact). Thor `nvfp4` parity pending on the Thor checklist.
+bit-exact) and on Thor at `nvfp4` for the tick test
+(`tests/test_imagewam_model_runtime_export.py`, two captured lengths
+bit-exact against `infer()`). The export gate this entry's promotion
+condition names has not been run on Thor; it is a pending row in
+`THOR_CHECKLIST.md`.
 
 Area: deployment engineering, roadmap item 12.
 

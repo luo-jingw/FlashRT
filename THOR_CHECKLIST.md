@@ -86,6 +86,24 @@ python tests/gate_imagewam_native_schema_parity.py --precision nvfp4 2>&1 | tee 
 
 ---
 
+## ABI-export. `frt_model_runtime_v1` 的导出 gate（OPT-028 的 promotion condition，Thor 上还没跑过）
+
+OPT-028 在 H100 上全绿、在 Thor 上 `tests/test_imagewam_model_runtime_export.py`（两个长度逐位一致）也过了，但它自己记的 promotion condition 是**这条 gate**：`## Promotion Condition` 写的是"Thor gate at `nvfp4` reports every parity row `array_equal=True`"。这条 gate 与那个 test 不是同一个东西：gate 每次 tick 前把每个待写缓冲填 NaN、并且逐行关掉一个 verb（五个 mutant 必须让对应行失败），所以它能抓"这一行是靠参考 `infer()` 的残留通过的"。
+
+要 `exec/build` 与 `runtime/build`，以及 `CKPT_PATH`、`FLUX2_AE_MODEL_PATH`（或 `AE_MODEL_PATH`）、`FLUX2_SRC`、`QWEN3_MODEL_SPEC`；`DATA_ROOT` 可选（不给就用固定种子的随机帧与状态）。
+
+```
+python tests/gate_imagewam_model_runtime_export.py --precision nvfp4 2>&1 | tee $OUT/ABIg_plain.log
+python tests/gate_imagewam_model_runtime_export.py --precision nvfp4 --vae-graph-input 224 224 2>&1 | tee $OUT/ABIg_vaegraph.log
+```
+
+FA4 在这里是显式的（`--use-fa4`，默认关），所以这两行的 `use_fa4=False` 与 `FLASHRT_THOR_FA4` 无关；脚会打印 `use_fa4=False` 供核对。
+
+判据：两条都打印每一行 `array_equal` / `max_abs = 0`（images、proprio、prompt、step 的 parse；`actions`、`actions_raw`、VAE token），五个 mutant 在两种放置下都被检出，确定性对照（`infer()` 跑两次同噪声）通过。第二条只有把 `fast` 档的"原生 VAE 进图"也算进本项时才需要——它要求 `ae_model_path`（规则 R3），VAE 输入走 224×224。
+去向：`opportunities.md` OPT-028 的 `## Thor` 段、`docs/imagewam_model_runtime.md`、`THOR_STATUS_SUMMARY.md`。
+
+---
+
 ## 已决定、不在这里测的
 
 `text_trim` 转默认（原 E1）已经决定并落库：`default` profile 带 `text_trim=True`，FA4 与原生 VAE 留在 `fast`，新增 `native` profile；门禁与矩阵的默认口径跟着服务默认走；这些结论在 `plan.md` 的 "Decisions pending"、`opportunities.md` OPT-019/030 与 `THOR_STATUS_SUMMARY.md`。
