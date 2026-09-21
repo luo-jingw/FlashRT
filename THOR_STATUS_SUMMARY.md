@@ -60,7 +60,7 @@
 | `workload` | `ImageWAMWorkload.libero()` | 服务的工作负载；序列布局与 `vae_graph_input` 由它派生并校验 | 字段必须与 checkpoint 的结构一致（规则 R7） |
 | `profile` | `default` | 开关的具名集合；`default` 含 `text_trim`，backbone 位点的 FA4 按机器自动解析；`fast` = 再加 FA4 的 mot 位点 + 原生 VAE 进图（`0920t`：同进程、LIBERO `valid_tokens=24` 时 `fast --precapture` 的 `infer()` 108.08 ms 对 `default` 139.47 ms；`c20f3a0` 一轮的对应两行是 93.2 对约 115 ms，nvfp4，libero_spatial） |`native` = 同样裁文本 + FA4 两位点显式关（native pipeline 没有 FA4 注意力），其余与 `default` 相同；`fast` 的 FA4 首次调用编译、失败回退 |
 | `precision` | `nvfp4` | 精度/速度档位 | `fp8_static*` 需要校准文件 |
-| `text_trim` | 关（服务 `default` 档位为**开**） | 按有效文本长度裁剪；开启后每个有效文本长度一张图，Python `infer()`、ABI 与 native 三条路径都能服务（native 侧由 `capture_pipeline_text_lengths` 逐长度安装并捕获）；服务默认即裁剪，`0920t` 的 nvfp4 gate 125.86 ms、端到端 126.5 ms | native pipeline 自己的按长度捕获尚未验证：`0920t` 的 `test_pipeline_records_one_graph_per_text_length` 失败（长度表是 property、比较覆盖了当前长度以外的行，两个成因已在 `43c49ce` 修复），Thor 重跑待做 |
+| `text_trim` | 关（服务 `default` 档位为**开**） | 按有效文本长度裁剪；开启后每个有效文本长度一张图，Python `infer()`、ABI 与 native 三条路径都能服务（native 侧由 `capture_pipeline_text_lengths` 逐长度安装并捕获）；服务默认即裁剪，`0920t` 的 nvfp4 gate 125.86 ms、端到端 126.5 ms | native pipeline 自己的按长度捕获已验证（`0920c`）：`test_pipeline_records_one_graph_per_text_length` 通过，该轮 native 两条 pytest 39 passed 且无 skip，逐长度 tick `differing=[]`，每个长度的 GEMM 交接完整（`{6: (4, 4), 14: (4, 4)}`） |
 | `text_trim_cache_size` | 32 | `text_trim` 预捕获图的张数上限，超出按 LRU 淘汰 | 显存只在首次捕获付出：首图 +218.0 MiB reserved / +206.3 MiB allocated，其后每张 +0.0 / +0.1 MiB，默认上限 32 的总代价在 221 MiB 量级（`a84916a`，nvfp4，15 个 LIBERO 长度） |
 | FA4（`FLASHRT_THOR_FA4`、`use_fa4_mot`） | backbone 位点：机器能跑就开（`FLASHRT_THOR_FA4=0` 强制走 cuBLAS 链）；mot 位点：关 | 注意力 kernel；`0920t` 同一裁剪配置下开比关快约 5 ms（端到端 126.5 对 131.3 ms），`effective_config` 对服务默认打印 `use_fa4=True`、对 `FLASHRT_THOR_FA4=0` 打印 `use_fa4=False` | 首次调用编译，失败自动回退 |
 | `vae_encoder="native"` / `vae_graph_input` | 关（torch 编码器） | 原生 VAE / 进图 | — |
@@ -154,6 +154,19 @@ LIBERO 回归：VAE 几何改动是保真中性的——`libero_spatial` nvfp4 `
 `text_trim` 的显存代价：在 Thor 上实测（nvfp4、FA4 关、15 个 LIBERO 长度），第一张捕获图付出 +218.0 MiB reserved / +206.3 MiB allocated，其后每张 +0.0 / +0.1 MiB——后续图共用同一个捕获池。因此默认 `text_trim_cache_size=32` 的总代价在 221 MiB 量级，不是 32 倍的首图代价。
 
 淘汰的代价（缓存上限 2、不预捕获）：重新访问一个已被淘汰的长度时 `set_prompt` 用 0.636 / 0.503 / 0.468 / 0.465 s；已预捕获的情形是 0.012 / 0.000 / 0.000 s。
+
+### `0920` 轮：三个症状的甄别与捕获路径缺陷的修复
+
+Jetson AGX Thor、MAXN、GPC 1.575 GHz、`emc_locked=null`、GPU 独占；原始日志在 `/home/jingwu/thor_val/0920/`。本轮把三个症状各自单独跑了一遍，四个文件全绿：
+
+| 检查 | 结果 |
+|---|---|
+| `tests/test_imagewam_fa4_dispatch.py -k capture_sync` | 1 passed——一次作废的捕获之后，重试确实在一张新池上捕获 |
+| `tests/test_imagewam_awq.py` | 6 passed，打印 `kernels per eager forward: plain=285 awq=285` |
+| `tests/test_imagewam_text_trim_graph_safety.py`（FA4 开） | 4 passed，恢复用例报 `equal=True cosine=1 max_abs=0` |
+| `tests/test_imagewam_model_runtime_vae.py` | 2 passed |
+
+三个症状里只有一个是真的缺陷：cuBLAS 回退重捕到了被作废的那次尝试还留在录制中的流与显存池；修法是先丢弃这份状态，让重试等同于一次全新捕获。另外两个是测试自己的比较——AWQ 读数里 plain 一侧为 `0`，是因为进程里第一段 `torch.profiler` CUDA 区域是盲的；FA4 开启的恢复行把一次 cuBLAS 重捕与失败前的 FA4 捕获相比。fixture v2 的 manifest 按字节原样入库（sha256 `a69a86ac…`、10954 字节）。
 
 ### `0920s4` 轮：native model runtime 每个文本长度一张采纳图（nvfp4）
 
