@@ -63,11 +63,12 @@ Phase Status: completed
 # Roadmap: Pi0.5-derived optimization tracks
 
 Roadmap Status: approved. All 14 items and the ISSUE-020 text-trim fix
-are implemented, verified on H100 and merged into `roadmap/integration`.
-Thor validation is pending; see "Execution status" and "Thor validation
-checklist" below. An item whose Thor step is still open keeps its own
-`# Plan: <item>` section later in this file; every item's results are
-recorded in the `opportunities.md` entry named in "Execution status".
+are implemented, verified on H100 and merged into `roadmap/integration`;
+the Thor rounds are listed in "Execution status" below and
+`THOR_CHECKLIST.md` carries no pending item. An item whose Thor step is
+still open keeps its own `# Plan: <item>` section later in this file;
+every item's results are recorded in the `opportunities.md` entry named
+in "Execution status" and per round in `THOR_STATUS_SUMMARY.md`.
 
 ## Problem
 
@@ -120,26 +121,37 @@ prerequisites and can start immediately, in parallel.
 
 ## Execution status
 
-Measured on H100 (sm_90, shared GPU). Each item's OPT entry holds the
-details. "Default" says whether the served configuration changed.
+H100 (sm_90, shared GPU) unless stated otherwise. "State" says whether
+the served configuration changed. Each row's full results are in the
+`opportunities.md` entry it names; the per-round Thor records are in
+`THOR_STATUS_SUMMARY.md`.
 
-| id | result | default | record |
-|---|---|---|---|
-| 1 | Per-shape measured tile choice for ActionDiT NVFP4/FP8 CUTLASS GEMMs, plus four 1-SM FP8 small-M tiles. Compiled for sm_110; correctness and speed not yet measured on Thor. | off (`gemm_variant_autotune=True`) | OPT-018 |
-| 2 | Fused uint8→BF16 VAE preprocessing kernel with a 256-entry table. Bit-exact to the previous path. | on | OPT-020 |
-| 3 | Gated residual fused with the following AdaLN, including across layer boundaries. Bit-exact over the whole pass. Together with item 4, cuts kernels per pass from 7082 to 4968. | on | OPT-017 |
-| 4 | Single-stream `attn_out_proj` + `mlp_down` merged into one `linear2` GEMM. NVFP4 operands are identical to the split path; only the accumulation order changes. | on, except `fp16_cutlass` | OPT-016 |
-| 5 | VAE stage capturable in the main graph, plus a native NHWC encoder with fused GroupNorm(+SiLU). VAE stage takes 4.3 ms on H100, against about 12 ms for the torch encoder. | off (`vae_encoder="native"`, `vae_graph_input`) | OPT-021 |
-| 6 | FA4 backbone and `mot` attention with a dedicated output buffer and a fallback to cuBLAS on failure. Not run on Thor at the served shapes. | off (`FLASHRT_THOR_FA4=1`, `use_fa4_mot=True`) | OPT-019 |
-| 7 | Real `fp8_static` calibration from 64 LIBERO frames (142 sites). Against fp16, actions cos is 0.99997 with the real calibration, vs 0.90 with the placeholder. Resolves ISSUE-001 with a TN FP8 layout on sm_89/sm_90. | opt-in (`calibration_path=`) | OPT-022 |
-| 8 | AWQ per-channel scales folded into NVFP4 weights. In simulation, backbone cos goes from 0.99820 to 0.99956. | off (`nvfp4_awq=True`) | OPT-023 |
-| 9 | `e0m3_hadamard` precision tier. Simulated 1 − actions cos is 2.97e-4, against 6.71e-4 for `nvfp4`. | off (`precision="e0m3_hadamard"`) | OPT-024 |
-| 10 | Jetson clock-state probe, printed by the ImageWAM benchmarks. | on (reporting only) | OPT-025 |
-| 11 | CPU-only precision-routing contract test. Eight precision columns. | n/a | OPT-026 |
-| 12 | `frt_model_runtime_v1` export (`io="python"`). Bit-exact to `infer()`; parity gates carry mutation tests. | n/a | OPT-028 |
-| 13 | LIBERO fidelity and latency gate: fixture v1, runner, per-device baselines. fp16 passes on H100. | n/a | OPT-027 |
-| 14 | Native C++ overlay (`io="native"`). Bit-exact; runs a tick without Python. Latency is equal to `io="python"` (4974 against 4998 graph nodes at fp16 on H100; the Thor `nvfp4` runs measure 5324 against 5348, `0920t`). | n/a | OPT-029 |
-| ISSUE-020 | `text_trim`: each prompt runs at its valid text length, which reproduces official's masked attention. On libero_goal (fp16), vs official, median/min goes from 0.99680/0.92997 to 0.99998/0.99963. H100 `infer()` is about 30% faster. | off (`text_trim=True`) | OPT-030, ISSUE-080 |
+| id | state | record |
+|---|---|---|
+| 1 | Per-shape measured tile choice for the ActionDiT NVFP4/FP8 CUTLASS GEMMs, plus four 1-SM FP8 small-M tiles, compiled for sm_110. Off (`gemm_variant_autotune=True`); correctness and speed unmeasured on Thor. | OPT-018 |
+| 2 | Fused uint8→BF16 VAE preprocessing kernel with a 256-entry table; bit-exact to the previous path. On. | OPT-020 |
+| 3 | Gated residual fused with the following AdaLN, including across layer boundaries; bit-exact over the whole pass. On. | OPT-017 |
+| 4 | Single-stream `attn_out_proj` + `mlp_down` merged into one `linear2` GEMM; the NVFP4 operands are identical to the split path, only the accumulation order changes. On, except `fp16_cutlass`. | OPT-016 |
+| 5 | VAE stage capturable in the main graph, plus a native NHWC encoder with fused GroupNorm(+SiLU): the stage takes 4.3 ms on H100 against about 12 ms for the torch encoder. Off (`vae_encoder="native"`, `vae_graph_input`). | OPT-021 |
+| 6 | FA4 backbone and `mot` attention with a dedicated output buffer and a fallback to cuBLAS on failure; not run on Thor at the served shapes. Off (`FLASHRT_THOR_FA4=1`, `use_fa4_mot=True`). | OPT-019 |
+| 7 | Real `fp8_static` calibration from 64 LIBERO frames (142 sites); against fp16, actions cos is 0.99997 with the real calibration against 0.90 with the placeholder, and it resolves ISSUE-001 with a TN FP8 layout on sm_89/sm_90. Opt-in (`calibration_path=`). | OPT-022 |
+| 8 | AWQ per-channel scales folded into NVFP4 weights; in simulation the backbone cos goes from 0.99820 to 0.99956. Off (`nvfp4_awq=True`). | OPT-023 |
+| 9 | `e0m3_hadamard` precision tier; simulated 1 − actions cos is 2.97e-4 against 6.71e-4 for `nvfp4`. Off (`precision="e0m3_hadamard"`). | OPT-024 |
+| 10 | Jetson clock-state probe, printed by the ImageWAM benchmarks. On (reporting only). | OPT-025 |
+| 11 | CPU-only precision-routing contract test, eight precision columns. n/a. | OPT-026 |
+| 12 | `frt_model_runtime_v1` export (`io="python"`); bit-exact to `infer()`, with parity gates carrying mutation tests. n/a. | OPT-028 |
+| 13 | LIBERO fidelity and latency gate: fixture v1, runner, per-device baselines; fp16 passes on H100. n/a. | OPT-027 |
+| 14 | Native C++ overlay (`io="native"`); bit-exact, runs a tick without Python, and its latency equals `io="python"`'s (4974 against 4998 graph nodes at fp16 on H100; the Thor `nvfp4` runs measure 5324 against 5348, `0920t`). n/a. | OPT-029 |
+| ISSUE-020 | `text_trim`: each prompt runs at its valid text length, which reproduces official's masked attention; against official on libero_goal (fp16) the median/min goes from 0.99680/0.92997 to 0.99998/0.99963, and H100 `infer()` is about 30% faster. Off (`text_trim=True`). | OPT-030, ISSUE-080 |
+
+Rounds that closed items: items 2-5 and 7-14 plus the ISSUE-020 fix
+merged into `roadmap/integration` on the H100 numbers above; Thor
+`eccf14f` closed item 13's like-for-like gate (202.2 ms) and re-seeded
+the latency baseline (231.6 -> 202.2 ms), `a84916a`/`0919e` closed the
+target workload and the `fp8_static`/`e0m3_hadamard` gates, `0920s4` and
+`0920t` closed the native per-length graphs and measured the served
+default, and `0920c` closed the last three checklist rows. Items 1 and 6
+keep their Thor steps open (ISSUE-023).
 
 The fp16 served default matches the baseline end to end:
 `fr_vs_off` 0.99840/0.99566 and MAE 0.18359 on libero_spatial.
@@ -157,23 +169,27 @@ Decisions that depend on Thor results or the owner:
 
 ## Thor validation checklist
 
-`scripts/imagewam_thor_validation.sh` runs all steps. Its header lists
-the build, environment and artifact-bundle prerequisites. It writes one log
-per command and `SUMMARY.txt`. `STEPS="..."` selects steps. The bundle
-(`thor_bundle`: gate fixture v1 plus calibration files, with `SHA256SUMS`)
-is built on the H100 dev box.
+`THOR_CHECKLIST.md` carries no pending item: the last three rows ran in
+the `0920c` round, and every measured conclusion is in
+`THOR_STATUS_SUMMARY.md`. `scripts/imagewam_thor_validation.sh` runs the
+steps; its header lists the build, environment and artifact-bundle
+prerequisites, it writes one log per command plus `SUMMARY.txt`, and
+`STEPS="..."` selects steps. The bundle (`thor_bundle`: gate fixture v1
+plus calibration files, with `SHA256SUMS`) is built on the H100 dev box.
+The script's comments state what each step checks; its header names this
+list as the place that states what each step decides:
 
-| step | checks | decides |
-|---|---|---|
-| 0 | commit, clock state, bundle checksums | provenance of every number |
-| 1 | full `pytest` suite; Thor-only tests run instead of skipping | correctness of every Thor-only kernel path |
-| 2 | served `nvfp4` default vs official; fusion A/B (items 3, 4); LIBERO gate for `nvfp4` and fp16; VAE preprocessing kernel | whether items 2-4 stay default-on; new `nvfp4` latency baseline |
-| 3 | `text_trim` off/on on three suites; speed and capture cost; multi-length graph safety at `nvfp4` and `e0m3_hadamard` | `text_trim` default (ISSUE-080) |
-| 4 | `e0m3_hadamard` vs `nvfp4`; NVFP4 with and without AWQ; `fp8_static(_cutlass)` with real and placeholder calibration; FP8 TN vs NN; `fp8_static` gate; trimmed `fp8_static_cutlass` | default precision; FP8 layout on Thor |
-| 5 | FA4 runtime, real-shape correctness, end to end, attention A/B, FA4 with `text_trim` | FA4 default |
-| 6 | VAE encode latency (torch/native, eager/graph); `infer()` A/B; native in-graph end to end | native VAE and in-graph defaults |
-| 7 | small-M tile sweep and `infer()` A/B | tile tuner default, or a fixed tile |
-| 8 | ABI export and native parity gates with mutants at `nvfp4` | Thor readiness of items 12 and 14 |
+| step | decides |
+|---|---|
+| 0 | provenance of every number |
+| 1 | correctness of every Thor-only kernel path |
+| 2 | whether items 2-4 stay default-on; new `nvfp4` latency baseline |
+| 3 | `text_trim` default (ISSUE-080) |
+| 4 | default precision; FP8 layout on Thor |
+| 5 | FA4 default |
+| 6 | native VAE and in-graph defaults |
+| 7 | tile tuner default, or a fixed tile |
+| 8 | Thor readiness of items 12 and 14 |
 
 ## Not planned (confirmed, not cost-gated)
 
@@ -187,36 +203,32 @@ is built on the H100 dev box.
 
 # Plan: Jetson clock-locking check for the benchmark scripts (roadmap item 10)
 
-Plan Status: approved
+Plan Status: completed. Phases 1-3 are completed: the record is captured as the
+machine is in every Thor round (the round headers of `THOR_STATUS_SUMMARY.md`
+carry `MAXN` / `GPC 1.575 GHz` / `emc_locked=null`), and `THOR_CHECKLIST.md`'s
+prerequisites run the probe each round.
 
 ## Problem
 
 ### Current
 
-The ImageWAM benchmark entry points (`benchmarks/imagewam_thor_graph_bench.py`,
-the timing section of `benchmarks/imagewam_e2e_official_compare.py`,
-`benchmarks/imagewam_thor_int4_bench.py`, `benchmarks/imagewam_thor_int8_bench.py`)
-print latency without recording the Jetson power and clock state it was
-measured under. Pi0.5's end-to-end benchmark
-(`tests/bench_pi05_decoder_fp4_e2e.py`, `machine_state()`) refuses to run
-unless `nvpmodel -q` reports MAXN and the `gpu-gpc-0`/`gpu-nvd-0`
-devfreq nodes have `min_freq == max_freq == cur_freq`, and it writes that
-state into its result JSON. No ImageWAM latency on record, including the
-shipped `nvfp4` P50 of 231.6 ms, carries a clock record.
+The ImageWAM benchmark entry points printed latency without recording the
+Jetson power and clock state it was measured under, so no ImageWAM latency on
+record, including the shipped `nvfp4` P50 of 231.6 ms, carried a clock record.
+Pi0.5's `tests/bench_pi05_decoder_fp4_e2e.py` (`machine_state()`) is the model
+it follows: it refuses to run unless `nvpmodel -q` reports MAXN and the
+`gpu-gpc-0`/`gpu-nvd-0` devfreq nodes have `min_freq == max_freq == cur_freq`,
+and it writes that state into its result JSON.
 
 ### Goal
 
-One reusable, read-only helper that reads the nvpmodel mode and
-GPU/EMC devfreq `cur/min/max/governor` from sysfs without root; prints
-and returns a structured record (power mode; clocks pinned or dynamic);
-warns only for a non-MAXN mode or unobservable state; and returns an
-explicit "not a Jetson" record on any other machine. It never changes
-machine state (no `sudo`, `jetson_clocks` or `nvpmodel -m`): Thor is
-shared and runs as is, at MAXN with DVFS-managed clocks. Every listed
-benchmark prints this record once before timing. Measurable: unit tests
-on x86 against a fake sysfs tree cover the pinned, dynamic,
-missing-nvpmodel, EMC and non-Jetson cases; on Thor the record is
-captured as the machine is.
+A read-only helper that reports the nvpmodel mode and the GPU/EMC devfreq state
+without root, warns only for a non-MAXN mode or unobservable state, and never
+changes machine state (no `sudo`, `jetson_clocks` or `nvpmodel -m`): Thor is
+shared and runs as is, at MAXN with DVFS-managed clocks. Every listed benchmark
+prints the record once before timing. Unit tests cover the pinned, dynamic,
+missing-nvpmodel, EMC and non-Jetson cases; on Thor the record is captured as
+the machine is. Results: `opportunities.md` OPT-025.
 
 ## Structure
 
@@ -275,18 +287,15 @@ dynamic clocks at MAXN are recorded without a warning.
 
 ## Flow
 
-1. `JetsonClockProbe.read()` checks `/etc/nv_tegra_release` and
-   `/proc/device-tree/{model,compatible}`. Neither present: return a
-   record with `is_jetson=False` and no tool calls.
-2. On a Jetson: run `nvpmodel -q` through the runner (timeout, never
-   `sudo`); list `/sys/class/devfreq/*`; classify
-   names containing `gpu` (and the Tegra GPU ids `gp10b/gv11b/ga10b/gb10b`)
-   as GPU and names containing `emc` as EMC; read `cur_freq`, `min_freq`,
-   `max_freq`, `governor`; read `/sys/kernel/nvpmodel_clk_cap/*`.
-3. Derive the verdict and warnings.
-4. `report_jetson_clock_state()` prints `[jetson-clock-state] <json>`
-   plus one `[jetson-clock-state] WARNING: ...` line per warning, and
-   returns the record.
+`JetsonClockProbe.read()` returns `is_jetson=False` with no tool calls when
+neither `/etc/nv_tegra_release` nor `/proc/device-tree/{model,compatible}`
+exists. On a Jetson it runs `nvpmodel -q` through the runner (timeout, never
+`sudo`), reads `cur_freq`/`min_freq`/`max_freq`/`governor` from
+`/sys/class/devfreq/*` (names containing `gpu`, or the Tegra GPU ids
+`gp10b/gv11b/ga10b/gb10b`, are GPU; names containing `emc` are EMC) plus
+`/sys/kernel/nvpmodel_clk_cap/*`, and derives the verdict.
+`report_jetson_clock_state()` prints `[jetson-clock-state] <json>` plus one
+`[jetson-clock-state] WARNING: ...` line per warning, and returns the record.
 
 ## Code Mapping
 
@@ -302,72 +311,55 @@ dynamic clocks at MAXN are recorded without a warning.
 
 Phase Status: completed
 
-Goal: `jetson_clock_state.py` with the interface above.
-Modified files: `flash_rt/hardware/jetson_clock_state.py`, `tests/test_jetson_clock_state.py`.
-Observation method: pytest on x86 with fake sysfs trees; the record
-printed on this H100 box (expected `is_jetson=false`).
+`jetson_clock_state.py` with the interface above, plus `tests/test_jetson_clock_state.py`; verified by the x86 pytest run on fake sysfs trees (11 passed, OPT-025) and the `is_jetson=false` record printed on the H100 box.
 
 ### Phase 2 — wire into the benchmark entry points
 
 Phase Status: completed
 
-Goal: every listed benchmark prints the record once before timing.
-Modified files: the four benchmarks listed in Code Mapping.
-Observation method: `python -m py_compile` on each; run the graph bench
-on H100 far enough to see the record line (fp16 row).
+Every benchmark in Code Mapping prints the record once before timing (`python -m py_compile` on each); verified by the `[jetson-clock-state]` line the graph bench's fp16 row prints on H100 (OPT-025).
 
 ### Phase 3 — Thor handoff
 
-Phase Status: blocked
+Phase Status: completed
 
-Goal: Thor checklist entry: the record captured as the machine is.
-Modified files: none (checklist in the stream report).
-Observation method: owner's Thor run.
-Blocker: needs the Thor hardware. The checklist command is
-`python -c "from flash_rt.hardware.jetson_clock_state import
-report_jetson_clock_state; report_jetson_clock_state()"`, run as the
-machine is; on the shared H100 the record is `is_jetson=false`.
+The record captured as the machine is, through the owner's run of `python -c "from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state; report_jetson_clock_state()"`; no file changes. Run in every Thor round since `c20f3a0`, with the state recorded beside that round's numbers.
 
 # Plan: Fidelity and latency regression gate harness (roadmap item 13)
 
-Plan Status: approved
+Plan Status: completed. Phases 1-5 are completed: the Thor gates ran in the
+`eccf14f` round (`nvfp4` 202.2 ms, pass) and in the `0920t` round (three rows,
+the served default among them), which is what Phase 5's handoff was for.
 
 ## Problem
 
 ### Current
 
-The repository has no committed gate for ImageWAM. Fidelity is checked
-ad hoc with `benchmarks/imagewam_e2e_official_compare.py`, which loads
-the official bf16 model (Qwen3-4B included) next to FlashRT in the same
-process (about 34GB) and needs `av`/`pandas` for LIBERO decoding, none
-of which a Thor gate run should depend on. Latency claims (`nvfp4` 231.6 ms, `opportunities.md`
-OPT-015) are recorded in prose, with no machine-readable baseline and no
-pass/fail rule. Pi0.5's harness (`tests/bench_pi05_decoder_fp4_e2e.py`)
-has the generic pieces: per-sample cosine thresholds,
-`p50` against a regression baseline, and a versioned result JSON with the
-clock state. Roadmap item 13 lists item 7 (real calibration data) as a
-dependency; only the `fp8_static` gate needs it.
+No ImageWAM gate was committed: fidelity was checked ad hoc with
+`benchmarks/imagewam_e2e_official_compare.py`, which loads the official bf16
+model (Qwen3-4B included) next to FlashRT in the same process (about 34GB) and
+needs `av`/`pandas` for LIBERO decoding, and latency claims (`nvfp4` 231.6 ms,
+`opportunities.md` OPT-015) were prose, with no machine-readable baseline and no
+pass/fail rule. Pi0.5's harness (`tests/bench_pi05_decoder_fp4_e2e.py`) supplies
+the generic pieces: per-sample cosine thresholds, `p50` against a regression
+baseline, and a versioned result JSON with the clock state.
 
 ### Goal
 
-1. A versioned LIBERO fixture: real preprocessed observations (two
-   224x224 views, proprio, prompt), the official Qwen3 context and mask,
-   fixed initial action noise, official reference actions, and FlashRT
-   `fp16` reference actions. Data lives under
-   `/home/user1/workspace/jingwu/artifacts/deploy-gates/`; git holds the
-   generator and a manifest with checksums. Gating on Thor needs neither
-   the official model nor Qwen3.
-2. A gate runner that, for one precision, checks fidelity against the
-   official reference and the FlashRT `fp16` reference, and latency
-   against a per-device baseline JSON (Thor `nvfp4` seeded at 231.6 ms;
-   H100 latency ungated).
-3. An `fp8_static` slot that activates when a calibration file exists,
-   with a documented hand-off interface and no dependency on the
-   calibration stream's code.
-
-Measurable: on H100, `fp16` against the fixture reproduces the
-end-to-end baseline (`fr_vs_off` median 0.99840, min 0.99567; mean
-`mae_fr_vs_gt` 0.18359) and passes.
+A versioned LIBERO fixture: real preprocessed observations (two 224x224 views,
+proprio, prompt), the official Qwen3 context and mask, fixed initial action
+noise, official reference actions, and FlashRT `fp16` reference actions; the
+data lives under `/home/user1/workspace/jingwu/artifacts/deploy-gates/`, git
+holds the generator and a manifest with checksums, and gating on Thor needs
+neither the official model nor Qwen3. A gate runner that, for one precision,
+checks fidelity against the official reference and the FlashRT `fp16`
+reference, and latency against a per-device baseline JSON (Thor `nvfp4` seeded
+at 231.6 ms; H100 latency ungated). An `fp8_static` slot that activates when a
+calibration file exists, with the hand-off interface below and no dependency on
+the calibration stream's code. Measurable: on H100, `fp16` against the fixture
+reproduces the end-to-end baseline (`fr_vs_off` median 0.99840, min 0.99567;
+mean `mae_fr_vs_gt` 0.18359) and passes. Roadmap item 13 lists item 7 (real
+calibration data) as a dependency; only the `fp8_static` gate needs it.
 
 ## Structure
 
@@ -436,32 +428,23 @@ Exit codes: 0 for `pass` and `skipped`, 1 for `fail` and `blocked`.
 
 ## Flow
 
-Generator (H100, once per fixture version):
-1. `load_samples()` from the end-to-end script (env `SUITE`, `N_TASKS`,
-   `FRAMES`, `SEEDS`); `center_crop_resize` both views to 224x224.
-2. Official model: per task `_prepare_flux2_infer_text` gives context and
-   mask; per sample and seed, noise emulated exactly as the official
-   sampler draws it (CPU generator, bf16 round trip), then
-   `infer_action_flux2(..., seed)` gives the official normalized actions.
-3. Free the official model; construct FlashRT `fp16` (real checkpoint,
-   AE, dataset stats, no Qwen3); per sample and seed, `set_prompt(context)`
-   and `infer(obs, action_noise=noise)`; store the renormalized actions.
-4. `GateFixtureStore.save` writes `fixture.npz` and the manifest.
+Generator (H100, once per fixture version): `load_samples()` from the end-to-end
+script (env `SUITE`, `N_TASKS`, `FRAMES`, `SEEDS`), both views
+`center_crop_resize`d to 224x224, the official model's `_prepare_flux2_infer_text`
+per task, the official sampler's per-seed noise draw (CPU generator, bf16 round
+trip) and `infer_action_flux2(..., seed)` for the official normalized actions;
+then FlashRT `fp16` (real checkpoint, AE, dataset stats, no Qwen3) with
+`set_prompt(context)` and `infer(obs, action_noise=noise)`;
+`GateFixtureStore.save` writes `fixture.npz` and the manifest.
 
-Runner (any CUDA device):
-1. Load and verify the fixture against the committed manifest.
-2. Resolve fidelity thresholds for the precision; apply the `fp8_static`
-   contract above.
-3. Read the clock state (item 10) and the device policy.
-4. Construct the frontend (no Qwen3); per sample and seed run served
-   `infer(obs, action_noise=noise)`; cosine in normalized action space
-   against the official and `fp16` references; MAE against ground truth
-   in real units.
-5. Latency: served `infer(obs)` with default noise, warmup then timed
-   iterations (`time.perf_counter` around each call; `infer()`
-   synchronizes).
-6. Evaluate, write `result.json`, print one `__IMAGEWAM_GATE__ <json>`
-   line, exit.
+Runner (any CUDA device): verify the fixture against the committed manifest,
+resolve the precision's thresholds and the `fp8_static` contract, read the clock
+state (item 10) and the device policy; per sample and seed run served
+`infer(obs, action_noise=noise)` and measure cosine in normalized action space
+against the official and `fp16` references and MAE against ground truth in real
+units; latency is served `infer(obs)` with default noise, warmup then timed
+iterations (`time.perf_counter` around each call, `infer()` synchronizes);
+evaluate, write `result.json`, print one `__IMAGEWAM_GATE__ <json>` line, exit.
 
 ## Code Mapping
 
@@ -482,81 +465,53 @@ Runner (any CUDA device):
 
 Phase Status: completed
 
-Goal: `regression_gate.py`, `imagewam_gate_fixture.py`, the two config
-JSON files, unit tests.
-Modified files: those files and `tests/test_imagewam_regression_gate.py`.
-Observation method: pytest on CPU; tamper test (flip one byte of a
-fixture array) must fail verification.
+`regression_gate.py`, `imagewam_gate_fixture.py`, the two config JSON files and the unit tests in Code Mapping; verified by the CPU pytest run, including the tamper test (flip one byte of a fixture array) failing verification.
 
 ### Phase 2 — explicit initial-noise hook in `infer()`
 
 Phase Status: completed
 
-Goal: `infer(observation, *, action_noise=None)`; default path
-unchanged.
-Modified files: `flash_rt/frontends/torch/imagewam_thor.py`.
-Observation method: on H100 fp16 real checkpoint, `infer(obs,
-action_noise=n)` equals the end-to-end script's
-`flashrt_infer_with_noise` (bit-exact after denormalization);
-regression suite unchanged.
+`infer(observation, *, action_noise=None)` in `flash_rt/frontends/torch/imagewam_thor.py`, default path unchanged; verified on H100 fp16 with the real checkpoint, where `infer(obs, action_noise=n)` matches the end-to-end script's `flashrt_infer_with_noise` bit-exactly after denormalization.
 
 ### Phase 3 — fixture generator, fixture v1 on H100
 
 Phase Status: completed
 
-Goal: `imagewam_libero_gate_v1` (libero_spatial, 10 tasks, frames 0 and
-60, seeds 0 and 1) generated; manifest committed.
-Modified files: `benchmarks/imagewam_gate_fixture_generate.py`,
-`tests/fixtures/imagewam_gate/imagewam_libero_gate_v1.manifest.json`.
-Observation method: generator prints per-sample official-vs-fp16
-cosine; its summary must reproduce the end-to-end baseline.
+`imagewam_libero_gate_v1` (libero_spatial, 10 tasks, frames 0 and 60, seeds 0 and 1) generated with `tests/fixtures/imagewam_gate/imagewam_libero_gate_v1.manifest.json` committed; verified by the generator's per-sample official-vs-fp16 cosine summary reproducing the end-to-end baseline (OPT-027).
 
 ### Phase 4 — gate runner, real fp16 gate on H100
 
 Phase Status: completed
 
-Goal: `tests/gate_imagewam_libero.py`; real `fp16` run on H100 passes
-fidelity with latency ungated; `fp8_static` without a calibration file
-reports `skipped`; `nvfp4` on H100 fails at construction with the
-existing clear NVFP4 build error.
-Modified files: `tests/gate_imagewam_libero.py`.
-Observation method: result JSON values next to the end-to-end baseline.
+`tests/gate_imagewam_libero.py`; the real `fp16` run passes fidelity with latency ungated, `fp8_static` without a calibration file reports `skipped`, and `nvfp4` on H100 fails at construction with the existing clear NVFP4 build error (OPT-027).
 
 ### Phase 5 — Thor handoff
 
-Phase Status: blocked
+Phase Status: completed
 
-Goal: Thor checklist: copy fixture, verify checksums, run `nvfp4` and
-`fp16`, report result JSON.
-Modified files: none.
-Observation method: owner's Thor run.
-Blocker: needs the Thor hardware and a copy of the v1 fixture there.
+The fixture copied and its checksums verified, then `nvfp4` and `fp16` run, with the result JSON reported; no file changes. Both precisions ran on Thor: `nvfp4` against fixture v1 in the `eccf14f` round (202.2 ms, pass) and three rows against fixture v2 in the `0920t` round (the served default's `nvfp4` row among them).
 
 # Plan: ActionDiT small-M CUTLASS tile selection (roadmap item 1)
 
-Plan Status: approved
+Plan Status: approved. Phases 1-6 are completed; Phase 7 (Thor confirmation)
+is blocked: no sm_110 device on the dev box, `gemm_variant_autotune` remains
+an opt-in flag, OPT-018's Thor check is unmeasured, and `issues.md`
+ISSUE-023 tracks it.
 
 ## Problem
 
 ### Current
 
-Every ActionDiT weight GEMM runs at `M = num_action = 64`. The tile
-variant for the two CUTLASS-backed quantized precisions is chosen by
-an `(N, K)`-only heuristic that was tuned for other shapes:
-
-- `nvfp4` (shipped default): `Nvfp4Linear` calls
-  `flash_rt.executors.fp4_utils.fp4_gemm` without a variant, so
-  `pick_variant(N, K)` applies. That table was calibrated for Pi0.5's
-  encoder at `M = 968`.
-- `fp8_static_cutlass`: `StaticFp8Linear(use_cutlass=True)` uses
-  `_pick_fp8_cutlass_variant(N, K)`, which picks `wide` when
-  `N >= 4K` and `sq` otherwise. It is a provisional guess ported
-  from backbone shapes.
-
-Inventory at the real ActionDiT shapes (`M = 64`,
-`action_hidden_dim = 1024`, `action_attn_width = 3072`,
-`action_mlp_hidden = 4096`, `action_dim = 7`, 5 double and 20 single
-layers):
+Every ActionDiT weight GEMM runs at `M = num_action = 64`, and the tile for the
+two CUTLASS-backed quantized precisions comes from an `(N, K)`-only heuristic
+tuned at other shapes: `Nvfp4Linear` calls
+`flash_rt.executors.fp4_utils.fp4_gemm` without a variant, so the
+`pick_variant(N, K)` table applies (calibrated for Pi0.5's encoder at
+`M = 968`), and
+`StaticFp8Linear(use_cutlass=True)` uses `_pick_fp8_cutlass_variant(N, K)`, which
+picks `wide` when `N >= 4K` and `sq` otherwise. Inventory at the real ActionDiT
+shapes (`M = 64`, `action_hidden_dim = 1024`, `action_attn_width = 3072`,
+`action_mlp_hidden = 4096`, `action_dim = 7`, 5 double and 20 single layers):
 
 | site | N | K | calls per step | `nvfp4` | `fp8_static_cutlass` | `fp16_cutlass` |
 |---|---:|---:|---:|---|---|---|
@@ -570,73 +525,57 @@ layers):
 | `action_encoder` | 1024 | 7 | 1 | cuBLASLt `Fp16Linear` (alignment fallback) | same | same |
 | `head.linear` | 7 | 1024 | 1 | cuBLASLt `Fp16Linear` (alignment fallback) | same | same |
 
-At `M = 64` one output tile row covers the whole M extent, so the CTA
-count equals the number of N tiles. On Thor's 20 SMs, the `N = 1024`
-GEMMs launch 4 CTAs under v6 (N tile 256), and 4 useful CTA pairs
-under FP8 `sq` with a 2x2 cluster. Those GEMMs are weight-bandwidth
-bound (arithmetic intensity 2M = 128 FLOP per weight element), so a
-launch that occupies 4 of 20 SMs cannot reach DRAM bandwidth. There
-are 50 such calls per denoise step and 500 per `infer()`. FP8 CUTLASS
-has no tile narrower than 128 in N and no 1-SM (cluster 1x1x1) tile at
-all. On Thor it measured 1.44-1.68x slower than cuBLASLt at this M
-(opportunities.md OPT-014, result 3).
-
-Pi0.5 runs its decoder (`M = 10`) on the narrow-N v10 tile
-(`128x64x256`, cluster 1x1x1) for all four projections
-(`docs/pi05_thor_decoder_fp4_e2e.md`, "Decoder v10 Tiles"). v10 is
-already instantiated in `cutlass_fp4_gemm_variants.cu`, but ImageWAM
+At `M = 64` one output tile row covers the whole M extent, so the CTA count
+equals the number of N tiles, and these GEMMs are weight-bandwidth bound
+(arithmetic intensity 2M = 128 FLOP per weight element): on Thor's 20 SMs the
+`N = 1024` GEMMs (50 calls per denoise step, 500 per `infer()`) launch 4 CTAs
+under v6 and 4 useful CTA pairs under FP8 `sq`. FP8 CUTLASS has no tile narrower
+than 128 in N and no 1-SM (cluster 1x1x1) tile at all, and measured 1.44-1.68x
+slower than cuBLASLt at this M (opportunities.md OPT-014, result 3). Pi0.5's
+decoder (`M = 10`) runs the narrow-N v10 tile (`128x64x256`, cluster 1x1x1) for
+all four projections (`docs/pi05_thor_decoder_fp4_e2e.md`, "Decoder v10 Tiles"),
+and v10 is already instantiated in `cutlass_fp4_gemm_variants.cu` but ImageWAM
 never selects it.
 
 ### Problem
 
-No ActionDiT GEMM tile choice is measured at `M = 64`. The existing
-choices are extrapolated from other shapes, and FP8 CUTLASS has no
-small-M tile to choose.
+No ActionDiT GEMM tile choice is measured at `M = 64`; the existing choices are
+extrapolated from other shapes, and FP8 CUTLASS has no small-M tile to choose.
 
 ### Measurable goal
 
-- A per-shape tile choice for the ActionDiT GEMMs, made by a one-time
-  measurement at construction on the device the frontend runs on,
-  cached per `(family, M, N, K)`. The candidate set includes the
-  current heuristic pick, and a candidate must reproduce the current
-  pick's output before it can be selected.
-- FP8 small-M 1-SM tiles, with the Pi0.5 v10 tile `128x64x256` as the
-  template.
-- Selection logic unit-tested with the kernels stubbed.
-- A Thor script that sweeps every candidate at every real ActionDiT
-  shape, reports cosine against fp16 and the per-shape winner, and
-  runs an `infer()` A/B of old vs new selection on `nvfp4` and
-  `fp8_static_cutlass`.
-- The shipped default selection stays unchanged (opt-in flag) until
-  Thor confirms correctness and speed.
+A per-shape tile choice for the ActionDiT GEMMs, measured once at construction
+on the device the frontend runs on and cached per `(family, M, N, K)`, with the
+current heuristic pick among the candidates and a candidate required to
+reproduce that pick's output. Plus FP8 small-M 1-SM tiles with the Pi0.5 v10
+tile `128x64x256` as template, selection logic unit-tested with the kernels
+stubbed, and a Thor script that sweeps every candidate at every real ActionDiT
+shape (cosine against fp16, per-shape winner) with an `infer()` A/B of old vs
+new selection on `nvfp4` and `fp8_static_cutlass`. The shipped default selection
+stays unchanged (opt-in flag) until Thor confirms correctness and speed.
 
 ## Structure
 
-- NEW `flash_rt/models/imagewam/gemm_variant_tuner.py`: owns the
-  selection policy (candidate filtering, correctness gate, timing
-  comparison, hysteresis against the incumbent) and the per-frontend
-  result cache. Defines the `VariantTunableGemm` and `VariantTimer`
-  protocols and the result dataclasses. No CUDA code.
-- NEW `flash_rt/models/imagewam/gemm_variant_timer.py`: owns the
-  device timing mechanism (`CudaGraphVariantTimer`: CUDA-graph
-  capture of a launch batch, replay timed with CUDA events).
+- NEW `flash_rt/models/imagewam/gemm_variant_tuner.py`: the selection policy
+  (candidate filtering, correctness gate, timing comparison, hysteresis against
+  the incumbent) and the per-frontend result cache; defines
+  `VariantTunableGemm`, `VariantTimer` and the result dataclasses, no CUDA code.
+- NEW `flash_rt/models/imagewam/gemm_variant_timer.py`: the device timing
+  mechanism (`CudaGraphVariantTimer`: CUDA-graph capture of a launch batch,
+  replay timed with CUDA events).
 - `flash_rt/models/imagewam/quant_linear.py`: `Nvfp4Linear` and
-  `StaticFp8Linear(use_cutlass=True)` implement `VariantTunableGemm`.
-  Each linear owns its own current variant. The default variant equals
-  today's heuristic pick, so `__call__` is unchanged until a variant is
-  set.
+  `StaticFp8Linear(use_cutlass=True)` implement `VariantTunableGemm`, each
+  linear owning its own current variant, whose default equals today's heuristic
+  pick, so `__call__` is unchanged until a variant is set.
 - `csrc/gemm/gemm_types_sm100.h`, `csrc/gemm/cutlass_sm100.cu`,
-  `csrc/bindings.cpp`: four new FP8 1-SM tiles (cluster 1x1x1):
-  `t128x64x256` (v10 template), `t128x64x128`, `t128x128x128`,
-  `t128x256x128`.
-- `flash_rt/frontends/torch/imagewam_thor.py`: owns the decision to
-  tune (`gemm_variant_autotune: bool = False`), the grouping of
-  ActionDiT linears by shape, and the tuner instance and its results
-  (`gemm_variant_results`).
-- NEW `benchmarks/imagewam_thor_small_m_tile_sweep.py`: Thor sweep
-  and `infer()` A/B.
-- NEW `tests/test_imagewam_gemm_variant_tuner.py`: stubbed selection
-  tests (CPU) and a real-timer test (any CUDA GPU).
+  `csrc/bindings.cpp`: four new FP8 1-SM tiles (cluster 1x1x1): `t128x64x256`
+  (v10 template), `t128x64x128`, `t128x128x128`, `t128x256x128`.
+- `flash_rt/frontends/torch/imagewam_thor.py`: the decision to tune
+  (`gemm_variant_autotune: bool = False`), the grouping of ActionDiT linears by
+  shape, and the tuner instance and its results (`gemm_variant_results`).
+- NEW `benchmarks/imagewam_thor_small_m_tile_sweep.py`: Thor sweep and `infer()`
+  A/B; NEW `tests/test_imagewam_gemm_variant_tuner.py`: stubbed selection tests
+  (CPU) and a real-timer test (any CUDA GPU).
 
 State ownership:
 
@@ -650,11 +589,7 @@ State ownership:
 
 ```python
 # flash_rt/models/imagewam/gemm_variant_tuner.py
-@dataclass(frozen=True)
-class GemmShape:
-    m: int
-    n: int
-    k: int
+@dataclass(frozen=True) class GemmShape:  m: int; n: int; k: int
 
 @dataclass(frozen=True)
 class VariantMeasurement:
@@ -665,19 +600,13 @@ class VariantMeasurement:
 
 @dataclass(frozen=True)
 class VariantTuneResult:
-    family: str
-    shape: GemmShape
-    members: int
-    default_variant: str
-    chosen_variant: str
+    family: str; shape: GemmShape; members: int
+    default_variant: str; chosen_variant: str
     measurements: tuple[VariantMeasurement, ...]
 
 class VariantTunableGemm(Protocol):
-    family: str
-    n: int
-    k: int
-    default_variant: str
-    variant: str
+    family: str; n: int; k: int
+    default_variant: str; variant: str
     def candidate_variants(self) -> tuple[str, ...]: ...
     def set_variant(self, variant: str) -> None: ...
     def prepare_tuning_input(self, x_ptr: int, m: int, stream: int) -> None: ...
@@ -705,23 +634,17 @@ class ImageWAMTorchFrontendThor:
     gemm_variant_results: tuple[VariantTuneResult, ...]
 ```
 
-Selection rule, per group of linears sharing `(family, M, N, K)`:
-
-1. Stage the same random input into every member.
-2. For every candidate, launch it once per member eagerly. Record
-   `launch_failed` for a nonzero return code or a raised Python
-   exception, and `nonfinite` or `mismatch` when its output against the
-   default variant's output on the same member is non-finite or below
-   `cosine_floor`. The default variant failing or raising is an error.
-3. Time each surviving candidate as one launch per member, round
-   robin, so each launch reads a different layer's weight and the
-   timing does not run from a warm L2. The batch is captured in one
-   CUDA graph so launch overhead is excluded.
-   A candidate the timer cannot capture is `timing_failed`.
-4. Choose the fastest candidate. Keep the default unless the winner is
-   faster by more than `min_gain` (2%), or if the default itself could
-   not be timed.
-5. Apply the choice to every member and cache it.
+Selection rule, per group of linears sharing `(family, M, N, K)`: stage the
+same random input into every member; launch every candidate once per member
+eagerly, recording `launch_failed` for a nonzero return code or a raised Python
+exception and `nonfinite`/`mismatch` when its output against the default
+variant's on the same member is non-finite or below `cosine_floor` (the default
+variant failing or raising is an error); time each survivor as one launch per
+member, round robin, so each launch reads a different layer's weight instead of
+a warm L2, with the batch captured in one CUDA graph so launch overhead is
+excluded (`timing_failed` when the timer cannot capture it); keep the default
+unless the winner is faster by more than `min_gain` (2%) or the default itself
+could not be timed; apply the choice to every member and cache it.
 
 ## Flow
 
@@ -759,183 +682,134 @@ calibrate-before-call contract is unaffected.
 
 Phase Status: completed
 
-- Goal: selection policy and device timer, independent of any kernel.
-- Files: `gemm_variant_tuner.py`, `gemm_variant_timer.py`,
-  `tests/test_imagewam_gemm_variant_tuner.py`.
-- Observation: stubbed tests cover argmin choice, hysteresis, launch
-  failure, mismatch rejection, nonfinite rejection, default failing,
-  every candidate failing, the cache, and group application. On H100,
-  a real-timer test tunes two real sm_90 kernels, and its printed
-  per-launch times are compared with a direct CUDA-event measurement.
+Selection policy and device timer, independent of any kernel (`gemm_variant_tuner.py`, `gemm_variant_timer.py`, `tests/test_imagewam_gemm_variant_tuner.py`); verified by the stubbed tests (argmin choice, hysteresis, launch failure, mismatch rejection, nonfinite rejection, default failing, every candidate failing, the cache, group application) and an H100 real-timer test over two real sm_90 kernels, checked against a direct CUDA-event measurement.
 
 ### Phase 2: FP8 1-SM small-M tiles
 
 Phase Status: completed
 
-- Goal: `cutlass_fp8_t128x64x256`, `_t128x64x128`, `_t128x128x128`,
-  `_t128x256x128` exported under `ENABLE_SM100_CUTLASS`.
-- Files: `csrc/gemm/gemm_types_sm100.h`, `csrc/gemm/cutlass_sm100.cu`,
-  `csrc/bindings.cpp`.
-- Observation: `sm110_check.sh` passes, and the sm_90 build is
-  unaffected. Correctness and speed are Thor checklist items.
+`cutlass_fp8_t128x64x256`, `_t128x64x128`, `_t128x128x128`, `_t128x256x128` exported under `ENABLE_SM100_CUTLASS` in `csrc/gemm/gemm_types_sm100.h`, `csrc/gemm/cutlass_sm100.cu`, `csrc/bindings.cpp`; verified now by `sm110_check.sh` passing with the sm_90 build unaffected, correctness and speed being Thor checklist items.
 
 ### Phase 3: quant_linear protocol implementation
 
 Phase Status: completed
 
-- Goal: `Nvfp4Linear` and `StaticFp8Linear(use_cutlass=True)` expose
-  `family`, `default_variant`, `variant`, `candidate_variants()`,
-  `set_variant()`, `prepare_tuning_input()`, and `launch_variant()`.
-  Default behavior stays unchanged.
-- Files: `flash_rt/models/imagewam/quant_linear.py`.
-- Observation: the regression suite is unchanged. Construction on
-  H100 still raises the same `RuntimeError`.
+`Nvfp4Linear` and `StaticFp8Linear(use_cutlass=True)` expose `family`, `default_variant`, `variant`, `candidate_variants()`, `set_variant()`, `prepare_tuning_input()` and `launch_variant()` with default behavior unchanged (`flash_rt/models/imagewam/quant_linear.py`); verified by the unchanged regression suite and the same `RuntimeError` on H100 construction.
 
 ### Phase 4: frontend wiring
 
 Phase Status: completed
 
-- Goal: `gemm_variant_autotune` flag, grouping ActionDiT linears by
-  shape, and `gemm_variant_results`.
-- Files: `flash_rt/frontends/torch/imagewam_thor.py`, tests.
-- Observation: a routing test with stubbed linear classes confirms
-  that only ActionDiT groups are tuned, with `m = num_action`, one
-  tune per distinct shape, and the chosen variant applied to every
-  member. With the flag off, nothing changes. The fp16 path and the
-  regression suite are unchanged.
+The `gemm_variant_autotune` flag, grouping ActionDiT linears by shape and `gemm_variant_results` (`flash_rt/frontends/torch/imagewam_thor.py`, tests); verified by a routing test with stubbed linear classes (only ActionDiT groups tuned, `m = num_action`, one tune per distinct shape, the chosen variant applied to every member, nothing changed with the flag off).
 
 ### Phase 5: Thor sweep and A/B script, handoff
 
 Phase Status: completed
 
-- Goal: `benchmarks/imagewam_thor_small_m_tile_sweep.py`, plus
-  results and Thor checklist in `opportunities.md` OPT-018.
-- Observation: the script's non-Thor paths (argument parsing, shape
-  table, cuBLASLt fp16 reference timing) run on H100 and print SKIP
-  for families this build lacks.
+`benchmarks/imagewam_thor_small_m_tile_sweep.py`, with results and the Thor checklist in `opportunities.md` OPT-018; verified by its non-Thor paths on H100 (argument parsing, shape table, cuBLASLt fp16 reference timing) printing SKIP for families this build lacks.
 
 ### Phase 6: candidates that raise are rejected
 
 Phase Status: completed
 
-- Goal: a Python exception from a candidate's launch, such as an
-  `AttributeError` for a `cutlass_fp8_t128x*` symbol missing from a
-  stale build, rejects that candidate instead of aborting construction.
-  A batch the timer cannot capture is rejected as `timing_failed`.
-- Files: `gemm_variant_tuner.py`, `gemm_variant_timer.py`, tests, both
-  benchmarks.
-- Observation: stub tests cover a raising candidate, a raising default
-  (still an error), an untimeable candidate, and an untimeable default
-  (kept). The timer test feeds a raising batch and a
-  capture-invalidating batch. A routing test removes the `t128x*`
-  symbols and construction completes.
+A Python exception from a candidate's launch, such as an `AttributeError` for a `cutlass_fp8_t128x*` symbol missing from a stale build, rejects that candidate instead of aborting construction, and a batch the timer cannot capture is rejected as `timing_failed`.
+Verified by stub tests (a raising candidate, a raising default still an error, an untimeable candidate, an untimeable default kept), the timer test's raising and capture-invalidating batches, and a routing test with the `t128x*` symbols removed.
 
 ### Phase 7: Thor confirmation
 
 Phase Status: blocked
 
-- Goal: the Thor checklist in opportunities.md OPT-018. The tile
-  sweep must show correct outputs for every tile, and the
-  `infer()` A/B of heuristic vs tuned tiles must show action cosine
-  >= 0.9999 and a P50 delta.
-- Blocker: no sm_110 device on the dev box. SM100 CUTLASS and NVFP4
-  kernels do not run on sm_90, which only compile-checks them
-  (`sm110_check.sh`). Recorded as issues.md ISSUE-023.
+The Thor checklist in `opportunities.md` OPT-018: the tile sweep must show correct outputs for every tile, and the `infer()` A/B of heuristic vs tuned tiles must show action cosine >= 0.9999 and a P50 delta.
+Blocker: no sm_110 device on the dev box; SM100 CUTLASS and NVFP4 kernels do not run on sm_90, which only compile-checks them (`sm110_check.sh`), recorded as `issues.md` ISSUE-023.
 
 # Plan: attention-chain fusion recheck at ImageWAM's real shapes (roadmap item 6)
 
-Plan Status: approved
+Plan Status: approved. Phases 1-6 are completed; Phase 7 (Thor confirmation,
+which the FA4 switch stays opt-in until) is blocked on an sm_110 device and an
+FA4 runtime (`issues.md` ISSUE-023).
 
 ## Problem
 
 ### Current
 
-Both attention sites run a cuBLAS-composed chain in
-`ImageWAMAttnBackend.run()` (`flash_rt/hardware/thor/attn_backend.py`):
-a strided-batched QK^T GEMM into a `logits` buffer, a softmax kernel,
-then a strided-batched PV GEMM (`fvk.attention_qkv_fp16_perhead`,
-`csrc/kernels/attention_cublas.cuh`). The frontend always constructs
-the backend with `use_perhead_kv=True, use_real_mot_mask=True`.
+Both attention sites run a cuBLAS-composed chain in `ImageWAMAttnBackend.run()`
+(`flash_rt/hardware/thor/attn_backend.py`): a strided-batched QK^T GEMM into a
+`logits` buffer, a softmax kernel, then a strided-batched PV GEMM
+(`fvk.attention_qkv_fp16_perhead`, `csrc/kernels/attention_cublas.cuh`). The
+frontend always constructs the backend with `use_perhead_kv=True` and
+`use_real_mot_mask=True`.
 
-- `"backbone"` site: prefill self-attention, 25 layers, `q = kv = a0 =
-  905` tokens, 24 heads, HD 128, no mask. FA4 is wired in as
-  `use_fa4=True` (opportunities.md OPT-005). On Thor it measured
-  cosine 1.000000 against the cuBLAS chain, 3.75x per call at the real
-  per-head shape, and -10.5% prefill in the per-layer benchmark. The
-  frontend default is `use_fa4=False`, because the previous dev box had
-  no FA4 runtime and `use_fa4=True` raises when the runtime is missing.
-- `"mot"` site: ActionDiT joint attention, 25 layers x 10 steps = 250
-  calls per `infer()`, `q = 64` action queries over `kv = total = 969`
-  keys. With `use_real_mot_mask=True`, the rule the frontend always
-  uses, the call is unmasked attention through the same
-  `attention_qkv_fp16_perhead`. Upstream `_build_mot_attention_mask_flux2`
-  with `target_len = 0` removes only the region mask, but it still
-  excludes padded text keys for every query row, at the prefill call
-  and at the action call. `pipeline_thor.py` models that mask at
-  neither site (issues.md ISSUE-020). FA4 has never been evaluated
-  here.
-- Pi0.5 rejected a fused SIMT attention chain at decoder `M = 10`,
-  HD 256, as 5-7x slower (`docs/pi05_thor_decoder_fp4_e2e.md`). At that
-  shape the QK^T/PV GEMMs are about 1 us of tensor-core work, and FA4
-  has no KV-split path at HD 256.
+- `"backbone"` site: prefill self-attention, 25 layers, `q = kv = a0 = 905`
+  tokens, 24 heads, HD 128, no mask. FA4 is wired in as `use_fa4=True`
+  (opportunities.md OPT-005) and measured on Thor at cosine 1.000000 against the
+  cuBLAS chain, 3.75x per call at the real per-head shape and -10.5% prefill in
+  the per-layer benchmark. The frontend default is `use_fa4=False`, because the
+  previous dev box had no FA4 runtime and `use_fa4=True` raises when the runtime
+  is missing.
+- `"mot"` site: ActionDiT joint attention, 25 layers x 10 steps = 250 calls per
+  `infer()`, `q = 64` action queries over `kv = total = 969` keys. With
+  `use_real_mot_mask=True`, the rule the frontend always uses, the call is
+  unmasked attention through the same `attention_qkv_fp16_perhead`, while
+  upstream `_build_mot_attention_mask_flux2` with `target_len = 0` still
+  excludes padded text keys for every query row, at the prefill call and at the
+  action call (issues.md ISSUE-020; the mask analysis, including that
+  `pipeline_thor.py` models it at neither site, is in `opportunities.md` OPT-019
+  Finding 1). FA4 has never been evaluated here.
+
+Pi0.5 rejected a fused SIMT attention chain at decoder `M = 10`, HD 256, as
+5-7x slower (`docs/pi05_thor_decoder_fp4_e2e.md`) because its QK^T/PV GEMMs are
+about 1 us of tensor-core work and FA4 has no KV-split path at HD 256; why that
+verdict does not transfer here is in `opportunities.md` OPT-019.
 
 ### Problem
 
-Nobody has measured which share of ImageWAM prefill and denoise time
-attention takes at the real shapes. The Thor FA4 win is not on by
-default. The `mot` site's fused-kernel eligibility has never been
-evaluated.
+Nobody has measured which share of ImageWAM prefill and denoise time attention
+takes at the real shapes. The Thor FA4 win is not on by default. The `mot`
+site's fused-kernel eligibility has never been evaluated.
 
 ### Measurable goal
 
-- H100, indicative only: the attention share of prefill and of one
-  denoise step at the real shapes, measured in-graph as graph time with
-  the real attention minus graph time with attention removed. Also
-  per-call cuBLAS chain vs fused kernels available on sm_90 (PyTorch
-  SDPA flash / cuDNN / mem-efficient) at both sites' shapes, with
-  cosine against the cuBLAS chain.
-- Recommendation with evidence per site.
-- If cheap: a Thor FA4 switch for `"backbone"` that resolves to the
-  cuBLAS chain when the FA4 runtime is missing or the device is not
-  Thor. It stays opt-in (`FLASHRT_THOR_FA4=1`) until Thor confirms FA4
-  at the served shapes. Also an opt-in FA4 path for `"mot"`. Dispatch
-  logic verified locally against the cuBLAS chain with a
-  reference-backed FA4 stand-in. FA4 itself goes on the Thor
+- H100, indicative only: the attention share of prefill and of one denoise step
+  at the real shapes, measured in-graph as graph time with the real attention
+  minus graph time with attention removed, and per-call cuBLAS chain vs fused
+  kernels available on sm_90 (PyTorch SDPA flash / cuDNN / mem-efficient) at
+  both sites' shapes, with cosine against the cuBLAS chain.
+- A recommendation with evidence per site.
+- A Thor FA4 switch for `"backbone"` that resolves to the cuBLAS chain when the
+  FA4 runtime is missing or the device is not Thor, staying opt-in
+  (`FLASHRT_THOR_FA4=1`) until Thor confirms FA4 at the served shapes, plus an
+  opt-in FA4 path for `"mot"`; dispatch verified locally against the cuBLAS
+  chain with a reference-backed FA4 stand-in, and FA4 itself on the Thor
   checklist.
 
 ## Structure
 
-- NEW `benchmarks/imagewam_attention_share_bench.py`: owns the
-  measurements (in-graph attention share; per-call chain vs fused
-  kernels; on Thor it also times FA4 per call, with `num_splits` swept
-  for the `mot` shape).
-- `flash_rt/hardware/thor/attn_backend.py`: `ImageWAMAttnBackend`
-  owns per-site kernel dispatch. It gains `use_fa4_mot: bool` for the
-  `"mot"` site FA4 branch. That branch is valid only with
-  `use_real_mot_mask=True` and `use_perhead_kv=True`, FlashRT's
-  unmasked per-head rule, and the constructor rejects any other
-  combination.
-- `flash_rt/hardware/thor/fa4_backend.py`: owns FA4 availability. It
-  gains `thor_default_enabled() -> bool`, true only on an sm_11x
-  device with an active FA4 runtime.
-- `flash_rt/frontends/torch/imagewam_thor.py`: owns the FA4 output
-  buffer, and the FA4-failure fallback in `set_prompt()`
-  (`_capture_graph_or_fall_back`): on an exception during warmup or
-  capture with FA4 on, it logs, warns, records `fa4_fallback_reason`,
-  rebuilds the backend with FA4 off, and captures again. It also owns
-  the default.
-  `use_fa4: bool | None = None` resolves, through `_resolve_use_fa4`, to
-  False unless `FLASHRT_THOR_FA4=1`. With the variable set, it resolves
-  to `fa4_backend.thor_default_enabled()`. An explicit `True` still
-  requires the runtime, and an explicit `False` forces the cuBLAS
-  chain. It also gains `use_fa4_mot: bool = False`, passed through.
-- Tests: `tests/test_imagewam_fa4_dispatch.py` (new) checks the
-  backend's FA4 branches for both sites against the cuBLAS chain, with
-  FA4 replaced by a stand-in that has FA4's `_flash_attn_fwd`
-  signature and computes attention as an fp32 matmul-softmax-matmul in
-  PyTorch. It also checks the default resolution.
-  `tests/test_imagewam_fa4_backbone.py` gains a real-FA4 `mot` case
-  that skips without FA4.
+- NEW `benchmarks/imagewam_attention_share_bench.py`: the measurements (in-graph
+  attention share; per-call chain vs fused kernels; on Thor it also times FA4
+  per call, with `num_splits` swept for the `mot` shape).
+- `flash_rt/hardware/thor/attn_backend.py`: `ImageWAMAttnBackend` owns per-site
+  kernel dispatch and gains `use_fa4_mot: bool` for the `"mot"` site FA4 branch.
+  That branch is valid only with `use_real_mot_mask=True` and
+  `use_perhead_kv=True`, FlashRT's unmasked per-head rule, and the constructor
+  rejects any other combination.
+- `flash_rt/hardware/thor/fa4_backend.py`: owns FA4 availability and gains
+  `thor_default_enabled() -> bool`, true only on an sm_11x device with an active
+  FA4 runtime.
+- `flash_rt/frontends/torch/imagewam_thor.py`: owns the FA4 output buffer, the
+  default, and the FA4-failure fallback in `set_prompt()`
+  (`_capture_graph_or_fall_back`): on an exception during warmup or capture with
+  FA4 on, it logs, warns, records `fa4_fallback_reason`, rebuilds the backend
+  with FA4 off, and captures again. `use_fa4: bool | None = None` resolves,
+  through `_resolve_use_fa4`, to False unless `FLASHRT_THOR_FA4=1`, in which case
+  it resolves to `fa4_backend.thor_default_enabled()`; an explicit `True` still
+  requires the runtime and an explicit `False` forces the cuBLAS chain. It also
+  gains `use_fa4_mot: bool = False`, passed through.
+- Tests: `tests/test_imagewam_fa4_dispatch.py` (new) checks the backend's FA4
+  branches for both sites against the cuBLAS chain, with FA4 replaced by a
+  stand-in that has FA4's `_flash_attn_fwd` signature and computes attention as
+  an fp32 matmul-softmax-matmul in PyTorch, and checks the default resolution;
+  `tests/test_imagewam_fa4_backbone.py` gains a real-FA4 `mot` case that skips
+  without FA4.
 
 State ownership:
 
@@ -1007,86 +881,50 @@ denoise:  attn.run("mot", ...)      -> FA4 if use_fa4_mot else attention_qkv_fp1
 
 Phase Status: completed
 
-- Goal: attention share (H100) and per-call chain vs fused kernels at
-  real shapes.
-- Files: `benchmarks/imagewam_attention_share_bench.py`.
-- Observation: printed P10/P50/P90 for graphs with and without
-  attention, per stage. Per-call medians for each kernel, with cosine
-  against the cuBLAS chain.
+Attention share (H100) and per-call chain vs fused kernels at the real shapes (`benchmarks/imagewam_attention_share_bench.py`); verified by the printed P10/P50/P90 for graphs with and without attention, per stage, and the per-call medians per kernel with cosine against the cuBLAS chain (opportunities.md OPT-019 Findings 2-3).
 
 ### Phase 2: Thor FA4 switch (opt-in), opt-in FA4 for `mot`
 
 Phase Status: completed
 
-- Goal: `use_fa4=None` resolution (opt-in through `FLASHRT_THOR_FA4=1`),
-  `use_fa4_mot`.
-- Files: `fa4_backend.py`, `attn_backend.py`, `imagewam_thor.py`,
-  tests.
-- Observation: dispatch tests show the FA4 branches, with an fp32
-  matmul stand-in, matching the cuBLAS chain at real shapes (cosine,
-  max-abs, rel_l2). Resolution resolves to False on H100. The
-  regression count is unchanged apart from the new tests. An fp16
-  end-to-end quick run matches the baseline, since the default
-  resolves to off on H100.
+`use_fa4=None` resolution (opt-in through `FLASHRT_THOR_FA4=1`) and `use_fa4_mot`, in `fa4_backend.py`, `attn_backend.py`, `imagewam_thor.py` and tests; verified by dispatch tests with an fp32 matmul stand-in matching the cuBLAS chain at the real shapes (cosine, max-abs, rel_l2), the resolution resolving to False on H100, and an fp16 end-to-end quick run matching the baseline.
 
 ### Phase 3: recommendation and Thor handoff
 
 Phase Status: completed
 
-- Goal: OPT-019 with evidence, recommendation, and Thor checks.
-- Files: `opportunities.md`.
+OPT-019 with evidence, recommendation and Thor checks (`opportunities.md`); the per-site numbers are that entry's Findings 2-4.
 
 ### Phase 4: FA4 back to opt-in
 
 Phase Status: completed
 
-- Goal: `use_fa4=None` resolves to the cuBLAS chain on every device.
-  `FLASHRT_THOR_FA4=1` opts in, and making FA4 the default is a
-  one-line change (`_FA4_OPT_IN_DEFAULT`).
-- Files: `imagewam_thor.py`, `tests/test_imagewam_fa4_dispatch.py`.
-- Observation: resolution tests cover every combination of the
-  environment variable, runtime availability, and explicit argument.
+`use_fa4=None` resolves to the cuBLAS chain on every device and `FLASHRT_THOR_FA4=1` opts in, making FA4 the default a one-line change (`_FA4_OPT_IN_DEFAULT`) in `imagewam_thor.py`; verified by `tests/test_imagewam_fa4_dispatch.py` resolution tests covering every combination of the environment variable, runtime availability and explicit argument.
 
 ### Phase 5: dedicated FA4 output buffer
 
 Phase Status: completed
 
-- Goal: FA4 output goes to `fa4_out` slots, which the frontend owns as
-  `(total, hidden)`, instead of `logits`, which overruns at small dims.
-- Files: `attn_backend.py`, `imagewam_thor.py`, FA4 tests, FA4 benches.
-- Observation: guard-band tests after `fa4_out`, and on `logits`, at
-  (a0, total) = (8, 12), (8, 24), and (905, 969), plus a frontend range
-  check. Both fail on the old staging. Capacity is checked at
-  construction.
+FA4 output goes to `fa4_out` slots, which the frontend owns as `(total, hidden)`, instead of `logits`, which overruns at small dims (`attn_backend.py`, `imagewam_thor.py`, FA4 tests, FA4 benches); verified by guard-band tests after `fa4_out`, and on `logits`, at (a0, total) = (8, 12), (8, 24) and (905, 969), plus a frontend range check, both failing on the old staging, with capacity checked at construction.
 
 ### Phase 6: fall back to the cuBLAS chain when FA4 fails
 
 Phase Status: completed
 
-- Goal: an FA4 failure during `set_prompt()`'s warmup or capture logs,
-  warns, records `fa4_fallback_reason`, rebuilds the backend without
-  FA4, and captures again.
-- Files: `imagewam_thor.py`, `tests/test_imagewam_fa4_dispatch.py`.
-- Observation: stand-ins that fail at first call, inside capture, and
-  by invalidating the capture all recover to the chain's output with
-  the caller's stream restored. A failure with FA4 off still raises.
+An FA4 failure during `set_prompt()`'s warmup or capture logs, warns, records `fa4_fallback_reason`, rebuilds the backend without FA4 and captures again (`imagewam_thor.py`, `tests/test_imagewam_fa4_dispatch.py`); verified by stand-ins that fail at first call, inside capture, and by invalidating the capture, all recovering to the chain's output with the caller's stream restored, while a failure with FA4 off still raises.
 
 ### Phase 7: Thor confirmation
 
 Phase Status: blocked
 
-- Goal: the Thor checklist in opportunities.md OPT-019, with FA4
-  explicitly opted in:
-  - the real-FA4 real-shape test at 905/905 and 64/969;
-  - kernel timings;
-  - an nvfp4 end-to-end official compare with FA4 on vs off;
-  - an `infer()` A/B with FA4 on vs off.
-- Blocker: no sm_110 device and no FA4 runtime on the dev box (issues.md
-  ISSUE-023).
+The Thor checklist in `opportunities.md` OPT-019, with FA4 explicitly opted in: the real-FA4 real-shape test at 905/905 and 64/969, kernel timings, an nvfp4 end-to-end official compare with FA4 on vs off, and an `infer()` A/B with FA4 on vs off.
+Blocker: no sm_110 device and no FA4 runtime on the dev box (`issues.md` ISSUE-023).
 
 # Plan: configuration consolidation (workload / precision / profile)
 
-Plan Status: approved
+Plan Status: completed. Every phase is completed (W0-W12, T1-T5, S1-S4);
+the `0920c` round ran the line's last three Thor rows, which left
+`THOR_CHECKLIST.md` with no pending item, and ISSUE-080 is resolved.
 
 ## Problem
 
@@ -1443,452 +1281,348 @@ files a mechanical change.
 
 ## Implementation Phases
 
-Work items are grouped into a dependency graph so independent ones can be
-done in parallel. `W` items are code; `T` items are Thor runs; `S` is a
-side track that does not block the rest.
+`W` items are code; `T` items are Thor runs; `S` is a side track that does
+not block the rest.
 
 ```
-W0 freeze the interface (this section: Workload / Structure /
-   Precision / Options / rule ids)
- |
- +--> W1 Workload: layout derivation + validation ---------------+
- +--> W2 Structure constants (checkpoint tensors + config.yaml) -+
- +--> W3 Precision enum + property table -----------------------+
- +--> W4 resolve_config: profiles + rules R1-R8 (pure Python) ---+  (needs W1, W3 types)
- +--> W5 tests: workload, profile table, rule ids (CPU) --------+   (extends routing test)
-                                                                 |
-                                   join                          v
-                                    W6 frontend: build dims from ResolvedConfig
-                                     |     (from_config, constructor kept)
-                                     v
-                                    W7 frontend: wire Precision + resolver
-                                     |     (replace tuples / fallback rules)
-                        +------------+-------------+
-                        v            v             v
-                       W8 hand-    W9 derive /    W10 ABI + native identity
-                       copied      demote flags   carries the workload
-                       dims        (vae_graph_    (runtime_export, surface,
-                       -> import   input, fa4_mot, pipeline_resources,
-                                   tuner, fusion) native_*, calibration_file)
-                        |            |             |
-                        +------------+-------------+
-                                     v
-                                    W11 public entry load_imagewam +
-                                        expert-constructor split
-                                        (needs T4: preset contents)
-                                     v
-                                    W12 Thor validation on the new entry
+W0 freeze the interface (Workload / Structure / Precision / Options / rule ids)
+ +--> W1 Workload: layout derivation + validation
+ +--> W2 Structure constants (checkpoint tensors + config.yaml)
+ +--> W3 Precision enum + property table
+ +--> W4 resolve_config: profiles + rules R1-R8 (pure Python; needs W1, W3 types)
+ +--> W5 tests: workload, profile table, rule ids (CPU; extends the routing test)
+ join -> W6 frontend: build dims from ResolvedConfig (from_config, constructor kept)
+      -> W7 frontend: wire Precision + resolver (replace tuples / fallback rules)
+           +--> W8 hand-copied dims -> import
+           +--> W9 derive / demote flags (vae_graph_input, fa4_mot, tuner, fusion)
+           +--> W10 ABI + native identity carries the workload (runtime_export,
+                surface, pipeline_resources, native_*, calibration_file)
+           join -> W11 public entry load_imagewam + expert/constructor split
+                     (needs T4: preset contents)
+                -> W12 Thor validation on the new entry
 
 Thor line (independent of W0-W10; T4 feeds W11 and the profile contents):
  T1 THOR_CHECKLIST A (data trustworthy) -> T2 B (missing data)
    -> T3 C (configuration matrix) -> T4 decide preset contents
    -> T5 FA4 / native VAE default decision (THOR_CHECKLIST C criteria)
 
-Side track S (S1-S4 completed: the R5 refusal fell in S2 for the ABI face and in S4 for the native pipeline):
+Side track S (S1-S4 completed: the R5 refusal fell in S2 for the ABI face
+and in S4 for the native pipeline):
  S1 ISSUE-080 condition 4: fixture v2 with trim (fp16 reference)
  S2 ISSUE-080 condition 5: runtime surface / ABI / native for per-length graphs
  S3 ISSUE-080 condition 6: bounded per-length graph cache + startup use of
     `precapture_text_lengths`
 ```
 
-Parallelism:
-
-- W1, W2, W3 are independent files and can proceed in parallel after W0.
-  W4 needs the types from W1 and W3 but not their implementations, so it
-  starts once W0 is frozen. W5 tests are written against W0 and run when
-  W1-W4 land.
-- W6 and W7 both edit the frontend constructor (`imagewam_thor.py`) and
-  are serial, one owner. To keep the seam small, all logic lives in the
-  new pure-Python modules; the constructor change is only "take resolved
-  dims and options".
-- W8, W9, W10 touch disjoint files after W7 and run in parallel. W8 is
-  mechanical (import instead of literal), W9 changes which flags are
-  public, W10 changes the identity that ABI and calibration files check.
-- W11 waits for T4 because the `fast` profile contents are a measured
-  decision; the mechanism (W0-W10) does not wait for it.
-- T1-T5 run on Thor independently of the code work; they are the source
-  of the profile contents.
+Parallelism: W1, W2, W3 are independent files after W0; W4 needs the W1 and
+W3 types but not their implementations, so it starts once W0 is frozen, and
+W5 runs when W1-W4 land. W6 and W7 both edit the frontend constructor
+(`imagewam_thor.py`) and are serial, one owner: all logic lives in the new
+pure-Python modules and the constructor change is only "take resolved dims
+and options". W8, W9 and W10 touch disjoint files after W7 and run in
+parallel — W8 is mechanical (import instead of literal), W9 changes which
+flags are public, W10 changes the identity that ABI and calibration files
+check. W11 waits for T4 because the `fast` profile contents are a measured
+decision, while the mechanism (W0-W10) does not. T1-T5 run on Thor
+independently of the code work and are the source of the profile contents.
 
 ### Phase W0: interface freeze
 Phase Status: completed
-- Goal: this section's Interface and rule table are the contract; any
-  change to a name here is a plan edit.
-- Modified files: `plan.md` only.
-- Observation: review of this section.
+This section's Interface and rule table are the contract; changing a name
+here is a plan edit. Files: `plan.md` only.
 
 ### Phase W1: `ImageWAMWorkload` and layout
 Phase Status: completed
-- Goal: derive `x0`, `img_len`, `a0`, `total`, `ref_h`, `ref_w`, `dt`,
-  `vae_graph_input` from the workload; reject inconsistent input.
-- First step: confirm from `vae_stage.py`, `pipeline_real.py` and
-  `rope.py:build_img_ids` how multiple views form the `ref_h x ref_w`
-  grid (LIBERO's two 224x224 views give 14 x 28, so views concatenate
-  along the width); the derivation must reproduce 513/905/969 and 14 x 28
-  exactly for `libero()`.
-- Modified files: `flash_rt/models/imagewam/workload.py` (new).
-- New structures: `ImageWAMWorkload`, `SequenceLayout`.
-- Affected modules: none yet (not wired).
-- Observation: `tests/test_imagewam_workload.py` (CPU): `libero()` layout
-  equals `LIBERO_REAL_DIMS`; invalid inputs raise.
+`flash_rt/models/imagewam/workload.py` (new: `ImageWAMWorkload`,
+`SequenceLayout`): derive `x0`, `img_len`, `a0`, `total`, `ref_h`, `ref_w`,
+`dt` and `vae_graph_input` and reject inconsistent input. Views concatenate
+along the width (`vae_stage.py`, `pipeline_real.py`, `rope.py:build_img_ids`),
+so LIBERO's two 224x224 views give 14 x 28 and the derivation must reproduce
+513/905/969 and 14 x 28 exactly for `libero()`. Observation:
+`tests/test_imagewam_workload.py` (CPU): `libero()` equals `LIBERO_REAL_DIMS`
+and invalid inputs raise.
 
 ### Phase W2: `ImageWAMStructure`
 Phase Status: completed
-- Goal: one place that reads backbone dims from checkpoint tensor shapes
-  and the rest from `config.yaml`, with `toy()` for tests.
-- Modified files: `flash_rt/models/imagewam/structure.py` (new).
-- Affected modules: `checkpoint_loader.py` (reads only).
-- Observation: on the local checkpoint, `from_checkpoint()` matches the
-  backbone values in `LIBERO_REAL_DIMS`; `toy()` matches `_DEFAULT_DIMS`.
+`flash_rt/models/imagewam/structure.py` (new): backbone dims from checkpoint
+tensor shapes, the rest from `config.yaml`, `toy()` for tests, reads only
+through `checkpoint_loader.py`.
 
 ### Phase W3: `Precision` property table
 Phase Status: completed
-- Goal: precision properties as data. The alignment rules reproduce
-  today's `_wrap_linear` fallbacks (fp16_cutlass n/k % 8, nvfp4 % 16,
-  fp8/fp8_static/fp8_static_cutlass % 8 -> fp16 linear).
-- Modified files: `flash_rt/models/imagewam/precision.py` (new).
-- Observation: unit test compares the property table with
-  `_PRECISIONS`, `_NVFP4_PRECISIONS`, `_STATIC_FP8_PRECISIONS`,
-  `_VARIANT_TUNED_PRECISIONS`.
+`flash_rt/models/imagewam/precision.py` (new): precision properties as data.
+The alignment rules reproduce today's `_wrap_linear` fallbacks (fp16_cutlass
+n/k % 8, nvfp4 % 16, fp8/fp8_static/fp8_static_cutlass % 8 -> fp16 linear).
 
 ### Phase W4: `resolve_config`, profiles, rules
 Phase Status: completed
-- Goal: rules R1-R8 in one function with ids; `effective_config` string
-  identical in format to the current compare-script line.
-- Modified files: `flash_rt/models/imagewam/config_resolver.py` (new).
-- Observation: one test per rule id (legal and illegal case); the
-  `default` profile reproduces today's constructor defaults.
+`flash_rt/models/imagewam/config_resolver.py` (new): rules R1-R8 with ids in
+one function, plus an `effective_config` string identical in format to the
+compare-script line. Observation: one test per rule id (legal and illegal
+case); the `default` profile reproduces today's constructor defaults.
 
 ### Phase W5: tests
 Phase Status: completed
-- Goal: pin profiles and rules.
-- Modified files: `tests/test_imagewam_thor_precision_routing.py`
-  (extend), `tests/test_imagewam_workload.py` (new).
-- Observation: CPU-only, no GPU needed; run locally.
+`tests/test_imagewam_thor_precision_routing.py` (extended) and
+`tests/test_imagewam_workload.py` (new) pin the profiles and the rules;
+CPU-only, no GPU needed.
 
 ### Phase W6: frontend builds dims from `ResolvedConfig`
 Phase Status: completed
-- Goal: `from_config` constructs the frontend from resolved dims and
-  options; the constructor signature and behaviour with `dims_override`
-  stay.
-- Modified files: `flash_rt/frontends/torch/imagewam_thor.py`.
-- Observation: `libero()` through `from_config` is bit-identical to the
-  old constructor with `LIBERO_REAL_DIMS` (fp16 and nvfp4, existing
-  `test_imagewam_thor_real_wiring.py` plus a new equality check).
+`from_config` builds the frontend from resolved dims and options, while the
+constructor signature and `dims_override` behaviour stay
+(`flash_rt/frontends/torch/imagewam_thor.py`). Observation: `libero()` through
+`from_config` is bit-identical to the old constructor with `LIBERO_REAL_DIMS`
+(fp16 and nvfp4, existing `test_imagewam_thor_real_wiring.py` plus a new
+equality check).
 
 ### Phase W7: frontend uses `Precision` and the resolver
 Phase Status: completed
-- Goal: delete the precision tuples and scattered checks the resolver now
-  owns; `_wrap_linear` reads `Precision` properties.
-- Modified files: `flash_rt/frontends/torch/imagewam_thor.py`.
-- Observation: `test_imagewam_thor_precision_routing.py` unchanged
-  results (`EXPECTED_ROUTING` still holds).
+The precision tuples and the scattered checks the resolver now owns are
+deleted, and `_wrap_linear` reads `Precision` properties, with
+`test_imagewam_thor_precision_routing.py` results unchanged
+(`EXPECTED_ROUTING` still holds).
 
 ### Phase W8: replace hand-copied dims
 Phase Status: completed
-- Goal: the 20 literal copies import the workload/`libero_dims`; toy dims
-  stay toy and are labelled.
-- Modified files: the list in Code Mapping.
-- Observation: `grep -rE "x0\s*=\s*513"` returns only `libero_dims.py` and
-  the workload test; every touched script still imports and its
-  `--help`/collect step works.
+The 20 literal copies import the workload/`libero_dims` (files in Code
+Mapping); toy dims stay toy and are labelled. Observation:
+`grep -rE "x0\s*=\s*513"` returns only `libero_dims.py` and the workload test,
+and every touched script still imports with its `--help`/collect step working.
 
 ### Phase W9: derive and demote flags
 Phase Status: completed
-- Goal: `vae_graph_input` derived from the workload; `use_fa4_mot` folded
-  into the FA4 tier of a profile; tuner, AWQ tuning and fusion flags
-  remain constructor-only.
-- Modified files: `imagewam_thor.py`, `config_resolver.py`,
-  `benchmarks/imagewam_fusion_ab.py` (uses the fusion flags).
-- Observation: existing callers of these flags still work; resolved
-  `effective_config` shows them.
+`vae_graph_input` derived from the workload, `use_fa4_mot` folded into the
+FA4 tier of a profile, and the tuner, AWQ tuning and fusion flags
+(`benchmarks/imagewam_fusion_ab.py`) left constructor-only. Observation:
+existing callers still work and the resolved `effective_config` shows them.
 
 ### Phase W10: ABI and native identity carry the workload
 Phase Status: completed
-- Goal: `identity` (ABI) and the calibration file identity include the
-  workload fields, so a runtime and a calibration file for a different
-  workload are rejected by name.
-- Modified files: `runtime_export.py`, `runtime_surface.py`,
-  `pipeline_resources.py`, `native_resources.py`, `native_runtime.py`,
-  `calibration_file.py`, `cpp/models/imagewam` (identity fields only).
-- Observation: `gate_imagewam_model_runtime_export.py` and
-  `gate_imagewam_native_schema_parity.py`; a mismatched-workload
-  calibration file is refused with the differing field named.
+`identity` (ABI) and the calibration file identity include the workload
+fields, so a runtime and a calibration file for a different workload are
+rejected by name (files in Code Mapping). Observation:
+`gate_imagewam_model_runtime_export.py`, `gate_imagewam_native_schema_parity.py`;
+a mismatched-workload calibration file is refused with the differing field
+named.
 
 ### Phase W11: public entry and constructor split
 Phase Status: completed
-- Goal: `load_imagewam(ckpt_path, workload, profile=..., precision=...,
-  calibration_path=...)` is the deployment entry; expert switches go
-  through `**expert` into `resolve_config`, not through positional
-  constructor arguments. The `fast` profile contents come from T4.
-- Modified files: `imagewam_thor.py`, `config_resolver.py`,
-  `THOR_STATUS_SUMMARY.md` (options table).
-- Observation: profile test pins the contents; the compare script builds
-  its frontend through `load_imagewam`.
+`load_imagewam` is the deployment entry and the expert switches reach
+`resolve_config` through `**expert` rather than positional constructor
+arguments; the `fast` profile contents come from T4 (files:
+`imagewam_thor.py`, `config_resolver.py`, `THOR_STATUS_SUMMARY.md` options
+table). Observation: the profile test pins the contents and the compare
+script builds its frontend through `load_imagewam`.
 
 ### Phase W12: Thor validation on the new entry
 Phase Status: completed
-- Closed: the blocker was the VAE encode geometry (ISSUE-086), fixed and
-  verified on Thor at `0919e` — the target workload serves on all three paths
-  (`default` `infer()` 216.93 / ABI 173.55 / native 173.27 ms; `profile=fast`
-  with precaptured lengths 137.64 / 139.35 / native refused by R5; the trimmed
-  sweep at 16 / 72 / 128 valid tokens 197.00 / 207.06 / 217.50 ms on `infer()`
-  and 153.51 / 161.68 / 172.05 ms on the ABI), and the LIBERO rows are
-  fidelity-identical to the previous round (`libero_spatial` nvfp4 `default`:
-  vs official min 0.99418 / median 0.99764, MAE 0.18290, P50 202.6 ms).
-- Result on Thor at `eccf14f` (Jetson AGX Thor, MAXN, GPC 1.575 GHz,
-  `emc_locked=null`, GPU exclusive, logs under `/home/jingwu/thor_val/0919s/`):
-  the recorded numbers reproduce through the new entry. The gate measures
-  202.2 ms nvfp4 (pass) and the end-to-end `default` row 202.4 / 202.1 /
-  202.0 ms over three repeats on libero_spatial, against the recorded
-  203.3 ms gate and 202.3 ms e2e — the previous round's 225 ms and 13.6 ms
-  spread were that session's state, not a scope difference (ISSUE-082
-  resolved). The same three repeats spread 0.4 ms (`default`) and 0.5 ms
-  (`stack`), and no row fell back from FA4.
-- The recorded `stack` / `fast` value of 106.1 ms is likewise session-stale:
-  the same switch set measures 92.6-93.7 ms across libero_goal and
-  libero_10, and 92.8-93.3 ms over three repeats on libero_spatial. The
-  latency gate's Thor baseline is re-based on the new session
-  (`tests/fixtures/imagewam_gate/latency_baselines.json`, 231.6 -> 202.2 ms),
-  which closes item E2.
-- Goal: the recorded numbers reproduce through the new path, and the
-  target workload runs as a `Workload`.
-- Modified files: `scripts/imagewam_thor_matrix.sh`,
-  `benchmarks/imagewam_e2e_official_compare.py`, `THOR_CHECKLIST.md`.
-- Observation: matrix rows `default` and `stack` within run-to-run noise
-  of the recorded 203.3 / 106.1 ms (same commit conditions, GPU
-  exclusivity recorded), `vs official` not below recorded values; the
-  target workload table filled.
-- Result on Thor at `c20f3a0` (Jetson AGX Thor, MAXN, DVFS-managed
-  clocks, logs under `/home/jingwu/thor_val/c20f3a0`):
-  - The two identity checks pass. `effective_config` is character for
-    character what `config_resolver.format_effective_config` produces for
-    the same resolved configuration, for `default` and for `fast`; the
-    exported runtime identity carries all nine `workload.<field>` entries
-    with `ImageWAMWorkload.libero()`'s values, its ABI is bit-exact
-    against `infer()`, and the native schema matches the golden records.
-    `THOR_CHECKLIST.md`'s C1-C3 items are closed and removed.
-  - `profile=fast` measured 106.8 ms (`vs official` median 0.99936)
-    against the recorded 106.1 ms, and the ladder's `stack` row (the same
-    switches) 93.2 ms; no row fell back from FA4. `profile=default`
-    measured 225.2 ms and the ladder's `default` row 225.5 ms, against a
-    recorded 203.3 ms that is a gate number (the frontend alone) while
-    the matrix is the end-to-end compare; the same session's
-    frontend-only ABI path measured 226 ms. Whether the default path is
-    slower on this commit is therefore not decided by this round
-    (ISSUE-082), and the ladder's switch marginals carry an in-session
-    spread of 13.6 ms between two instances of the same configuration.
-  - The switch ladder and the FA4 / native-VAE criterion outcomes are
-    recorded in `opportunities.md` OPT-019, OPT-021 and OPT-030. Section
-    C's 2 ms working threshold and the gate baseline need the two
-    measurements item E2 now spells out.
-  - Still open in this phase: the like-for-like `default` baseline, and
-    running the target workload as an `ImageWAMWorkload`.
+Goal: the recorded numbers reproduce through the new path and the target
+workload runs as a `Workload`. Observation: matrix rows `default` and `stack`
+within run-to-run noise of the recorded 203.3 / 106.1 ms (same commit
+conditions, GPU exclusivity recorded), `vs official` not below the recorded
+values, and the target-workload table filled. Rounds: `0919e` fixed and
+verified the VAE encode geometry blocker (ISSUE-086) and served the target
+workload on all three paths, with the LIBERO rows fidelity-identical to the
+previous round; `eccf14f` reproduced the recorded numbers through the new
+entry, showed the previous session's 225 ms and 13.6 ms spread to be that
+session's state rather than a scope difference (ISSUE-082 resolved) and
+re-based the latency gate's Thor baseline (231.6 -> 202.2 ms, closing item
+E2); `c20f3a0` passed both identity checks (`effective_config` character for
+character, the nine `workload.<field>` entries, ABI bit-exact against
+`infer()`, native schema against the golden records; C1-C3 closed) and its
+`default` rows (225.2 / 225.5 ms against the recorded 203.3 ms gate number)
+left the like-for-like baseline to the open owner decision in "Decisions
+pending" 1. Numbers: `THOR_STATUS_SUMMARY.md` (`0919e`, `eccf14f`, `c20f3a0`);
+the switch ladder and the FA4 / native-VAE criteria: `opportunities.md`
+OPT-019, OPT-021, OPT-030.
 
 ### Phase T1-T5: Thor line
 Phase Status: completed
-- Goal: the Thor-only rows. The lettered checklist sections A, B, C, D and E
-  ran and were removed as their conclusions were recorded (T1-T3 the matrix,
-  the switch ladder and the target-workload table; T4 the preset contents in
-  `plan.md` "Decisions pending"; T5 the FA4 and native-VAE default criteria).
-  The line's last three rows ran in the `0920c` round — the native pipeline's
-  own per-length capture, the `frt_model_runtime_v1` export gate at `nvfp4`,
-  and the `e0m3_hadamard` trim-safety check — all three green, so
-  `THOR_CHECKLIST.md` carries no pending item.
-- Modified files: `THOR_CHECKLIST.md` (finished items removed),
-  `opportunities.md`, `issues.md`.
-- Observation: matrix CSV/MD per THOR_CHECKLIST. Result: every Thor condition
-  this plan named is met or recorded; ISSUE-080 is resolved.
+The Thor-only rows: the lettered checklist sections A-E ran and were removed
+as their conclusions were recorded (T1-T3 the matrix, the switch ladder and
+the target-workload table; T4 the preset contents in "Decisions pending"; T5
+the FA4 and native-VAE default criteria). The line's last three rows ran in
+the `0920c` round — the native pipeline's own per-length capture, the
+`frt_model_runtime_v1` export gate at `nvfp4` and the `e0m3_hadamard`
+trim-safety check — all three green, so `THOR_CHECKLIST.md` carries no
+pending item and ISSUE-080 is resolved. Files: `THOR_CHECKLIST.md` (finished
+items removed), `opportunities.md`, `issues.md`.
 
 ### Phase S1: a gate fixture whose `fp16` reference is recorded trimmed
 Phase Status: completed
-- Goal: ISSUE-080 condition 4. Fixture v1's `fp16` reference is untrimmed, so
-  a trimmed `fp16` run measures 0.99837 / 0.99579 against it, below the fp16
-  bounds 0.999 / 0.995, while being closer to official (0.99998 / 0.99992):
-  a trimmed configuration cannot pass the gate until a fixture recorded
-  trimmed exists.
-- Modified files: `benchmarks/imagewam_gate_fixture_generate.py` (the
-  `TEXT_TRIM` / `--text-trim` switch, the reference built through
-  `load_imagewam`), `flash_rt/datasets/imagewam_gate_fixture.py`
-  (`ImageWAMGateFixture.text_trim`, `FixtureManifest.text_trim`, absent means
-  untrimmed so v1 still loads), `tests/gate_imagewam_libero.py` (`--text-trim`;
-  a fixture recorded with the other value is refused before the checkpoint
-  hash), `tests/fixtures/imagewam_gate/fidelity_thresholds.json` (the
-  like-for-like rule stated, numbers unchanged),
-  `tests/test_imagewam_regression_gate.py`.
-- Observation: CPU round trip through `save`/`load` and the v1 manifest, the
-  refusal of either mismatch, and the generator's imports resolving against
-  the compare script (the check that caught the generator's own `REAL_DIMS`
-  breakage). On Thor the v2 fixture was generated (`text_trim=true`) and the
-  trimmed nvfp4 gate passes against it: vs official 0.99931 / min 0.99898,
-  vs the fixture's fp16 reference 0.99935 / 0.99907, P50 114.6 ms; a trimmed
-  run against v1 and an untrimmed run against v2 are both refused. The
-  fixture's manifest still has to be committed (checklist item E2).
+ISSUE-080 condition 4: fixture v1's `fp16` reference is untrimmed, so a
+trimmed `fp16` run measures 0.99837 / 0.99579 against it, below the fp16
+bounds 0.999 / 0.995, while being closer to official (0.99998 / 0.99992) — a
+trimmed configuration cannot pass the gate until a fixture recorded trimmed
+exists. Files: `benchmarks/imagewam_gate_fixture_generate.py` (the `TEXT_TRIM`
+/ `--text-trim` switch, the reference built through `load_imagewam`),
+`flash_rt/datasets/imagewam_gate_fixture.py` (`ImageWAMGateFixture.text_trim`,
+`FixtureManifest.text_trim`, absent means untrimmed so v1 still loads),
+`tests/gate_imagewam_libero.py` (`--text-trim`; a fixture recorded with the
+other value is refused before the checkpoint hash),
+`tests/fixtures/imagewam_gate/fidelity_thresholds.json` (the like-for-like
+rule stated, numbers unchanged), `tests/test_imagewam_regression_gate.py`.
+Observation: the CPU round trip through `save`/`load` and the v1 manifest, the
+refusal of either mismatch, and the generator's imports resolving against the
+compare script (the check that caught the generator's own `REAL_DIMS`
+breakage); on Thor the v2 fixture was generated (`text_trim=true`) and the
+trimmed nvfp4 gate passes against it, with a trimmed run against v1 and an
+untrimmed run against v2 both refused — numbers in
+`THOR_STATUS_SUMMARY.md` `a84916a`. The fixture's manifest still has to be
+committed (checklist item E2).
 
 ### Phase S2: the ABI carries one graph per trimmed length
 Phase Status: completed
-- Goal: ISSUE-080 condition 5. The exec layer already models a graph as a
-  `ShapeKey -> graph-exec` variant table with an LRU cap, so a trimmed
-  frontend's per-length graphs become keys of one declared graph, and `step`
-  replays the key of the length the prompt set. This is what lifts rule R5
-  for `consumer="abi"`; the native pipeline keeps its refusal until its own
-  phase.
-- Modified files: `flash_rt/models/imagewam/runtime_surface.py`,
-  `runtime_export.py`, `flash_rt/frontends/torch/imagewam_thor.py`,
-  `flash_rt/models/imagewam/config_resolver.py` (the R5 scope), their tests.
-- Interface: `runtime_surface()` exposes `graph_variants` (`active_key`, the
-  `(key, graph_exec)` entries ascending, `per_prompt_length`), the `ShapeKey`
-  is the context length `x0`, `graph_variant_plan` turns the table into the
-  declaration's `default_key` / `keys` / `max_variants` (pure, CPU-tested),
-  the manifest records `text_lengths`, and `step` replays
-  `active_dims["x0"]` after `frt_graph_has_variant`, refusing an uncaptured
-  length by name. `setup_identity` gains the `text_trim` pair, so the export
-  fingerprint of an existing untrimmed deployment changes (no artifact
-  compatibility is required at this stage).
-- Observation: the pure table/plan seam and the resolver's R5 scope are
-  covered on CPU. On Thor the multi-length check passes (the ABI tick at two
-  captured lengths is bit-exact against `infer()`, and `guards` 7 tests
-  pass), and the served numbers come out: LIBERO `default` `infer()` 202.3 ms
-  against ABI 184.2 ms and native 183.8 ms in one process, and with
-  `profile=fast` plus precaptured lengths `infer()` 93.2 ms against ABI
-  95.1 ms. The native face keeps refusing trimmed prompts; its own phase is
-  S4.
+ISSUE-080 condition 5: the exec layer already models a graph as a `ShapeKey ->
+graph-exec` variant table with an LRU cap, so a trimmed frontend's per-length
+graphs become keys of one declared graph and `step` replays the key of the
+length the prompt set, which is what lifts rule R5 for `consumer="abi"`; the
+native pipeline kept its refusal until its own phase. Files:
+`flash_rt/models/imagewam/runtime_surface.py`, `runtime_export.py`,
+`flash_rt/frontends/torch/imagewam_thor.py`,
+`flash_rt/models/imagewam/config_resolver.py` (the R5 scope), their tests.
+Interface: `runtime_surface()` exposes `graph_variants` (`active_key`, the
+`(key, graph_exec)` entries ascending, `per_prompt_length`), the `ShapeKey` is
+the context length `x0`, `graph_variant_plan` turns the table into the
+declaration's `default_key` / `keys` / `max_variants` (pure, CPU-tested), the
+manifest records `text_lengths`, and `step` replays `active_dims["x0"]` after
+`frt_graph_has_variant`, refusing an uncaptured length by name.
+`setup_identity` gains the `text_trim` pair, so the export fingerprint of an
+existing untrimmed deployment changes (no artifact compatibility is required
+at this stage). Observation: the pure table/plan seam and the resolver's R5
+scope are covered on CPU; on Thor the multi-length check passes (the ABI tick
+at two captured lengths is bit-exact against `infer()`, and the `guards` 7
+tests pass) and the three-path numbers are in `THOR_STATUS_SUMMARY.md`
+`eccf14f`.
 
 ### Phase S4: the native model runtime carries one graph per trimmed length
 Phase Status: completed
-- Goal: ISSUE-080 condition 5's remaining half. The ABI face serves trimmed
-  prompts now; the native C++ pipeline refuses them explicitly at both entry
-  points (`ImageWAMNativeRuntime.create`, `export_model_runtime(io="native")`).
-- What it needs (assessed while implementing S2, all of it C-ABI + host work,
-  none of it Python-only): `NativeRuntime` holds one `graph_`, one
-  `owned_graph_` for the `capture()` path and one `context_rows_` (used by
-  `set_proprio_row`'s bound and `set_pipeline`'s dims check), so the keyed
-  variant table has to replace them (`frt_graph` already offers
-  adopt/has_variant/replay); the host needs a visible key
-  (`use_graph(key, exec)` / `has_variant(key)` / `set_text_length(key)`, wired
-  into the prompt/proprio verb path, since C++ cannot see the Python prompt);
-  `native_resources.build_io_config` hands the per-key `context_rows`; and
-  `native_schema.cpp` plus the schema-parity gate gain the new records.
-- Modified files: `cpp/models/imagewam/**`, `flash_rt/models/imagewam/native_runtime.py`,
-  `native_resources.py`, `runtime_export.py`, the native gates.
-- Interface: `frt_imagewam_io_config` declares the deployment's text lengths
-  (`num_text_lengths` / `text_lengths`, `context_rows` = the active one), and
-  the handle gained `use_graph(key, exec)`, `has_variant(key)`,
-  `variant_exec(key)`, `set_text_length(key)` and `text_length`; `step`,
-  `set_proprio_row` and `set_pipeline` resolve against the active key. The key
-  is `x0`, the same space `GraphVariants` uses, and adoption is refused while
-  a model runtime over the handle is live — so `set_text_length` and
-  `set_proprio_row` are the two calls that stay legal on the hot path.
-  `export_model_runtime(io="native")` adopts the handle's exec per captured
-  length and records the same `text_lengths` manifest table as the ABI face.
-- Observation: `tests/test_imagewam_native_runtime.py::test_native_tick_matches_infer_at_every_captured_length`
-  (two captured lengths, the shorter ticked first, `array_equal` to `infer()`
-  in the actions and the action latent), the native manifest's length table,
-  and CPU-only pins for the io config's table and the handle's key plumbing
-  over a stubbed library. On Thor at `0920s4` (native C++ rebuilt only, the
-  ctypes layout check silent) the suite is 38 passed: the two-length tick is
-  `array_equal` with `max_abs=0`, the manifest records
-  `text_lengths={'default_key': 14, 'keys': [6, 14], 'per_prompt_length': True}`,
-  `set_text_length` returns `-2` for a length with no graph, the untrimmed
-  one-key file is green as a whole, the schema gate's seven records are
-  line-identical to the golden file, and the native parity gate is green for
-  both graph producers with all six mutants detected at the same node counts
-  (native 5324 / Python 5348). The P50s sit about 22 ms above the earlier
-  `08_gate_native` round's ~182 ms, with the node counts unchanged and the
-  untrimmed values identical: recorded as a session difference, not a
-  measured regression.
-- **R5 is lifted**: the native pipeline carries one resource table and one
-  graph per text length. `pipeline_resources()` describes the ACTIVE length
-  (sequence dims and RoPE table active, buffers max-size and shared); the
-  handle installs one pipeline per key (`set_pipeline` installs the key its
-  config carries, replaces only that key's pipeline and graph, and makes it the
-  active text length; `gemm_shapes` / `set_gemm_algo` / `run` / `capture` all
-  resolve against the active key); `ImageWAMNativeRuntime.capture_pipeline_text_lengths(source)`
-  activates each of `source.captured_text_lengths` (a property), installs its
-  table and captures its graph, then restores the active length. `graph_producer` follows
-  the active key. Rule R5 is removed from `config_resolver.py` and from the
-  table above; the `native` profile is the native consumer's set — the served
-  `default`'s switches with FA4 explicitly off, contents otherwise equal to
-  `default`.
-- Observation (pipeline): on CPU the per-length resource table and the install
-  loop's call sequence are pinned over a stub frontend and handle, and the
-  13-file list stays green. On Thor `test_pipeline_records_one_graph_per_text_length`
-  installs and captures two lengths (`x0` 6 and 14) with the handle's own
-  graphs and the tick at each is `array_equal` to `infer()`, with the untrimmed
-  one-key numbers and node counts unchanged (checklist item S4-pipeline).
+ISSUE-080 condition 5's remaining half: the ABI face served trimmed prompts
+while the native C++ pipeline refused them explicitly at both entry points
+(`ImageWAMNativeRuntime.create`, `export_model_runtime(io="native")`). What it
+needed, all of it C-ABI and host work and none of it Python-only:
+`NativeRuntime` held one `graph_`, one `owned_graph_` for the `capture()` path
+and one `context_rows_` (used by `set_proprio_row`'s bound and
+`set_pipeline`'s dims check), so the keyed variant table has to replace them
+(`frt_graph` already offers adopt/has_variant/replay); the host needs a
+visible key (`use_graph(key, exec)` / `has_variant(key)` /
+`set_text_length(key)`, wired into the prompt/proprio verb path, since C++
+cannot see the Python prompt); `native_resources.build_io_config` hands the
+per-key `context_rows`; and `native_schema.cpp` plus the schema-parity gate
+gain the new records. Files: `cpp/models/imagewam/**`,
+`flash_rt/models/imagewam/native_runtime.py`, `native_resources.py`,
+`runtime_export.py`, the native gates. Interface: `frt_imagewam_io_config`
+declares the deployment's text lengths (`num_text_lengths` / `text_lengths`,
+`context_rows` = the active one), and the handle gained `use_graph(key, exec)`,
+`has_variant(key)`, `variant_exec(key)`, `set_text_length(key)` and
+`text_length`; `step`, `set_proprio_row` and `set_pipeline` resolve against the
+active key. The key is `x0`, the same space `GraphVariants` uses, and adoption
+is refused while a model runtime over the handle is live — so
+`set_text_length` and `set_proprio_row` are the two calls that stay legal on
+the hot path. `export_model_runtime(io="native")` adopts the handle's exec per
+captured length and records the same `text_lengths` manifest table as the ABI
+face.
+
+**R5 is lifted**: the native pipeline carries one resource table and one graph
+per text length. `pipeline_resources()` describes the ACTIVE length (sequence
+dims and RoPE table active, buffers max-size and shared); the handle installs
+one pipeline per key (`set_pipeline` installs the key its config carries,
+replaces only that key's pipeline and graph, and makes it the active text
+length; `gemm_shapes` / `set_gemm_algo` / `run` / `capture` all resolve
+against the active key); `ImageWAMNativeRuntime.capture_pipeline_text_lengths(source)`
+activates each of `source.captured_text_lengths` (a property), installs its
+table and captures its graph, then restores the active length; `graph_producer`
+follows the active key. Rule R5 is removed from `config_resolver.py` and from
+the table above; the `native` profile is the native consumer's set — the served
+`default`'s switches with FA4 explicitly off, contents otherwise equal to
+`default`. Observation:
+`tests/test_imagewam_native_runtime.py::test_native_tick_matches_infer_at_every_captured_length`
+(two captured lengths, the shorter ticked first, `array_equal` to `infer()` in
+the actions and the action latent), the native manifest's length table, and
+CPU-only pins for the io config's table and the handle's key plumbing over a
+stubbed library; on Thor the per-length resource table and the install loop's
+call sequence are pinned over a stub frontend and handle and the 13-file list
+stays green. The round numbers (`0920s4`, `0920c`: `array_equal` with
+`max_abs=0`, `text_lengths`, `set_text_length` returning `-2` for an uncaptured
+length, node counts native 5324 / Python 5348, the schema gate's seven records
+line-identical to the golden file, both graph producers and all six mutants
+green, and the pipeline's own two-length install and capture) are in
+`THOR_STATUS_SUMMARY.md` and `opportunities.md` OPT-029, together with the
+22 ms P50 difference from the earlier `08_gate_native` round, which is recorded
+there as a session difference, not a measured regression.
 
 ### Phase S3: a bounded per-length graph cache, precaptured at construction
 Phase Status: completed
-- Goal: ISSUE-080 condition 6; a trimmed frontend captured one graph per
-  distinct length with no bound, and `precapture_text_lengths` existed but
-  nothing called it.
-- Modified files: `flash_rt/frontends/torch/imagewam_thor.py` (`evict_lru`,
-  the `text_trim_cache_size` constructor keyword, `_touch_capture` /
-  `_store_capture`, the recency updates, the `precapture_text_lengths` keyword
-  on `from_config`/`load_imagewam`), `flash_rt/models/imagewam/config_resolver.py`
-  (`text_trim_cache_size` in `ImageWAMOptions` and `EXPERT_KEYS`, default 32,
-  rule V1), `tests/test_imagewam_text_trim_cache.py`.
-- Observation: `evict_lru` (order, the active capture never dropped, a bound
-  of 1, a cache whose only entry is active), the resolver option and its V1
-  cases, the constructor validation before any allocation, and the precapture
-  keyword reaching `precapture_text_lengths` once through a mocked
-  constructor. On Thor a precaptured length switches in 0.000-0.012 s where a
-  length captured on first use takes 0.42-0.58 s, over three swept lengths
-  (16, 24, 31 valid tokens), and eviction behaves as designed: with the bound
-  at 2 and no precapture, revisiting an evicted length captures again
-  (0.636 / 0.503 / 0.468 / 0.465 s for 16 -> 24 -> 31 -> 16). The memory
-  measurement corrected this phase's own assumption: the first captured graph
-  costs +218.0 MiB reserved / +206.3 MiB allocated and every following one
-  +0.0 / +0.1 MiB (the captures share the pool), so 15 lengths sit under one
-  graph's fixed cost and the default bound of 32 is on the order of 221 MiB,
-  not 32 x 218 MiB.
-- Two decisions made while implementing: `precapture_text_lengths` refuses a
-  request with more distinct lengths than the bound (its refill loop would
-  otherwise recapture what eviction had just dropped, forever), and the cache
-  may stay above the bound when the only remaining candidate is the active
-  capture (that is what keeps the replayable graph alive).
+ISSUE-080 condition 6: a trimmed frontend captured one graph per distinct
+length with no bound, and `precapture_text_lengths` existed but nothing called
+it. Files: `flash_rt/frontends/torch/imagewam_thor.py` (`evict_lru`, the
+`text_trim_cache_size` constructor keyword, `_touch_capture` /
+`_store_capture`, the recency updates, the `precapture_text_lengths` keyword on
+`from_config`/`load_imagewam`), `flash_rt/models/imagewam/config_resolver.py`
+(`text_trim_cache_size` in `ImageWAMOptions` and `EXPERT_KEYS`, default 32,
+rule V1), `tests/test_imagewam_text_trim_cache.py`. Observation: `evict_lru`
+(order, the active capture never dropped, a bound of 1, a cache whose only
+entry is active), the resolver option and its V1 cases, the constructor
+validation before any allocation, and the precapture keyword reaching
+`precapture_text_lengths` once through a mocked constructor; the Thor switch,
+eviction and memory timings are in `THOR_STATUS_SUMMARY.md` `a84916a`. Two
+decisions made while implementing: `precapture_text_lengths` refuses a request
+with more distinct lengths than the bound (its refill loop would otherwise
+recapture what eviction had just dropped, forever), and the cache may stay
+above the bound when the only remaining candidate is the active capture (that
+is what keeps the replayable graph alive). The memory measurement corrected
+this phase's own assumption: the first captured graph costs +218.0 MiB
+reserved / +206.3 MiB allocated and every following one +0.0 / +0.1 MiB (the
+captures share the pool), so 15 lengths sit under one graph's fixed cost and
+the default bound of 32 is on the order of 221 MiB, not 32 x 218 MiB.
 
 ## Execution record
 
-Observed on the development machine that ran W1-W11 (WSL2, `torch.cuda.is_available()`
-is `False`, `nvidia-smi` reports the GPU blocked by the operating system).
-Every observation below is therefore a CPU-side contract check; nothing that
-needs a CUDA device has been run, and no latency or accuracy number is
-claimed here.
+Observed on the development machine that ran W1-W11 (WSL2,
+`torch.cuda.is_available()` is `False`, `nvidia-smi` reports the GPU blocked
+by the operating system), so every observation here is a CPU-side contract
+check: nothing that needs a CUDA device was run and no latency or accuracy
+number is claimed.
 
-| Phase | Observation | Result |
-|---|---|---|
-| W0 | this section reviewed, names frozen | completed; the addendum above holds the names added while executing |
-| W1, W2, W3, W5 | earlier session | committed before this record; `tests/test_imagewam_workload.py`, `tests/test_imagewam_structure.py`, `tests/test_imagewam_precision_table.py` |
-| W2 (addendum) | `ImageWAMStructure.libero()` against the real checkpoint | `from_checkpoint(/home/ljw/projects/pi0.5/models/imagewam_flux2_4b_libero/model.pt) == ImageWAMStructure.libero()`, `missing/extra` none; the checkpoint exists on this machine, so this is a real read, not a skip |
-| W4 | one legal and one illegal case per rule id | `tests/test_imagewam_config_resolver.py` |
-| W6 | `frontend_kwargs_from_config` maps every option onto the constructor keyword the constructor declares; `from_config` passes exactly that mapping | `tests/test_imagewam_frontend_from_config.py` (the frontend itself is not constructed: it allocates CUDA). The bit-identical fp16/nvfp4 comparison of `from_config` against the old constructor is part of the W12 Thor run |
-| W7 | the frontend's four precision tuples are comprehensions over `Precision`, `_wrap_linear` takes its fallback from `alignment_fallback`, no precision literal survives in it | `tests/test_imagewam_precision_table.py` (values pinned literally, delegation checked by `ast` over the frontend source); `tests/test_imagewam_thor_precision_routing.py` `EXPECTED_ROUTING` unchanged |
-| W8 | no served-dims literal outside `libero_dims.py` and its tests | `grep -rnE "x0\s*=\s*513"` over `benchmarks/`, `tests/`, `flash_rt/` returns four hits: the literal pin table in `tests/test_imagewam_workload.py` and three docstrings; no module redefines the dims. Benchmark modules import and their argparse `--help` runs (three of them need `pandas`, absent from this machine's `.venv`) |
-| W9 | `vae_graph_input` and `use_fa4_mot` come from the resolved options | `tests/test_imagewam_frontend_from_config.py` |
-| W10 | `workload_identity()` renders the nine `workload.<field>` pairs; `runtime_surface()` adds them for a frontend built from a resolved configuration | `tests/test_imagewam_public_entry.py`; the identity on a real exported runtime is the W12 Thor item |
-| W11 | `load_imagewam` signature, `ConfigError` before construction, structure read only when given | `tests/test_imagewam_public_entry.py` |
-| W12 | run on Thor at `c20f3a0`; the identity checks pass and `fast`/`stack` reproduce their recorded values, `default`'s like-for-like baseline is open | see the phase's own "Result on Thor" block, `THOR_CHECKLIST.md` item E2 and ISSUE-082 |
+- `tests/test_imagewam_workload.py`, `test_imagewam_structure.py` and
+  `test_imagewam_precision_table.py` pin the workload, structure and precision
+  tables (W1-W3, W5); `tests/test_imagewam_config_resolver.py` covers one legal
+  and one illegal case per rule id (W4).
+- `tests/test_imagewam_frontend_from_config.py` checks that
+  `frontend_kwargs_from_config` maps every option onto a constructor keyword
+  the constructor declares and that `from_config` passes exactly that mapping,
+  without constructing the frontend because it allocates CUDA (W6, W9). The
+  bit-identical fp16/nvfp4 comparison of `from_config` against the old
+  constructor is the W12 Thor item.
+- `test_imagewam_precision_table.py` pins the frontend's four precision tuples
+  as comprehensions over `Precision` and checks by `ast` that no precision
+  literal survives in `_wrap_linear`, with `EXPECTED_ROUTING` unchanged (W7).
+- `tests/test_imagewam_public_entry.py` covers `workload_identity()`'s nine
+  `workload.<field>` pairs, the `load_imagewam` signature, `ConfigError` before
+  construction and the structure read only when given (W10, W11); the identity
+  of a real exported runtime is the W12 Thor item.
+- W2's addendum read the real checkpoint on this machine:
+  `from_checkpoint(<local model.pt>) == ImageWAMStructure.libero()` with no
+  missing or extra key.
+- W8: `grep -rnE "x0\s*=\s*513"` over `benchmarks/`, `tests/` and `flash_rt/`
+  returns four hits — the literal pin table in `tests/test_imagewam_workload.py`
+  and three docstrings — so no module redefines the dims. The benchmark modules
+  import and their argparse `--help` runs; three of them need `pandas`, absent
+  from this machine's `.venv`.
 
-The CPU test set used for every phase above, and the directory-wide
-collection count, are recorded once in `PROJECT.md` under the CPU-only work
-note; that record is the current one and is not repeated here. Outside
-ImageWAM, whole-directory collection still reports errors from modules whose
-extensions are not built or installed on this machine (`flash_rt.flash_rt_fp4`,
+The CPU test set used for every phase above, and the directory-wide collection
+count, are recorded once in `PROJECT.md` under the CPU-only work note; that
+record is the current one and is not repeated here. Outside ImageWAM,
+whole-directory collection still reports errors from modules whose extensions
+are not built or installed on this machine (`flash_rt.flash_rt_fp4`,
 `_flashrt_exec`, `ml_dtypes`).
 
-Not done, and why:
-
-- T1-T5 and the rest of W12 are Thor runs; the Thor is a separate shared
-  machine. `THOR_CHECKLIST.md` carries the commands, each item's 判据 and
-  where its conclusion goes, so one pass covers what is still pending. The
-  rounds after `c20f3a0` (`eccf14f`, the `0919e` round at `a84916a`, and the
-  `0920`, `0920s4`, `0920t` and `0920c` rounds) ran the rest of the line, and
-  each section left the checklist as its conclusions were recorded; the last
-  three rows cleared in `0920c`, so nothing is pending there.
-- S1-S3 are untouched: S1 needs the fixture data regenerated on a GPU (the
-  generator's own `fp16` reference), S2 and S3 change the runtime surface
-  and the capture cache, whose only observation is a captured graph. Their
-  design is recorded in `issues.md` ISSUE-080 conditions 4, 5 and 6.
+The Thor rounds after `c20f3a0` (`eccf14f`, the `0919e` round at `a84916a`,
+and the `0920`, `0920s4`, `0920t` and `0920c` rounds) ran the rest of the
+line, each leaving `THOR_CHECKLIST.md` as its conclusions were recorded; the
+last three rows cleared in `0920c`, so nothing is pending there. The S-track
+design is recorded in `issues.md` ISSUE-080 conditions 4, 5 and 6.
 
 ## Decisions pending (owner)
 
