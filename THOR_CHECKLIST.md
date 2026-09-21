@@ -104,6 +104,18 @@ FA4 在这里是显式的（`--use-fa4`，默认关），所以这两行的 `use
 
 ---
 
+## trim-safety 的最后一格：`e0m3_hadamard`（可选，只有要服务这个精度时才需要）
+
+裁剪的多长度安全检查已经在 `nvfp4`（FA4 关与 FA4 开各 4 条）与真实 dims 上跑过（`0920`），只剩 `e0m3_hadamard` 那个精度没跑。`opportunities.md` OPT-030 的 `## Open` 里它是唯一还剩的 trim 相关 Thor 行；如果 `e0m3_hadamard` 不在服务集合里，这一项可以不做。
+
+```
+TRIM_PRECISION=e0m3_hadamard python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s 2>&1 | tee $OUT/trim_e0m3.log
+```
+
+判据：每个长度与"新建的单长度前端"逐位一致，没有权重/中间张量被重新分配，没有写进被下毒的释放内存。去向：`opportunities.md` OPT-030、`THOR_STATUS_SUMMARY.md`。
+
+---
+
 ## 已决定、不在这里测的
 
 `text_trim` 转默认（原 E1）已经决定并落库：`default` profile 带 `text_trim=True`，FA4 与原生 VAE 留在 `fast`，新增 `native` profile；门禁与矩阵的默认口径跟着服务默认走；这些结论在 `plan.md` 的 "Decisions pending"、`opportunities.md` OPT-019/030 与 `THOR_STATUS_SUMMARY.md`。
