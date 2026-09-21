@@ -3931,9 +3931,9 @@ replaced slots `-` for the precisions that merge.
 
 # OPT-027: fidelity + latency regression gate on a versioned LIBERO fixture (roadmap item 13)
 
-Status: implemented; fp16 gate passing on H100; Thor `nvfp4`/`fp16`
-runs pending (plan.md "Plan: Fidelity and latency regression gate
-harness").
+Status: implemented; fp16 gate passing on H100; the Thor `nvfp4` and
+`fp16` gates have run (`eccf14f`, `0920t`; the `nvfp4` row against
+fixture v2 is the served default's).
 
 Area: committed CI/regression gate for the served ImageWAM path
 
@@ -5606,8 +5606,12 @@ having no FA4 attention), serves the trim, and is no longer refused by any rule.
 # OPT-029: ImageWAM native C++ overlay (`io="native"`)
 
 Status: implemented and verified bit-exact on H100 (fp16, small dims and
-real checkpoint); NVFP4 wiring compiles and links for sm_110; Thor
-`nvfp4` parity and speed pending on the Thor checklist.
+real checkpoint) and on Thor at `nvfp4` (`0920s4`, `0920t`: both gates
+pass, node counts unchanged); NVFP4 wiring compiles and links for
+sm_110. The native pipeline's own per-length capture is the one item
+still waiting for its Thor re-run —
+`test_pipeline_records_one_graph_per_text_length`, whose two causes are
+fixed at `43c49ce`.
 
 Area: deployment engineering, roadmap item 14; interface record
 `docs/imagewam_native_cpp.md`.
@@ -5837,10 +5841,12 @@ ABI, and the served `default` ticks 120.05 ms against 120.29 ms.
 
 # OPT-030: text context trimmed to the prompt's valid length (issues.md ISSUE-020)
 
-Status: implemented behind `ImageWAMTorchFrontendThor(text_trim=True)`
-(default `False`), verified on H100 at `fp16`, `fp8` and `fp8_static`;
-`nvfp4`, `e0m3_hadamard`, FA4 and Thor latency pending (Thor check in
-`plan.md`'s "Thor validation checklist", steps 3 and 5; issues.md ISSUE-080).
+Status: implemented and serving as the default (`PROFILES["default"]`
+sets `text_trim=True`; the constructor keeps `text_trim=False` for a
+caller that passes dims and switches by hand), verified on H100 at
+`fp16`, `fp8` and `fp8_static` and on Thor at `nvfp4` (trim plus FA4,
+gates and end to end); `e0m3_hadamard` with trimming still pending
+(issues.md ISSUE-080).
 
 Area: `flash_rt/models/imagewam/text_context.py`,
 `flash_rt/frontends/torch/imagewam_thor.py`,
@@ -6045,13 +6051,6 @@ gain.
 - `fp8`/`fp8_static` run on H100 since the TN FP8 path (issues.md
   ISSUE-001) and are verified with trimming above;
   `fp8_static_cutlass` runs on Thor only.
-- The per-length graph cache is unbounded (up to 512 lengths).
-  `precapture_text_lengths` captures known lengths at startup; a bound
-  on the cache does not exist yet.
-- Gate fixture v1 holds an untrimmed fp16 reference: trimmed fp16
-  measures 0.99837 / 0.99579 (median / min) against it, under the fp16
-  bounds 0.999 / 0.995, while vs official it is 0.99998 / 0.99992. A
-  trimmed default needs a regenerated fixture (ISSUE-080).
 - Owner decision: serve `text_trim=True` by default (ISSUE-080).
 
 ## Thor, one matrix session (`c20f3a0`, libero_spatial, nvfp4)

@@ -157,9 +157,9 @@ _VARIANT_TUNED_PRECISIONS = tuple(p.value for p in Precision if p.supports_tile_
 # importable FA4 runtime -- and stays on the cuBLAS chain everywhere else,
 # never raising for a missing runtime. `FLASHRT_THOR_FA4=0` forces the cuBLAS
 # chain; unset and "1" both leave the choice to the machine. FA4 is measured
-# at `a0=896` in the per-layer bench (OPT-005); the served default's own
-# numbers need a Thor re-measure (the previous ones were recorded with FA4
-# off).
+# at `a0=896` in the per-layer bench (OPT-005) and on the served shapes end to
+# end at `nvfp4` (`0920t`: 126.5 ms with FA4 against 131.3 ms with
+# `FLASHRT_THOR_FA4=0`, THOR_STATUS_SUMMARY.md).
 _FA4_OPT_IN_ENV = "FLASHRT_THOR_FA4"
 _FA4_OPT_IN_DEFAULT = "1"
 
@@ -857,8 +857,9 @@ class ImageWAMTorchFrontendThor:
           it never raises for a missing runtime. `FLASHRT_THOR_FA4=0` forces
           the cuBLAS chain; `=1` and unset both leave the choice to the
           machine. FA4 has been measured on Thor at `a0=896` in the per-layer
-          bench (OPT-005); the served shapes and the end-to-end path are what
-          the Thor re-measure has to confirm (OPT-019).
+          bench (OPT-005) and on the served shapes end to end at `nvfp4`
+          (`0920t`: 126.5 ms with FA4 against 131.3 ms with
+          `FLASHRT_THOR_FA4=0`, THOR_STATUS_SUMMARY.md).
         """
         if use_fa4 is not None:
             return bool(use_fa4)
@@ -2428,8 +2429,8 @@ def load_imagewam(ckpt_path: str | None, workload: ImageWAMWorkload, *,
     `profile` names the option set (`config_resolver.PROFILES`); `precision`
     overrides the profile's; `calibration_path` is the static-FP8 / AWQ
     statistics file; `consumer` is what the configuration will be used for
-    (`"infer"`, `"abi"`, `"native"`), which is what makes the ABI and native
-    refusals (`text_trim`, AWQ, FA4, the VAE stage) apply.
+    (`"infer"`, `"abi"`, `"native"`), which is what makes the native
+    consumer's refusals (AWQ, FA4, the VAE stage) apply.
     `allow_placeholder_calibration` accepts the N(0, 0.1) placeholder scales
     for a static-FP8 precision without a calibration file; the default
     refuses it (rule R1).

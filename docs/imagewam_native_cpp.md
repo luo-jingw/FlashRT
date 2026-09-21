@@ -59,7 +59,8 @@ descriptor for (`nvfp4_sim`, `fp8*`, `e0m3_hadamard`). FA4 (`use_fa4` /
 `use_fa4_mot`) is not available to the native pipeline, which uses the cuBLAS-decomposed per-head attention
 (`attention_qkv_fp16_perhead`). Precisions (the merged single-stream
 `linear1` path): `fp16`, verified on H100; `nvfp4`, compiled for sm_110
-(SM100-class CUTLASS builds) and pending verification on Thor. Both
+(SM100-class CUTLASS builds) and verified on Thor at both captured lengths
+(`0920s4`, `0920t`). Both
 layer structures are supported: the served one (single-stream `linear2`
 as one GEMM, each gated residual fused with the following AdaLN) and the
 split/unfused one (`merge_linear2` / `fuse_res_norm` off).
@@ -259,4 +260,6 @@ the key, so a **rebuild is required**; a stale library fails at load in
 `native_library._check_layout` ("config struct sizes differ from the
 ctypes mirror; rebuild the library"). the parity tests and gates above run there with
 `IMAGEWAM_NATIVE_PRECISION=nvfp4` and `--precision nvfp4` (plan.md,
-"Native C++ overlay", Thor checklist) and have not been run yet.
+"Native C++ overlay", Thor checklist) and pass, with the node counts
+unchanged (`0920s4`, `0920t`). The native pipeline's own per-length
+capture is the one row of this surface still waiting for its Thor re-run.

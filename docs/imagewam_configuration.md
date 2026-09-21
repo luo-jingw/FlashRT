@@ -39,10 +39,10 @@ precapture_text_lengths=None, **expert)`.
   `ckpt_path` is `None` (random-weight run).
 - `consumer` is what the configuration is for: `"infer"` (the frontend's own
   `infer()`), `"abi"` (`runtime_surface()` / `export_model_runtime(io="python")`),
-  `"native"` (`pipeline_resources()` / the native runtime). Which
-  combinations they allow is rules R5 and R6: `text_trim` is served through
-  the ABI (one graph per trimmed length) and still refused for the native
-  pipeline, which describes one fixed graph.
+  `"native"` (`pipeline_resources()` / the native runtime). What stays
+  specific to the native consumer is rule R6 (AWQ, a precision the native
+  pipeline cannot describe, FA4, the VAE stage): `text_trim` is served by all
+  three consumers, each through a table of one graph per text length.
 - `precapture_text_lengths` (x0 values, valid tokens + 1 with proprio, as
   the `captured_text_lengths` property reports them): the frontend captures
   a graph for each of those lengths once at construction, so the first `set_prompt` of
@@ -151,9 +151,9 @@ own historical defaults (untrimmed) for a caller that passes dims by hand.
 
 | Profile | Contents |
 |---|---|
-| `default` | the served configuration: `nvfp4`, **`text_trim` on**, FA4 backbone as the frontend resolves it (`FLASHRT_THOR_FA4`, off unless set), no FA4 mot, torch VAE encoder outside the graph, no AWQ |
-| `fast` | `default` plus FA4 at both attention sites and the native VAE encoder inside the graph. Opt-in: FA4 compiles on first use and can fall back, and the in-graph VAE changes the graph |
-| `native` | the native/one-graph consumer's set until phase S4: `nvfp4`, `text_trim` off, FA4 explicitly off, no FA4 mot, torch VAE outside the graph, no AWQ. It is what `default` used to be, and it exists because rule R5 refuses a trimmed frontend for those consumers (the native pipeline holds one graph and one context length) |
+| `default` | the served configuration: `nvfp4`, **`text_trim` on**, FA4 backbone as the frontend resolves it (`FLASHRT_THOR_FA4`, on where the machine can run FA4, the cuBLAS chain elsewhere; `FLASHRT_THOR_FA4=0` forces the chain), no FA4 mot, torch VAE encoder outside the graph, no AWQ |
+| `fast` | `default` plus FA4 at the `mot` site and the native VAE encoder inside the graph (FA4 stated `True` at both sites). Opt-in: FA4 compiles on first use and can fall back, and the in-graph VAE changes the graph |
+| `native` | the native consumer's set: the served default's contents (`nvfp4`, `text_trim` on, one graph per prompt length, torch VAE outside the graph, no AWQ) with FA4 explicitly off at both sites, because the native C++ pipeline has no FA4 attention (rule R6). The native pipeline carries one resource table and one captured graph per text length, so it serves the trim like the other two consumers |
 
 `resolve_config` raises `ConfigError("<rule id>: <combination>")`:
 
@@ -163,7 +163,6 @@ own historical defaults (untrimmed) for a caller that passes dims by hand.
 | R2 | `gemm_variant_autotune` with a precision that has no switchable tile |
 | R3 | a real VAE encoder, or the VAE inside the graph, without `ae_model_path` / `flux2_src` |
 | R4 | `nvfp4_awq` with a non-AWQ precision, or without a calibration file |
-| R5 | `text_trim` with the `native` consumer. The ABI carries one graph per trimmed length (the exec layer's `ShapeKey` variant table), so it is legal there; the native C++ pipeline still holds one graph and one context length, which is ISSUE-080 condition 5's remaining half |
 | R6 | native consumer with something the native pipeline does not carry: AWQ, a precision it cannot describe, FA4, or the VAE stage |
 | R7 | workload layout inconsistent with the structure |
 | R8 | a calibration file whose identity differs from the resolved dims or `text_trim` |

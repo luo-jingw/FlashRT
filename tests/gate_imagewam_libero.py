@@ -48,8 +48,9 @@ and v1's manifest (``--manifest`` defaults to v2's, and stays overridable).
 The frontend resolves FA4 itself (``use_fa4=None`` in the served profile):
 FA4 where the machine can run it, the cuBLAS chain elsewhere, with the
 resolved value recorded in ``context["config"]["use_fa4"]``. The committed
-latency baseline was measured with FA4 off; the served default's own numbers
-need a Thor re-measure.
+latency baseline describes the untrimmed, FA4-off configuration and bounds it
+from one side only; the served default's own numbers are the ``0920t`` round's
+(``nvfp4`` gate 125.86 ms against fixture v2, end to end 126.5 ms).
 
 ``fp8_static`` (thresholds marked ``requires_calibration``) is gated only
 with a real activation-calibration file, given by ``--fp8-calibration``
