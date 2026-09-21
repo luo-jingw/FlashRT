@@ -96,7 +96,7 @@ can start in any order, in parallel, immediately.
 | 1 | ActionDiT small-M CUTLASS tile retry (Pi0.5's proven "v10" `128x64x256` tile) | speed | hours | none | opportunities.md OPT-014's own `M=64` CUTLASS-slower-than-cuBLASLt regression |
 | 2 | Image normalization LUT (256-entry FP16, precomputed) | speed | hours | none | Pi0.5's own proven technique, "bit-identical" per its docs |
 | 3 | Gated-residual + next-layer-norm fusion (one elementwise kernel) | speed | hours -- 1-2 days | none | Pi0.5's own real, working equivalent -- supersedes the previously-deferred CUTLASS-epilogue idea for this same problem (opportunities.md OPT-013's deferred gated-residual epilogue) |
-| 4 | `linear2` merge (attn_out_proj + mlp_down) | speed | days | none | opportunities.md OPT-015 op-fusion audit sub-problem 3, not started |
+| 4 | `linear2` merge (attn_out_proj + mlp_down) | speed | days | none | opportunities.md OPT-015 op-fusion audit sub-problem 3, implemented as OPT-016 |
 | 5 | VAE port to FlashRT kernel style + in-graph capture | speed | weeks, standalone | none | opportunities.md OPT-008; prerequisite for in-graph VAE, not for anything else here |
 | 6 | Attention-chain fusion feasibility recheck at ImageWAM's own real shapes | analysis | hours, analysis only | none | Pi0.5 rejected this at `M=10` (5-7x slower); ImageWAM's shapes (`M~905` backbone, `M=64` ActionDiT) differ, worth re-checking, not assuming the same verdict |
 | 7 | Real calibration data pipeline (replace `N(0,0.1)` placeholder in `_calibrate_fp8()`) | accuracy | days | none | hub node -- unlocks items 8 and 13 |
@@ -105,7 +105,7 @@ can start in any order, in parallel, immediately.
 | 10 | Jetson clock-locking check for benchmark scripts | deployment | hours | none | Pi0.5's own devfreq/nvpmodel check; ImageWAM benchmarks currently have none |
 | 11 | Precision-routing contract test (stubbed, no GPU) | deployment | hours -- 1 day | none | mirrors Pi0.5's `test_pi05_thor_fp4_routing.py` pattern against ImageWAM's own `_PRECISIONS`/`_wrap_linear` |
 | 12 | ABI integration (`frt_model_runtime_v1`, `io="python"` producer mode) | deployment | 1-3 days | none | zero C++, zero new kernels -- exposes ImageWAM's existing `self._graph`/buffers through the same generic ABI Pi0.5's Python producer already uses |
-| 13 | Fidelity + latency CI/regression gate harness | deployment | days | 7 | gate logic (cosine thresholds, `p50<baseline-margin`, JSON result schema) is generic/copyable from Pi0.5's own harness; content needs real calibration data + a real LIBERO fixture format; ready-made baseline: this session's own real 231.6ms `nvfp4` `infer()` number |
+| 13 | Fidelity + latency CI/regression gate harness | deployment | days | 7 | gate logic (cosine thresholds, `p50<baseline-margin`, JSON result schema) is generic/copyable from Pi0.5's own harness; content needs real calibration data + a real LIBERO fixture format; ready-made baseline: the round that built it recorded 231.6 ms, since re-seeded to 202.2 ms |
 | 14 | Native C++ overlay (`io="native"`/`"native_v2"`) | deployment | 2-4 weeks | 12 | ports existing Python orchestration to C++ against ImageWAM's EXISTING kernels, not a kernel rewrite; the item that actually removes the Python/GIL dependency from the hot path |
 
 ## Dependency graph

@@ -63,3 +63,5 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 唯一还等 owner 的延迟口径问题也记在 `plan.md` 的 "Open"：`latency_baselines.json` 的 202.2 ms 描述的是未裁剪、FA4 关的配置，而它现在被用在服务默认上（同一 gate 里服务默认 125.86 ms），是否按服务默认重新定基线、以及文件里是否逐条写明各数字对应的配置，是那次决定的内容。它不是 Thor 测试项。
 
 `plan.md` 的 "Open" 里另有三个非 Thor 项：T4 的 profile 内容（`fast` 的 FA4 mot 位点与原生 VAE 进图是否继续按名字 opt-in）、标定文件 identity 是否加入 `num_views`/`image_h`/`image_w`、以及目标工作负载自身未确认的声明与其 checkpoint / 标定文件 / 图显存预算。
+
+另一份 plan（"Plan: ActionDiT small-M CUTLASS tile selection"，roadmap item 1）还有一个面向 Thor 的相位是 `blocked`：`gemm_variant_autotune` 的 tile 扫描与 `infer()` A/B 从未在 Thor 上跑过（`benchmarks/imagewam_thor_small_m_tile_sweep.py`，`issues.md` ISSUE-023，`opportunities.md` OPT-018）。它不属于本清单的收尾范围（`fast`/`default` 都不开这个开关），列在这里只是为了不让人以为机器上的活已经全干完——如果要做，那是一个独立的短项。
