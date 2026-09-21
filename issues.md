@@ -1,81 +1,3 @@
-# ISSUE-001
-
-Status: resolved
-
-Area: FP8 cuBLASLt GEMM (`fp8_gemm_descale_fp16` / `fp8_gemm_descale_f32out`, `csrc/kernels/decoder_fused.cu`), used by `Fp8Linear` and `StaticFp8Linear(use_cutlass=False)` in `flash_rt/models/imagewam/quant_linear.py`
-
-## Observation
-
-`fp8_gemm_descale_fp16` fails at `cublasLtMatmulAlgoGetHeuristic` with
-`CUBLAS_STATUS_NOT_SUPPORTED` (status 15) on H100 (sm_90, CUDA 12.6
-toolkit, torch 2.14.0+cu126) at every shape tried, from `[4,16,16]` up to
-the real `[905,27648,3072]`. On the same GPU and process,
-`torch._scaled_mm` with FP8 E4M3 inputs and FP16 output succeeds.
-
-## Impact
-
-The `fp8` and `fp8_static` precisions cannot run on sm_89 or sm_90.
-FP8 accuracy work, such as real-data calibration for `fp8_static*`, can
-only be checked end to end on Thor. Ada showed the same failure, and
-`PROJECT.md` recorded it as an Ada cuBLASLt environment gap.
-
-## Evidence
-
-- The descriptor sets `CUBLASLT_MATMUL_DESC_TRANSA = CUBLAS_OP_N` and
-  `CUBLASLT_MATMUL_DESC_TRANSB = CUBLAS_OP_N`. The weight is laid out as
-  column-major `(N,K)` with `ld=N`, and the activation as `(K,M)` with
-  `ld=K`.
-- cuBLASLt supports FP8 matmul on compute capability 8.9 and 9.0 only in
-  the TN layout (A transposed, B not transposed). Blackwell lifts that
-  restriction, and the same code runs on Thor (sm_110).
-- `tests/test_imagewam_quant_linear.py`: on H100 the FP8 and static-FP8
-  tests skip with the same status-15 message.
-
-## Hypotheses
-
-The NN operation layout is the only cause. With a TN descriptor over a
-weight stored as `(N,K)` row-major, the heuristic would return an
-algorithm on sm_89 and sm_90.
-
-## Next Experiment
-
-Construct a TN variant, with `TRANSA=T` and A stored as `(N,K)` row-major
-(`ld=K`), and run it on H100 at the shapes above. If it works, compare
-its cosine against `Fp16Linear`. Keep the NN path for Thor unless TN is
-measured there to be no slower.
-
-## Resolution
-
-The hypothesis held: the NN operation layout was the only cause.
-
-- `csrc/kernels/decoder_fused.cu` gained `fp8_gemm_descale_fp16_tn` and
-  `fp8_gemm_descale_f32out_tn`: weight stored `(N,K)` row-major,
-  `TRANSA=T`, their own descriptor cache keyed by `(M,N,K,output type)`.
-  The NN functions and their cache are unchanged.
-- `quant_linear.fp8_cublaslt_layout()` returns `"nn"` on compute
-  capability >= 10 (Thor keeps the exact NN path it was measured with)
-  and `"tn"` below. `Fp8Linear` and `StaticFp8Linear(use_cutlass=False)`
-  store the weight in that layout; `layout=` forces one for an A/B.
-- H100 (sm_90): `fp8_gemm_descale_fp16_tn` is bit-exact to
-  `torch._scaled_mm` at `[4,16,16]`, `[905,27648,3072]` and
-  `[64,5120,1024]`; the NN call still returns status 15.
-- `tests/test_imagewam_quant_linear.py` runs its FP8 tests on H100: the
-  small case gives cosine 0.999242 for dynamic and static FP8 (the same
-  value Thor measured), and every served ImageWAM shape (16 distinct
-  `(M,N,K)`, merged single-stream `linear1`/`linear2`) gives cosine
-  0.999291-0.999304, rel_l2 0.0373-0.0376 against `Fp16Linear` (random
-  N(0,0.02) weight, N(0,1) input). The
-  NN-vs-TN test skips here (NN unsupported) and runs on Thor.
-- `sm110_check.sh`: builds; the Thor build exports the TN and NN symbols.
-- End to end on H100 with the real checkpoint
-  (`imagewam_e2e_official_compare.py`, `N_TASKS=3 FRAMES=0`): `fp8` gives
-  `fr_vs_off` median 0.99845, MAE vs GT 0.20706 (official 0.20688).
-  `fp8_static` runs too; its accuracy depends on the activation
-  calibration (`opportunities.md` OPT-022).
-
-Whether TN is as fast as NN on Thor is open; the Thor check is
-`benchmarks/imagewam_fp8_layout_bench.py`.
-
 # ISSUE-002
 
 Status: open
@@ -100,22 +22,14 @@ trained sampler.
 ## Evidence
 
 Source: `benchmarks/imagewam_e2e_official_compare.py` on H100, fp16,
-libero_spatial, 10 tasks x frames {0,60}, 20 frames in total.
+libero_spatial, 10 tasks x frames {0,60}, 20 frames in total. Cosine
+against official, median / min: FlashRT with the same N(0,1) noise
+0.99840 / 0.99567, FlashRT with `0.01*noise` 0.99697 / 0.99301, the
+served `infer()` 0.99602 / 0.98828, official seed 0 vs seed 1
+0.99630 / 0.97154.
 
-| comparison | median | min |
-|---|---:|---:|
-| FlashRT vs official, same N(0,1) noise | 0.99840 | 0.99567 |
-| FlashRT with 0.01*noise vs official | 0.99697 | 0.99301 |
-| served `infer()` vs official | 0.99602 | 0.98828 |
-| official seed 0 vs seed 1 | 0.99630 | 0.97154 |
-
-Mean MAE of the 64-step chunk against ground truth:
-
-| path | mean MAE |
-|---|---:|
-| official | 0.18538 |
-| FlashRT, N(0,1) noise | 0.18359 |
-| served `infer()` | 0.18396 |
+Mean MAE of the 64-step chunk against ground truth: official 0.18538,
+FlashRT with N(0,1) noise 0.18359, served `infer()` 0.18396.
 
 ## Hypotheses
 
@@ -141,9 +55,11 @@ Area: `benchmarks/imagewam_real_checkpoint_validation.py`, block-level check wit
 
 ## Observation
 
-On H100 the backbone check gives cosine 0.993062. The ActionDiT check
-gives 0.999962. On Thor, run 2026-09-14, the same checks gave 0.999927
-and 0.999963.
+`benchmarks/imagewam_real_checkpoint_validation.py`, the block-level check
+with random inputs: on H100 (torch 2.14.0+cu126) the backbone check gives
+cosine 0.993062 and the ActionDiT check 0.999962; on Thor, run
+2026-09-14 (torch 2.9.1+cu130), the same checks give 0.999927 and
+0.999963.
 
 ## Impact
 
@@ -153,11 +69,8 @@ backbone number, however, is no longer comparable across machines.
 
 ## Evidence
 
-| | H100 (this run) | Thor (2026-09-14) |
-|---|---|---|
-| torch | 2.14.0+cu126 | 2.9.1+cu130 |
-| backbone cosine | 0.993062 | 0.999927 |
-| ActionDiT cosine | 0.999962 | 0.999963 |
+Those four cosines and both torch versions are that script's own output on
+the two machines.
 
 ## Hypotheses
 
@@ -173,319 +86,116 @@ divergent layer.
 
 ## Resolution
 
-# ISSUE-060
-
-Status: resolved
-
-Area: `ImageWAMTorchFrontendThor.set_prompt` prompt cache (`flash_rt/frontends/torch/imagewam_thor.py`)
-
-## Observation
-
-`set_prompt` returns early when `(prompt_text, context is not None)`
-equals the cached key. Every call that passes a precomputed `context`
-has the key `(None, True)`, so a second call with a different context
-and mask is ignored: the previous task's context stays in the buffer
-and `infer()` runs on it.
-
-## Impact
-
-Any caller that switches tasks through `set_prompt(context=...)` gets
-actions conditioned on the wrong instruction, without an error.
-`benchmarks/imagewam_e2e_official_compare.py`,
-`benchmarks/imagewam_gate_fixture_generate.py` and
-`tests/gate_imagewam_libero.py` work around it by setting
-`frontend._current_prompt = None` before each new context. The
-`prompt_text` path (live Qwen3) is not affected.
-
-## Evidence
-
-Source of the cache key: `cache_key = (prompt_text, context is not
-None)`, compared before any copy. The workaround line is present in the
-end-to-end script since commit `21a2080`.
-
-## Hypotheses
-
-The cache was written for the random-context and `prompt_text` paths,
-where the key identifies the content. For a precomputed context the key
-carries no content identity.
-
-## Next Experiment
-
-Skip the early return whenever `context` is given (a context copy is
-cheap and the graph is captured only once), then remove the three
-workarounds and confirm the gate's `fp16` result on the v1 fixture is
-unchanged.
-
-## Resolution
-
-`set_prompt` returns early on its cache key only for the live-Qwen3 and
-random paths; a precomputed `context` is applied on every call
-(`flash_rt/frontends/torch/imagewam_thor.py`). The `_current_prompt`
-reset is removed from `benchmarks/imagewam_e2e_official_compare.py`,
-`benchmarks/imagewam_gate_fixture_generate.py` and
-`tests/gate_imagewam_libero.py`.
-
-Checks:
-
-- `tests/test_imagewam_text_trim.py::test_new_context_of_the_same_length_is_applied`
-  (both `text_trim` settings): a second context with the same mask
-  replaces the context rows, changes the actions, and equals a fresh
-  frontend given only that context, bit for bit.
-- `tests/gate_imagewam_libero.py --precision fp16` on fixture v1 (H100),
-  before (base code with the reset) and after (fix, no reset): the 40
-  per-sample `vs_official`, `vs_fp16_reference` and MAE values are
-  identical; `vs_official` median 0.998358, min 0.995532, mean
-  `mae_vs_gt` 0.183642.
-
-# ISSUE-061
-
-Status: open (clock policy decided; baseline re-seed pending on Thor)
-
-Area: regression-gate latency baseline for Thor `nvfp4` (`tests/fixtures/imagewam_gate/latency_baselines.json`)
-
-## Observation
-
-The seeded baseline, `infer()` P50 = 231.6 ms (`opportunities.md`
-OPT-015), has no record of the Jetson power mode, the devfreq clock
-state, or whether `use_fa4` was set when it was measured. The gate runs
-the frontend with its defaults (`use_fa4=False`) and records the clock
-state of every run (`flash_rt/hardware/jetson_clock_state.py`).
-
-## Impact
-
-If the baseline and a gate run differ in clock state or FA4, the
-latency check compares different configurations. A run that differs by a few percent could pass or fail
-for that reason alone. The margin is 5% (limit 243.18 ms).
-
-## Evidence
-
-OPT-014 and OPT-015 report P50 values without clock or FA4 details. The
-40-call stability run before the `linear1` merge had a P50 of 243.5 ms
-with a 243.2-247.3 ms range, against 236.9 ms in the precision table of
-the same checklist.
-
-## Hypotheses
-
-Clock state and FA4 each move `infer()` P50 by a few percent on Thor.
-
-## Next Experiment
-
-On Thor, as the machine is (MAXN, DVFS-managed clocks), run the gate
-for `nvfp4`, with and without `FLASHRT_THOR_FA4=1`. Re-seed the baseline
-from that run and record its clock record and FA4 state in the
-baseline's `source` field.
-
-## Resolution
-
-Clock policy decided: Thor is shared, and no benchmark or gate changes
-its power mode or clocks (no `sudo`, `nvpmodel -m` or `jetson_clocks`).
-Runs happen at the existing MAXN mode with DVFS-managed clocks. The
-latency check records the clock state and never refuses dynamic clocks;
-the baseline comes from a run in the same state. Re-seeding the baseline
-from a Thor run is still pending.
-
-# ISSUE-020
-
-Status: resolved by `text_trim=True`, which the served `default` profile sets (ISSUE-080)
-
-Area: text-token key padding in every attention call
-(`flash_rt/hardware/thor/attn_backend.py` `ImageWAMAttnBackend`, both
-sites; `flash_rt/models/imagewam/pipeline_thor.py`)
-
-## Observation
-
-The served pipeline attends to every one of the `x0` context rows. The
-Qwen3 context is tokenized to a fixed 512 tokens with
-`padding="max_length"` (`flash_rt/models/imagewam/text_encoder.py`).
-LIBERO prompts have 16-31 valid tokens, so about 490 of the 512 text
-rows are padding.
-
-Official `_build_mot_attention_mask_flux2` in
-`imagewam/models/backbones/imagewam.py` excludes the padded text keys
-for every query row:
-
-```python
-mask[:, :, t0:r0] &= text_valid[:, None, :]
-```
-
-`infer_action_flux2` passes `text_attention_mask` to both of its calls,
-the backbone prefill (`action_len=0`) and the action site
-(`action_len>0`). `target_len=0` removes only the region mask.
-FlashRT's `set_prompt()` reads `context_mask` only to place the
-proprio row. At both attention sites FlashRT attends to the padded
-keys and official does not.
-
-## Impact
-
-This one difference accounts for almost all of FlashRT's deviation
-from official, and on some frames it is larger than official's own
-seed-to-seed spread.
-
-Measurement setup:
-
-- 60 LIBERO frames: `libero_spatial`, `libero_goal` and `libero_10`,
-  10 tasks x frames {0, 60} each.
-- FlashRT fp16 against official bf16, seed 0, the same N(0,1) initial
-  noise on both sides, H100.
-- The official variants patch `_build_mot_attention_mask_flux2` to drop
-  `text_attention_mask` at both calls, at the prefill call only, or at
-  the action call only.
-
-Action cosine:
-
-| comparison | median | min | mean |
-|---|---:|---:|---:|
-| FlashRT vs official (masked, as shipped) | 0.99809 | 0.92997 | 0.99543 |
-| FlashRT vs official with the text mask removed at both calls | 0.999979 | 0.99758 | 0.99990 |
-| official masked vs official unmasked | 0.99812 | 0.92807 | 0.99557 |
-| official, mask dropped at the prefill call only, vs masked | 0.99918 | 0.93622 | 0.99631 |
-| official, mask dropped at the action call only, vs masked | 0.99825 | 0.98264 | 0.99794 |
-| official seed 0 vs seed 1 (masked) | 0.99656 | 0.77926 | 0.98782 |
-
-Per suite:
-
-| suite | valid text tokens | FlashRT vs official median / min | FlashRT vs unmasked official median / min | official masked vs unmasked median / min |
-|---|---|---|---|---|
-| libero_spatial | 26-31 | 0.99840 / 0.99567 | 0.99998 / 0.99994 | 0.99839 / 0.99585 |
-| libero_goal | 16-21 | 0.99681 / 0.92997 | 0.99998 / 0.99971 | 0.99690 / 0.92807 |
-| libero_10 | 20-31 | 0.99860 / 0.96642 | 0.99998 / 0.99758 | 0.99860 / 0.97533 |
-
-Four of 60 frames fall below 0.99 against official:
-
-| frame | valid tokens | FlashRT vs official | FlashRT vs unmasked official | official masked vs unmasked | official seed 0 vs 1 |
-|---|---:|---:|---:|---:|---:|
-| libero_goal ep 0, frame 0 | 19 | 0.92997 | 0.99996 | 0.92807 | 0.99756 |
-| libero_10 ep 0, frame 60 | 24 | 0.96642 | 0.99758 | 0.97533 | 0.77926 |
-| libero_goal ep 300, frame 0 | 19 | 0.98105 | 0.99998 | 0.98091 | 0.99554 |
-| libero_goal ep 338, frame 0 | 21 | 0.98137 | 0.99997 | 0.98133 | 0.98854 |
-
-On libero_goal ep 0 frame 0, official's own seed spread is 0.99756, but
-the mask alone moves official to 0.928.
-
-Mean MAE of the 64-step chunk against ground truth barely moves:
-
-| path | mean MAE |
-|---|---:|
-| official masked | 0.15873 |
-| official unmasked | 0.15855 |
-| FlashRT | 0.15868 |
-
-The correlation between the valid-token count and the masked-vs-unmasked
-cosine is 0.258.
-
-## Evidence
-
-- The upstream mask builder and both of its call sites, as quoted above.
-- `ImageWAMAttnBackend.run()` has no key-mask input. With
-  `use_real_mot_mask=True` both sites call unmasked
-  `attention_qkv_fp16_perhead`.
-- The measurements above. Removing the mask from official moves
-  FlashRT's agreement from median 0.99809 / min 0.92997 to median
-  0.999979 / min 0.99758.
-- With proprio packing, padded keys form one contiguous row range,
-  `[valid_count + 1, x0)`, between the proprio row and the image rows.
-
-## Hypotheses
-
-Under the official mask, padded text tokens are inert: no query reads
-them. Their own queries still run, but nothing reads their outputs,
-because the text rows' outputs do not feed the action path except
-through K/V, and padded K/V are masked. If so, dropping the padded rows
-from the sequence is exactly equivalent to the official mask, with no
-mask kernel needed.
-
-Supporting measurement, fp16, H100, 4 libero_goal frames including
-ep 0 frame 0:
-
-- FlashRT built with `x0 = n_valid + 1` (a0 and total adjusted:
-  `a0 = x0 + 392`, `total = a0 + 64`).
-- `set_prompt(context=context[:n_valid], context_mask=mask[:n_valid])`.
-- Cosine against official masked: 0.999976-0.999989, including the
-  frame where the full-length build gives 0.930.
-- The shorter sequence also makes `infer()` faster.
-
-## Next Experiment
-
-Serve with the padded tokens dropped: size `x0` from the prompt's
-valid-token count (`n_valid + 1` with proprio), so `a0` and `total`
-follow, and capture per prompt length. The served frontend fixes `x0`
-at construction today, so this needs either per-prompt construction or
-buffers sized for the maximum length with a capture per length. Then
-run `benchmarks/imagewam_e2e_official_compare.py` on
-`libero_spatial`, `libero_goal` and `libero_10`, and compare
-`fr_vs_off` against the table above; the expected median is
-0.99998-level. Then re-measure `infer()` on Thor.
-
-## Resolution
-
-`ImageWAMTorchFrontendThor(text_trim=True)` (opportunities.md OPT-030)
-builds the sequence from the valid tokens and the proprio row only
-(`x0 = n_valid + 1`, `a0 = x0 + 392`, `total = a0 + 64`), with one CUDA
-graph per distinct length over the max-size buffers. This is the
-official masked math with no mask kernel.
-
-H100, fp16 FlashRT vs official bf16, the same 60 frames
-(`benchmarks/imagewam_e2e_official_compare.py`, `N_TASKS=10
-FRAMES=0,60 SEEDS=0,1`, `TEXT_TRIM=0` / `1`), `fr_vs_off`:
-
-| suite | valid tokens | untrimmed median / min | trimmed median / min |
-|---|---|---:|---:|
-| libero_spatial | 26-31 | 0.99840 / 0.99566 | 0.99998 / 0.99993 |
-| libero_goal | 16-21 | 0.99680 / 0.92997 | 0.99998 / 0.99971 |
-| libero_10 | 20-31 | 0.99860 / 0.96654 | 0.99998 / 0.99654 |
-| all 60 frames | | 0.99809 / 0.92997 | 0.99998 / 0.99654 |
-
-- Frames below 0.99: 4 untrimmed, 0 trimmed. libero_goal ep 0 frame 0
-  goes from 0.92997 to 0.99998.
-- The trimmed minimum is libero_10 ep 0 frame 60: 0.99654 at seed 0 and
-  0.99986 at seed 1. Official's own seed 0 vs seed 1 cosine on that
-  frame is 0.77926.
-- Mean `mae_fr_vs_gt` moves onto official's own: libero_spatial
-  0.18359 -> 0.18555 (official 0.18538), libero_goal 0.16201 -> 0.15958
-  (0.15941), libero_10 0.13044 -> 0.13144 (0.13139).
-
-# ISSUE-021
+# ISSUE-010
 
 Status: open
 
-Area: `ImageWAMTorchFrontendThor._autotune_gemm`
-(`flash_rt/frontends/torch/imagewam_thor.py`), `precision="fp16"` only
+Area: `ImageWAMTorchFrontendThor._autotune_gemm` (`flash_rt/frontends/torch/imagewam_thor.py`), `fp16` precision only
 
 ## Observation
 
 `_autotune_gemm` autotunes cuBLASLt for a fixed list of `(M, N, K)`
-shapes. For single-stream blocks the list still has the split shapes,
-`(a0, 3*hidden, hidden)` and `(a0, 2*mlp_hidden, hidden)`, and their
-ActionDiT counterparts. Since the `linear1` merge (opportunities.md
-OPT-015, finding 1), every precision except `fp16_cutlass` runs one
-merged GEMM of width `3*hidden + 2*mlp_hidden` instead. At the real
-dims that is `(905, 27648, 3072)` for the backbone and
-`(64, 17408, 1024)` for the ActionDiT, and neither shape is in the
-autotune list.
+shapes. The list still holds the split shapes the `linear1` merge
+replaced, `(a0, 3*hidden, hidden)` and `(a0, 2*mlp_hidden, hidden)` with
+their ActionDiT counterparts, and neither of the merged shapes:
+
+- backbone `(a0, 3*hidden + 2*mlp_hidden, hidden)`;
+- ActionDiT `(num_action, 3*action_attn_width + 2*action_mlp_hidden, action_hidden_dim)`.
+
+Since the `linear1` merge (opportunities.md OPT-015, finding 1), every
+precision except `fp16_cutlass` runs one merged GEMM of width
+`3*hidden + 2*mlp_hidden` instead. At the real dims that is
+`(905, 27648, 3072)` for the backbone and `(64, 17408, 1024)` for the
+ActionDiT. Every other `fp16` weight GEMM shape is in the list, including
+the merged `linear2` shapes added by roadmap item 4.
 
 ## Impact
 
-With `precision="fp16"`, the 20 backbone and 20 ActionDiT `linear1`
-GEMMs run on cuBLASLt's top-1 heuristic algorithm, not the autotuned
-one. The size of the loss is unmeasured. It can only match or lose
-against autotuning. `nvfp4` is unaffected, because only its two K=7 /
-N=7 fallback GEMMs go through `fp16_nn`.
+With `precision="fp16"` and `merge_qkv_mlp` on (the `fp16` default), the
+20 backbone and 20 ActionDiT `linear1` GEMMs run with `GemmRunner.fp16_nn`
+on the cuBLASLt heuristic's first pick, not the autotuned one. The size
+of the loss is unmeasured; it can only match or lose against autotuning.
+Quantized precisions are unaffected, because their `linear1` does not go
+through `fp16_nn`: `nvfp4` sends only its two K=7 / N=7 fallback GEMMs
+there.
 
 ## Evidence
 
-Code reading: the `shapes` set in `_autotune_gemm`, compared with
-`_alloc_random_weights` / `build_real_weights(merge_qkv_mlp=True)`,
-which create `linear1.weight` with `n = 3*hidden + 2*mlp_hidden`.
+Code reading: the `shapes` set in `_autotune_gemm` lists the split `qkv`
+and `mlp_in` shapes but no `3*hidden + 2*mlp_hidden` entry, compared with
+`_alloc_random_weights` / `build_real_weights(merge_qkv_mlp=True)`, which
+create `linear1.weight` with `n = 3*hidden + 2*mlp_hidden`; commit
+`4e9f7d7` added the merged GEMM without adding its shape.
 
 ## Hypotheses
 
-The list was not updated when the merge landed.
+An omission in the `linear1` merge, not a deliberate choice: the list was
+not updated when the merge landed.
 
 ## Next Experiment
 
 Add both merged shapes to the list when `dims["merge_qkv_mlp"]` is set.
-Then A/B the fp16 `infer()` on Thor, or on H100 as an indicative
-check, with the same-process alternating method.
+Then A/B the `fp16` `infer()` P50 with and without them in the same
+process, on Thor or on H100 as an indicative check, with the
+same-process alternating method.
+
+## Resolution
+
+# ISSUE-011
+
+Status: open
+
+Area: merged single-stream `linear2` (roadmap item 4) under `fp8`, `fp8_static`, `fp8_static_cutlass`
+
+## Observation
+
+`merge_linear2` is on for the FP8 precisions. `Fp8Linear` quantizes its
+input with one per-tensor absmax scale, and `StaticFp8Linear` with one
+calibrated per-tensor scale, so the merged GEMM quantizes the attention
+output and the SiLU-GLU activation with one shared scale where the split
+path used one scale per half. The weight side is the same: both classes
+quantize the whole merged `(K, N)` weight with one per-tensor FP8 scale,
+where the split path had one scale for `attn_out_proj` and one for
+`mlp_down`.
+
+## Impact
+
+Measured negligible at the GEMM level (Evidence). None of these
+precisions is the shipped default (`nvfp4`, whose per-16-element block
+scales make the merged and split operands identical). The end-to-end
+merged vs split comparison for FP8 has not run; with the ISSUE-001 TN
+layout it can run on H100 as well as Thor.
+
+## Evidence
+
+- `quant_linear.py`: `Fp8Linear.__call__` runs `quantize_fp8_device_fp16`
+  over the whole `(m, k)` input and `__init__` over the whole weight;
+  `StaticFp8Linear.calibrate` freezes one `act_scale`.
+- Roadmap verification pass, real checkpoint, real shapes:
+  - activation absmax ratio between the two halves: backbone median 3.6,
+    max 7.1; ActionDiT median 2.2, max 12.5;
+  - weight absmax ratio between the two halves: 1.06-2.15;
+  - FP8 GEMM error, merged / split: median 1.00x, range 0.98-1.03x
+    (dynamic scale); never more than 2% worse (static scale).
+- E4M3 is a floating-point format (3 mantissa bits, per-value
+  exponent), so a smaller shared scale costs the smaller half dynamic
+  range at the bottom of the exponent range, not relative precision;
+  at these ratios (at most 12.5x, about 3.7 binades) the values stay in
+  the normal range.
+
+## Hypotheses
+
+The single shared scale does not measurably change FP8 accuracy for
+ImageWAM; the existing FP8 calibration gap (the `N(0, 0.1)` placeholder
+activations) dominates.
+
+## Next Experiment
+
+`AB=merge_linear2 PRECISIONS=fp8,fp8_static` with `CKPT_PATH` set
+(`benchmarks/imagewam_fusion_ab.py`), on Thor or on H100: merged vs split
+action cosine. Close this issue if it matches `fp16`'s merged vs split
+(cos >= 0.9999); otherwise default FP8 to the split path
+(`merge_linear2=False` for those precisions).
 
 ## Resolution
 
@@ -573,103 +283,6 @@ all three real-FA4 tests.
 
 Run the Thor checklists in opportunities.md OPT-018 ("Thor check") and
 OPT-019 ("Thor check").
-
-## Resolution
-
-# ISSUE-010
-
-Status: open
-
-Area: `ImageWAMTorchFrontendThor._autotune_gemm` (`flash_rt/frontends/torch/imagewam_thor.py`), `fp16` precision only
-
-## Observation
-
-The merged single-stream `linear1` GEMM shapes, `(a0, 3*hidden +
-2*mlp_hidden, hidden)` and `(num_action, 3*action_attn_width +
-2*action_mlp_hidden, action_hidden_dim)`, are not in the autotune shape
-set. Every other `fp16` weight GEMM shape is, including the merged
-`linear2` shapes added by roadmap item 4. With `merge_qkv_mlp` on (the
-default for `fp16`), `GemmRunner.fp16_nn` runs `linear1` with the
-cuBLASLt heuristic's first pick.
-
-## Impact
-
-`fp16` only (quantized precisions do not use `fp16_nn` for these GEMMs).
-Size unknown: autotune can only match or beat the heuristic pick.
-
-## Evidence
-
-`_autotune_gemm`'s `shapes` set lists the split `qkv` and `mlp_in` shapes
-but no `3*hidden + 2*mlp_hidden` entry; commit 4e9f7d7 added the merged
-GEMM without adding its shape.
-
-## Hypotheses
-
-An omission in the `linear1` merge, not a deliberate choice.
-
-## Next Experiment
-
-Add both shapes, then A/B `fp16` `infer()` P50 on Thor with and without
-them in the same process.
-
-## Resolution
-
-# ISSUE-011
-
-Status: open
-
-Area: merged single-stream `linear2` (roadmap item 4) under `fp8`, `fp8_static`, `fp8_static_cutlass`
-
-## Observation
-
-`merge_linear2` is on for the FP8 precisions. `Fp8Linear` quantizes its
-input with one per-tensor absmax scale, and `StaticFp8Linear` with one
-calibrated per-tensor scale, so the merged GEMM quantizes the attention
-output and the SiLU-GLU activation with one shared scale where the split
-path used one scale per half. The weight side is the same: both classes
-quantize the whole merged `(K, N)` weight with one per-tensor FP8 scale,
-where the split path had one scale for `attn_out_proj` and one for
-`mlp_down`.
-
-## Impact
-
-Measured negligible at the GEMM level (Evidence). None of these
-precisions is the shipped default (`nvfp4`, whose per-16-element block
-scales make the merged and split operands identical). The end-to-end
-merged vs split comparison for FP8 has not run: FP8 GEMMs fail on H100
-until the ISSUE-001 TN-layout fix lands (calibration stream); after
-that it can run on H100 as well as Thor.
-
-## Evidence
-
-- `quant_linear.py`: `Fp8Linear.__call__` runs `quantize_fp8_device_fp16`
-  over the whole `(m, k)` input and `__init__` over the whole weight;
-  `StaticFp8Linear.calibrate` freezes one `act_scale`.
-- Roadmap verification pass, real checkpoint, real shapes:
-  - activation absmax ratio between the two halves: backbone median 3.6,
-    max 7.1; ActionDiT median 2.2, max 12.5;
-  - weight absmax ratio between the two halves: 1.06-2.15;
-  - FP8 GEMM error, merged / split: median 1.00x, range 0.98-1.03x
-    (dynamic scale); never more than 2% worse (static scale).
-- E4M3 is a floating-point format (3 mantissa bits, per-value
-  exponent), so a smaller shared scale costs the smaller half dynamic
-  range at the bottom of the exponent range, not relative precision;
-  at these ratios (at most 12.5x, about 3.7 binades) the values stay in
-  the normal range.
-
-## Hypotheses
-
-The single shared scale does not measurably change FP8 accuracy for
-ImageWAM; the existing FP8 calibration gap (the `N(0, 0.1)` placeholder
-activations) dominates.
-
-## Next Experiment
-
-`AB=merge_linear2 PRECISIONS=fp8,fp8_static` with `CKPT_PATH` set
-(`benchmarks/imagewam_fusion_ab.py`), on Thor, or on H100 once
-ISSUE-001's TN fix lands: merged vs split action cosine. Close this issue
-if it matches `fp16`'s merged vs split (cos >= 0.9999); otherwise default
-FP8 to the split path (`merge_linear2=False` for those precisions).
 
 ## Resolution
 
@@ -766,11 +379,10 @@ table in 127 of 256 entries, by at most 0.0039; on tokens this is the
 
 The VAE amplifies the resize-filter difference, more at 256 -> 224 than
 at 512 -> 224, and the policy is robust to it in open loop at both
-sizes. `pil_bilinear` is closer to the training transform than area
-(token cosine 0.9963 vs 0.9926 at 512, 0.9957 vs 0.9793 at 256), but
-neither reproduces training exactly: training resizes in float32 without
-uint8 rounding. The official eval chain is as far from training as
-`pil_bilinear` is.
+sizes. `pil_bilinear` is closer to the training transform than area (the
+token-cosine table above), but neither reproduces training exactly:
+training resizes in float32 without uint8 rounding. The official eval
+chain is as far from training as `pil_bilinear` is.
 
 ## Next Experiment
 
@@ -781,6 +393,50 @@ transform mode (float32 bilinear antialias) would be closer to training
 still, but no reference eval uses it. A closed-loop LIBERO success-rate
 A/B of `area` vs `pil_bilinear` at the eval's 256x256 rendering on Thor
 would settle whether the difference matters beyond open loop.
+
+## Resolution
+
+# ISSUE-040
+
+Status: open
+
+Area: `flash_rt.core.calibration.stratified_sample_indices` (house calibration-frame sampler)
+
+## Observation
+
+With `frames_per_ep = ceil(n / n_eps)` and `step = len(ep) // frames_per_ep`,
+`range(0, len(ep), step)` yields `frames_per_ep + 1` frames whenever
+`len(ep)` is not a multiple of `frames_per_ep`. The loop stops at `n`
+picks, so the extra frame per episode is paid for by episodes at the end
+of the chosen list, which are never reached.
+
+## Impact
+
+Episode coverage is about two thirds of what the docstring promises.
+For ImageWAM's calibration build (`n = 64`, three suites, 21-22 frames
+per suite) each suite's share covered 6-7 episodes instead of 11
+(`frames 0, len//2, len-1` per episode). Pi0.5/GROOT callers of the same
+function are affected the same way. The scales stayed stable in this
+case: a differently mixed 64-frame set (31/27/6 frames per suite) gave
+per-site amax within a few percent (e.g. `txt_mlp2` max 7051 vs 7067,
+single-stream `linear1` median 36.47 vs 36.42).
+
+## Evidence
+
+- `benchmarks/imagewam_build_calibration.py` log: "64 from 21 episodes"
+  for 3 x 11 chosen episodes.
+- `select_calibration_frames(..., n=64)` picks frames `0, 72, 144` of
+  `libero_object` episode 0.
+
+## Hypotheses
+
+The intended behavior is exactly `frames_per_ep` frames per chosen
+episode (`range(0, len, step)[:frames_per_ep]`).
+
+## Next Experiment
+
+Cap each episode at `frames_per_ep` picks, rebuild the ImageWAM file,
+and compare per-site amax and the `fp8_static` fidelity numbers.
 
 ## Resolution
 
@@ -856,7 +512,7 @@ attention that follows.
 ## Evidence
 
 `benchmarks/imagewam_e0m3_accuracy_study.py` activation statistics (4
-frames): `txt_mlp2` absmax 5580, fraction of saturated blocks 6e-6.
+frames): fraction of saturated blocks at `txt_mlp2` 6e-6.
 Per-GEMM error at `txt_mlp2`: `nvfp4` 0.09482; with a per-16 Hadamard
 rotation (outlier spread to 1395) 0.04147; with a per-tensor
 activation pre-scale 0.03350; `e0m3_hadamard` 0.03440.
@@ -917,50 +573,6 @@ change.
 
 ## Resolution
 
-# ISSUE-040
-
-Status: open
-
-Area: `flash_rt.core.calibration.stratified_sample_indices` (house calibration-frame sampler)
-
-## Observation
-
-With `frames_per_ep = ceil(n / n_eps)` and `step = len(ep) // frames_per_ep`,
-`range(0, len(ep), step)` yields `frames_per_ep + 1` frames whenever
-`len(ep)` is not a multiple of `frames_per_ep`. The loop stops at `n`
-picks, so the extra frame per episode is paid for by episodes at the end
-of the chosen list, which are never reached.
-
-## Impact
-
-Episode coverage is about two thirds of what the docstring promises.
-For ImageWAM's calibration build (`n = 64`, three suites, 21-22 frames
-per suite) each suite's share covered 6-7 episodes instead of 11
-(`frames 0, len//2, len-1` per episode). Pi0.5/GROOT callers of the same
-function are affected the same way. The scales stayed stable in this
-case: a differently mixed 64-frame set (31/27/6 frames per suite) gave
-per-site amax within a few percent (e.g. `txt_mlp2` max 7051 vs 7067,
-single-stream `linear1` median 36.47 vs 36.42).
-
-## Evidence
-
-- `benchmarks/imagewam_build_calibration.py` log: "64 from 21 episodes"
-  for 3 x 11 chosen episodes.
-- `select_calibration_frames(..., n=64)` picks frames `0, 72, 144` of
-  `libero_object` episode 0.
-
-## Hypotheses
-
-The intended behavior is exactly `frames_per_ep` frames per chosen
-episode (`range(0, len, step)[:frames_per_ep]`).
-
-## Next Experiment
-
-Cap each episode at `frames_per_ep` picks, rebuild the ImageWAM file,
-and compare per-site amax and the `fp8_static` fidelity numbers.
-
-## Resolution
-
 # ISSUE-070
 
 Status: open
@@ -1002,903 +614,20 @@ tests and re-run; all five should pass.
 
 ## Resolution
 
-# ISSUE-071
-
-Status: resolved
-
-Area: `ImageWAMTorchFrontendThor._graph` replay, final backbone residual
-(`backbone_hidden` after the last single-stream block)
-
-## Observation
-
-On H100 (fp16, small random dims), a scratch parity script that ran the
-Python pipeline eagerly (`pipeline_thor._single_stream_layer`,
-`_double_stream_layer`, `imagewam_prefill`, `imagewam_denoise_loop`) and
-the native pipeline eagerly, then replayed the Python graph once from a
-restored input state, saw that replay's final `backbone_hidden` differ
-from every other run by `max_abs` 0.0049 and 0.0035 in 2 of 7 script
-runs. In the same replays the K/V caches, `Q_O` and `action_latent` were
-bit-identical, and every later replay matched the eager result exactly.
-
-## Impact
-
-None on actions: after the last backbone layer, the residual is not read
-by the denoise loop (it reads only the K/V caches). Bit-exact parity
-checks that included `backbone_hidden` after a Python-graph replay failed
-intermittently, so the native-pipeline test had dropped that buffer from
-its native-graph vs Python-graph comparison.
-
-## Evidence
-
-- Targeted reproductions did not trigger it: 500 consecutive replays
-  (0 mismatches); first replay after eager Python denoise, eager native
-  denoise, or both (30 trials each, 0 mismatches).
-- The difference is confined to the last block's gated residual update,
-  i.e. to its `attn_out_proj` / `mlp_down` GEMMs, its `_add_inplace`, or
-  its in-graph gate tensor (`_fuse_mod_group` output in the graph's
-  private memory pool).
-
-## Hypotheses
-
-1. Memory in the graph's private pool that backs the last block's
-   in-graph gate tensor was modified between capture and that replay.
-2. A timing-dependent kernel choice or workspace effect in one of the
-   last block's GEMMs under a co-tenant load.
-
-## Next Experiment
-
-Replay with the per-layer gate tensors hoisted out of the graph (the
-native pipeline's precomputed modulation) and count mismatches over many
-first replays after mixed eager work; if they disappear, hypothesis 1
-holds.
-
-## Resolution
-
-Resolved 2026-09-18: a race in the test harness, not in the Python graph.
-
-- Root cause: the snapshot that followed the Python-graph replay queued
-  its `clone()` copies on the torch stream and returned without waiting
-  for them. The next call, `NativeRuntime::capture()`, ran its eager
-  warm-up on the native stream, which is created non-blocking and so is
-  not ordered after the torch stream. The warm-up's first GEMM
-  (`txt_in`, rows `[0, x0)` of `backbone_hidden`) could overwrite those
-  rows before the copy read them. With small random weights the final
-  residual is within a few bf16 ulps of the `txt_in` output, which is why
-  the differences were small and confined to the text rows.
-- Reproduction: with `backbone_hidden` back in
-  `test_native_graph`'s comparison, the test failed in 15 of 24 runs on
-  H100 (GPU shared with another process), with differences only in rows
-  `[0, x0)`. With a second Python replay added, only the snapshot taken
-  directly before `capture()` differed. A replica with no native work
-  right after the snapshot never failed.
-- Fix: `frt_imagewam_native_run` and `frt_imagewam_native_capture` now
-  wait for all prior device work (`cudaDeviceSynchronize`) before they
-  write the frontend's buffers, and the test's snapshot waits for its
-  copies. Either change alone removed the failure: 0 of 16 runs failed
-  (8 processes, both layer structures). With both
-  changes, the native runtime and pipeline tests, including the
-  restored comparison, passed in 10 of 10 runs.
-- Consistent with independent evidence that the Python graph is
-  deterministic: over 100 fresh-process runs of first versus later
-  replays and eager runs, across scenarios and the base commit, showed 0
-  mismatches, with one digest per structure across processes.
-
-# ISSUE-080
-
-Status: resolved — `text_trim` serves by default (`plan.md` "Decisions
-pending", E1), all six conditions below are satisfied, and the `0920c` Thor
-round confirmed the last one (the native pipeline's own per-length capture,
-whose two defects were found by the first run of that row and fixed at
-`43c49ce`). Conclusions in `opportunities.md` OPT-019/OPT-028/OPT-029/OPT-030
-and `THOR_STATUS_SUMMARY.md`.
-
-Area: `ImageWAMTorchFrontendThor(text_trim=...)`
-(`flash_rt/frontends/torch/imagewam_thor.py`, opportunities.md OPT-030)
-
-## Observation
-
-`text_trim=True` removes FlashRT's largest deviation from official
-(ISSUE-020) and shortens every backbone GEMM and attention call, but
-it is opt-in. On H100 it is verified at `fp16`, `fp8` and `fp8_static`
-(with a calibration file recorded trimmed). `nvfp4`, `e0m3_hadamard`,
-`fp8_static_cutlass` and FA4 run on Thor only.
-
-At seed 1 the trimmed fp16 libero_goal minimum vs official is
-ep 114 frame 60, 0.99487-0.99510 over four H100 runs, where official's
-own seed 0 vs seed 1 cosine is 0.93157 (seed 0 on the same frame:
-0.99966-0.99971).
-
-## Impact
-
-The untrimmed configuration (`nvfp4`) keeps attending to about 490
-padded text keys: action cosine vs official down to 0.930 at fp16 on
-libero_goal, and about 30% more replay time than trimmed at fp16 on
-H100.
-
-Costs that come with the flag:
-
-- The first `set_prompt` of each new text length captures a graph:
-  0.6-2.0 s at fp16 on H100 (fp16 GEMM autotune of the new shapes is
-  0.3-0.6 s of it; other precisions skip that part). Thor time is
-  unmeasured. A cached length switches in about 10 ms.
-- Each cached length holds one CUDA graph: 10-16 MiB on H100 (NVML,
-  per process). The cache has no bound; LIBERO has 15 distinct lengths
-  over its four suites, and the buffers allow up to 512.
-- The regression gate's fixture v1 stores an untrimmed fp16 reference.
-  Trimmed fp16 on that fixture (H100, 40 runs) measures vs official
-  median 0.99998 / min 0.99992, but vs the stored fp16 reference median
-  0.99837 / min 0.99579, below the fp16 bounds 0.999 / 0.995; mean MAE
-  ratio to the reference 1.0115 (bound 1.02). Serving `text_trim=True`
-  by default needs the fixture's fp16 reference regenerated with
-  trimming (`benchmarks/imagewam_gate_fixture_generate.py`), a new
-  fixture version.
-
-## Evidence
-
-opportunities.md OPT-030 (H100 numerics, speed, capture cost and
-memory).
-
-## Hypotheses
-
-On Thor, trimming improves `nvfp4` agreement with official on every
-suite by about as much as on fp16, and lowers `infer()` P50 because
-the backbone (about 46% of `infer()`) runs about 420 instead of 905
-rows.
-
-## Next Experiment
-
-Conditions for making `text_trim=True` the served default, all of them:
-
-1. Thor `nvfp4` end-to-end compare with `TEXT_TRIM=0` and `1` on
-   libero_spatial, libero_goal and libero_10, and the FA4 checks (`plan.md`
-   "Thor validation checklist", steps 3 and 5): trimmed agreement with
-   official at or above untrimmed on every suite, `infer()` P50 lower.
-2. The multi-length safety check on Thor at the served precision, FA4
-   off and on (`plan.md` "Thor validation checklist" step 3,
-   `tests/test_imagewam_text_trim_graph_safety.py`): every length
-   bit-identical to a fresh single-length frontend, no weight-op tensor
-   reallocated, no write into poisoned free memory.
-3. A failed capture leaves no graph active (done: `set_prompt` raises,
-   `infer()` refuses, cached lengths keep working).
-4. Gate fixture v2 with a trimmed fp16 reference
-   (`benchmarks/imagewam_gate_fixture_generate.py`): fixture v1's fp16
-   reference is untrimmed and trimmed fp16 falls below its fp16 bounds
-   (0.99837 / 0.99579 vs 0.999 / 0.995).
-5. Every consumer of the frontend's graph and buffers uses the active
-   per-length dims (opportunities.md OPT-030, "Constraints on consumers
-   of a trimmed frontend"): the runtime surface and export with
-   `text_trim` and the active `x0` in the setup identity and the graph
-   re-adopted after the prompt verb, one native graph per length, and
-   calibration files recorded trimmed (the file identity enforces the
-   last). Until then `runtime_surface()`, `pipeline_resources()` and
-   `export_model_runtime()` refuse a trimmed frontend.
-6. Known prompt lengths captured at startup (`precapture_text_lengths`)
-   and a bounded per-length cache, so no capture happens while serving
-   and memory stays bounded.
-
-Status of the six conditions after the `eccf14f` round:
-
-1. satisfied (Thor, three suites: trimmed agreement with official at or
-   above untrimmed, lower P50).
-2. satisfied at `0920`: the multi-length safety check passes with FA4 off
-   (4 tests) and with FA4 on (4 tests), the recovery case reporting
-   `equal=True cosine=1 max_abs=0` against a chain reference. The work behind
-   it is ISSUE-085: one real capture-path defect (the fallback reusing an
-   invalidated pool) plus two tests that compared across attention chains or
-   through a blind profiler region.
-3. satisfied (a failed capture leaves no graph active).
-4. satisfied: fixture v2 with a trimmed `fp16` reference was generated
-   (`text_trim=true`) and a trimmed nvfp4 gate run passes against it (vs
-   official 0.99931 / min 0.99898, vs the fixture's fp16 reference
-   0.99935 / 0.99907, P50 114.6 ms). Only its manifest is committed; the
-   fixture data stays in the bundle.
-5. satisfied for all three faces, the native pipeline's own capture included.
-   The ABI serves trimmed prompts (one adopted graph per text length, selected
-   by the replay key; the tick at two different lengths is bit-exact against
-   `infer()`), the native model runtime does the same (the io config declares
-   the deployment's lengths, `use_graph(key, exec)` fills the handle's variant
-   table, `set_text_length(key)` selects the active one on the hot path with
-   `set_proprio_row`, and `export_model_runtime(io="native")` adopts one exec
-   per captured length), and the native C++ pipeline now records one pipeline
-   and one graph per text length itself: `pipeline_resources()` describes the
-   active length, `set_pipeline` installs the key its table carries and makes
-   it active, and `ImageWAMNativeRuntime.capture_pipeline_text_lengths`
-   installs and captures every length the frontend has captured, restoring the
-   active one afterwards. Rule R5 is removed: `text_trim=True` is legal for
-   `consumer="infer"`, `"abi"` and `"native"`, and the `native` profile is the
-   native consumer's set (the served `default`'s switches with FA4 off).
-   The Thor round that first ran this last half also found its two defects,
-   both fixed at `43c49ce`: `captured_text_lengths` is a property on the
-   pipeline source but was read as a method, and the per-length tick compared
-   one side's rows against the other side's leftovers instead of a baseline
-   both sides start from. The re-run at `0920c` confirms the half: the native
-   pair collects 39 tests with no skip, `test_pipeline_records_one_graph_per_text_length`
-   installs and captures one pipeline per captured length from the handle
-   itself with a complete per-length GEMM hand-off
-   (`{6: (4, 4), 14: (4, 4)}`), both ticks are `array_equal` to `infer()` with
-   `differing=[]`, and the untrimmed one-key path is unchanged
-   (`graph_exec=0`, `graph_nodes=0`, `graph_producer=''`).
-6. satisfied: the per-length cache is bounded (`text_trim_cache_size`,
-   default 32) and `precapture_text_lengths` fills it at construction. On
-   Thor a precaptured length switches in 0.000-0.012 s where a length
-   captured on first use takes 0.42-0.58 s. Eviction behaves as designed: with
-   the bound at 2 and no precapture, `set_prompt` for the lengths 16 -> 24 ->
-   31 -> 16 costs 0.636 / 0.503 / 0.468 / **0.465 s**, i.e. the revisited
-   length captures again, against 0.012 / 0.000 / 0.000 s for the same three
-   lengths precaptured under a bound of 8. The memory claim in this issue's
-   own text (10-16 MiB per captured graph on H100) is wrong for Thor: the
-   first captured graph costs +218.0 MiB reserved / +206.3 MiB allocated and
-   every following one +0.0 / +0.1 MiB, because the captures share the pool -
-   15 LIBERO lengths together sit under one graph's worth of fixed cost, and
-   the default bound of 32 is on the order of 221 MiB, not 32 x 218 MiB.
-
-The design question in "Shape of condition 5" is settled for this
-deployment: exact trimmed lengths, precaptured at construction and bounded by
-an LRU cache, no 16-token buckets (the instruction set is fixed and short, so
-the graph count stays small and no padding mask is needed anywhere).
-
-The default followed from that: `text_trim` is the served default
-(`plan.md` "Decisions pending", E1), the constructor keeps its historical
-untrimmed defaults for a caller that passes dims by hand, and the gate's own
-defaults are the served configuration (fixture v2, trimming on).
-
-### Shape of condition 5: exact lengths or 16-token buckets
-
-Two ways to give the ABI and the native pipeline the per-length graphs (rule
-R5 refused them until phase S4), with different costs:
-
-- **Exact length + a bounded cache** (what `text_trim` does now): one graph
-  per distinct `x0 = n_valid + 1`, exactly the official masked math, no mask
-  in any kernel. The graph set is data-dependent, so the ABI must either
-  declare the deployment's known lengths at startup
-  (`precapture_text_lengths`, condition 6) or accept a graph adopted after
-  the prompt verb. Memory and capture time are per length (10-16 MiB,
-  0.6-2.0 s at fp16 on H100).
-- **16-token buckets**: `x0` rounded up to a multiple of 16, so the graph
-  set is fixed and known (`ceil(text_max_len / 16) + 1` graphs: 33 for
-  LIBERO's 512, 9 for a 128-token workload) whatever the prompts are. The
-  rows inside the last bucket are padding, and the official model MASKS
-  them: running the same unmasked attention over them would change the
-  softmax denominator, so a bucketed graph is only equal to the official
-  math if the padding rows are masked at both attention sites. The
-  backbone's masked reference kernel exists
-  (`tests/test_imagewam_backbone_ref_masked_kernel.py`); the FA4 path would
-  need to carry the same mask.
-
-Bucketing is the cheaper shape for a bounded ABI and for a small
-`text_max_len` (a 128-token workload has 9 buckets), and it costs a mask and
-the kernel work around it. Exact lengths need no kernel change and keep the
-graph set data-dependent.
-
-## Resolution
-
-# ISSUE-081
-
-Status: resolved
-
-Area: `ImageWAMTorchFrontendThor.runtime_surface().view_shape`
-(`flash_rt/frontends/torch/imagewam_thor.py`), consumed by
-`flash_rt/models/imagewam/runtime_export.py` (`decode_image_views`,
-the declared frame shape and the exported verb list)
-
-## Observation
-
-`runtime_surface()` reports
-
-```python
-view_shape=((2, 224, 224) if self._vae_stage is None else
-            (self._vae_stage.spec.num_views, self._vae_stage.spec.in_h, self._vae_stage.spec.in_w))
-```
-
-so a frontend built with the VAE outside the CUDA graph (`vae_encoder="torch"`
-or `"native"` with `vae_graph_input=None`, the `default` profile) declares
-`(2, 224, 224)` whatever workload it was resolved for. `vae_graph_input`
-carries the workload's own `(num_views, image_h, image_w)` when the VAE is in
-the graph, so the hard-coded value is reached only on the outside-the-graph
-path.
-
-## Impact
-
-`view_shape` is not descriptive: `decode_image_views` unpacks the ABI's image
-payload with it, and `_input_shapes`/the exported verb list declare
-`(*view_shape, 3)` uint8 frames. A deployment whose workload differs from
-LIBERO's (a different camera count, or a per-view size other than 224x224)
-therefore exports an ABI that decodes the wrong number of bytes per frame and
-declares the wrong input shape, while `infer()` itself would take the views it
-is handed. This is the deployment `TARGET_WORKLOAD`
-(`benchmarks/_imagewam_workload_cli.py`) describes, whose open field is
-recorded in `plan.md`'s open list.
-
-## Evidence
-
-- `flash_rt/frontends/torch/imagewam_thor.py`, `runtime_surface()`.
-- `flash_rt/models/imagewam/runtime_export.py:100` (`decode_image_views(payload,
-  view_shape)`), `:164` (`frames = decode_image_views(payload,
-  self._surface.view_shape)`), `:196` (`frame_shape = (*surface.view_shape, 3)`),
-  `:235` (`view_names(surface.view_shape[0])`).
-- `ImageWAMWorkload.vae_graph_input()` returns the workload's
-  `(num_views, image_h, image_w)` and is the only other source of the same
-  geometry; `resolve_config` sets it only when the profile/override puts the
-  VAE in the graph.
-
-## Hypotheses
-
-The constant predates the workload object (it was the LIBERO shape of the
-frontend's own `set_prompt`/staging path) and was never revisited when
-`view_shape` became the ABI's frame geometry.
-
-## Next Experiment
-
-Carry the geometry from the workload: a frontend built through
-`from_config`/`load_imagewam` reports `workload.vae_graph_input()` as
-`view_shape` on both paths (equal to the VAE stage's spec when the stage
-exists), and a frontend built by the constructor with hand-passed dims keeps
-today's value. Then check, on `TARGET_WORKLOAD`, that the exported
-runtime's `image_views` verb list and its declared frame shape follow the
-workload, and that a LIBERO export is unchanged.
-
-# ISSUE-082
-
-Status: resolved
-
-Area: Thor latency baselines and the configuration matrix's thresholds —
-`tests/gate_imagewam_libero.py` (gate) versus
-`benchmarks/imagewam_e2e_official_compare.py` through
-`scripts/imagewam_thor_matrix.sh` (matrix), and
-`tests/fixtures/imagewam_gate/latency_baselines.json`
-
-## Observation
-
-On `c20f3a0`, `SUITE=libero_spatial PRECS=nvfp4 PROFILES="default fast"`
-measured `infer()` P50 225.2 ms for `profile=default` and 106.8 ms for
-`profile=fast`. The flag-row ladder in the same session measured
-`default` 225.5, `vae` 190.1, `vae_trim` 102.9, `vae_trim_fa4bb` 99.0 and
-`stack` 93.2 ms; `fast` and `stack` are the same switch set (the C2 check
-showed the same resolved `effective_config`, character for character).
-
-Two recorded baselines are used as if they were commensurate with those
-matrix rows:
-
-- `THOR_STATUS_SUMMARY.md` records the current default as "约 202–203 ms
-  （gate 203.3）", and the stacked configuration as 106.1 ms.
-- `plan.md` W12's criterion is "matrix rows `default` and `stack` within
-  run-to-run noise of the recorded 203.3 / 106.1 ms".
-
-203.3 ms is a gate number (`tests/gate_imagewam_libero.py`, the frontend
-alone); the matrix rows are the end-to-end compare, which also loads the
-official model, encodes the official text context and runs both sides per
-frame. In the same session the ABI path (frontend alone) measured 226 ms,
-which is consistent with the matrix's 225.2 ms for `default`.
-
-The same configuration measured twice in one session — `profile=fast`
-106.8 ms and the ladder's `stack` 93.2 ms — differs by 13.6 ms.
-
-## Impact
-
-Two questions cannot be answered from this round:
-
-1. Whether the default path is slower on `c20f3a0` than the recorded
-   baseline. No gate number exists for this commit, so a 203.3 -> 225
-   reading mixes two measurement scopes; a regression is neither shown nor
-   excluded. The same round argues against a machine-wide slowdown: the
-   `profile=fast` row (106.8 ms) reproduces the recorded end-to-end 106.1 ms
-   to within 0.7 ms, so the end-to-end scope is comparable across sessions
-   on this machine. The ladder's `stack` row — the same switches, later in
-   the same session — is the outlier at 93.2 ms.
-2. How large the spread of one row is. The 13.6 ms between those two
-   instances of the same configuration is larger than the 2 ms working
-   threshold the switch ladder's criterion uses for the FA4-into-the-default
-   criterion, which was judged on `stack` - `vae_trim` = 9.7 ms in one
-   ladder pass.
-
-## Evidence
-
-- This round: `$OUT/matrix_libero_spatial_nvfp4_profiles_default+fast.{csv,md}`
-  and the ladder's `matrix_libero_spatial_nvfp4_<row>.log` under
-  `/home/jingwu/thor_val/c20f3a0`.
-- `THOR_STATUS_SUMMARY.md`, "逐项收益" and "各精度" tables (the 202-203 ms
-  and 106.1 ms entries name their own measurement), and the 231.6 ms
-  baseline that `latency_baselines.json`'s 243 ms nvfp4 threshold was
-  derived from.
-- The switch ladder's criteria ("阈值是工作值，按跑间波动调整",
-  `THOR_STATUS_SUMMARY.md`, "开关阶梯") and the latency baseline's scope
-  (ISSUE-082).
-
-## Hypotheses
-
-The Thor runs in its existing MAXN power mode with DVFS-managed clocks and
-is shared (`PROJECT.md`, "Project-Specific Constraints"), so a row's
-duration carries the machine's power and thermal state at that moment; the
-matrix runs one process per row in a fixed order, so row order and state
-are correlated. The gate and the compare differ in what else is resident
-and in how many times the graph is replayed per measurement.
-
-## Next Experiment
-
-1. Run `tests/gate_imagewam_libero.py` on `c20f3a0` in a recorded clock
-   state and compare with the 203.3 ms gate number; if they differ, run the
-   same gate on the pre-change commit `1ff6034` in the same session, so the
-   default path is compared against itself.
-2. Repeat one configuration three times in a single session (and once in a
-   second session) and record the spread next to the clock state; use it to
-   reset the ladder's threshold and the Thor entries of
-   `tests/fixtures/imagewam_gate/latency_baselines.json` (item E2).
-
-# ISSUE-083
-
-Status: resolved
-
-Area: `ImageWAMWorkload.text_max_len` against the live Qwen3 text encoder
-(`flash_rt/models/imagewam/text_encoder.py`) and the frontend's context
-writer (`ImageWAMTorchFrontendThor.set_prompt`)
-
-## Observation
-
-The deployment's candidate workload carries instructions of 16-128 tokens
-(owner, 2026-09-18), so the padded text length is 128 rather than LIBERO's
-512. `text_encoder.py` fixes the encoder's own length: it tokenizes with
-`padding="max_length", truncation=True, max_length=512` (`_MAX_LENGTH =
-512`, matching `flux2.text_encoder.MAX_LENGTH`), so
-`encode_prompts`/`load_real_text_encoder` always produce a context of
-exactly `(512, 7680)`.
-
-The frontend requires the context it is given to match the workload:
-
-- `proprio_dim` set (the served path): `_set_context_with_optional_proprio`
-  raises `dims['x0']=129 must equal the text context length (512) + 1 (the
-  proprio slot)`;
-- `proprio_dim` unset: `context length 512 != dims['x0']=128`;
-- `text_trim=True`: `_write_trimmed_context` raises once the valid count
-  needs more than `dims['x0']` rows — that one is per prompt, not fixed.
-
-A `text_max_len=512` workload (LIBERO's) has none of these problems, which
-is why the served configuration never met them.
-
-## Impact
-
-A 128-token workload cannot take the live encoder's output as it is, so the
-deployment has to decide how the context for that workload is produced:
-
-1. slice the encoder's `(512, 7680)` output to its first `text_max_len`
-   rows (keeping the mask), or
-2. encode with a shorter `max_length` (a `text_encoder.py` change), or
-3. keep `text_max_len=512` and trim at run time (`text_trim`).
-
-(1) and (2) are only equivalent if a token's hidden state does not depend on
-how far the padding extends beyond it, which follows from the encoder's
-attention mask but has not been checked against the official model. (3)
-keeps the official served length and makes `text_trim` the thing that
-removes the padding.
-
-There is also a quantitative consequence for `text_trim`: at
-`text_max_len=128` with 3 views of 256x256 (`img_len = 16*48 = 768`,
-`x0 = 129`, `a0 = 897`) a trimmed sequence of `n_valid + 1` rows saves at
-most 112 of 897 backbone rows, so the trimmed-vs-untrimmed difference is a
-fraction of the LIBERO measurement (-87.2 ms out of 225.5 ms, where the
-padded block was 513 of 905 rows).
-
-## Evidence
-
-- `flash_rt/models/imagewam/text_encoder.py` (`_MAX_LENGTH = 512`, the
-  tokenizer call), `_imagewam_thor_spec.py`'s `context` shape `(512, ...)`.
-- `flash_rt/frontends/torch/imagewam_thor.py`,
-  `_set_context_with_optional_proprio` (`x0 != text_len + 1` ->
-  `ValueError`), `_write_context`, `_write_trimmed_context`.
-- `plan.md`, the LIBERO facts: `data.train.context_len: 128` is a
-  training-time setting, not the served text length.
-- `opportunities.md` OPT-030 and `THOR_STATUS_SUMMARY.md` for the LIBERO
-  ladder the 128-token arithmetic above is compared against.
-
-## Hypotheses
-
-The 512 comes from FLUX.2's own text encoder configuration, so slicing its
-output is expected to be a pure sub-sequence of the same computation (the
-padding positions are masked), but the official serving path and the
-checkpoint were built around 512, so this is a deviation to check rather
-than assume.
-
-## Next Experiment
-
-Decide (1), (2) or (3), then check it on Thor against the official model
-with one prompt shorter than the chosen length: the first `n` rows of a
-512-padded encoding against an encoding padded to `n`, and the actions from
-a workload at that `text_max_len` against the official model given the same
-context rows. Record the cosine per row count.
-
-## Resolution
-
-The encoder's padded length is the caller's: `encode_prompts` takes
-`max_length` (default `_MAX_LENGTH = 512`) and the frontend passes its own
-context length (`dims["x0"] - 1` where a proprio row is set, so LIBERO
-encodes at 512). A workload therefore declares the padded token count its
-prompts are built at, as `text_max_len`, and `text_trim` is a separate
-mechanism that drops the padding rows a prompt does not use. The frontend
-accepts whatever a workload declares as long as the prompt builder pads to
-it and the truncation behaviour is the tokenizer's own.
-
-`TARGET_WORKLOAD.text_max_len = 128` (`benchmarks/_imagewam_workload_cli.py`)
-is a candidate, not a confirmed deployment value: the target workload serves
-on all three paths with that declaration (`0919e`: `infer()` 216.93 / ABI
-173.55 / native 173.27 ms), and a trimmed sweep at 16, 72 and 128 valid
-tokens measured `infer()` 197.00 / 207.06 / 217.50 ms, so a larger
-declaration costs the padding it adds. Confirming the instruction set
-settles it.
-
-# ISSUE-084
-
-Status: resolved
-
-Area: the served observation and VAE-encode paths are two-view only —
-`ImageWAMTorchFrontendThor._observation_views`, `stage_images`,
-`flash_rt/models/imagewam/vae_encoder.py:encode_to_tokens`
-
-## Observation
-
-The workload and the layout support any view count
-(`ImageWAMWorkload.num_views`, `ref_w = num_views * image_w / patch_stride`),
-and the in-graph VAE stage is already generic
-(`ImageWAMVaeStage.stage` checks `len(views) == spec.num_views`). The path
-that feeds it is not:
-
-- `_observation_views(observation)` returns `[view1] + [view2]` if present,
-  whatever the workload is: a three-view observation silently contributes
-  two views.
-- `stage_images(*views)` outside the graph rejects anything but one or two
-  views (`if not 1 <= len(views) <= 2`), and the encoder it calls,
-  `encode_to_tokens(ae, view1, view2=None, ...)`, takes exactly two views
-  (concatenated horizontally after each is resized).
-
-So a workload with `num_views=3` runs only as long as the image tokens are
-staged through the ABI (`image_tokens` SWAP) or left as the random
-placeholder: `infer()` with three `view*` keys feeds two to the VAE stage
-and fails its count check (`expected 3 views, got 2`), and the
-outside-the-graph path refuses three views outright.
-
-## Impact
-
-The candidate target workload (`TARGET_WORKLOAD` in
-`benchmarks/_imagewam_workload_cli.py`, 3 views of 256x256, ISSUE-083)
-cannot be driven through the served `infer()` with the real VAE encoder.
-Latency for its sequence layout can be measured today (placeholder image
-tokens), but the VAE stage — one of the switches under comparison
-(OPT-021) — cannot.
-
-## Evidence
-
-- `flash_rt/frontends/torch/imagewam_thor.py`, `_observation_views`,
-  `stage_images`.
-- `flash_rt/models/imagewam/vae_encoder.py:103`, `encode_to_tokens`'s
-  docstring ("one or two real camera views").
-- `flash_rt/models/imagewam/vae_stage.py:87`, `stage` validating
-  `len(views) == spec.num_views`.
-- `benchmarks/_imagewam_workload_cli.py` and
-  `benchmarks/imagewam_thor_path_bench.py` (the target workload's three
-  paths), which is where the limitation surfaced.
-
-## Hypotheses
-
-The two-view shape is LIBERO's: the official LIBERO evaluation concatenates
-a third-person and a wrist view into one 224x448 image, so two views was
-the only case the plumbing ever had to carry. Nothing in the kernels or the
-VAE stage depends on it.
-
-## Next Experiment
-
-Make the view count the workload's, in the same three places:
-
-- `_observation_views`: read `view1..view{num_views}` (the workload's
-  count when the frontend was built from a resolved configuration, else
-  today's two).
-- `stage_images`: accept `num_views` views, and let
-  `encode_to_tokens` take a sequence (resize each view, concatenate
-  horizontally, one VAE encode — the same construction the two-view path
-  already uses).
-- Keep the LIBERO path bit-identical: two views must produce exactly the
-  same tokens as today (`benchmarks/imagewam_e2e_official_compare.py` and
-  the gate fixtures are the check).
-
-## Resolution
-
-Fixed with the workload-owned view shape: `ImageWAMTorchFrontendThor._input_view_shape()`
-is the single owner (the resolved workload's `vae_graph_input()` -> the
-in-graph stage's spec -> `(2, 224, 224)` for a caller that passed dims by
-hand) and `runtime_surface()` passes it as `view_shape`, so the ABI's
-declared frame shape and the observation path cannot diverge
-(commit `780ac11`). The ABI round trip at a three-view workload still has to
-be observed on Thor (`THOR_CHECKLIST.md`, item P).
-
-## Resolution
-
-The view count is the workload's now: `observation_views(observation,
-num_views)`, a read-only `num_views` property, `stage_images` taking exactly
-that many views, and `encode_to_tokens(ae, views: Sequence[Tensor], ...)`
-encoding N views as one horizontally concatenated image (commit `780ac11`).
-The LIBERO two-view path keeps its construction line unchanged; that it is
-bit-identical is a Thor check (`tests/test_imagewam_vae_stage.py`,
-`benchmarks/imagewam_e2e_official_compare.py`).
-
-## Resolution
-
-`encode_prompts(model, tokenizer, prompts, *, max_length=512)` takes the
-length, and the frontend's live-Qwen3 branch passes the workload's own
-(`dims["x0"] - 1` with proprio, else `dims["x0"]`; 512 for LIBERO, 128 for
-the three-view target workload). The encoder runs once per prompt outside the
-captured graph, so this decides the context width and nothing about the
-steady-state latency.
-
-What is not measured yet: whether the actions of a workload served at
-`text_max_len=128` match the official model given the same 128 context rows,
-and whether the first 128 rows of a 512-padded encoding equal a 128-padded
-encoding (they should, the padding being masked, but the checkpoint and the
-official serving path were built around 512). That needs the target data and
-the official side, and stays part of the target workload's fidelity gap.
-
-## Resolution
-
-The `eccf14f` round answers both questions. The default path is not slower:
-the gate measures **202.2 ms** nvfp4 (pass) and the end-to-end `default` row
-202.4 / 202.1 / 202.0 ms over three repeats on libero_spatial, against the
-recorded 203.3 ms gate / 202.3 ms e2e. The 225 ms and the 13.6 ms
-between-instances spread of the `c20f3a0` round were that session's state,
-not a measurement-scope difference: in the `eccf14f` session the same
-repeats spread **0.4 ms** (`default`) and **0.5 ms** (`stack`), so the ladder's
-2 ms working threshold is meaningful after all.
-
-What the round also shows: the recorded `stack` / `fast` latency of 106.1 ms
-belongs to that same unstable session. The same switch set measures
-**92.6-93.7 ms** across libero_goal and libero_10 (and 92.8-93.3 ms over
-three repeats on libero_spatial) in the `eccf14f` session. Baselines taken
-from a single row of an unstable session carry that session's error; the
-gate's own repeated-row spread is the number to compare against.
-
-# ISSUE-085
-
-Status: resolved
-
-Area: two independent test-level defects on Thor, neither on the served path —
-the FA4 dispatch test's `capture_sync` mode (capture-pool allocation) and
-`tests/test_imagewam_awq.py`'s kernel accounting; plus the FA4-enabled
-graph-recovery test that the first one masks
-
-## Observation
-
-The `0919e` round ran each of the three symptoms in isolation:
-
-- `tests/test_imagewam_fa4_dispatch.py -k capture_sync`: fails with
-  `beginAllocateToPool: already recording to mempool_id`. **A real defect**:
-  something allocates into the capture pool while the stream is already
-  recording, which is what invalidates the capture state the earlier round saw
-  as a cascade.
-- `tests/test_imagewam_awq.py`: fails with the plain path's kernel count `0`
-  against the AWQ path's `285`. **An independent defect** (the accounting is
-  not wired for the plain path), not a consequence of the capture problem.
-- `tests/test_imagewam_text_trim_graph_safety.py` with FA4 **off**: 4 passed.
-  The `torch.equal` failure reported in the previous round was therefore the
-  `capture_sync` cascade, not a defect of its own.
-- the same file's recovery test with FA4 **on**: fails, because the fallback
-  swallows the test's stand-in and the subsequent `torch.equal` comparison
-  then fails. **An independent defect**, again not a cascade.
-
-## Impact
-
-None observed on the served results: the configuration matrix, the gate and
-the path benchmark all run with FA4 active and never fall back
-(`FA4 fallback=None` on every row of both Thor rounds). Two defects remain,
-and the FA4-enabled multi-length recovery case is the one that keeps
-ISSUE-080's condition 2 red, which is the last technical blocker for serving
-`text_trim` by default on the Python and ABI paths.
-
-## Evidence
-
-- The `0919e` round's `A1_*.log` files under
-  `/home/jingwu/thor_val/0919e/`: `A1_fa4_dispatch.log` (the mempool message),
-  `A1_awq.log` (`plain=0` vs `awq=285`), `A1_graph_recover.log` (FA4 off, 4
-  passed), `A1_fa4_recover.log` (FA4 on, the swallowed stand-in and the
-  `torch.equal` mismatch). Item R of `THOR_CHECKLIST.md` lists the four
-  commands.
-- Where each one dies, from that round:
-  - `capture_sync`: inside `_capture_graph`, at
-    `torch.cuda.graph(..., pool=self._graph_pool)`, with
-    `RuntimeError: beginAllocateToPool: already recording to mempool_id`, and
-    `cudaErrorStreamCaptureInvalidated` in the fallback log that follows — the
-    invalidated capture's pool recording is never ended before the fallback
-    opens a new capture on the same pool.
-  - AWQ: with `torch.profiler(activities=[ProfilerActivity.CUDA])`, the
-    no-weights `fe.run_eager` sees 0 CUDA events after warmup while
-    `fe.run_eager(weights)` sees 285 — the no-weights call is replaying the
-    captured graph, which that profiler mode does not see.
-  - FA4-on recovery: the fallback reports `stand-in: capture failed on a new
-    length -- falling back to the cuBLAS attention chain`, the injected
-    `pytest.raises` still matches, and the later `torch.equal` compares an
-    FA4-captured graph against a cuBLAS re-capture of the same length
-    (`0.7887` against `0.7886`), which differ in the last bits by
-    construction.
-
-## Hypotheses
-
-- `capture_sync`: a buffer (the FA4 output staging or a lazily built scratch)
-  is allocated inside the recording region; the allocation must happen before
-  `begin` or through a separate pool. The error names the pool state, so the
-  first step is to run the capture under a synchronize/bisect that names the
-  allocating call.
-- AWQ: the plain-path counter is probably a kernel-group gate that the AWQ
-  path satisfies and the plain path does not; the assertion compares counts
-  that the two paths do not both produce.
-- FA4-on recovery: the fallback turns the injected failure into a successful
-  capture, so the test's stand-in never fires and `torch.equal` compares
-  against the wrong reference.
-
-## Next Experiment
-
-Per defect: (1) `capture_sync` — end or abandon the invalidated pool's
-recording before the cuBLAS fallback starts a new capture, keeping the healthy
-path unchanged; (2) AWQ — make the two sides comparable (the property under
-test is "the fold adds no kernels after the first call", so both sides must
-measure the same kind of call); (3) the FA4-on recovery test — compare
-like-for-like or assert the documented post-fallback state, keeping "a failed
-capture leaves no graph active and the frontend recovers". Then re-run the
-four files on Thor (`THOR_CHECKLIST.md` item R).
-
-Implementation, and a correction to two of this record's own readings:
-
-- `capture_sync` was a **real defect in the capture path** and is fixed: the
-  fallback re-captured into the stream and pool the invalidated attempt had
-  left recording, because `_capture_graph` reuses both whenever they are
-  non-None. `_capture_graph_or_fall_back` now abandons them
-  (`_abandon_capture_state`) before the FA4 decision, so the retry is a first
-  capture in every respect; the healthy path is untouched. Cost, documented in
-  the method: the abandoned pool is not released, and a fallback happens at
-  most once per frontend (it clears `use_fa4`/`use_fa4_mot` for good).
-- The AWQ bullet's reading was **wrong**: `run_eager` is genuinely eager with
-  and without a `weights` argument (the same file's other test compares the two
-  pipelines' `_backbone_hidden` at cosine > 0.9999). The `0` was what the
-  **first** `torch.profiler` CUDA region in the process reported, while the
-  region right after it reported the 285 this study already recorded for both
-  paths. The code is right; the test now discards one region as profiler
-  warm-up, keeps the equality assertion, and adds `assert n_plain > 0` so a
-  blind profiler cannot satisfy the equality on its own.
-- The FA4-on recovery bullet's reading was also **wrong**: with FA4 on the
-  injected stand-in *is* a capture failure, and the documented contract is to
-  log, record `fa4_fallback_reason`, switch both sites to the cuBLAS chain and
-  capture again — which is what happened. The old `torch.equal` compared that
-  chain against the pre-failure **FA4** capture, chains that differ in the last
-  bits by construction. The test now pins the post-failure state
-  (`fa4_fallback_reason` present exactly when FA4 is on, `use_fa4` off, the
-  reason carrying the stand-in's message, no graph active, `infer()` refusing)
-  and compares like-for-like: bit-exact against the first capture when the
-  fallback was not consulted, against a chain-captured fresh frontend sharing
-  the same `GemmRunner` when it was.
-
-So ISSUE-080's condition 2 redness was, on this reading, test-side rather than
-a serving defect — subject to the Thor re-run, which is what keeps this issue
-open.
-
-## Resolution
-
-The Thor re-run at `0920` (logs `/home/jingwu/thor_val/0920/`, MAXN, GPC
-1.575 GHz, `emc_locked=null`, GPU exclusive) is green on all four files:
-
-| file | result |
-|---|---|
-| `fa4_dispatch -k capture_sync` | 1 passed, 22 deselected — i.e. on Thor's torch 2.9.1 the retry does capture on a fresh pool after an invalidated capture |
-| `test_imagewam_awq.py` | 6 passed, printing `kernels per eager forward: plain=285 awq=285` — the folded path adds no kernels, and the plain side is no longer read through a blind profiler region |
-| graph-safety with `TRIM_FA4=on` | 4 passed, the recovery case reporting `after a failed capture, n_valid=5 vs fresh equal=True cosine=1 max_abs=0` |
-| `test_imagewam_model_runtime_vae.py` | 2 passed (the geometry follow-up from ISSUE-086) |
-
-So of the three symptoms the round split out: one was a real capture-path defect
-and is fixed; the other two were the tests' own comparisons, with no served-path
-behaviour behind them. ISSUE-080's condition 2 is satisfied by this run.
-# ISSUE-086
-
-Status: resolved
-
-Area: the VAE encode geometry against the workload's per-view size —
-`flash_rt/models/imagewam/vae_encoder.py` (`encode_to_tokens`'s `out_hw`),
-`flash_rt/models/imagewam/vae_stage.py` (`ImageWAMVaeStage` / `VaeStageSpec`
-token geometry), reached from `ImageWAMTorchFrontendThor.stage_images`
-
-## Observation
-
-The target workload is three views of 256x256, so
-`ImageWAMWorkload.layout` derives `ref_h = 256/16 = 16` and
-`ref_w = 3*256/16 = 48`: `img_len = 768`, and the frontend allocates
-`img_raw` as `(768, 128)`.
-
-On Thor (`benchmarks/imagewam_thor_path_bench.py --workload target
---text-max-len 128`):
-
-- the `default` profile (torch VAE outside the graph) skips `infer()` with
-  "768 vs 588": the VAE path resizes each view to 224x224, so each view
-  yields 14x14 = 196 tokens and three views give 588;
-- the `fast` profile (native VAE inside the graph) fails during construction
-  with `img_raw` expected `(588, 128)` and got `(768, 128)`, i.e. the
-  in-graph stage computes its token geometry from a fixed 224-derived grid
-  while `img_raw` follows the workload.
-
-The ABI and native rows of that workload measure 152.7 ms and 154.5 ms
-because the benchmark stages `image_tokens` directly; those are layout
-numbers, with placeholder image tokens.
-
-## Impact
-
-`infer()` cannot serve a per-view size other than 224x224: the served path's
-image branch is tied to LIBERO's view size while the sequence layout, the
-RoPE grid and `img_raw` already follow the workload. The target
-configuration (`TARGET_WORKLOAD`) therefore cannot be measured end to end,
-and the same mismatch would apply to any camera whose frames are
-not resized to 224x224 before staging.
-
-## Evidence
-
-- `ImageWAMWorkload.layout` (`ref_h`/`ref_w` from `image_h`/`image_w` and
-  `patch_stride`), `ImageWAMWorkload.vae_graph_input`.
-- `flash_rt/models/imagewam/vae_encoder.py`, `encode_to_tokens(...,
-  out_hw=(224, 224))` and `ImageWAMTorchFrontendThor.stage_images`'s call.
-- `flash_rt/models/imagewam/vae_stage.py`, the stage's token geometry versus
-  the `img_raw` it is handed.
-- The `eccf14f` round's target-workload logs under
-  `/home/jingwu/thor_val/0919s/`.
-
-## Hypotheses
-
-Both the `out_hw` default and the stage's token geometry predate the
-workload object (LIBERO's views are 224x224, so the two agreed by
-construction). `_input_view_shape()` is already the frontend's single owner
-of the served view geometry, so the fix is to route both paths through it.
-
-## Next Experiment
-
-Implemented and to be re-checked on Thor: the per-view size comes from the
-workload (outside the graph) and from the stage spec's `in_h`/`in_w` (inside
-it), with the LIBERO two-view result unchanged. Then re-run
-`benchmarks/imagewam_thor_path_bench.py --workload target --text-max-len 128`
-for all three paths, and the LIBERO rows for the bit-identity of the two-view
-tokens.
-
-## Resolution
-
-Both fixed-224 geometries are gone. `VaeStageSpec.out_hw` now defaults to
-`None`, meaning "the views' own size", exposed as `encode_hw` (the size the
-encode actually runs at) which `latent_hw`/`img_len` and
-`ImageWAMVaeStage.__init__` derive from; `(3, 256, 256)` gives 16x48 = 768
-tokens and `(2, 224, 224)` gives 14x28 = 392, an explicit `out_hw` is still
-honoured for direct callers. The frontend resolves the served per-view size in
-one place (`_input_view_shape()`) and uses it for both placements: the in-graph
-stage spec and its preprocessing kernel, and the outside-the-graph
-`encode_to_tokens(out_hw=...)` plus its kernel. No new switch and no new
-constructor argument.
-
-Two consequences worth knowing:
-
-- for the outside-the-graph path the preprocessing kernel is now built at the
-  first `stage_images` (the workload is recorded after the constructor
-  returns), so a caller reading `fe._vae_pre` before staging sees `None`; the
-  two in-tree callers (`benchmarks/imagewam_e2e_official_compare.py`,
-  `imagewam_e0m3_accuracy_study.py`) go through `stage_images` now, and the
-  e2e one gains correct `VAE_RESIZE=pil_bilinear` behaviour it would have
-  silently lost;
-- a caller that passes dims by hand with `vae_graph_input=(2, 512, 512)` now
-  encodes at 512x512 (2048 tokens) instead of silently resizing to 224.
-
-Verified on CPU: the spec geometry per workload against
-`ImageWAMWorkload.layout()`, the stage accepting `(768, 128)` for three
-256x256 views and `(392, 128)` for two 224x224 views, and the encode size
-`stage_images` passes for each workload (`tests/test_imagewam_vae_geometry.py`).
-To be observed on Thor (`THOR_CHECKLIST.md` item P):
-`--workload target --text-max-len 128` on all three paths, and the LIBERO rows
-for the bit-identity of the two-view tokens.
-
-## Verified on Thor
-
-`0919e`: the target workload serves. `view_shape` is `(3, 256, 256)`,
-`img_len` is 768, `infer()` runs instead of being skipped, and all three paths
-produce numbers (`default` `infer()` 216.93 / ABI 173.55 / native 173.27 ms).
-The LIBERO rows are unchanged in fidelity (`libero_spatial` nvfp4 `default`:
-vs official min 0.99418 / median 0.99764, MAE 0.18290, exactly the values the
-previous round recorded; P50 202.6 ms against 202.0-202.4 ms), so the two-view
-path is faithful to the geometry change.
-
-One test did not follow the change: `tests/test_imagewam_model_runtime_vae.py`'s
-in-graph port test still drives 256x256 frames with LIBERO-shaped dims, so its
-expected token geometry moved. That is a test-side follow-up, not a served-path
-defect.
+## Index: resolved entries and where their conclusions are recorded
+
+This file carries the open problems only. Each entry below states a problem
+that is no longer open; the pointer names where its conclusion is recorded.
+
+- `ISSUE-001` — cuBLASLt runs FP8 matmul on sm_89 and sm_90 only in the TN operation layout, so `fp8_gemm_descale_fp16_tn` / `fp8_gemm_descale_f32out_tn` were added and `fp8_cublaslt_layout()` picks NN on compute capability >= 10 and TN below; whether TN is as fast as NN on Thor is unmeasured (`benchmarks/imagewam_fp8_layout_bench.py`). → `flash_rt/models/imagewam/quant_linear.py` (the module docstring and `fp8_cublaslt_layout`), `PROJECT.md`'s GPU notes.
+- `ISSUE-020` — the padded text keys are handled by `text_trim` rather than by a mask, which reproduces official's masked attention, and it is the served default. → `docs/imagewam_configuration.md` (`text_trim`, the `default` profile), `plan.md`'s roadmap row for this issue.
+- `ISSUE-060` — a precomputed `context` is applied on every `set_prompt` call, because the cache key identifies content only on the live-Qwen3-text-encoder and random-weight paths. → `docs/imagewam_configuration.md` (the `set_prompt` notes under "Entry point").
+- `ISSUE-071` — the native `run` / `capture` race was the test harness's, not the Python graph's: both verbs now wait for all prior device work (`cudaDeviceSynchronize`) and the test's snapshot waits for its own copies. → `docs/imagewam_native_cpp.md` (the threading and lifetime contract).
+- `ISSUE-080` — `text_trim` is the served default with all six conditions satisfied, the last one (the native pipeline's own per-length capture) confirmed in the `0920c` round. → `plan.md` ("Decisions pending (owner)", E1), `docs/imagewam_configuration.md` (`text_trim`, the `default` and `native` profiles), `THOR_STATUS_SUMMARY.md`'s `0920c` section.
+- `ISSUE-081` — `view_shape` is the frontend's resolved view shape, from the single owner `_input_view_shape()`. → `docs/imagewam_model_runtime.md` (the `(views, H, W)` note), the `_input_view_shape` docstrings in `flash_rt/models/imagewam/runtime_surface.py`, `runtime_export.py` and `vae_encoder.py`.
+- `ISSUE-082` — the `c20f3a0` session's 225 ms reading and 13.6 ms between-instances spread were that session's state: the `eccf14f` round measured the same gate at 202.2 ms with a 0.4 ms repeat spread, which makes the ladder's 2 ms working threshold meaningful. → `THOR_STATUS_SUMMARY.md` (the `eccf14f` round), `tests/fixtures/imagewam_gate/latency_baselines.json` (`source`), `plan.md` (Phase W12).
+- `ISSUE-083` — the encoder's padded length is the caller's (`encode_prompts(..., max_length=...)`), so a workload declares its own `text_max_len` and `text_trim` is a separate mechanism that drops the rows a prompt does not use. → `docs/imagewam_configuration.md` (`text_max_len`), the `encode_prompts` docstring in `flash_rt/models/imagewam/text_encoder.py`.
+- `ISSUE-084` — the view count is the workload's: `observation_views(observation, num_views)`, `stage_images` taking exactly that many views, and `encode_to_tokens(ae, views, ...)` encoding N views as one horizontally concatenated image. → `docs/imagewam_configuration.md` (the view-geometry paragraph), `encode_to_tokens` in `flash_rt/models/imagewam/vae_encoder.py`.
+- `ISSUE-085` — one real defect (the cuBLAS fallback re-captured into the pool an invalidated capture had left recording) was fixed by abandoning that capture state, and the other two symptoms were the tests' own comparisons. → `docs/imagewam_configuration.md` (the abandoned capture state before the retry), the `_abandon_capture_state` docstring in `flash_rt/frontends/torch/imagewam_thor.py`, `THOR_STATUS_SUMMARY.md`'s `0920` section (restated in `0920c`).
+- `ISSUE-086` — nothing is fixed at 224x224 any more: `VaeStageSpec.encode_hw` defaults to the staged views' own size, and the frontend resolves the served per-view size in one place (`_input_view_shape()`) for the in-graph and outside-the-graph paths alike. → `docs/imagewam_configuration.md` (the encode-geometry paragraph), `plan.md` (Phase W12).
+- `ISSUE-061` — last line because it was not fixed but satisfied: its subject, a latency baseline with no recorded clock and power state, is met by `latency_baselines.json`'s 202.2 ms `nvfp4` baseline, which carries its clock state (MAXN, GPC 1.575 GHz, `emc_locked=null`, GPU exclusive), and `plan.md` records the 231.6 -> 202.2 ms re-base as closing that item; the only part still open is whether the baseline is re-seeded per configuration. → `tests/fixtures/imagewam_gate/latency_baselines.json` (`source`), `plan.md` ("Rounds that closed items", and "Open" item 1).
