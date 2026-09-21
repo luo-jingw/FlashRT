@@ -652,7 +652,7 @@ A test that fails a capture on purpose and ends without a successful capture aft
 
 ## Next Experiment
 
-`FLASHRT_GENERATOR_SENTINEL=1 python -m pytest tests/test_imagewam_*.py tests/test_jetson_clock_state.py -q` (`tests/conftest.py`): after every test it draws one random number and, on the first test that leaves the flag set, names it in a teardown failure and repairs the state with one small capture, so the rest of the run is judged on its own. Then the fix is that test's own (a small successful capture in its cleanup), not the frontend's.
+Done in `0921d` (`FLASHRT_GENERATOR_SENTINEL=1`, `tests/conftest.py`): the sentinel named one test, `tests/test_imagewam_gemm_variant_tuner.py::test_cuda_graph_timer_on_real_launches`, and after it the whole run is `2 failed, 781 passed, 1 skipped, 5 errors` (86 / 631 / 55 without it). The fix is that test's own: end it with one successful small capture (or keep its failing capture out of the default generator's process).
 
 ## Resolution
 
@@ -672,24 +672,60 @@ The `fp16` row of every table is the untrimmed speed whatever the profile says, 
 
 ## Evidence
 
-| round | configuration | fp16 P50 |
+fp16 P50 of the same kind of trimmed graph, by harness and round:
+
+| round | harness | fp16 |
 |---|---|---:|
-| earlier matrix `default` row | untrimmed | 275.2 ms |
-| `0920t` gate, fixture v2 (trimmed reference) | trim + FA4 backbone | 284.38 ms |
-| earlier stacked row | trim + FA4 + native VAE | 273.8 ms |
-| `0921_final`, `imagewam_thor_path_bench.py --profile default --precision fp16` | trim, FA4 both sites, native VAE (`effective_config` full, no fallback) | 274.70 ms (P10 274.20, P90 275.86, n=100), active `x0=25` |
+| earlier matrix `default` row | e2e, untrimmed | 275.2 ms |
+| `0920t` | gate, fixture v2 | 284.38 ms |
+| earlier stacked row | e2e | 273.8 ms |
+| `0921_final` | `imagewam_thor_path_bench.py --profile default` | 274.70 ms |
+| `0921d_final` | the same command | **226.71 ms** (P10 226.35, P90 227.67) |
+| `0921d_final` | `imagewam_e2e_official_compare.py`, profile default | 224.3 ms |
+| `0921d` D1 | `imagewam_graph_kernel_profile.py`, first graph (24 valid tokens), replay | 294.95 ms |
+| `0921d` D2 | `imagewam_text_trim_bench.py --section ab`, x0=21 replay, same process | 172.36 ms (x0=513: 270.93) |
 
-The same switches on `nvfp4`: 202.2 to 103.3 ms (`0921` ladder, `default` to `vae_trim`). On `fp8_static_cutlass`: about 220 to 115 ms. `fp16` is the only precision whose trimmed run shows no gain, and it does so in three separate harnesses and rounds, so it is not noise.
+The same command ran 274.70 ms one round and 226.71 ms the next, with no code change between them that touches the graph. `nvfp4` under the same commands is stable (108.03 / 107.62 ms, repeat -0.4%; 124.95 ms 24-token replay in D1 with FA4 off) and drops with the row count (D1: 206.49 to 124.95 ms; D2: 181.80 to 109.81 ms). `fp16_cutlass` (CUTLASS) also shrinks (275.59 to 187.05 ms). Only the cuBLASLt `fp16` path is both non-scaling in some runs and unstable between runs.
 
-The `fp16` tier differs from the others in its GEMM path (`Fp16Linear` over `GemmRunner.fp16_nn`, cuBLASLt with a per-shape autotune, `_autotune_gemm(..., fp16_nn_shapes=True)` on every new length); the quantized tiers run CUTLASS.
+D1, 512 valid tokens, kernels inside the replay: fp16 GEMM 218.28 ms of 288.48 (`nvjet_hsh_448x64` 46.1 ms x200, `nvjet_hsh_128x192` 39.9 ms x35); nsys: `nvjet_hsh_512x64` averages 4.47 ms per call. A 47 GFLOP GEMM at a tensor-core rate takes a few tenths of a millisecond, so some fp16 GEMMs run at a few TFLOPs. The kernels inside the replay are about 100% of it (no idle gaps), so the time is in the GEMM kernels.
+
+The frontend's autotune (`GemmRunner::autotune_cached`) times the heuristic's top 16 algorithms on the zero-filled scratch `_autotune_gemm` passes and keeps the fastest per shape, in a cache keyed by (type, M, N, K).
 
 ## Hypotheses
 
-Not tested: (a) the cuBLASLt algorithm the autotune picks at the trimmed shapes (`M = x0` and `M = a0`, such as 25 and 417) is slow enough to cancel the smaller row count; (b) a kernel outside the GEMMs, in the fp16 path only, costs the same at any length; (c) the trimmed graph is not the one replayed for `fp16`. `active x0=25` in the bench output speaks against (c) but does not exclude it.
+The chosen cuBLASLt algorithm per shape differs between runs and is sometimes very slow: the heuristic's top-16 for these shapes on sm_110 contains poor candidates, and the timing on zero tensors (or its noise) picks one of them or the cache holds a poor default at shapes it did not tune. Untested: which shapes are slow, and whether the pick is stable within a process and between processes.
 
 ## Next Experiment
 
-`benchmarks/imagewam_graph_kernel_profile.py --precision fp16 --valid-tokens 24,512 --use-fa4 off` and the same with `--precision nvfp4`: the kernel time by category and the top kernels at 24 and 512 valid tokens. The kernels whose per-replay time is the same at both lengths are the part that does not scale. And `benchmarks/imagewam_text_trim_bench.py --precision fp16 --section ab --use-fa4 off` for the graph-replay A/B in one process.
+`benchmarks/imagewam_fp16_gemm_probe.py --x0 25,513`: per weight-GEMM shape, the heuristic's top-1, the algorithm autotuned on zeros (what the frontend does) and on random data, each re-timed on random operands with CUDA events, over three fresh runners, with the achieved TFLOPs. It shows which shapes are slow, whether the autotune's pick varies between runners, and whether zero-fill versus random changes the pick. If it confirms, the fix is in the autotune (tune on random data, time several repetitions, refuse a pick slower than a floor rate) or the `fp16` tier uses the CUTLASS GEMM.
+
+## Resolution
+
+# ISSUE-089
+
+Status: open
+
+Area: `tests/test_imagewam_text_trim.py` and `tests/test_imagewam_real_checkpoint.py`
+
+## Observation
+
+After the generator poisoning was removed by the sentinel (ISSUE-087), the `0921d` full run leaves 2 failures and 5 errors. The 2 failures are in `tests/test_imagewam_text_trim.py`: one asserts the per-length cache is empty after a failed capture, and one compares `torch.equal` after an FA4 fallback and gets values that are very close but not equal. Four of the errors are `test_imagewam_real_checkpoint.py` (`fixture 'mot' not found`); the fifth is the sentinel's own teardown.
+
+## Impact
+
+Not measured. The fallback comparison being close but unequal is the FA4-fallback graph against a chain reference; whether that is a tolerance in the test or a real difference is not known.
+
+## Evidence
+
+Reported by the Thor agent for `0921d`; the tests' full output is in `thor_val/0921d`.
+
+## Hypotheses
+
+The `mot` fixture error is a test that has no checkpoint fixture on the Thor (an untracked local test file, `tests/test_imagewam_real_checkpoint.py`, was noted in the gate's `worktree not clean`). The other two are unexplained.
+
+## Next Experiment
+
+Run the two `text_trim` tests alone with `-x -q -s` and read the assertion.
 
 ## Resolution
 

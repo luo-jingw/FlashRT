@@ -17,70 +17,130 @@
         "num_train_timesteps": 1000
       },
       "checkpoint": {
-        "name": null,
-        "sha256_16": null
+        "name": "ImageWAM-FLUX.2-4B-LIBERO model.pt",
+        "sha256_16": "53620f93f8772d20"
       },
       "boundary": "one call from camera frames and proprio (text context already encoded, so the text encoder is outside) to the de-normalised action chunk on the host; steady state (graphs captured, caches warm)",
-      "session": null,
+      "session": "0921d_final",
       "measurement": {
-        "device": null,
-        "commit": null,
-        "date": null,
-        "gpu_exclusive": null,
+        "device": "NVIDIA Jetson AGX Thor (sm_110)",
+        "commit": "824f058",
+        "date": "2026-09-21",
+        "gpu_exclusive": true,
         "clock": {
-          "nvpmodel": null,
-          "gpu_locked": null,
+          "nvpmodel": "MAXN",
+          "gpu_locked": true,
           "emc_locked": null
         },
-        "warmup": null,
-        "iters": null
+        "warmup": 20,
+        "iters": 100
       },
       "rows": [
         {
           "id": "official_torch",
-          "status": "not_measured",
+          "status": "measured",
           "scope": "full_infer",
-          "reason": "not run yet",
-          "config": null,
-          "latency": null,
+          "reason": "",
+          "config": {
+            "effective_config": "official bf16 eager, torch.no_grad, no torch.compile (benchmarks/imagewam_official_torch_bench.py, warmup 5, iters 30)",
+            "calibration": null
+          },
+          "latency": {
+            "p10_ms": 456.13,
+            "p50_ms": 456.66,
+            "p90_ms": 457.6,
+            "n": 30
+          },
           "fidelity": null,
-          "note": ""
+          "note": "",
+          "session": "0921d_final",
+          "repeat": {
+            "p50_ms": 377.04
+          }
         },
         {
           "id": "flashrt_fp16",
-          "status": "not_measured",
+          "status": "measured",
           "scope": "full_infer",
-          "reason": "not run yet",
-          "config": null,
-          "latency": null,
-          "fidelity": null,
-          "note": ""
+          "reason": "",
+          "config": {
+            "effective_config": "effective_config precision=fp16 text_trim=True vae_encoder=native vae_graph=True use_fa4=True use_fa4_mot=True fa4_fallback_reason=None calibration=None awq=False",
+            "calibration": null
+          },
+          "latency": {
+            "p10_ms": 226.35,
+            "p50_ms": 226.71,
+            "p90_ms": 227.67,
+            "n": 100
+          },
+          "fidelity": {
+            "source": "libero_spatial, 10 tasks x frames 0,60 x seeds 0,1 (40 samples), official center-crop resize, real data; scripts/imagewam_thor_matrix.sh profile row",
+            "vs_official_cos_median": 0.99998,
+            "vs_official_cos_min": 0.99994,
+            "mae_vs_gt_median": 0.18561,
+            "n": 40
+          },
+          "note": "cuBLASLt fp16 GEMM path: the same trimmed graph measured 172-295 ms in other harnesses and runs (ISSUE-088, under diagnosis); this is one session's value. Instruction: 24 valid tokens (LIBERO range 16-31), trimmed. Latency from imagewam_thor_path_bench.py infer, random observation; fidelity from the matrix run of the same profile and precision.",
+          "session": "0921d_final"
         },
         {
           "id": "flashrt_fp8",
-          "status": "not_measured",
+          "status": "measured",
           "scope": "full_infer",
-          "reason": "not run yet",
-          "config": null,
-          "latency": null,
-          "fidelity": null,
-          "note": ""
+          "reason": "",
+          "config": {
+            "effective_config": "effective_config precision=fp8_static_cutlass text_trim=True vae_encoder=native vae_graph=True use_fa4=True use_fa4_mot=True fa4_fallback_reason=None calibration=imagewam_libero_calib_n64_trim_v2.safetensors (9ecef6363e82bfc2) awq=False",
+            "calibration": "imagewam_libero_calib_n64_trim_v2.safetensors (9ecef6363e82bfc2)"
+          },
+          "latency": {
+            "p10_ms": 116.48,
+            "p50_ms": 116.59,
+            "p90_ms": 116.73,
+            "n": 100
+          },
+          "fidelity": {
+            "source": "libero_spatial, 10 tasks x frames 0,60 x seeds 0,1 (40 samples), official center-crop resize, real data; scripts/imagewam_thor_matrix.sh profile row",
+            "vs_official_cos_median": 0.99994,
+            "vs_official_cos_min": 0.99989,
+            "mae_vs_gt_median": 0.18593,
+            "n": 40
+          },
+          "note": "Instruction: 24 valid tokens (LIBERO range 16-31), trimmed. Latency from imagewam_thor_path_bench.py infer, random observation; fidelity from the matrix run of the same profile and precision.",
+          "session": "0921d_final"
         },
         {
           "id": "flashrt_fp4",
-          "status": "not_measured",
+          "status": "measured",
           "scope": "full_infer",
-          "reason": "not run yet",
-          "config": null,
-          "latency": null,
-          "fidelity": null,
-          "note": ""
+          "reason": "",
+          "config": {
+            "effective_config": "effective_config precision=nvfp4 text_trim=True vae_encoder=native vae_graph=True use_fa4=True use_fa4_mot=True fa4_fallback_reason=None calibration=None awq=False",
+            "calibration": null
+          },
+          "latency": {
+            "p10_ms": 107.96,
+            "p50_ms": 108.03,
+            "p90_ms": 108.16,
+            "n": 100
+          },
+          "fidelity": {
+            "source": "libero_spatial, 10 tasks x frames 0,60 x seeds 0,1 (40 samples), official center-crop resize, real data; scripts/imagewam_thor_matrix.sh profile row",
+            "vs_official_cos_median": 0.99936,
+            "vs_official_cos_min": 0.99885,
+            "mae_vs_gt_median": 0.18613,
+            "n": 40
+          },
+          "note": "Instruction: 24 valid tokens (LIBERO range 16-31), trimmed. Latency from imagewam_thor_path_bench.py infer, random observation; fidelity from the matrix run of the same profile and precision.",
+          "session": "0921d_final",
+          "repeat": {
+            "p50_ms": 107.62
+          }
         },
         {
           "id": "flashrt_int8",
           "status": "not_measured",
           "scope": "gemm_only",
-          "reason": "not run yet",
+          "reason": "left blank by decision: the built extension has no int8/int4 fp16-out kernel (cutlass_int8_rowwise_fp16out / cutlass_int4_rowwise_fp16out) and the rows would be GEMM-only upper bounds",
           "config": null,
           "latency": null,
           "fidelity": null,
@@ -90,7 +150,7 @@
           "id": "flashrt_int4",
           "status": "not_measured",
           "scope": "gemm_only",
-          "reason": "not run yet",
+          "reason": "left blank by decision: the built extension has no int8/int4 fp16-out kernel (cutlass_int8_rowwise_fp16out / cutlass_int4_rowwise_fp16out) and the rows would be GEMM-only upper bounds",
           "config": null,
           "latency": null,
           "fidelity": null,

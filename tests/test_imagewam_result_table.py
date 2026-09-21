@@ -176,3 +176,23 @@ def test_gemm_only_row_is_its_prefill_plus_steps_times_the_step():
     assert any("num_steps" in e for e in rt.validate(doc))
     del t["rows"][4]["components"]
     assert any("needs latency.p50_ms and components" in e for e in rt.validate(doc))
+
+
+def test_repeat_gives_a_drift_and_an_unbracketed_official_marks_every_ratio():
+    doc, t = filled()
+    measured(t["rows"][0], 450.0)
+    measured(t["rows"][3], 100.0)
+    t["rows"][3]["repeat"] = {"p50_ms": 100.4}
+    t["rows"][0]["repeat"] = {"p50_ms": 450.9}
+    assert rt.validate(doc) == []
+    text = rt.render(doc)
+    fp4 = next(l for l in text.splitlines() if "fp4" in l)
+    assert "4.50x" in fp4 and "§" not in fp4 and "+0.4%" in fp4
+    t["rows"][0]["repeat"] = {"p50_ms": 372.0}      # the official row drifted -17%
+    text = rt.render(doc)
+    fp4 = next(l for l in text.splitlines() if "fp4" in l)
+    assert "4.50x §" in fp4 and "not bracketed" in fp4
+    official = next(l for l in text.splitlines() if "official torch" in l)
+    assert "-17.3%" in official
+    t["rows"][3]["repeat"] = {"p50_ms": 0}
+    assert any("repeat needs a positive p50_ms" in e for e in rt.validate(doc))

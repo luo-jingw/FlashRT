@@ -314,6 +314,28 @@ MAXN，GPC 1.575 / NVD 1.692 GHz，`emc_locked=null`，GPU 空闲；checkpoint s
 - **FlashRT fp16，服务 `default` profile**（`effective_config precision=fp16 text_trim=True vae_encoder=native vae_graph=True use_fa4=True use_fa4_mot=True fa4_fallback_reason=None`）：`infer` P10 274.20 / P50 274.70 / P90 275.86 ms（n=100），`valid_tokens=24`（活动 `x0=25`）。与未裁剪的 275 ms 几乎相同，而 nvfp4 同样的开关从 202 降到 103 ms：fp16 是唯一不随裁剪变快的精度，三个不同的轮次都是这样（284.38 / 273.8 / 274.70 ms），记为 issues.md ISSUE-088，成因未知。
 - **ISSUE-087 探针（torch 2.9.1+cu130）**：`case_sync_inside_capture` 之后 `torch.randn` 抛 `Offset increment outside graph capture encountered unexpectedly`，一次成功的小捕获之后恢复；另外两种失败方式（捕获体内 Python 异常、捕获体内用了 RNG 再出错）不留下这个状态。`test_imagewam_fa4_dispatch.py` 单独 24 passed；`capture_sync` 之后紧接 `infer_action_noise.py` 5 passed（FA4 回退成功再录图，标志被复位）。清单里的 `-k capture_sync` 作用在两个文件上，把第二个文件的测试都 deselect 了，所以没有测到级联；是哪个测试留下标志仍未确定，D3 用哨兵去找。
 
+### `0921d` / `0921d_final` 轮：ISSUE-088 / 087 的诊断与 LIBERO 最终表（commit `824f058`）
+
+MAXN，GPC 1.575 / NVD 1.692 GHz，`emc_locked=null`，GPU 独占，未改频、未重编；checkpoint sha256 前 16 位 `53620f93f8772d20`；日志在 Thor 的 `thor_val/0921d`（D 组）与 `thor_val/0921d_final`（L 组）。
+
+**LIBERO 最终表**（`docs/imagewam_results.md`，由 `docs/imagewam_results.json` 生成；同一 session，10 步，服务 `default` profile，指令 24 个有效 token）：
+
+| 行 | P50（P10–P90） | 相对官方 | vs official 余弦 median / min | MAE vs GT |
+|---|---:|---:|---:|---:|
+| 官方 torch bf16 eager | 456.66（456.13–457.60） | 1.00× | — | — |
+| FlashRT fp16 | 226.71（226.35–227.67） | 2.01× | 0.99998 / 0.99994 | 0.1856 |
+| FlashRT fp8_static_cutlass（trim 标定） | 116.59（116.48–116.73） | 3.92× | 0.99994 / 0.99989 | 0.1859 |
+| FlashRT nvfp4 | 108.03（107.96–108.16） | 4.23× | 0.99936 / 0.99885 | 0.1861 |
+| int8 / int4 | 留空（决定） | | | |
+
+三个口径问题：官方一行在 session 末尾复测是 377.04 ms（−17.4%），超过 2% 的界，所以三个倍数都标 §（分母没夹住；官方三个 session 的首次测量都是 453.6 / 456.97 / 456.66 ms，末尾这次才偏低，怀疑 EMC 没锁，清单 X2）；nvfp4 的两端一致（107.62 ms，−0.4%）；fp16 一行只是这个 session 的值（见下）。延迟来自 `imagewam_thor_path_bench.py`（随机观测），精度来自同一 profile 与精度的矩阵行（真实 LIBERO 数据，libero_spatial，40 个样本）。
+
+**ISSUE-088（fp16 不随裁剪变快）的新证据**：同一个命令 `0921_final` 是 274.70 ms、这一轮是 226.71 ms；D1 里 fp16 首张图（24 token）replay 294.95 ms、512 token 288.48 ms，D2 同进程 x0=21 是 172.36 ms（x0=513 是 270.93）。nvfp4 在各处都稳定并随行数缩小（D1 206.49 → 124.95；D2 181.80 → 109.81 ms），`fp16_cutlass` 也缩小（275.59 → 187.05）。fp16 的 512 token 图里 GEMM 占 218.28 / 288.48 ms，`nvjet_hsh_512x64` 平均 4.47 ms/次，图里 kernel 占比约 100%（没有空隙）。所以只有 cuBLASLt 的 fp16 GEMM 路径既不稳定又慢，指向它的算法选择（清单 X1 的探针定位）。`torch.profiler` 对每个精度第一张图抓到 0 个 kernel，与 nsys 抢 CUPTI（`MULTIPLE_SUBSCRIBERS_NOT_SUPPORTED`），所以 24 token 的 kernel 表没有。
+
+**ISSUE-087**：哨兵点名一个测试 `test_cuda_graph_timer_on_real_launches`；复位之后全量是 2 failed / 781 passed / 1 skipped / 5 errors（无哨兵是 86 / 631 / 55）。
+
+**L4（int8 / int4）**：扩展里没有 `cutlass_int8_rowwise_fp16out` / `cutlass_int4_rowwise_fp16out`（只有 bf16out），没有重编；这两行按决定留空。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

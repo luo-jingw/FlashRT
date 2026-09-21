@@ -310,5 +310,12 @@ def test_cuda_graph_timer_on_real_launches():
     times = timer.us_per_launch([raising, batch(1), invalidating], members)
     print(f"batch that raises -> {times[0]}, good batch -> {times[1]:.2f}us, "
           f"capture-invalidating batch -> {times[2]}")
+    # The invalidating batch leaves the default CUDA generator believing a capture is still open on
+    # torch 2.9.1, and every later random draw in the process then fails (ISSUE-087): one successful
+    # small capture clears it, so this test does not poison the tests after it.
+    reset = torch.cuda.CUDAGraph()
+    probe = torch.zeros(1, device="cuda")
+    with torch.cuda.graph(reset):
+        _ = probe + 1
     assert times[0] is None and times[2] is None and times[1] > 0.0
     assert torch.cuda.current_stream() == caller

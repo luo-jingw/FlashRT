@@ -3,17 +3,17 @@
 ## libero
 
 Workload: 2 views 224x224, text 512 tokens (16-31 valid), horizon 64, action_dim 7, proprio 8, shift 5.0; **10 denoise steps**.  
-Device —, commit —, —; GPU exclusive: None, nvpmodel None, gpu_locked None, emc_locked None; warmup None, iters None.  
-Checkpoint: None (None). Timed call: one call from camera frames and proprio (text context already encoded, so the text encoder is outside) to the de-normalised action chunk on the host; steady state (graphs captured, caches warm).
+Device NVIDIA Jetson AGX Thor (sm_110), commit 824f058, 2026-09-21; GPU exclusive: True, nvpmodel MAXN, gpu_locked True, emc_locked None; warmup 20, iters 100.  
+Checkpoint: ImageWAM-FLUX.2-4B-LIBERO model.pt (53620f93f8772d20). Timed call: one call from camera frames and proprio (text context already encoded, so the text encoder is outside) to the de-normalised action chunk on the host; steady state (graphs captured, caches warm).
 
 | Row | Scope | P50 ms | P10–P90 ms | vs official | cos vs official (median / min) | MAE vs GT | Note |
 |---|---|---:|---:|---:|---:|---:|---|
-| official torch (bf16 eager) | full_infer | — | — | — | — | — | not_measured: not run yet |
-| FlashRT fp16 | full_infer | — | — | — | — | — | not_measured: not run yet |
-| FlashRT fp8 (static, CUTLASS) | full_infer | — | — | — | — | — | not_measured: not run yet |
-| FlashRT fp4 (nvfp4) | full_infer | — | — | — | — | — | not_measured: not run yet |
-| FlashRT int8 (SM80 CUTLASS) | gemm_only | — | — | — | — | — | not_measured: not run yet |
-| FlashRT int4 (SM80 CUTLASS) | gemm_only | — | — | — | — | — | not_measured: not run yet |
+| official torch (bf16 eager) | full_infer | 456.7 | 456.1–457.6 | 1.00x | — | — | End-of-session repeat 377.0 ms (-17.4%). |
+| FlashRT fp16 | full_infer | 226.7 | 226.3–227.7 | 2.01x § | 0.99998 / 0.99994 | 0.1856 | § the official row was not bracketed: its end-of-session repeat is -17.4%. cuBLASLt fp16 GEMM path: the same trimmed graph measured 172-295 ms in other harnesses and runs (ISSUE-088, under diagnosis); this is one session's value. Instruction: 24 valid tokens (LIBERO range 16-31), trimmed. Latency from imagewam_thor_path_bench.py infer, random observation; fidelity from the matrix run of the same profile and precision. |
+| FlashRT fp8 (static, CUTLASS) | full_infer | 116.6 | 116.5–116.7 | 3.92x § | 0.99994 / 0.99989 | 0.1859 | § the official row was not bracketed: its end-of-session repeat is -17.4%. Instruction: 24 valid tokens (LIBERO range 16-31), trimmed. Latency from imagewam_thor_path_bench.py infer, random observation; fidelity from the matrix run of the same profile and precision. |
+| FlashRT fp4 (nvfp4) | full_infer | 108.0 | 108.0–108.2 | 4.23x § | 0.99936 / 0.99885 | 0.1861 | § the official row was not bracketed: its end-of-session repeat is -17.4%. Instruction: 24 valid tokens (LIBERO range 16-31), trimmed. Latency from imagewam_thor_path_bench.py infer, random observation; fidelity from the matrix run of the same profile and precision. End-of-session repeat -0.4%. |
+| FlashRT int8 (SM80 CUTLASS) | gemm_only | — | — | — | — | — | not_measured: left blank by decision: the built extension has no int8/int4 fp16-out kernel (cutlass_int8_rowwise_fp16out / cutlass_int4_rowwise_fp16out) and the rows would be GEMM-only upper bounds |
+| FlashRT int4 (SM80 CUTLASS) | gemm_only | — | — | — | — | — | not_measured: left blank by decision: the built extension has no int8/int4 fp16-out kernel (cutlass_int8_rowwise_fp16out / cutlass_int4_rowwise_fp16out) and the rows would be GEMM-only upper bounds |
 
 ## robotwin
 

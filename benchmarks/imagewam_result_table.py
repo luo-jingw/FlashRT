@@ -32,8 +32,10 @@ Schema (`schema_version` 1). Top level: `schema_version`, `tables`. Each
                scope (`full_infer` | `gemm_only`), reason (required unless
                measured), session (optional override), config
                ({effective_config, calibration}), latency ({p50_ms, p10_ms,
-               p90_ms, n}), fidelity ({source, vs_official_cos_median,
-               vs_official_cos_min, mae_vs_gt_median, n} or null), note.
+               p90_ms, n}), repeat (optional, {p50_ms}: the same row measured
+               again at the end of the session, to bound drift), fidelity
+               ({source, vs_official_cos_median, vs_official_cos_min,
+               mae_vs_gt_median, n} or null), note.
 
 Rules the checker enforces (one line each in its output):
 
@@ -48,6 +50,9 @@ Rules the checker enforces (one line each in its output):
     runs them, the benches time the GEMMs with random packed operands and no
     activation quantization) carries no fidelity, and its speedup is not
     computed: it is an upper bound, not a deployment number;
+  * a row's `repeat.p50_ms` gives its drift over the session; the renderer
+    shows it, and when the OFFICIAL row drifted by more than `DRIFT_LIMIT_PCT`
+    every ratio is marked § (the denominator was not bracketed);
   * a speedup against the official row is only computed when both rows ran
     in the same `session`; otherwise the cell says so instead of dividing
     numbers taken on different machine states (issues.md ISSUE-082).
@@ -75,6 +80,7 @@ ROWS: tuple[tuple[str, str, str, str | None, str], ...] = (
 ROW_IDS = tuple(r[0] for r in ROWS)
 STATUSES = ("measured", "not_measured", "not_supported")
 SCOPES = ("full_infer", "gemm_only")
+DRIFT_LIMIT_PCT = 2.0
 
 WORKLOAD_FIELDS = (
     "num_views", "image_h", "image_w", "text_max_len", "valid_tokens_min", "valid_tokens_max",
@@ -176,6 +182,9 @@ def validate(doc: dict) -> list[str]:
                 p10, p50, p90, n = (lat.get(k) for k in ("p10_ms", "p50_ms", "p90_ms", "n"))
                 if None in (p10, p50, p90, n) or not (p10 <= p50 <= p90) or n < 1:
                     errors.append(f"{here}: latency needs p10 <= p50 <= p90 and n >= 1, got {lat}")
+            rep_p50 = (row.get("repeat") or {}).get("p50_ms")
+            if row.get("repeat") is not None and not (isinstance(rep_p50, (int, float)) and rep_p50 > 0):
+                errors.append(f"{here}: repeat needs a positive p50_ms, got {row.get('repeat')}")
             if not (row.get("config") or {}).get("effective_config") and rid != "official_torch":
                 errors.append(f"{here}: a FlashRT row records its effective_config")
             if row.get("scope") == "gemm_only" and row.get("fidelity"):
@@ -197,6 +206,13 @@ def validate(doc: dict) -> list[str]:
 
 def _s(v: Any) -> str:
     return "—" if v is None else str(v)
+
+
+def drift_pct(row: dict) -> float | None:
+    """The row's own repeat against its first measurement, in percent, or None."""
+    rep = (row.get("repeat") or {}).get("p50_ms")
+    lat = (row.get("latency") or {}).get("p50_ms")
+    return None if rep is None or lat is None else 100.0 * (rep / lat - 1.0)
 
 
 def _fmt(v: float | None, spec: str = ".1f") -> str:
@@ -248,8 +264,8 @@ def render(doc: dict) -> str:
                 speed = "1.00x"
             elif row["scope"] == "gemm_only":
                 speed = "—"
-                note = ("† synthetic upper bound: GEMMs on random packed operands, no activation "
-                        "quantization, a stand-in VAE; not comparable to a full call. " + note).strip()
+                note = ("† GEMM-only upper bound: random packed operands, no activation "
+                        "quantization; not comparable to a full call. " + note).strip()
             elif official["status"] != "measured":
                 speed = "—"
             elif _row_session(t, row) != _row_session(t, official) or _row_session(t, row) is None:
@@ -257,6 +273,16 @@ def render(doc: dict) -> str:
                 note = ("‡ not the official row's session: no ratio computed. " + note).strip()
             else:
                 speed = f"{official['latency']['p50_ms'] / lat['p50_ms']:.2f}x"
+                od = drift_pct(official)
+                if od is not None and abs(od) > DRIFT_LIMIT_PCT:
+                    speed += " §"
+                    note = (f"§ the official row was not bracketed: its end-of-session repeat is "
+                            f"{od:+.1f}%. " + note).strip()
+            d = drift_pct(row)
+            if d is not None and row["id"] != "official_torch":
+                note = (note + f" End-of-session repeat {d:+.1f}%.").strip()
+            if d is not None and row["id"] == "official_torch":
+                note = (note + f" End-of-session repeat {row['repeat']['p50_ms']:.1f} ms ({d:+.1f}%).").strip()
             cos = "—" if not fid else (f"{_fmt(fid.get('vs_official_cos_median'), '.5f')} / "
                                        f"{_fmt(fid.get('vs_official_cos_min'), '.5f')}")
             spread = (f"{lat['p10_ms']:.1f}–{lat['p90_ms']:.1f}"
