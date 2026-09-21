@@ -344,16 +344,19 @@ def test_committed_latency_baselines():
     assert untrimmed.config == {"text_trim": False, "use_fa4": False, "use_fa4_mot": False, "vae": "torch"}
     assert "UNTRIMMED" in untrimmed.source and "eccf14f" in untrimmed.source
     assert "both configurations" not in untrimmed.source
-    # The served default is not seeded until a Thor gate run of it exists: ungated, never a silent
-    # pass against the untrimmed number.
+    # The served default is seeded from its own Thor gate run (0921, three repeats
+    # 105.42 / 105.93 / 105.66 ms): a run of that configuration is judged against
+    # 105.42 ms, never against the untrimmed number.
     served = named["served_default"]
-    assert not served.seeded and served.p50_ms is None and served.margin == 0.05
+    assert served.seeded and served.p50_ms == 105.42 and served.margin == 0.05
+    assert served.limit_ms == pytest.approx(105.42 * 1.05)
     assert served.config == {"text_trim": True, "use_fa4": "auto", "use_fa4_mot": "auto",
                              "vae": "native_graph"}
-    assert "UNSEEDED" in served.source and "tests/gate_imagewam_libero.py --precision nvfp4" in served.source
+    assert "de0ef510050f" in served.source and "fa4_fallback_reason=None" in served.source
     run = dict(served.config, use_fa4=True, use_fa4_mot=True)
-    check = LatencyGate(thor).evaluate("nvfp4", _summary(125.86), "served_default", run)
-    assert check.status == CHECK_UNGATED and check.value == 125.86
+    assert LatencyGate(thor).evaluate("nvfp4", _summary(105.9), "served_default", run).status == CHECK_PASS
+    slow = LatencyGate(thor).evaluate("nvfp4", _summary(125.86), "served_default", run)
+    assert slow.status == CHECK_FAIL and slow.value == 125.86   # the old default's number now fails
     h100 = table.resolve("NVIDIA H100 NVL", (9, 0))
     assert h100.device == "h100" and not h100.gated and h100.baselines == {}
     unknown = table.resolve("NVIDIA GeForce RTX 4090", (8, 9))

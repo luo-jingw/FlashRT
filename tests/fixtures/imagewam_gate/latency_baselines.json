@@ -23,9 +23,9 @@
               "use_fa4_mot": "auto",
               "vae": "native_graph"
             },
-            "p50_ms": null,
+            "p50_ms": 105.42,
             "margin": 0.05,
-            "source": "UNSEEDED: the served default's own Thor gate run has not been recorded. Seed it by running, on Jetson AGX Thor (MAXN, GPU exclusive), `python tests/gate_imagewam_libero.py --precision nvfp4 --fixture-dir <imagewam_libero_gate_v2 dir>` (profile default, text_trim on, fixture v2, no other flag), then paste the `latency_seed.entry` object of its result.json (also printed on the console) over this entry. Until then latency is ungated for this configuration (blocked under --require-latency). Reference points from before the promotion, not this configuration: 125.86 ms with the trimmed default whose VAE ran outside the graph and whose FA4 mot site was off (0920t round, same gate)."
+            "source": "gate run 20260921T193230Z, commit de0ef510050f (the recorded `(worktree not clean)` came from untracked local files on the Thor: checkpoints/, env.sh, a local test file; no product diff), NVIDIA Thor sm_110, nvpmodel MAXN, gpu_locked=True, emc_locked=None, GPU idle, --warmup 20 --iters 100, fixture imagewam_libero_gate_v2; effective_config precision=nvfp4 text_trim=True vae_encoder=native vae_graph=True use_fa4=True use_fa4_mot=True fa4_fallback_reason=None calibration=None awq=False. Three repeats of the same command: 105.42 / 105.93 / 105.66 ms (spread 0.51 ms), so the 5% margin (about 5.3 ms) is ten times the repeat spread. This is the gate's own protocol (the fixture's last observation and its prompt length): an end-to-end row of the same configuration measures lower (`stack` 94.4 ms in the 0921 matrix, other prompts), so do not compare the two P50 columns. Seeded from the THOR_CHECKLIST N1 round."
           },
           "untrimmed_reference": {
             "config": {
