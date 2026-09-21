@@ -5723,6 +5723,16 @@ Remaining native work beyond this entry: VAE encoding in the graph
 (roadmap item 5, then an `images` STAGED native port), proprio projection
 inside the graph, and a native checkpoint loader (`native_v2`).
 
+Neither the A/B nor `benchmarks/imagewam_thor_path_bench.py` measures the
+deployment's own choice of graph producer: the A/B compares the Python
+graph with the frontend's adopted one, both recorded by Python, and the
+bench's native row adopts every captured length the same way
+(`use_graph(key, exec)` per entry) before `export_model_runtime(io="native")`.
+The graphs this entry exists for — the ones the C++ pipeline records itself
+through `capture_pipeline_text_lengths` — have their correctness pinned by
+the parity gate's `--graph native` row and their per-length install by the
+checklist's S4-pipeline row, but no benchmark reports their latency.
+
 ## Thor, both workloads (`eccf14f`)
 
 `eccf14f`, Jetson AGX Thor, MAXN, GPC 1.575 GHz, `emc_locked=null`, GPU
