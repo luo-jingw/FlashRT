@@ -26,14 +26,25 @@
 
 ## 前置（每轮一次）
 
-环境变量与构建见 `scripts/imagewam_thor_validation.sh` 文件头。native 的 C++（pipeline 自己按长度录图）在 `0920t` 那一轮已经编过，此后没有新的 C++ 或 kernel 改动：`43c49ce` 只在 Python 侧（长度表改成 property、native 的测试与门禁各自显式写 `use_fa4=False`）。所以本轮**不需要为了新代码重编**；ABI 行需要 `exec/`，native 行需要 `runtime/` 与 `flashrt_imagewam_native`。
+环境变量与构建的完整清单在 `scripts/imagewam_thor_validation.sh` 文件头。native 的 C++（pipeline 自己按长度录图）在 `0920t` 那一轮已经编过，此后没有新的 C++ 或 kernel 改动：`43c49ce` 与 `73dc802` 只在 Python 侧（长度表改成 property、native 的测试与门禁各自显式写 `use_fa4=False`、一条 CPU 口径 pin）。所以本轮**不需要为了新代码重编**。
+
+但 S4-pipeline 的四行都要求下面三样已经在位，缺一样会**静默跳过而不是失败**：两个 native 测试文件在模块级 `pytest.importorskip("flash_rt.runtime.exec")`，`exec/` 不在时它们报 "2 skipped"、0 collected、退出码 0；parity gate 在 import 阶段就依赖 `exec/`。
+
+- `flash_rt/libflashrt_imagewam_native.so`（本节第一条命令编出它；nvfp4 需要 cache 变量 `ENABLE_SM100_CUTLASS`）
+- `exec/build`（ABI 面的 exec 层）
+- `runtime/build`
+
+parity gate 还需要这些环境变量，缺任何一个都是 `KeyError`（`tests/gate_imagewam_native_parity.py`）：`CKPT_PATH`、`FLUX2_SRC`、`FLUX2_AE_MODEL_PATH`（或 `AE_MODEL_PATH`）、`QWEN3_MODEL_SPEC`；schema gate 的 `CKPT_PATH` 是可选的（不给就用随机权重）。这些变量的取值见上面那个脚本的文件头。
 
 ```
 export OUT=$HOME/thor_val/$(date +%m%d)
+mkdir -p $OUT
 python -c "from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state as r; r()" | tee $OUT/P0_clock.log
 git rev-parse HEAD | tee $OUT/P0_commit.log
 (cd $BUNDLE && sha256sum -c SHA256SUMS) | tee $OUT/P0_bundle.log
 ```
+
+`$BUNDLE` 由脚本文件头定义（示例 `BUNDLE=$HOME/thor_bundle`）；`$OUT` 每轮是一个带日期的**新**目录，所以先 `mkdir -p`，否则 `tee` 会因为目录不存在而失败、四条前置命令有三条不落日志。
 
 记录：commit hash；GPU 是否被其他进程占用；`emc_locked` 是否为 `null`（目前未锁定）。这三项写在本轮所有数字旁边。
 
@@ -64,13 +75,13 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ```
 cmake --build build -j --target flashrt_imagewam_native
-IMAGEWAM_NATIVE_PRECISION=nvfp4 python -m pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q -s 2>&1 | tee $OUT/S4p_native.log   # 期望 39 passed；不需要 FLASHRT_THOR_FA4
-IMAGEWAM_NATIVE_PRECISION=nvfp4 python -m pytest tests/test_imagewam_text_trim_consumer_guards.py -q 2>&1 | tee $OUT/S4p_guards.log   # 期望 12 passed（上一轮 11：新增一条 CPU 口径 pin，protocol / 前端 / 替身的成员种类必须一致）
+IMAGEWAM_NATIVE_PRECISION=nvfp4 python -m pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q -s 2>&1 | tee $OUT/S4p_native.log   # 期望 39 passed；不需要 FLASHRT_THOR_FA4。若是 "2 skipped" / 0 collected，那是 exec/build 不在（前置失败），不是通过
+python -m pytest tests/test_imagewam_text_trim_consumer_guards.py -q 2>&1 | tee $OUT/S4p_guards.log   # 期望 12 passed（上一轮 11：新增一条 CPU 口径 pin）。这个文件不读 IMAGEWAM_NATIVE_PRECISION，它的前端固定 fp16
 python tests/gate_imagewam_native_parity.py --precision nvfp4 --graph native --bench-iters 50 2>&1 | tee $OUT/S4p_parity_native.log
 python tests/gate_imagewam_native_schema_parity.py --precision nvfp4 2>&1 | tee $OUT/S4p_schema.log
 ```
 
-判据：`test_pipeline_records_one_graph_per_text_length` 两个长度（`x0=6` 先、`14` 后）由 handle 自己装管线并录图，`graph_producer=native`，manifest `text_lengths={'default_key': 14, 'keys': [6, 14], 'per_prompt_length': True}`，两个长度的 tick 都 `array_equal` 到 `infer()`、`differing=[]`、`actions max_abs=0`。两侧的 state 缓冲都是整块比对（`np.array_equal` 全长度），且两边都先 NaN 填过再跑（`_infer_reference` 与 `_poisoned_native_tick` 各在跑之前 `poison_tick_state`），所以一条长度自己的图没写到的行在两侧都停在基线上——哪一侧越界写了自己不拥有的行，或者写得不一样，仍然会红，不再靠"残留 vs NaN"；未裁剪一 key 路径逐行不变（节点数仍 native 5324 / Python 5348、`test_set_pipeline_drops_the_captured_graph` 的 `graph_exec=0 graph_nodes=0 graph_producer=''` 不变）；guards 里那条 GPU 行打印 x0=6 与 x0=10 的 dims / AdaLN 行数 / RoPE 指针随活动长度变化而 buffers 相同；parity `--graph native` 六个 mutant 全检出、节点数不变；schema gate 7 条记录与 golden 逐行相同。
+判据（四条各自的读法）：native 两条 pytest 合计 **39 passed**、guards **12 passed**、parity 打印 PASS 且六个 mutant 全检出、schema 打印 `7 records, identical`。任何一条报 "skipped" 或 0 collected 都表示二进制/`exec/` 没就位，不算做过。`test_pipeline_records_one_graph_per_text_length` 两个长度（`x0=6` 先、`14` 后）由 handle 自己装管线并录图，`graph_producer=native`，manifest `text_lengths={'default_key': 14, 'keys': [6, 14], 'per_prompt_length': True}`，两个长度的 tick 都 `array_equal` 到 `infer()`、`differing=[]`、`actions max_abs=0`。两侧的 state 缓冲都是整块比对（`np.array_equal` 全长度），且两边都先 NaN 填过再跑（`_infer_reference` 与 `_poisoned_native_tick` 各在跑之前 `poison_tick_state`），所以一条长度自己的图没写到的行在两侧都停在基线上——哪一侧越界写了自己不拥有的行，或者写得不一样，仍然会红，不再靠"残留 vs NaN"；未裁剪一 key 路径逐行不变（节点数仍 native 5324 / Python 5348、`test_set_pipeline_drops_the_captured_graph` 的 `graph_exec=0 graph_nodes=0 graph_producer=''` 不变）；guards 里那条 GPU 行打印 x0=6 与 x0=10 的 dims / AdaLN 行数 / RoPE 指针随活动长度变化而 buffers 相同；parity `--graph native` 六个 mutant 全检出、节点数不变；schema gate 7 条记录与 golden 逐行相同。
 去向：`opportunities.md` OPT-029、`THOR_STATUS_SUMMARY.md`。
 
 ---
