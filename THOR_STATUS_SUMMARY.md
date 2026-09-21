@@ -24,6 +24,8 @@
 
 `resolve_config` 是唯一的合法性判定点，非法组合抛一条带规则编号（R1–R11，以及值域规则 V1）的错误。日志里的 `effective_config` 行由 `config_resolver.format_effective_config` 产出，比较脚本、矩阵脚本与 runtime 身份打印同一个字符串，因此 profile 与精度是一份可记录的部署身份。
 
+同一组按长度捕获的图也由 native 侧承载：native model runtime（`io="native"`）按长度 adopt 前端的每张图（`use_graph(key, exec)`，key 就是 `x0`），服务时用 `set_text_length(x0)` 在热路径上选长度；native **pipeline** 自己的捕获（`pipeline_resources()` + `capture()`）仍是单长度，所以规则 R5 继续拒绝 `consumer="native"` 的 `text_trim`，`native` profile 仍是 native 路径唯一的具名集合。
+
 同一 workload 也是 runtime 与校准文件身份的一部分：ABI 描述与 `setup_identity` 在 `dims.<key>` 之外带 `workload.<field>`（`num_views`、`image_h`、`image_w`、`text_max_len`、`action_horizon`、`action_dim`、`proprio_dim`、`num_steps`、`shift`）；这些条目是附加描述，已记录的校准文件仍然有效。
 
 新入口在 Thor 上验证过（`c20f3a0`）：同一配置下运行时打印的 `effective_config` 与 `config_resolver` 逐字符一致（`default` 与 `fast` 两行都比对过）；导出的 runtime identity 带全部九个 `workload.<field>`，其 ABI 与 `infer()` bit-exact，native schema 与 golden 一致。

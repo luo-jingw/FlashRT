@@ -51,6 +51,29 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ---
 
+## S4 native 多长度（本轮新增）
+
+native model runtime 现在按长度带图（io config 声明长度表、`use_graph(key,exec)`、`set_text_length(key)` 在热路径选长度），所以**必须重编**：io config 变大、`use_graph` 换签名；旧 `.so` 会在加载时被 `native_library._check_layout` 拒掉（"config struct sizes differ from the ctypes mirror; rebuild the library"）。
+
+```
+# 0. 前置（commit/时钟/bundle）
+cmake --build build -j --target flash_rt_kernels flash_rt_fp4 flashrt_imagewam_native
+PB=$(python -c "import pybind11;print(pybind11.get_cmake_dir())")
+cmake -S exec -B exec/build -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=$(which python) -Dpybind11_DIR=$PB && cmake --build exec/build -j
+cmake -S runtime -B runtime/build -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=$(which python) -Dpybind11_DIR=$PB && cmake --build runtime/build -j
+python -c "from flash_rt.models.imagewam.native_library import ImageWAMNativeLibrary as L; L()"   # 布局校验，静默即通过
+
+IMAGEWAM_NATIVE_PRECISION=nvfp4 python -m pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q -s 2>&1 | tee $OUT/S4_native.log
+python tests/gate_imagewam_native_schema_parity.py --precision nvfp4 2>&1 | tee $OUT/S4_schema.log
+python tests/gate_imagewam_native_parity.py --precision nvfp4 --graph python --bench-iters 50 2>&1 | tee $OUT/S4_parity_python.log
+python tests/gate_imagewam_native_parity.py --precision nvfp4 --graph native --bench-iters 50 2>&1 | tee $OUT/S4_parity_native.log
+```
+
+判据：`test_native_tick_matches_infer_at_every_captured_length` 两个长度（`x0=6` 先、`14` 后）actions/actions_raw 都 `array_equal=True`，native manifest 的 `text_lengths={'default_key': 14, 'keys': [6, 14], 'per_prompt_length': True}`，`set_text_length` 对没有图的长度回 `-2`；schema gate PASS 且 `tests/data/imagewam_native_schema.records` **与 golden 逐行相同**（x0 不在记录里，不一致就是声明形状变了，要解释而不是重定基线）；parity gate 两种 `--graph` 的 tick 行全绿、六个 mutant 全检出、节点数与上一轮一致。**未裁剪（一 key）路径的数不能动**——`test_imagewam_native_pipeline.py` 整文件就是这条证据。P50 记进 OPT-029。
+去向：`opportunities.md` OPT-029、`THOR_STATUS_SUMMARY.md`。
+
+---
+
 ## E. 收尾
 
 ### E1 `text_trim` 转默认 —— 已决定（E1 = (c)）

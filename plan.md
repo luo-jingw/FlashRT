@@ -1747,8 +1747,8 @@ Phase Status: completed
   95.1 ms. The native face keeps refusing trimmed prompts; its own phase is
   S4.
 
-### Phase S4: the native pipeline carries one graph per trimmed length
-Phase Status: active
+### Phase S4: the native model runtime carries one graph per trimmed length
+Phase Status: completed
 - Goal: ISSUE-080 condition 5's remaining half. The ABI face serves trimmed
   prompts now; the native C++ pipeline refuses them explicitly at both entry
   points (`ImageWAMNativeRuntime.create`, `export_model_runtime(io="native")`).
@@ -1764,13 +1764,30 @@ Phase Status: active
   `native_schema.cpp` plus the schema-parity gate gain the new records.
 - Modified files: `cpp/models/imagewam/**`, `flash_rt/models/imagewam/native_runtime.py`,
   `native_resources.py`, `runtime_export.py`, the native gates.
-- Observation: a native tick at two prompt lengths, bit-exact against
-  `infer()`, next to the ABI row that S2 already added. The implementation
-  mirrors S2 on the C++ side (one keyed variant table instead of the single
-  `graph_` handle, a per-key context length for the proprio bound and the
-  `set_pipeline` dims check, and a host-visible key on the prompt/proprio
-  path), so the two faces read as one design; the Thor run list is in
-  `THOR_CHECKLIST.md` once the code lands.
+- Interface: `frt_imagewam_io_config` declares the deployment's text lengths
+  (`num_text_lengths` / `text_lengths`, `context_rows` = the active one), and
+  the handle gained `use_graph(key, exec)`, `has_variant(key)`,
+  `variant_exec(key)`, `set_text_length(key)` and `text_length`; `step`,
+  `set_proprio_row` and `set_pipeline` resolve against the active key. The key
+  is `x0`, the same space `GraphVariants` uses, and adoption is refused while
+  a model runtime over the handle is live — so `set_text_length` and
+  `set_proprio_row` are the two calls that stay legal on the hot path.
+  `export_model_runtime(io="native")` adopts the handle's exec per captured
+  length and records the same `text_lengths` manifest table as the ABI face.
+- Observation: `tests/test_imagewam_native_runtime.py::test_native_tick_matches_infer_at_every_captured_length`
+  (two captured lengths, the shorter ticked first, `array_equal` to `infer()`
+  in the actions and the action latent), the native manifest's length table,
+  and CPU-only pins for the io config's table and the handle's key plumbing
+  over a stubbed library. On Thor this needs the rebuild the checklist item
+  names, then that test plus the native parity and schema gates.
+- **R5 is not lifted**, deliberately: the native *pipeline* (its own
+  `capture()` from `pipeline_resources()`'s one resource table) still records
+  one graph at one context length, so `consumer="native"` keeps refusing
+  `text_trim` and the `native` profile stays the only resolved native set. A
+  deployment that wants trimmed prompts on the native face constructs the
+  frontend with the resolved configuration and adopts the per-length execs,
+  which is what the tests do. Making the pipeline itself per-length needs the
+  decision below.
 
 ### Phase S3: a bounded per-length graph cache, precaptured at construction
 Phase Status: completed
@@ -1925,6 +1942,15 @@ Open:
 - Whether the regression gate's *default* invocation should follow the served
   configuration (trimmed, fixture v2) instead of staying the untrimmed
   reference. Either answer is measured; only the gate's own defaults change.
+- Whether the native **pipeline** (native-owned capture) gets per-length
+  resource tables, which would let rule R5 go away entirely instead of only
+  for the model-runtime face. Three shapes, none of them a flag:
+  (a) one pipeline install per length with owned graphs surviving
+  `set_pipeline` (a per-key pipeline table in `native_runtime.{h,cpp}`);
+  (b) a pipeline config carrying per-key dims and RoPE tables (touches
+  `native_pipeline.cpp`); or (c) the pipeline stays one-length for good and
+  R5 stays. The trimmed face works today through adoption, so (c) costs only
+  the native-owned capture path.
 - Profile contents (T4): keep `fast` as `text_trim` + FA4 (backbone and mot)
   + native VAE in graph. The FA4 criterion was met in the `c20f3a0` round
   (`stack` 9.7 ms below `vae_trim`, agreement with official not worse) and

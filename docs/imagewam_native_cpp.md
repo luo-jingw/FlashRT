@@ -14,7 +14,7 @@ of the same model is in [`imagewam_model_runtime.md`](imagewam_model_runtime.md)
 |---|---|
 | weights (incl. NVFP4 packed weights and scales), activation scratch, K/V caches, `img_raw` / `context` / `action_latent`, every pipeline buffer | `ImageWAMTorchFrontendThor` |
 | fp16 AdaLN modulation tensors, transposed proprio weight | the Python handoff objects (`pipeline_resources()` result, `native_resources.py`), kept alive by `ImageWAMNativeRuntime` |
-| CUDA stream, captured graph exec, `GemmRunner` and cuBLAS/cuBLASLt handles and workspaces, proprio staging scratch, host copies of the min/max constants | the native handle (`frt_imagewam_native`, refcounted) |
+| CUDA stream, the captured graph execs (one per text length the handle recorded or adopted), `GemmRunner` and cuBLAS/cuBLASLt handles and workspaces, proprio staging scratch, host copies of the min/max constants | the native handle (`frt_imagewam_native`, refcounted) |
 
 The native library never frees a borrowed pointer. `ImageWAMNativeRuntime`
 holds the runtime surface, whose `owner` is the frontend, and the source
@@ -23,7 +23,12 @@ the declaration's Python owner and retains the native handle through the
 verb override. Borrowed memory therefore outlives every verb call, with or
 without an export. Replacing the pipeline (`set_pipeline`) destroys the
 graph captured from the previous one; while a model runtime over the
-handle is live, `use_graph`, `set_pipeline` and `capture` are refused.
+handle is live, `use_graph` (adoption), `set_pipeline` and `capture` are
+refused; `set_text_length` and `set_proprio_row` stay legal, because they
+carry the prompt change on the hot path. The native-owned `capture()` path
+records one graph at one context length (`pipeline_resources()` describes
+one resource table), which is why rule R5 still refuses `text_trim` for
+`consumer="native"` while the adopted per-length table above serves it.
 The Python graph and the native graph share the same buffers and must not
 run concurrently.
 
@@ -58,7 +63,7 @@ split/unfused one (`merge_linear2` / `fuse_res_norm` off).
 | file | responsibility |
 |---|---|
 | `cpp/models/imagewam/include/flashrt/cpp/models/imagewam/c_api.h` | C ABI: IO config, pipeline config (resource table), handle lifetime, verbs, setup calls |
-| `cpp/models/imagewam/src/native_runtime.{h,cpp}` | verbs, declaration check, graph ownership, eager segments, capture |
+| `cpp/models/imagewam/src/native_runtime.{h,cpp}` | verbs, declaration check, graph ownership, the graph variant table (one exec per text length), eager segments, capture |
 | `cpp/models/imagewam/src/native_pipeline.{h,cpp}` | prefill / denoise recording in `pipeline_thor.py` order |
 | `cpp/models/imagewam/src/fp4_linear.{h,cpp}` | NVFP4 linear (SM100-class builds) |
 | `cpp/models/imagewam/src/proprio_projection.{h,cpp}` | cached cuBLASLt bf16 GEMM + bias for the proprio token |
@@ -81,13 +86,21 @@ split/unfused one (`merge_linear2` / `fuse_res_norm` off).
 | `actions_raw` | out | SWAP | TENSOR | f32 | (64, 7) | `action_latent` |
 
 Buffers `img_raw`, `context`, `action_latent`; region `rollout_boundary`
-(the `action_latent` window); one GRAPH stage `infer`. The declaration's
-stream is the native stream and its graph is the one the native `step`
-replays. Identity adds `io=native` and `graph_producer` (`python` when the
-native verbs replay the frontend's graph, `native` after `capture`).
-`images` and `prompt` are not declared: their transforms (VAE, Qwen3) run
-in Python. The prompt is set through the frontend in setup, followed by
-`ImageWAMNativeRuntime.set_proprio_row(runtime_surface().proprio_row)`.
+(the `action_latent` window); one GRAPH stage `infer` whose graphs are the
+handle's, one per text length `x0` (the variant key), with the C `step`
+replaying the handle's active length. Identity adds `io=native` and
+`graph_producer` (`python` when the native verbs replay the frontend's
+graphs, `native` after `capture`). `images` and `prompt` are not declared:
+their transforms (VAE, Qwen3) run in Python. The prompt is set through the
+frontend in setup, followed by
+`ImageWAMNativeRuntime.set_text_length(x0)` and then
+`set_proprio_row(runtime_surface().proprio_row)`; a length the handle holds
+no graph for is refused by both (`-2`), and lengths are adopted
+(`use_graph(key, exec)`) before the export, because adoption is refused
+while a model runtime over the handle is live. The lengths a handle can
+serve are declared when it is created (`frt_imagewam_io_config`'s
+`num_text_lengths` / `text_lengths`), so a deployment declares or
+precaptures them first.
 The canonical records are pinned in
 `tests/data/imagewam_native_schema.records`.
 
@@ -99,12 +112,13 @@ Verbs:
   created at setup) written into the context row, on the native stream.
 - `get_output(actions)`: device-to-host copy on the native stream,
   synchronize, host `(x - offset) / scale`.
-- `step`: `cudaGraphLaunch` on the native stream.
+- `step`: `cudaGraphLaunch` of the active text length's graph on the native stream; `-2` when the handle holds no graph for it.
 - Status codes, the same as on the `io="python"` face: `-2` unknown
-  port, `-3` SWAP port passed to `set_input` / `get_output`, `-4` wrong
-  proprio payload size, `-5` short output buffer, `-1` a stream that is
-  not the native stream or a proprio write before `set_proprio_row`; the
-  message is in `last_error`. `tests/_helpers/imagewam_abi_checks.py`
+  port or a text length with no adopted/captured graph, `-3` SWAP port
+  passed to `set_input` / `get_output`, `-4` wrong proprio payload size,
+  `-5` short output buffer, `-1` a stream that is not the native stream or
+  a proprio write before `set_proprio_row`; the message is in
+  `last_error`. `tests/_helpers/imagewam_abi_checks.py`
   (`EXPECTED_STATUSES`) pins the table for both faces.
 
 ## Native pipeline
@@ -147,11 +161,16 @@ plus `exec/build` and `runtime/build` as in
 `EXCLUDE_FROM_ALL`; it builds for `GPU_ARCH=90` and `GPU_ARCH=110`.
 
 ```python
-native = ImageWAMNativeRuntime.create(fe.runtime_surface())
+native = ImageWAMNativeRuntime.create(fe.runtime_surface())   # declares fe's text lengths
 native.set_pipeline(fe)          # resource table + GEMM algorithm hand-off
-native.capture()                 # native graph
+native.capture()                 # native graph (one context length)
+# or, per captured length, adopt the frontend's graphs instead of capturing:
+#   for key, exec in fe.runtime_surface().graph_variants.entries:
+#       native.use_graph(key, exec)
 rt = fe.export_model_runtime(io="native", native=native, identity={...})
-# hand rt.ptr to the host; set_input/get_output/step are C functions
+# hand rt.ptr to the host; set_input/get_output/step are C functions.
+# Per prompt: frontend set_prompt, then native.set_text_length(x0), then
+# set_proprio_row(surface.proprio_row).
 ```
 
 ## Verification
@@ -180,7 +199,13 @@ parity row is re-run against mutants that must make it fail.
   the consumer skips the proprio verb or `step`; a tick through the C
   verbs enters no Python function (the `io="python"` face enters 57);
   status codes equal the `io="python"` face's (`EXPECTED_STATUSES`);
-  `use_graph` / `set_pipeline` / `capture` are refused while exported.
+  `use_graph` / `set_pipeline` / `capture` are refused while exported,
+  and `set_text_length` is not (it carries the prompt change);
+  `test_native_tick_matches_infer_at_every_captured_length` ticks at two
+  captured lengths (the shorter first) and each is `array_equal` to
+  `infer()` in the actions and the action latent, with the manifest's
+  `text_lengths` table; `set_text_length` returns `-2` for a length with no
+  graph.
 - `tests/gate_imagewam_native_schema_parity.py`: at the real dims the
   Python declaration, the C++ records and the golden file are identical.
 - `tests/gate_imagewam_native_parity.py --graph native`: real checkpoint,
@@ -196,6 +221,9 @@ parity row is re-run against mutants that must make it fail.
   pass.
 
 Thor (`nvfp4`): `sm110_check.sh` builds `flashrt_imagewam_native` for
-sm_110; the parity tests and gates above run there with
+sm_110. The io config carries the text-length table and `use_graph` takes
+the key, so a **rebuild is required**; a stale library fails at load in
+`native_library._check_layout` ("config struct sizes differ from the
+ctypes mirror; rebuild the library"). the parity tests and gates above run there with
 `IMAGEWAM_NATIVE_PRECISION=nvfp4` and `--precision nvfp4` (plan.md,
 "Native C++ overlay", Thor checklist) and have not been run yet.

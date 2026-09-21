@@ -5822,21 +5822,29 @@ With `text_trim=True` the sequence length changes with the prompt.
 `frontend.dims` holds the buffer sizes (the maximum); the dims the active
 graph runs are `frontend.active_dims`.
 
-`runtime_surface()`, `pipeline_resources()` and `export_model_runtime()`
-describe one graph at `frontend.dims` and raise `ValueError` for a
-trimmed frontend. Per-length support there needs all of:
+What the consumers needed, and what they now have:
 
 - the active dims everywhere a length appears: `context_rows` is
-  `active_dims["x0"]`, the image rows start at it, the backbone RoPE
-  table (`_rope_table`) has `active_dims["a0"]` rows, the action rows
-  start at `active_dims["a0"]`;
+  `active_dims["x0"]`, the image rows start at it, the backbone RoPE table
+  (`_rope_table`) has `active_dims["a0"]` rows, the action rows start at
+  `active_dims["a0"]`. `runtime_surface()` does this, and carries the graph
+  table (`graph_variants`: the `(key, exec)` entries with `key = x0`);
 - `text_trim` and the active `x0` in the setup identity;
-- after the prompt verb (`set_prompt`), re-adopting the graph: a new
-  length activates, and may capture, another graph (`_graph`); the
-  capture stream (`_graph_stream`) is the same for every length;
-- for the native pipeline, one native graph per length, recorded from
-  that length's dims and RoPE table, or the same trimmed packing
-  (`text_context.pack_trimmed_context`) in native code.
+- after the prompt verb (`set_prompt`), re-adopting the graph: a new length
+  activates, and may capture, another graph (`_graph`); the capture stream
+  (`_graph_stream`) is the same for every length. Both model-runtime faces do
+  it by key: `export_model_runtime(io="python")` replays the key of the
+  active length, `export_model_runtime(io="native")` adopts one exec per
+  captured length on the native handle (`use_graph(key, exec)`), which
+  selects it with `set_text_length(key)` before `set_proprio_row`;
+- the native *pipeline*'s own capture (`pipeline_resources()` →
+  `frt_imagewam_native_set_pipeline` → `capture()`) still records one graph
+  at one context length from one resource table, so rule R5 keeps refusing
+  `text_trim` for `consumer="native"` and the `native` profile remains the
+  only resolved native set. Per-length native-owned capture needs either one
+  pipeline install per length with owned graphs surviving `set_pipeline`, a
+  pipeline config carrying per-key dims and RoPE tables, or the decision to
+  leave that path one-length (plan.md, "Decisions pending").
 
 Activation statistics for a trimmed frontend are recorded at the active
 dims (`run_eager()` runs them). The untrimmed forward's text and
