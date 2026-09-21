@@ -195,7 +195,7 @@ commit `4cd06e5`：Jetson AGX Thor、MAXN、GPC 1.575 GHz / NVD 1.692 GHz、`emc
 | `fast --precapture` | 108.08 | 110.09 | 跳过（native VAE 进图） | 裁剪，FA4 两个位点，原生 VAE 进图；文本长度已预捕获 |
 | `native` | 145.93 | 126.58 | 126.38 | 裁剪，`use_fa4=False`；不再被任何规则跳过 |
 
-native C++ 本轮重建。`FLASHRT_THOR_FA4=0 IMAGEWAM_NATIVE_PRECISION=nvfp4 pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q`：38 passed、1 failed；未裁剪的一 key 路径整文件绿（state `array_equal`、`graph_exec=0`、`graph_nodes=0`、`graph_producer=''`）。失败的是 `test_pipeline_records_one_graph_per_text_length`，两个成因正在修（长度表是 property、比较覆盖了当前长度以外的行），所以 native pipeline 自己的按长度捕获**还不是已验证的能力**。`tests/test_imagewam_text_trim_consumer_guards.py` 11 passed，其 GPU 行打印逐长度资源表（`x0=6` 维度 `(6,16,20)`、`x0=10` 维度 `(10,20,24)`，AdaLN 行与 backbone RoPE 表跟着当前长度，`buffers identical=True`）。
+native C++ 本轮重建。`FLASHRT_THOR_FA4=0 IMAGEWAM_NATIVE_PRECISION=nvfp4 pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q`：38 passed、1 failed；未裁剪的一 key 路径整文件绿（state `array_equal`、`graph_exec=0`、`graph_nodes=0`、`graph_producer=''`）。失败的是 `test_pipeline_records_one_graph_per_text_length`，两个成因已在 `43c49ce` 修复（长度表是 property、比较覆盖了当前长度以外的行），但 native pipeline 自己的按长度捕获要等这一节在 `THOR_CHECKLIST.md` 的 S4-pipeline 行重跑过才算已验证的能力。`tests/test_imagewam_text_trim_consumer_guards.py` 11 passed，其 GPU 行打印逐长度资源表（`x0=6` 维度 `(6,16,20)`、`x0=10` 维度 `(10,20,24)`，AdaLN 行与 backbone RoPE 表跟着当前长度，`buffers identical=True`）。
 
 | gate | 结果 |
 |---|---|

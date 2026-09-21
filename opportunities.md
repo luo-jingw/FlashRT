@@ -5823,10 +5823,11 @@ tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q`
 38 passed, 1 failed. The untrimmed one-key path is fully green in that run: its
 state rows are `array_equal` with `graph_exec=0`, `graph_nodes=0` and
 `graph_producer=''`. The failing test is
-`test_pipeline_records_one_graph_per_text_length`, and its two causes are being
-fixed: the length table is a property, and the comparison covered rows beyond
-the active length. The native pipeline's own per-length capture is therefore not
-a verified capability yet.
+`test_pipeline_records_one_graph_per_text_length`, and its two causes are fixed
+at `43c49ce`: the length table is a property, and the comparison covered rows
+beyond the active length. The native pipeline's own per-length capture is
+therefore not a verified capability yet; the section it is re-run by is
+`THOR_CHECKLIST.md`'s S4-pipeline row.
 
 | gate | result |
 |---|---|
