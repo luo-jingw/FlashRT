@@ -1815,3 +1815,176 @@ question left for the owner.
    workload — the per-length memory figures recorded so far are LIBERO's.
    With those settled the workload has latency evidence but no fidelity
    evidence: every `vs official` number recorded so far is LIBERO's.
+
+
+# Plan: the final result tables (LIBERO and RoboTwin standard configurations)
+
+Plan Status: R1 completed (schema, checker, renderer, skeleton); R2-R6 pending
+the owner's RoboTwin declaration and a Thor session.
+
+## Problem
+
+### Current
+
+The project's numbers are spread over sessions and documents, and the two
+ends of the comparison are not produced by one protocol:
+
+- The official torch baseline (bf16 eager, 453.6 ms on Thor at LIBERO) was
+  measured in another session; no script in the repository times the official
+  implementation (`benchmarks/imagewam_e2e_official_compare.py` builds it only
+  to compare actions).
+- FlashRT's own rows come from different rounds (`eccf14f`, `c20f3a0`,
+  `0920t`, ...), several of them in machine states that differ by more than the
+  effects being compared (ISSUE-082), so a ratio across rounds is not a result.
+- The frontend has no int8 or int4 tier. The int8 and int4 numbers come from
+  `benchmarks/imagewam_thor_int8_bench.py` / `imagewam_thor_int4_bench.py`,
+  which time the GEMMs with random packed operands and no activation
+  quantization (an upper bound, OPT-007); on Thor int4 has no tensor-core path
+  (`tcgen05.mma` has no integer 4-bit kind) and measured slower than fp16.
+- FlashRT's non-quantized tier is `fp16`; the official model runs bf16. There
+  is no bf16 GEMM tier in the frontend.
+- The RoboTwin workload is not declared anywhere in the repository (the only
+  checkpoint here is the LIBERO one), and the benchmarks that carry a workload
+  are LIBERO-shaped (`_imagewam_workload_cli.WORKLOADS`: `libero`, `target`).
+  RoboTwin runs 30 denoise steps against LIBERO's 10.
+
+### Problem
+
+There is no single, formatted record of "official torch vs FlashRT at
+fp16 / fp8 / fp4 / int8 / int4, steady state, on each standard workload".
+
+### Measurable goal
+
+Two tables, one per workload, each row measured in ONE Thor session with the
+same timed-call boundary, recorded in one JSON document and rendered from it:
+
+| Row | What runs |
+|---|---|
+| `official_torch` | the official implementation, bf16 eager |
+| `flashrt_fp16` | `precision="fp16"` |
+| `flashrt_fp8` | `precision="fp8_static_cutlass"` (real calibration for that workload) |
+| `flashrt_fp4` | `precision="nvfp4"` |
+| `flashrt_int8` | the SM80 INT8 CUTLASS bench, scope `gemm_only` |
+| `flashrt_int4` | the SM80 INT4 CUTLASS bench, scope `gemm_only` |
+
+The timed call is camera frames + proprio (text context already encoded) to the
+de-normalised action chunk on the host, in steady state. FlashRT rows use the
+served `default` profile of `load_imagewam` (the fastest configuration) so a
+row is "what a deployment runs", with `effective_config` recorded per row.
+
+## Structure
+
+| Module | Responsibility | State it owns |
+|---|---|---|
+| `benchmarks/imagewam_result_table.py` (R1) | the schema, the checker, the renderer | the row set, the standard step counts, the rules |
+| `docs/imagewam_results.json` | the record set | every measured number, its session, its configuration |
+| `docs/imagewam_results.md` | the rendered tables | nothing: generated, never edited |
+| workload presets (`benchmarks/_imagewam_workload_cli.py`, R2) | the named workloads the benches run | the `robotwin` workload once declared |
+| official bench (R3) | the official implementation's steady-state latency | nothing |
+| int8 / int4 benches (R4) | GEMM-only timings at the workload's shapes | nothing |
+| results driver (R5) | one session: every row of a table, then the import into the JSON | the session id |
+
+Ownership rules: the JSON is the only place a table's numbers live; the
+Markdown is derived; a workload's fields are declared once (the table's
+`workload` block equals the preset the benches ran); a ratio is only computed
+by the renderer, and only inside one session.
+
+## Interface
+
+Schema `schema_version` 1 (`benchmarks/imagewam_result_table.py`, whose module
+docstring is the field list). Table level: `workload`, `checkpoint`,
+`boundary`, `session`, `measurement` (device, commit, date, `gpu_exclusive`,
+clock state, warmup, iters), `rows`. Row level: `id`, `status`
+(`measured` / `not_measured` / `not_supported`), `scope` (`full_infer` /
+`gemm_only`), `reason`, `session`, `config` (`effective_config`,
+calibration), `latency` (p10 / p50 / p90 / n), `fidelity` (source, cosine vs
+official median and min, MAE vs ground truth, n) or null, `note`.
+
+Commands: `skeleton`, `check <json>`, `render <json>`.
+
+Rules (checked): the six rows once, in order; `num_steps` equals the table's
+standard (libero 10, robotwin 30); a measured row has ordered percentiles and
+n >= 1, a complete workload, a measurement block and an identified checkpoint;
+a FlashRT row records its `effective_config`; a `gemm_only` row has no
+fidelity and no ratio (marked †); a ratio against the official row exists only
+when both rows carry the same session (otherwise ‡).
+
+## Flow
+
+```
+declare the workload (R2) -> one Thor session:
+   official bench (R3) -> FlashRT fp16, fp8, fp4 through load_imagewam (R5)
+   -> int8, int4 GEMM benches (R4)
+ -> importer fills docs/imagewam_results.json (rows, session, config, fidelity)
+ -> check -> render -> docs/imagewam_results.md
+```
+
+## Code Mapping
+
+| Item | File |
+|---|---|
+| schema, checker, renderer, skeleton | `benchmarks/imagewam_result_table.py`, `tests/test_imagewam_result_table.py`, `docs/imagewam_results.json`, `docs/imagewam_results.md` |
+| `robotwin` workload, `VALID_TOKENS` entry | `benchmarks/_imagewam_workload_cli.py` |
+| official steady-state bench | `benchmarks/imagewam_official_torch_bench.py` (new) |
+| int8 / int4 at a workload and step count | `benchmarks/imagewam_thor_int8_bench.py`, `imagewam_thor_int4_bench.py`, `imagewam_thor_graph_bench.py` |
+| FlashRT rows | `benchmarks/imagewam_thor_path_bench.py` (latency, `--workload`, `--profile default`), `benchmarks/imagewam_e2e_official_compare.py` + `scripts/imagewam_thor_matrix.sh` (latency and fidelity where data exists) |
+| fp8 calibration for a workload | `benchmarks/imagewam_build_calibration.py` (LIBERO data loader today) |
+| session driver and importer | `scripts/imagewam_thor_results.sh`, `benchmarks/imagewam_result_table.py import` (new) |
+
+## Implementation Phases
+
+### Phase R1: the schema, checker and renderer
+Phase Status: completed
+- Goal: the record format and its rules exist and are tested before any
+  number is entered.
+- Modified files: `benchmarks/imagewam_result_table.py`,
+  `tests/test_imagewam_result_table.py`, `docs/imagewam_results.json` (the
+  skeleton: every row `not_measured`), `docs/imagewam_results.md`.
+- Observation: `tests/test_imagewam_result_table.py` (CPU, 13 tests).
+
+### Phase R2: the RoboTwin workload
+Phase Status: pending (owner input)
+- Goal: `robotwin` is a named workload with `num_steps=30`.
+- Needs from the owner (none of it is in the repository): camera count and
+  image size, valid instruction token range and the padded length,
+  `action_horizon`, `action_dim`, `proprio_dim`, `shift`, the RoboTwin
+  checkpoint (its backbone widths must match; `ImageWAMStructure.from_checkpoint`
+  reads them) and where its observation data lives.
+- Modified files: `benchmarks/_imagewam_workload_cli.py`, the `robotwin`
+  `workload` block of `docs/imagewam_results.json`.
+
+### Phase R3: the official torch steady-state bench
+Phase Status: pending
+- Goal: a script times the official implementation at a workload and step
+  count over exactly the timed call above (image encode + proprio + transformer
+  with the text context passed in), with warmup, device sync and percentiles.
+  It replaces the one-off 453.6 ms.
+- Modified files: `benchmarks/imagewam_official_torch_bench.py` (new).
+
+### Phase R4: int8 and int4 at a workload
+Phase Status: pending
+- Goal: the two benches take `--workload` and the step count, and emit the
+  same latency record; their rows stay `gemm_only`.
+- Open decision: whether a real full-pipeline INT8 tier (activation
+  quantization inside the frontend; INT8 has a `tcgen05` legacy path on Thor)
+  is worth building so the int8 row can be `full_infer`. int4 cannot be
+  (no hardware path, OPT-007), so its row is `gemm_only` either way.
+- Modified files: `benchmarks/imagewam_thor_int8_bench.py`,
+  `imagewam_thor_int4_bench.py`, `imagewam_thor_graph_bench.py`.
+
+### Phase R5: the session driver and importer
+Phase Status: pending
+- Goal: one script runs every row of a table in one process family, writes the
+  raw logs, and an importer turns the logs into rows of the JSON (session id,
+  `effective_config`, percentiles, fidelity).
+- Modified files: `scripts/imagewam_thor_results.sh` (new),
+  `benchmarks/imagewam_result_table.py` (`import` command).
+
+### Phase R6: the Thor session
+Phase Status: pending
+- The next `THOR_CHECKLIST.md` describes it. Points it must state: fp8 needs
+  a calibration recorded on the workload's own data (the identity carries
+  `num_denoise_steps`, `shift` and the camera geometry); 30 steps put about
+  three times the ActionDiT kernels in one graph, so the capture time and the
+  graph memory are observed on the RoboTwin rows; the official row runs at 30
+  steps too.

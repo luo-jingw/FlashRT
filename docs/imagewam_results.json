@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "tables": {
+    "libero": {
+      "workload": {
+        "num_views": 2,
+        "image_h": 224,
+        "image_w": 224,
+        "text_max_len": 512,
+        "valid_tokens_min": 16,
+        "valid_tokens_max": 31,
+        "action_horizon": 64,
+        "action_dim": 7,
+        "proprio_dim": 8,
+        "num_steps": 10,
+        "shift": 5.0,
+        "num_train_timesteps": 1000
+      },
+      "checkpoint": {
+        "name": null,
+        "sha256_16": null
+      },
+      "boundary": "one call from camera frames and proprio (text context already encoded, so the text encoder is outside) to the de-normalised action chunk on the host; steady state (graphs captured, caches warm)",
+      "session": null,
+      "measurement": {
+        "device": null,
+        "commit": null,
+        "date": null,
+        "gpu_exclusive": null,
+        "clock": {
+          "nvpmodel": null,
+          "gpu_locked": null,
+          "emc_locked": null
+        },
+        "warmup": null,
+        "iters": null
+      },
+      "rows": [
+        {
+          "id": "official_torch",
+          "status": "not_measured",
+          "scope": "full_infer",
+          "reason": "not run yet",
+          "config": null,
+          "latency": null,
+          "fidelity": null,
+          "note": ""
+        },
+        {
+          "id": "flashrt_fp16",
+          "status": "not_measured",
+          "scope": "full_infer",
+          "reason": "not run yet",
+          "config": null,
+          "latency": null,
+          "fidelity": null,
+          "note": ""
+        },
+        {
+          "id": "flashrt_fp8",
+          "status": "not_measured",
+          "scope": "full_infer",
+          "reason": "not run yet",
+          "config": null,
+          "latency": null,
+          "fidelity": null,
+          "note": ""
+        },
+        {
+          "id": "flashrt_fp4",
+          "status": "not_measured",
+          "scope": "full_infer",
+          "reason": "not run yet",
+          "config": null,
+          "latency": null,
+          "fidelity": null,
+          "note": ""
+        },
+        {
+          "id": "flashrt_int8",
+          "status": "not_measured",
+          "scope": "gemm_only",
+          "reason": "not run yet",
+          "config": null,
+          "latency": null,
+          "fidelity": null,
+          "note": ""
+        },
+        {
+          "id": "flashrt_int4",
+          "status": "not_measured",
+          "scope": "gemm_only",
+          "reason": "not run yet",
+          "config": null,
+          "latency": null,
+          "fidelity": null,
+          "note": ""
+        }
+      ]
+    },
+    "robotwin": {
+      "workload": {
+        "num_views": null,
+        "image_h": null,
+        "image_w": null,
+        "text_max_len": null,
+        "valid_tokens_min": null,
+        "valid_tokens_max": null,
+        "action_horizon": null,
+        "action_dim": null,
+        "proprio_dim": null,
+        "num_steps": 30,
+        "shift": null,
+        "num_train_timesteps": null
+      },
+      "checkpoint": {
+        "name": null,
+        "sha256_16": null
+      },
+      "boundary": "one call from camera frames and proprio (text context already encoded, so the text encoder is outside) to the de-normalised action chunk on the host; steady state (graphs captured, caches warm)",
+      "session": null,
+      "measurement": {
+        "device": null,
+        "commit": null,
+        "date": null,
+        "gpu_exclusive": null,
+        "clock": {
+          "nvpmodel": null,
+          "gpu_locked": null,
+          "emc_locked": null
+        },
+        "warmup": null,
+        "iters": null
+      },
+      "rows": [
+        {
+          "id": "official_torch",
+          "status": "not_measured",
+          "scope": "full_infer",
+          "reason": "not run yet",
+          "config": null,
+          "latency": null,
+          "fidelity": null,
+          "note": ""
+        },
+        {
+          "id": "flashrt_fp16",
+          "status": "not_measured",
+          "scope": "full_infer",
+          "reason": "not run yet",
+          "config": null,
+          "latency": null,
+          "fidelity": null,
+          "note": ""
+        },
+        {
+          "id": "flashrt_fp8",
+          "status": "not_measured",
+          "scope": "full_infer",
+          "reason": "not run yet",
+          "config": null,
+          "latency": null,
+          "fidelity": null,
+          "note": ""
+        },
+        {
+          "id": "flashrt_fp4",
+          "status": "not_measured",
+          "scope": "full_infer",
+          "reason": "not run yet",
+          "config": null,
+          "latency": null,
+          "fidelity": null,
+          "note": ""
+        },
+        {
+          "id": "flashrt_int8",
+          "status": "not_measured",
+          "scope": "gemm_only",
+          "reason": "not run yet",
+          "config": null,
+          "latency": null,
+          "fidelity": null,
+          "note": ""
+        },
+        {
+          "id": "flashrt_int4",
+          "status": "not_measured",
+          "scope": "gemm_only",
+          "reason": "not run yet",
+          "config": null,
+          "latency": null,
+          "fidelity": null,
+          "note": ""
+        }
+      ]
+    }
+  }
+}
