@@ -1980,55 +1980,45 @@ set that turns FA4 off.
 
 Open:
 
-- The served default's *numbers* changed with the FA4 default and the gate's
-  defaults (a trimmed, FA4-on configuration where the machine supports FA4);
-  the Thor re-measure is done in the `0920t` round and recorded
-  (`THOR_STATUS_SUMMARY.md`, OPT-019/OPT-028/OPT-029/OPT-030): gate nvfp4
-  against fixture v2 0.99889 / 0.99934 at P50 125.86 ms, gate fp16 284.38 ms,
-  the untrimmed reference (`--no-text-trim` + v1) 0.99418 / 0.99758 at
-  191.79 ms, end-to-end `default` 126.5 ms against 131.3 ms with
-  `FLASHRT_THOR_FA4=0`. The `0920c` round then closed the last three Thor
-  rows (the native pipeline's own per-length capture, the ABI export gate,
-  the `e0m3_hadamard` trim-safety check), so no phase of this plan is waiting
-  on the machine.
-- The latency gate's baseline (`tests/fixtures/imagewam_gate/latency_baselines.json`,
-  nvfp4 202.2 ms, margin 0.05) describes the untrimmed, FA4-off configuration
-  as a one-sided bound. With the served default measuring 125.86 ms in the
-  same gate, that bound (202.2 x 1.05 = 212.3 ms) admits a regression of
-  about 69% before it fires, where the untrimmed row it was recorded from
-  has about 11% of headroom. The
-  decision is whether the baseline is re-seeded from the served default's own
-  gate run, which also means the file states the configuration each number
-  describes (trim on or off, FA4 state) instead of one entry per precision;
-  the untrimmed reference row then needs its own entry or none.
-- Profile contents (T4): keep `fast` as `text_trim` + FA4 (backbone and mot)
-  + native VAE in graph. The FA4 criterion was met in the `c20f3a0` round
-  (`stack` 9.7 ms below `vae_trim`, agreement with official not worse) and
-  so was the native-VAE criterion; `text_trim` remains the largest single
-  step on the LIBERO workload.
-- The S phases are done: S1 (a gate fixture whose `fp16` reference is recorded
-  trimmed, so a trimmed configuration can pass the regression gate), S2 (the
-  ABI carries one adopted graph per text length), S3 (a bounded per-length
-  cache filled by `precapture_text_lengths` at startup) and S4 (the native
-  model runtime and then the native pipeline's own per-length capture; rule
-  R5 removed). With `text_max_len=128` the trimmed sequence saves at most 112
-  of about 897 backbone rows, so the gain there is a fraction of the LIBERO
-  one (ISSUE-083) — the trim is still the right default, it is just a smaller
-  number on that workload.
-- Whether the calibration file's identity gains the workload fields
-  (`num_views`, `image_h`, `image_w`): with no compatibility requirement
-  this is a format version bump and a re-recorded file. It closes the one
-  collision the dims-derived identity has — two workloads with the same
-  `ref_h`/`ref_w` (e.g. two 224x224 views and four 224x112 views) have the
-  same dims but different VAE inputs.
-- The target-workload declaration (`TARGET_WORKLOAD` in
-  `benchmarks/_imagewam_workload_cli.py`: `num_views=3`, `image_h=image_w=256`,
-  `action_horizon=32`, `action_dim=7`, `proprio_dim=8`, `num_steps=10`,
-  `shift=5.0`, instruction tokens 16-128). The workload serves on all three
-  paths: `0919e` measured `infer()` 216.93 / ABI 173.55 / native 173.27 ms
-  with `default`, and a trimmed sweep at 16, 72 and 128 valid tokens measured
-  197.00 / 207.06 / 217.50 ms on `infer()` and 153.51 / 161.68 / 172.05 ms on
-  the ABI. Still open: whether 128 padded tokens is the deployment's own
-  count (ISSUE-083 resolves how it is encoded, not what it should be), and
-  the checkpoint, calibration file and graph memory budget that go with that
-  workload — the per-length memory figures recorded so far are LIBERO's.
+Four decisions, none of them a Thor run. The plan's own phases are all
+`completed` and `THOR_CHECKLIST.md` carries no pending item; the served
+default's numbers are re-measured and recorded (`0920t`, `0920c`).
+
+1. The latency gate's baseline
+   (`tests/fixtures/imagewam_gate/latency_baselines.json`, nvfp4 202.2 ms,
+   margin 0.05) describes the untrimmed, FA4-off configuration as a one-sided
+   bound. Both configurations the gate can be asked for are compared to that
+   one number: the served default (trim + FA4) measures 125.86 ms in the same
+   gate, so the bound (202.2 x 1.05 = 212.3 ms) fires only after a regression
+   of about 69%; the untrimmed row it was recorded from measures 191.79 ms in
+   the `0920t` session, leaving that row about 11%. The decision is whether
+   the baseline is re-seeded from the served default's own gate run, which
+   also means the file states the configuration each number describes (trim
+   on or off, FA4 state) instead of one entry per precision; the untrimmed
+   reference row then needs its own entry or none.
+2. Profile contents (T4): whether `fast` stays what it is — `text_trim` + FA4
+   at both attention sites + the native VAE inside the graph — with the FA4
+   `mot` site and the in-graph VAE opt-in by name rather than part of the
+   served default. Both criteria were met in the `c20f3a0` round (`stack`
+   9.7 ms below `vae_trim`, agreement with official not worse; the same for the
+   native VAE), and `text_trim` remains the largest single step on the LIBERO
+   workload, so the question is only whether the two smaller wins are promoted.
+3. Whether the calibration file's identity gains the workload fields
+   (`num_views`, `image_h`, `image_w`): with no compatibility requirement this
+   is a format version bump and a re-recorded file. It closes the one
+   collision the dims-derived identity has — two workloads with the same
+   `ref_h`/`ref_w` (e.g. two 224x224 views and four 224x112 views) have the
+   same dims but different VAE inputs.
+4. The target-workload declaration (`TARGET_WORKLOAD` in
+   `benchmarks/_imagewam_workload_cli.py`: `num_views=3`, `image_h=image_w=256`,
+   `action_horizon=32`, `action_dim=7`, `proprio_dim=8`, `num_steps=10`,
+   `shift=5.0`, instruction tokens 16-128). The workload serves on all three
+   paths: `0919e` measured `infer()` 216.93 / ABI 173.55 / native 173.27 ms
+   with `default`, and a trimmed sweep at 16, 72 and 128 valid tokens measured
+   197.00 / 207.06 / 217.50 ms on `infer()` and 153.51 / 161.68 / 172.05 ms on
+   the ABI. Still open: whether 128 padded tokens is the deployment's own
+   count (ISSUE-083 resolves how it is encoded, not what it should be), and
+   the checkpoint, calibration file and graph memory budget that go with that
+   workload — the per-length memory figures recorded so far are LIBERO's.
+   With those settled the workload has latency evidence but no fidelity
+   evidence: every `vs official` number recorded so far is LIBERO's.
