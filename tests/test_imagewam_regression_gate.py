@@ -24,8 +24,10 @@ from flash_rt.core.regression_gate import (
     CHECK_FAIL,
     CHECK_PASS,
     CHECK_UNGATED,
+    DEFAULT_SEED_MARGIN,
     LATENCY_CHECK,
     LATENCY_NOT_MEASURED,
+    LATENCY_SCHEMA_VERSION,
     RESULT_SCHEMA_VERSION,
     VERDICT_BLOCKED,
     VERDICT_FAIL,
@@ -43,6 +45,7 @@ from flash_rt.core.regression_gate import (
     LatencyGate,
     LatencyPolicyTable,
     LatencySummary,
+    config_differences,
 )
 from flash_rt.datasets.imagewam_gate_fixture import (
     FIXTURE_FILE,
@@ -128,20 +131,142 @@ def test_latency_summary_keeps_run_order():
         LatencySummary.from_samples([1.0] * 9)
 
 
+SERVED_CONFIG = {"text_trim": True, "use_fa4": "auto", "use_fa4_mot": "auto", "vae": "native_graph"}
+UNTRIMMED_CONFIG = {"text_trim": False, "use_fa4": False, "use_fa4_mot": False, "vae": "torch"}
+
+
+def _summary(p50: float) -> LatencySummary:
+    return LatencySummary.from_samples([p50] * 10)
+
+
+def _thor_policy(**named: LatencyBaseline) -> DeviceLatencyPolicy:
+    return DeviceLatencyPolicy("thor", True, "target", {"nvfp4": dict(named)})
+
+
 def test_latency_gate_rule_is_strict_less_than_limit():
-    policy = DeviceLatencyPolicy("thor", True, "target",
-                                 {"nvfp4": LatencyBaseline(p50_ms=200.0, margin=0.05, source="test")})
+    policy = _thor_policy(served_default=LatencyBaseline(200.0, 0.05, "test", SERVED_CONFIG))
     gate = LatencyGate(policy)
-    assert gate.evaluate("nvfp4", LatencySummary.from_samples([209.9] * 10)).status == CHECK_PASS
-    at_limit = gate.evaluate("nvfp4", LatencySummary.from_samples([210.0] * 10))
+    assert gate.evaluate("nvfp4", _summary(209.9), "served_default").status == CHECK_PASS
+    at_limit = gate.evaluate("nvfp4", _summary(210.0), "served_default")
     assert at_limit.status == CHECK_FAIL and at_limit.limit == pytest.approx(210.0)
-    missing = gate.evaluate("fp16", LatencySummary.from_samples([1.0] * 10))
+    missing = gate.evaluate("fp16", _summary(1.0), "served_default")
     assert missing.status == CHECK_UNGATED and "no baseline" in missing.detail
+
+
+def test_seeded_entry_passes_and_fails_against_its_own_bound():
+    policy = _thor_policy(served_default=LatencyBaseline(120.0, 0.05, "test", SERVED_CONFIG),
+                          untrimmed_reference=LatencyBaseline(200.0, 0.05, "test", UNTRIMMED_CONFIG))
+    gate = LatencyGate(policy)
+    served_config = dict(SERVED_CONFIG, use_fa4=True, use_fa4_mot=True)
+    ok = gate.evaluate("nvfp4", _summary(125.0), "served_default", served_config)
+    assert ok.status == CHECK_PASS and ok.limit == pytest.approx(126.0)
+    assert "served_default" in ok.detail
+    slow = gate.evaluate("nvfp4", _summary(127.0), "served_default", served_config)
+    assert slow.status == CHECK_FAIL and slow.value == 127.0
+    # the same 127 ms is nowhere near the untrimmed reference's bound: each
+    # configuration is judged against its own number only
+    reference = gate.evaluate("nvfp4", _summary(127.0), "untrimmed_reference", UNTRIMMED_CONFIG)
+    assert reference.status == CHECK_PASS and reference.limit == pytest.approx(210.0)
+    # a regression that the old single 202.2 ms bound would have let through on the served default
+    assert gate.evaluate("nvfp4", _summary(180.0), "served_default", served_config).status == CHECK_FAIL
+
+
+def test_unseeded_entry_is_ungated_not_passed_and_not_failed():
+    policy = _thor_policy(served_default=LatencyBaseline(None, 0.05, "run the gate on Thor", SERVED_CONFIG))
+    check = LatencyGate(policy).evaluate("nvfp4", _summary(125.86), "served_default",
+                                         dict(SERVED_CONFIG, use_fa4=True, use_fa4_mot=True))
+    assert check.status == CHECK_UNGATED and check.value == 125.86 and check.limit is None
+    assert "served_default" in check.detail and "not seeded" in check.detail
+    assert "125.86" in check.detail and "latency_seed" in check.detail
+    with pytest.raises(ValueError, match="unseeded"):
+        policy.baselines["nvfp4"]["served_default"].limit_ms
+    report = GateReport.evaluated("nvfp4", "thor", [_fidelity_pass(), check], {})
+    assert report.verdict == VERDICT_PASS and report.latency == CHECK_UNGATED
+    assert "served_default" in report.latency_reason and "served_default" in report.reason
+    required = GateReport.evaluated("nvfp4", "thor", [_fidelity_pass(), check], {}, require_latency=True)
+    assert required.verdict == VERDICT_BLOCKED and "served_default" in required.reason
+
+
+@pytest.mark.parametrize("configuration, reason_part", [
+    ("fast_experiment", "no baseline for configuration 'fast_experiment'"),
+    (None, "no latency baseline"),
+])
+def test_unknown_or_unnamed_configuration_is_ungated(configuration, reason_part):
+    policy = _thor_policy(untrimmed_reference=LatencyBaseline(200.0, 0.05, "test", UNTRIMMED_CONFIG))
+    check = LatencyGate(policy).evaluate("nvfp4", _summary(90.0), configuration, UNTRIMMED_CONFIG,
+                                         configuration_reason="profile 'fast' resolved to ...")
+    assert check.status == CHECK_UNGATED and check.value == 90.0
+    assert reason_part in check.detail and "90.00" in check.detail
+    if configuration is None:
+        assert "profile 'fast' resolved to" in check.detail
+    else:
+        assert "untrimmed_reference" in check.detail   # the known names are listed
+    required = GateReport.evaluated("nvfp4", "thor", [_fidelity_pass(), check], {}, require_latency=True)
+    assert required.verdict == VERDICT_BLOCKED and reason_part in required.reason
+
+
+def test_entry_only_judges_a_run_of_the_configuration_it_states():
+    policy = _thor_policy(untrimmed_reference=LatencyBaseline(200.0, 0.05, "test", UNTRIMMED_CONFIG))
+    gate = LatencyGate(policy)
+    drifted = dict(UNTRIMMED_CONFIG, use_fa4=True)
+    check = gate.evaluate("nvfp4", _summary(100.0), "untrimmed_reference", drifted)
+    assert check.status == CHECK_UNGATED and "use_fa4" in check.detail and "untrimmed_reference" in check.detail
+    assert gate.seed_entry("nvfp4", "untrimmed_reference", _summary(100.0), drifted, "src", drifted) is None
+
+
+def test_config_differences_auto_matches_anything_and_bool_is_not_int():
+    assert config_differences(SERVED_CONFIG, dict(SERVED_CONFIG, use_fa4=False, use_fa4_mot=True)) == []
+    assert config_differences(SERVED_CONFIG, dict(SERVED_CONFIG, vae="torch")) == ["vae"]
+    assert config_differences(UNTRIMMED_CONFIG, dict(UNTRIMMED_CONFIG, use_fa4=0)) == ["use_fa4"]
+    assert config_differences(UNTRIMMED_CONFIG, {"text_trim": False}) == ["use_fa4", "use_fa4_mot", "vae"]
+
+
+def test_latency_seed_carries_the_measured_p50_and_a_pasteable_entry():
+    policy = _thor_policy(served_default=LatencyBaseline(None, 0.07, "seed me", SERVED_CONFIG))
+    gate = LatencyGate(policy)
+    run_config = dict(SERVED_CONFIG, use_fa4=True, use_fa4_mot=True)
+    seed = gate.seed_entry("nvfp4", "served_default", _summary(118.4567), run_config, "gate run X", run_config)
+    assert seed["p50_ms"] == 118.46 and seed["configuration"] == "served_default"
+    assert seed["path"] == 'devices["thor"].baselines["nvfp4"]["served_default"]'
+    # an unseeded entry keeps its own description and margin; the run only fills p50_ms and source
+    assert seed["entry"] == {"config": SERVED_CONFIG, "p50_ms": 118.46, "margin": 0.07, "source": "gate run X"}
+    record = json.loads(json.dumps(seed))
+    assert record["entry"]["p50_ms"] == 118.46
+    # pasting it in gives a seeded entry that gates: the round trip through the file format
+    pasted = LatencyBaseline(**{**record["entry"]})
+    assert pasted.seeded and pasted.limit_ms == pytest.approx(118.46 * 1.07)
+    check = gate.evaluate("nvfp4", _summary(118.4567), "served_default", run_config)
+    report = GateReport.evaluated("nvfp4", "thor", [_fidelity_pass(), check], {}, latency_seed=seed)
+    assert report.to_dict()["latency_seed"]["entry"]["p50_ms"] == 118.46
+    assert GateReport.evaluated("nvfp4", "thor", [_fidelity_pass()], {}).to_dict()["latency_seed"] is None
+
+
+def test_latency_seed_for_a_missing_entry_uses_the_runs_config_and_default_margin():
+    gate = LatencyGate(_thor_policy(untrimmed_reference=LatencyBaseline(200.0, 0.05, "test", UNTRIMMED_CONFIG)))
+    config = dict(SERVED_CONFIG, use_fa4=True, use_fa4_mot=False)
+    seed = gate.seed_entry("nvfp4", "served_default", _summary(120.0), config, "src", config)
+    assert seed["entry"] == {"config": config, "p50_ms": 120.0, "margin": DEFAULT_SEED_MARGIN, "source": "src"}
+    assert LatencyGate(DeviceLatencyPolicy("thor", True, "t")).seed_entry(
+        "fp16", "served_default", _summary(1.0), config, "src", config)["path"].endswith(
+        '["fp16"]["served_default"]')
+
+
+@pytest.mark.parametrize("policy, configuration", [
+    # seeded entry: the number is already there
+    (_thor_policy(served_default=LatencyBaseline(120.0, 0.05, "t", SERVED_CONFIG)), "served_default"),
+    # no configuration name: nothing to seed
+    (_thor_policy(), None),
+    # an ungated device is not seeded from
+    (DeviceLatencyPolicy("h100", False, "shared GPU"), "served_default"),
+])
+def test_no_latency_seed_when_there_is_nothing_to_seed(policy, configuration):
+    assert LatencyGate(policy).seed_entry("nvfp4", configuration, _summary(1.0), SERVED_CONFIG, "s",
+                                          SERVED_CONFIG) is None
 
 
 def test_latency_gate_ungated_device_still_records_p50():
     check = LatencyGate(DeviceLatencyPolicy("h100", False, "shared GPU")).evaluate(
-        "fp16", LatencySummary.from_samples([500.0] * 10))
+        "fp16", LatencySummary.from_samples([500.0] * 10), "served_default")
     assert check.status == CHECK_UNGATED and check.value == 500.0 and "shared GPU" in check.detail
 
 
@@ -169,13 +294,14 @@ def _fidelity_pass() -> GateCheck:
 
 @pytest.mark.parametrize("policy, precision, reason_part", [
     (DeviceLatencyPolicy("h100", False, "shared GPU"), "fp16", "shared GPU"),
-    (DeviceLatencyPolicy("thor", True, "target",
-                         {"nvfp4": LatencyBaseline(231.6, 0.05, "OPT-015")}), "fp16", "no baseline for precision"),
+    (_thor_policy(served_default=LatencyBaseline(231.6, 0.05, "OPT-015", SERVED_CONFIG)), "fp16",
+     "no baseline for precision"),
     (LatencyPolicyTable(entries=()).resolve("NVIDIA GeForce RTX 4090", (8, 9)), "nvfp4",
      "no latency policy for this device"),
 ])
 def test_ungated_latency_is_explicit_and_can_be_required(policy, precision, reason_part):
-    latency = LatencyGate(policy).evaluate(precision, LatencySummary.from_samples([100.0] * 10))
+    latency = LatencyGate(policy).evaluate(precision, LatencySummary.from_samples([100.0] * 10),
+                                           "served_default")
     default = GateReport.evaluated(precision, policy.device, [_fidelity_pass(), latency], {})
     record = default.to_dict()
     assert default.verdict == VERDICT_PASS and default.exit_code == 0
@@ -189,7 +315,7 @@ def test_ungated_latency_is_explicit_and_can_be_required(policy, precision, reas
 
 def test_required_latency_does_not_mask_a_fidelity_failure():
     latency = LatencyGate(DeviceLatencyPolicy("h100", False, "shared GPU")).evaluate(
-        "fp16", LatencySummary.from_samples([100.0] * 10))
+        "fp16", LatencySummary.from_samples([100.0] * 10), "served_default")
     report = GateReport.evaluated("fp16", "h100", [GateCheck("vs_official_min", CHECK_FAIL, 0.9, 0.99, ""),
                                                    latency], {}, require_latency=True)
     assert report.verdict == VERDICT_FAIL and "latency ungated" in report.reason
@@ -206,14 +332,87 @@ def test_missing_latency_check_counts_as_ungated():
 def test_committed_latency_baselines():
     table = LatencyPolicyTable.load(CONFIG_DIR / "latency_baselines.json")
     thor = table.resolve("NVIDIA Thor", (11, 0))
-    # Re-baselined from the eccf14f round: gate 202.2 ms, three consecutive
-    # end-to-end repeats within 0.4 ms (issues.md ISSUE-082).
-    assert thor.gated and thor.baselines["nvfp4"].p50_ms == 202.2
-    assert thor.baselines["nvfp4"].limit_ms == pytest.approx(202.2 * 1.05)
+    assert thor.gated and set(thor.baselines) == {"nvfp4"}
+    named = thor.baselines["nvfp4"]
+    assert set(named) == {"served_default", "untrimmed_reference"}
+    # The 202.2 ms record from the eccf14f round (gate 202.2 ms, three consecutive
+    # end-to-end repeats within 0.4 ms, issues.md ISSUE-082) describes the
+    # untrimmed, FA4-off configuration only.
+    untrimmed = named["untrimmed_reference"]
+    assert untrimmed.p50_ms == 202.2 and untrimmed.margin == 0.05
+    assert untrimmed.limit_ms == pytest.approx(202.2 * 1.05)
+    assert untrimmed.config == {"text_trim": False, "use_fa4": False, "use_fa4_mot": False, "vae": "torch"}
+    assert "UNTRIMMED" in untrimmed.source and "eccf14f" in untrimmed.source
+    assert "both configurations" not in untrimmed.source
+    # The served default is not seeded until a Thor gate run of it exists: ungated, never a silent
+    # pass against the untrimmed number.
+    served = named["served_default"]
+    assert not served.seeded and served.p50_ms is None and served.margin == 0.05
+    assert served.config == {"text_trim": True, "use_fa4": "auto", "use_fa4_mot": "auto",
+                             "vae": "native_graph"}
+    assert "UNSEEDED" in served.source and "tests/gate_imagewam_libero.py --precision nvfp4" in served.source
+    run = dict(served.config, use_fa4=True, use_fa4_mot=True)
+    check = LatencyGate(thor).evaluate("nvfp4", _summary(125.86), "served_default", run)
+    assert check.status == CHECK_UNGATED and check.value == 125.86
     h100 = table.resolve("NVIDIA H100 NVL", (9, 0))
-    assert h100.device == "h100" and not h100.gated
+    assert h100.device == "h100" and not h100.gated and h100.baselines == {}
     unknown = table.resolve("NVIDIA GeForce RTX 4090", (8, 9))
     assert not unknown.gated and unknown.device.startswith("unknown")
+
+
+def test_committed_baseline_configs_are_named_by_the_gate_from_the_same_terms():
+    """Each committed entry's ``config`` is a configuration the runner names as that entry."""
+    runner = gate_runner()
+    table = LatencyPolicyTable.load(CONFIG_DIR / "latency_baselines.json")
+    named = table.resolve("NVIDIA Thor", (11, 0)).baselines["nvfp4"]
+    assert dict(named["untrimmed_reference"].config) == runner.UNTRIMMED_REFERENCE_CONFIG
+    assert runner.baseline_configuration("native", {"use_fa4": False}, dict(named["untrimmed_reference"].config))[0] \
+        == "untrimmed_reference"
+    assert runner.baseline_configuration("default", {}, dict(named["served_default"].config))[0] == "served_default"
+
+
+def test_latency_baselines_of_schema_version_1_are_refused(tmp_path):
+    old = tmp_path / "latency_baselines.json"
+    old.write_text(json.dumps({
+        "schema_version": 1, "rule": "p50 < baseline * (1 + margin)",
+        "devices": [{"device": "thor", "match": {"name_contains": "Thor", "compute_capability": [11, 0]},
+                     "gated": True, "reason": "target",
+                     "baselines": {"nvfp4": {"p50_ms": 202.2, "margin": 0.05, "source": "old"}}}]}))
+    with pytest.raises(ValueError) as refused:
+        LatencyPolicyTable.load(old)
+    message = str(refused.value)
+    assert "schema_version 1" in message and f"expected {LATENCY_SCHEMA_VERSION}" in message
+    assert "per configuration" in message and str(old) in message
+
+
+def _baseline_file(tmp_path, entry):
+    path = tmp_path / "latency_baselines.json"
+    path.write_text(json.dumps({
+        "schema_version": LATENCY_SCHEMA_VERSION, "rule": "r",
+        "devices": [{"device": "thor", "match": {"name_contains": "Thor", "compute_capability": [11, 0]},
+                     "gated": True, "reason": "target", "baselines": {"nvfp4": {"served_default": entry}}}]}))
+    return path
+
+
+@pytest.mark.parametrize("entry, message", [
+    ({"p50_ms": 1.0, "margin": 0.05, "source": "s"}, "`config` must state"),
+    ({"config": {}, "p50_ms": 1.0, "margin": 0.05, "source": "s"}, "`config` must state"),
+    ({"config": {"text_trim": True}, "p50_ms": 0, "margin": 0.05, "source": "s"}, "positive number or null"),
+    ({"config": {"text_trim": True}, "p50_ms": "fast", "margin": 0.05, "source": "s"}, "positive number or null"),
+])
+def test_malformed_latency_baseline_entries_are_refused(tmp_path, entry, message):
+    with pytest.raises(ValueError, match=message):
+        LatencyPolicyTable.load(_baseline_file(tmp_path, entry))
+
+
+def test_latency_baseline_entry_round_trips_seeded_and_unseeded(tmp_path):
+    seeded = LatencyPolicyTable.load(_baseline_file(
+        tmp_path, {"config": {"text_trim": True}, "p50_ms": 120, "margin": 0.1, "source": "s"}))
+    entry = seeded.resolve("Thor", (11, 0)).baselines["nvfp4"]["served_default"]
+    assert entry.p50_ms == 120.0 and entry.limit_ms == pytest.approx(132.0) and entry.seeded
+    unseeded = LatencyPolicyTable.load(_baseline_file(
+        tmp_path, {"config": {"text_trim": True}, "p50_ms": None, "margin": 0.1, "source": "s"}))
+    assert not unseeded.resolve("Thor", (11, 0)).baselines["nvfp4"]["served_default"].seeded
 
 
 def test_committed_fidelity_thresholds():
@@ -352,9 +551,162 @@ def test_gate_runs_the_switch_it_checks():
     assert "--text-trim" in strings
     constructor_calls = [node for node in ast.walk(tree)
                          if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                         and node.func.id == "ImageWAMTorchFrontendThor"]
+                         and node.func.id == "load_imagewam"]
     assert constructor_calls
     assert all("text_trim" in {kw.arg for kw in call.keywords} for call in constructor_calls)
+    # and the frontend is not built around the deployment entry any more
+    assert not [node for node in ast.walk(tree)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "ImageWAMTorchFrontendThor"]
+
+
+# ── the runner's configuration name, overrides and dims check ─────────────
+
+
+@pytest.mark.parametrize("item, expected", [
+    ("use_fa4=false", ("use_fa4", False)),
+    ("use_fa4_mot=TRUE", ("use_fa4_mot", True)),
+    ("use_fa4=auto", ("use_fa4", None)),
+    ("vae_graph=auto", ("vae_graph", None)),
+    ("vae_encoder=auto", ("vae_encoder", "auto")),      # a real value of that key, not the None spelling
+    ("vae_encoder=torch", ("vae_encoder", "torch")),
+    ("text_trim_cache_size=16", ("text_trim_cache_size", 16)),
+    ("awq_scope=adaln+down", ("awq_scope", "adaln+down")),
+    ("awq_alpha=0.5", ("awq_alpha", "0.5")),            # parsed literally: not an int, so a string
+])
+def test_runner_parses_overrides_literally(item, expected):
+    assert gate_runner().parse_override(item) == expected
+
+
+@pytest.mark.parametrize("item, message", [
+    ("use_fa4", "KEY=VALUE"),
+    ("=true", "KEY=VALUE"),
+    ("use_fa4=", "KEY=VALUE"),
+    ("use_fa5=true", "not an expert key"),
+    ("text_trim=false", "--no-text-trim"),
+])
+def test_runner_refuses_malformed_overrides(item, message):
+    with pytest.raises(ValueError, match=message):
+        gate_runner().parse_override(item)
+
+
+def test_runner_collects_overrides_and_refuses_a_repeated_key():
+    runner = gate_runner()
+    assert runner.parse_overrides(["use_fa4=false", "vae_graph=false"]) == {"use_fa4": False, "vae_graph": False}
+    assert runner.parse_overrides([]) == {}
+    with pytest.raises(ValueError, match="more than once"):
+        runner.parse_overrides(["use_fa4=false", "use_fa4=true"])
+
+
+def test_gate_parser_profile_and_override_flags():
+    parser = gate_runner().build_parser()
+    required = ["--precision", "nvfp4", "--fixture-dir", "/fixture"]
+    bare = parser.parse_args(required)
+    assert bare.profile == "default" and bare.override == []
+    both = parser.parse_args(required + ["--profile", "native", "--override", "use_fa4=false",
+                                         "--override", "vae_graph=false"])
+    assert both.profile == "native" and both.override == ["use_fa4=false", "vae_graph=false"]
+
+
+def _libero_options(profile="default", ae_model_path="/ae", **expert):
+    from flash_rt.models.imagewam.config_resolver import resolve_config
+    from flash_rt.models.imagewam.structure import ImageWAMStructure
+    from flash_rt.models.imagewam.workload import ImageWAMWorkload
+    return resolve_config(ImageWAMWorkload.libero(), ImageWAMStructure.libero(), profile=profile,
+                          ae_model_path=ae_model_path, **expert).options
+
+
+def test_runner_names_the_served_default_from_the_resolved_profile():
+    """The profile the gate builds by default resolves to the configuration the
+    committed ``served_default`` entry states, and the runner names it so."""
+    runner = gate_runner()
+    table = LatencyPolicyTable.load(CONFIG_DIR / "latency_baselines.json")
+    entry = table.resolve("NVIDIA Thor", (11, 0)).baselines["nvfp4"]["served_default"]
+    options = _libero_options()
+    config = runner.resolved_configuration(options)
+    assert config == {"text_trim": True, "use_fa4": "auto", "use_fa4_mot": "auto", "vae": "native_graph"}
+    assert config_differences(entry.config, config) == []
+    name, _ = runner.baseline_configuration("default", {}, config)
+    assert name == "served_default"
+    # the runtime-resolved FA4 values replace the unresolved ones, as in the effective_config line
+    ran = runner.resolved_configuration(options, use_fa4=True, use_fa4_mot=False)
+    assert ran["use_fa4"] is True and ran["use_fa4_mot"] is False
+    assert config_differences(entry.config, ran) == []
+    assert runner.baseline_configuration("default", {}, ran)[0] == "served_default"
+
+
+def test_runner_names_the_untrimmed_reference_from_the_resolved_options():
+    runner = gate_runner()
+    expert = {"use_fa4": False, "use_fa4_mot": False, "vae_graph": False, "vae_encoder": "torch"}
+    config = runner.resolved_configuration(_libero_options(text_trim=False, **expert))
+    assert config == runner.UNTRIMMED_REFERENCE_CONFIG
+    assert runner.baseline_configuration("default", expert, config)[0] == "untrimmed_reference"
+    # `native` states FA4 off and the torch VAE itself, so text_trim off is all it needs
+    native = runner.resolved_configuration(_libero_options("native", text_trim=False))
+    assert runner.baseline_configuration("native", {}, native)[0] == "untrimmed_reference"
+
+
+@pytest.mark.parametrize("profile, expert, overrides, reason_part", [
+    # untrimmed but FA4/VAE left to the machine: not the FA4-off reference
+    ("default", {"text_trim": False}, {}, "neither 'served_default'"),
+    # the served default with an override is a different configuration
+    ("default", {"use_fa4": False}, {"use_fa4": False}, "neither 'served_default'"),
+    ("default", {"vae_graph": False}, {"vae_graph": False}, "neither 'served_default'"),
+    # another profile that trims
+    ("fast", {}, {}, "neither 'served_default'"),
+    ("native", {}, {}, "neither 'served_default'"),
+    # an override outside the four switches changes the computation
+    ("default", {"gemm_variant_autotune": True}, {"gemm_variant_autotune": True}, "beyond the switches"),
+    ("native", {"text_trim": False, "gemm_variant_autotune": True}, {"gemm_variant_autotune": True},
+     "beyond the switches"),
+])
+def test_runner_gives_no_baseline_name_to_any_other_configuration(profile, expert, overrides, reason_part):
+    runner = gate_runner()
+    config = runner.resolved_configuration(_libero_options(profile, **expert))
+    name, reason = runner.baseline_configuration(profile, overrides, config)
+    assert name is None
+    assert reason_part in reason
+    if reason_part == "neither 'served_default'":
+        assert str(config) in reason   # the reason names the resolved configuration
+
+
+def test_runner_unnamed_configuration_is_ungated_naming_the_resolved_configuration():
+    runner = gate_runner()
+    table = LatencyPolicyTable.load(CONFIG_DIR / "latency_baselines.json")
+    thor = table.resolve("NVIDIA Thor", (11, 0))
+    config = runner.resolved_configuration(_libero_options("fast"), use_fa4=True, use_fa4_mot=True)
+    name, reason = runner.baseline_configuration("fast", {}, config)
+    check = LatencyGate(thor).evaluate("nvfp4", _summary(100.0), name, config, configuration_reason=reason)
+    assert check.status == CHECK_UNGATED
+    assert "'fast'" in check.detail and "native_graph" in check.detail
+    assert LatencyGate(thor).seed_entry("nvfp4", name, _summary(100.0), config, "s", config) is None
+
+
+@pytest.mark.parametrize("manifest_path", [V1_MANIFEST, V2_MANIFEST])
+def test_committed_fixture_dims_are_the_libero_workloads_resolved_dims(manifest_path):
+    from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
+    dims = FixtureManifest.read(manifest_path).metadata["fp16_reference"]["dims"]
+    runner = gate_runner()
+    assert runner.dims_mismatch(dims, LIBERO_REAL_DIMS) == {}
+    assert runner.dims_mismatch(dict(dims, hidden=dims["hidden"] + 1), LIBERO_REAL_DIMS) == {
+        "hidden": (dims["hidden"] + 1, dims["hidden"])}
+    assert runner.dims_mismatch({"not_a_dim": 1}, LIBERO_REAL_DIMS) == {"not_a_dim": (1, None)}
+
+
+def test_runner_seed_source_states_what_the_run_was_measured_under():
+    source = gate_runner().seed_source(
+        stamp="20260921T101500Z", git={"commit": "0123456789abcdef", "clean": True},
+        device_name="NVIDIA Thor", capability=(11, 0),
+        clock_state={"nvpmodel_mode": "MAXN", "gpu_locked": False, "emc_locked": None},
+        warmup=20, iters=100, fixture="imagewam_libero_gate_v2",
+        effective_config="effective_config precision=nvfp4 text_trim=True")
+    for part in ("20260921T101500Z", "0123456789ab", "NVIDIA Thor sm_110", "nvpmodel MAXN", "emc_locked=None",
+                 "--iters 100", "imagewam_libero_gate_v2", "effective_config precision=nvfp4"):
+        assert part in source
+    assert "not clean" not in source
+    assert "worktree not clean" in gate_runner().seed_source(
+        stamp="s", git={"commit": "c", "clean": False}, device_name="d", capability=(1, 2),
+        clock_state={}, warmup=0, iters=10, fixture="f", effective_config="e")
 
 
 # ── fixture IO ──────────────────────────────────────────────────────────

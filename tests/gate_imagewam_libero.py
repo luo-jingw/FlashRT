@@ -1,9 +1,11 @@
 """ImageWAM fidelity + latency regression gate on a versioned LIBERO fixture.
 
-For one precision, runs the served ``ImageWAMTorchFrontendThor.infer()``
-(real checkpoint, real VAE, proprio, dataset stats) on every fixture
-observation and seed, starting from the fixture's fixed initial noise,
-and checks:
+For one precision, builds the frontend through the deployment entry
+(``flash_rt.frontends.torch.imagewam_thor.load_imagewam`` on
+``ImageWAMWorkload.libero()``, ``--profile``, default ``default``), runs its
+served ``infer()`` (real checkpoint, real VAE, proprio, dataset stats) on
+every fixture observation and seed, starting from the fixture's fixed initial
+noise, and checks:
 
 * fidelity against the fixture's official ImageWAM reference and its
   FlashRT ``fp16`` reference (per-sample cosine median/min in normalized
@@ -12,7 +14,8 @@ and checks:
   ``tests/fixtures/imagewam_gate/fidelity_thresholds.json``;
 * latency of the served ``infer()`` (default noise) against the device
   policy in ``tests/fixtures/imagewam_gate/latency_baselines.json``
-  (``p50 < baseline * (1 + margin)``; ungated on the shared H100).
+  (``p50 < baseline * (1 + margin)``; ungated on the shared H100), per
+  configuration (see "Latency baselines" below).
 
 Fidelity is measured with the fixture's fixed N(0,1) initial noise, the
 noise the official sampler draws for each seed, passed through
@@ -45,12 +48,32 @@ a bare run gates what is served. The untrimmed reference stays reachable and
 unchanged: fixture v1 (``imagewam_libero_gate_v1``) with ``--no-text-trim``
 and v1's manifest (``--manifest`` defaults to v2's, and stays overridable).
 
-The frontend resolves FA4 itself (``use_fa4=None`` in the served profile):
-FA4 where the machine can run it, the cuBLAS chain elsewhere, with the
-resolved value recorded in ``context["config"]["use_fa4"]``. The committed
-latency baseline describes the untrimmed, FA4-off configuration and bounds it
-from one side only; the served default's own numbers are the ``0920t`` round's
-(``nvfp4`` gate 125.86 ms against fixture v2, end to end 126.5 ms).
+The configuration under test is the profile's, resolved by ``load_imagewam``:
+profile ``default`` is the fastest configuration the machine and the inputs
+allow (text_trim, FA4 at both attention sites where the machine can run it,
+the cuBLAS chain elsewhere, and the native VAE encoder inside the CUDA graph
+because the autoencoder path is given). ``--override KEY=VALUE`` (repeatable)
+sets an expert key (``config_resolver.EXPERT_KEYS``): ``true``/``false`` are
+bools, integers are ints, anything else is a string, and ``use_fa4``,
+``use_fa4_mot`` and ``vae_graph`` also take ``auto``. ``--text-trim`` /
+``--no-text-trim`` is the ``text_trim`` override (not repeated through
+``--override``). The resolved ``effective_config`` line (the runtime-resolved
+FA4 values and any capture-time fallback included) is printed and recorded in
+``result.json`` under ``context["config"]["effective_config"]``.
+
+Latency baselines are per configuration (``latency_baselines.json``, schema 2):
+the run's configuration name is derived from what it resolved, never from a
+flag. Profile ``default`` with no ``--override`` and text_trim on is
+``served_default``; text_trim off with FA4 off at both sites and the torch VAE
+outside the graph (for example ``--no-text-trim --override use_fa4=false
+--override use_fa4_mot=false --override vae_graph=false --override
+vae_encoder=torch``, or ``--profile native --no-text-trim``) is
+``untrimmed_reference``; anything else has no baseline and its latency is
+ungated, with the resolved configuration named in the reason. An entry that
+is not seeded yet (``p50_ms`` null) is also ungated: the result then carries
+``latency_seed``, the measured P50 and the JSON entry to paste into the
+baselines file (printed on the console too). Seeding ``served_default`` is
+one run of the bare command below on the Thor.
 
 ``fp8_static`` (thresholds marked ``requires_calibration``) is gated only
 with a real activation-calibration file, given by ``--fp8-calibration``
@@ -59,14 +82,16 @@ or ``$IMAGEWAM_FP8_CALIBRATION``:
 * no path, or the file does not exist: verdict ``skipped`` (exit 0);
 * the file exists and ``ImageWAMTorchFrontendThor.__init__`` declares a
   ``calibration_path`` keyword (the calibration stream's name for it):
-  the path is passed there and the precision is gated like any other;
+  the path is passed as ``load_imagewam(calibration_path=...)`` and the
+  precision is gated like any other;
 * the file exists but the constructor has no such keyword: verdict
   ``blocked`` (exit 1). The gate never runs ``fp8_static`` on the
   placeholder ``N(0, 0.1)`` calibration.
 
 Latency is ungated on a device marked ungated (the shared H100), on a
-device with no policy, and for a precision with no baseline on a gated
-device. The result then carries ``latency: "ungated"`` and
+device with no policy, for a precision or a configuration with no baseline
+(or an unseeded one) on a gated device, and for a run whose configuration is
+neither named configuration. The result then carries ``latency: "ungated"`` and
 ``latency_reason`` at top level and the verdict reason names it; the
 verdict stays ``pass``. ``--require-latency`` turns an ungated latency
 into ``blocked`` (exit 1).
@@ -89,9 +114,11 @@ default, fixture v2 and trimming on, with no flags::
         --fixture-dir /path/to/imagewam_libero_gate_v2
 
 and the untrimmed reference, the same run against fixture v1 with
-``--no-text-trim`` and v1's manifest::
+``--no-text-trim``, v1's manifest and the FA4-off, torch-VAE switches::
 
     python tests/gate_imagewam_libero.py --precision nvfp4 --no-text-trim \\
+        --override use_fa4=false --override use_fa4_mot=false \\
+        --override vae_graph=false --override vae_encoder=torch \\
         --manifest tests/fixtures/imagewam_gate/imagewam_libero_gate_v1.manifest.json \\
         --fixture-dir /path/to/imagewam_libero_gate_v1
 """
@@ -137,9 +164,17 @@ from flash_rt.datasets.imagewam_gate_fixture import (  # noqa: E402
     GateFixtureStore,
     ImageWAMGateFixture,
 )
-from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor  # noqa: E402
+from flash_rt.frontends.torch.imagewam_thor import (  # noqa: E402
+    ImageWAMTorchFrontendThor,
+    load_imagewam,
+)
 from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state  # noqa: E402
+from flash_rt.models.imagewam.config_resolver import (  # noqa: E402
+    EXPERT_KEYS,
+    format_effective_config,
+)
 from flash_rt.models.imagewam.dataset_stats import MinMaxNormalizer, load_real_normalizers  # noqa: E402
+from flash_rt.models.imagewam.workload import ImageWAMWorkload  # noqa: E402
 
 CONFIG_DIR = REPO / "tests" / "fixtures" / "imagewam_gate"
 # The served configuration's fixture: trimmed (v2). The untrimmed reference is
@@ -152,6 +187,125 @@ FP8_CALIBRATION_FRONTEND_KWARG = "calibration_path"
 DEV = "cuda"
 BF16 = torch.bfloat16
 RESULT_PREFIX = "__IMAGEWAM_GATE__ "
+
+# The latency baselines' configuration names (latency_baselines.json).
+SERVED_DEFAULT = "served_default"
+UNTRIMMED_REFERENCE = "untrimmed_reference"
+SERVED_PROFILE = "default"
+# The expert keys that make up a baseline's `config` (regression_gate's
+# entries state text_trim, use_fa4, use_fa4_mot and vae); an override of any
+# other key changes the computation without being part of the description.
+CONFIG_OVERRIDE_KEYS = ("text_trim", "use_fa4", "use_fa4_mot", "vae_encoder", "vae_graph")
+# Keys whose value `auto` means "resolve at construction" (None in the resolver).
+AUTO_OVERRIDE_KEYS = ("use_fa4", "use_fa4_mot", "vae_graph")
+UNTRIMMED_REFERENCE_CONFIG = {"text_trim": False, "use_fa4": False, "use_fa4_mot": False, "vae": "torch"}
+
+
+def parse_override(item: str) -> tuple[str, object]:
+    """One ``--override KEY=VALUE`` as ``(key, value)``.
+
+    The key must be an expert key (``config_resolver.EXPERT_KEYS``). The
+    value is parsed literally: ``true`` / ``false`` (any case) are bools, an
+    integer literal is an int, ``auto`` is ``None`` for ``use_fa4``,
+    ``use_fa4_mot`` and ``vae_graph`` (resolve at construction), and
+    anything else is a string. ``text_trim`` is refused: it has its own flag.
+    """
+    key, sep, text = item.partition("=")
+    key, text = key.strip(), text.strip()
+    if not sep or not key or not text:
+        raise ValueError(f"--override expects KEY=VALUE, got {item!r}")
+    if key not in EXPERT_KEYS:
+        raise ValueError(f"--override {key!r} is not an expert key; known: {', '.join(EXPERT_KEYS)}")
+    if key == "text_trim":
+        raise ValueError("text_trim is set with --text-trim / --no-text-trim, not --override")
+    lowered = text.lower()
+    if lowered in ("true", "false"):
+        return key, lowered == "true"
+    if lowered == "auto" and key in AUTO_OVERRIDE_KEYS:
+        return key, None
+    try:
+        return key, int(text)
+    except ValueError:
+        return key, text
+
+
+def parse_overrides(items: list[str]) -> dict[str, object]:
+    """Every ``--override`` as one dict; a key given twice is an error."""
+    overrides: dict[str, object] = {}
+    for item in items:
+        key, value = parse_override(item)
+        if key in overrides:
+            raise ValueError(f"--override {key!r} given more than once")
+        overrides[key] = value
+    return overrides
+
+
+def resolved_configuration(options: object, *, use_fa4: bool | None = None,
+                           use_fa4_mot: bool | None = None) -> dict[str, object]:
+    """The four switches a latency baseline states, from the resolved options.
+
+    The terms of the ``effective_config`` line: ``use_fa4`` / ``use_fa4_mot``
+    are the runtime-resolved values when given (``fe.use_fa4``), else the
+    options' own, ``auto`` while unresolved; ``vae`` is the encoder, with
+    ``_graph`` appended when it runs inside the CUDA graph (``torch``,
+    ``native``, ``native_graph``).
+    """
+    fa4 = options.use_fa4 if use_fa4 is None else use_fa4
+    mot = options.use_fa4_mot if use_fa4_mot is None else use_fa4_mot
+    graph = options.vae_graph_input is not None
+    return {"text_trim": bool(options.text_trim),
+            "use_fa4": "auto" if fa4 is None else fa4,
+            "use_fa4_mot": "auto" if mot is None else mot,
+            "vae": f"{options.vae_encoder}_graph" if graph else options.vae_encoder}
+
+
+def baseline_configuration(profile: str, overrides: dict[str, object],
+                           config: dict[str, object]) -> tuple[str | None, str]:
+    """The latency baseline's configuration name for a run, and why.
+
+    ``profile`` and ``overrides`` (the ``--override`` dict, without
+    ``text_trim``) are what was asked for; ``config`` is what resolved
+    (``resolved_configuration``). ``served_default``: profile ``default``,
+    no override, text_trim on. ``untrimmed_reference``: text_trim off, FA4
+    off at both sites, torch VAE, and no override outside those switches.
+    Anything else has no name (``None``), and the reason names the resolved
+    configuration.
+    """
+    other = sorted(set(overrides) - set(CONFIG_OVERRIDE_KEYS))
+    if other:
+        return None, (f"override(s) {other} change the computation beyond the switches a baseline "
+                      f"describes; resolved {config}")
+    if profile == SERVED_PROFILE and not overrides and config["text_trim"] is True:
+        return SERVED_DEFAULT, f"profile {SERVED_PROFILE!r}, no override, text_trim on"
+    if config == UNTRIMMED_REFERENCE_CONFIG:
+        return UNTRIMMED_REFERENCE, "text_trim off, FA4 off at both sites, torch VAE"
+    return None, (f"profile {profile!r} with overrides {overrides} resolved to {config}: neither "
+                  f"{SERVED_DEFAULT!r} (profile {SERVED_PROFILE!r}, no override, text_trim on) nor "
+                  f"{UNTRIMMED_REFERENCE!r} ({UNTRIMMED_REFERENCE_CONFIG})")
+
+
+def dims_mismatch(fixture_dims: dict[str, object], resolved_dims: dict[str, object]) -> dict[str, tuple]:
+    """Keys of the fixture's fp16-reference dims the resolved dims disagree on.
+
+    ``{key: (fixture, resolved)}``. Only the fixture's own keys are compared
+    (a manifest predates keys such as ``num_views`` / ``image_h``), so the
+    frontend built by ``load_imagewam`` runs the dims the reference was
+    recorded with.
+    """
+    return {key: (value, resolved_dims.get(key)) for key, value in fixture_dims.items()
+            if resolved_dims.get(key) != value}
+
+
+def seed_source(*, stamp: str, git: dict[str, object], device_name: str, capability: tuple[int, int],
+                clock_state: dict[str, object], warmup: int, iters: int, fixture: str,
+                effective_config: str) -> str:
+    """The ``source`` text of a seeded baseline: what it was measured under."""
+    commit = str(git.get("commit"))[:12]
+    dirty = "" if git.get("clean") else " (worktree not clean)"
+    clocks = (f"nvpmodel {clock_state.get('nvpmodel_mode')}, gpu_locked={clock_state.get('gpu_locked')}, "
+              f"emc_locked={clock_state.get('emc_locked')}")
+    return (f"gate run {stamp}, commit {commit}{dirty}, {device_name} sm_{capability[0]}{capability[1]}, "
+            f"{clocks}, --warmup {warmup} --iters {iters}, fixture {fixture}; {effective_config}")
 
 
 def file_sha256(path: Path) -> str:
@@ -324,10 +478,30 @@ def emit(report: GateReport, output_dir: Path) -> int:
     print(RESULT_PREFIX + json.dumps(record, sort_keys=True), flush=True)
     print(f"verdict: {report.verdict} ({report.reason})")
     print(f"latency: {report.latency} ({report.latency_reason})")
+    if report.latency_seed is not None:
+        print("latency_seed (paste `entry` at `path` in the baselines file): "
+              + json.dumps(report.latency_seed, sort_keys=True))
     for check in report.checks:
         print(f"  {check.status:8s} {check.name:26s} value={check.value} limit={check.limit}  {check.detail}")
     print(f"result: {output_dir / 'result.json'}", flush=True)
     return report.exit_code
+
+
+def record_configuration(fe: ImageWAMTorchFrontendThor, context: dict[str, object]) -> None:
+    """Record what the frontend resolved and is running into ``context["config"]``.
+
+    ``use_fa4`` / ``use_fa4_mot`` are the runtime-resolved values (FA4 where
+    the machine can run it; both False after a capture-time fallback,
+    ``fa4_fallback_reason`` then says why); ``effective_config`` is the
+    line ``format_effective_config`` prints for them.
+    """
+    config = context["config"]
+    config["use_fa4"] = fe.use_fa4   # what the frontend resolved on this machine
+    config["use_fa4_mot"] = fe.use_fa4_mot
+    config["fa4_fallback_reason"] = fe.fa4_fallback_reason
+    config["effective_config"] = format_effective_config(
+        fe.resolved_config.options, use_fa4=fe.use_fa4, use_fa4_mot=fe.use_fa4_mot,
+        fa4_fallback_reason=fe.fa4_fallback_reason)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -340,10 +514,19 @@ def build_parser() -> argparse.ArgumentParser:
                         help="fixture manifest; defaults to the served fixture "
                              "(imagewam_libero_gate_v2, trimmed), while the untrimmed reference is "
                              "imagewam_libero_gate_v1")
+    parser.add_argument("--profile", default=SERVED_PROFILE,
+                        help="config_resolver profile the frontend is built from (default: the "
+                             "served `default`)")
     parser.add_argument("--text-trim", action=argparse.BooleanOptionalAction, default=True,
-                        help="run the configuration under test with text_trim=True, the served "
-                             "default; --no-text-trim runs the untrimmed reference. Either way it "
-                             "must equal the fixture's own text_trim")
+                        help="the expert text_trim override: run the configuration under test with "
+                             "text_trim=True, the served default; --no-text-trim runs it untrimmed "
+                             "(the untrimmed reference also needs FA4 off, see --override). Either "
+                             "way it must equal the fixture's own text_trim")
+    parser.add_argument("--override", action="append", default=[], metavar="KEY=VALUE",
+                        help="an expert key of the resolver (config_resolver.EXPERT_KEYS), repeatable; "
+                             "true/false are bools, integers ints, anything else a string, and "
+                             "use_fa4/use_fa4_mot/vae_graph also take `auto`. A run with an override "
+                             "is not the served_default configuration; text_trim has its own flag")
     parser.add_argument("--thresholds", type=Path, default=CONFIG_DIR / "fidelity_thresholds.json")
     parser.add_argument("--baselines", type=Path, default=CONFIG_DIR / "latency_baselines.json")
     parser.add_argument("--fp8-calibration", type=Path, default=os.environ.get(FP8_CALIBRATION_ENV))
@@ -366,6 +549,13 @@ def main() -> int:
         parser.error(f"--iters must be at least {LATENCY_GROUP_COUNT} (latency group medians), got {args.iters}")
     if args.warmup < 0:
         parser.error(f"--warmup must be non-negative, got {args.warmup}")
+    try:
+        overrides = parse_overrides(args.override)
+    except ValueError as exc:
+        parser.error(str(exc))
+    ae_model_path = os.environ.get("FLUX2_AE_MODEL_PATH", os.environ.get("AE_MODEL_PATH"))
+    if ae_model_path is None:
+        parser.error("FLUX2_AE_MODEL_PATH (or AE_MODEL_PATH) is required: the gate runs the real VAE")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output_dir = args.output_dir or Path(f"/tmp/imagewam-gate-{args.precision}-{stamp}")
 
@@ -394,7 +584,8 @@ def main() -> int:
         # default). `None` is "not resolved yet"; the value the frontend
         # resolved replaces it after construction.
         "config": {"warmup": args.warmup, "iters": args.iters, "use_fa4": None,
-                   "text_trim": args.text_trim, "require_latency": args.require_latency},
+                   "text_trim": args.text_trim, "require_latency": args.require_latency,
+                   "profile": args.profile, "overrides": overrides},
     }
 
     mismatch = text_trim_mismatch(manifest, args.text_trim)
@@ -432,17 +623,27 @@ def main() -> int:
     context["config"]["dims"] = dims
     start = time.time()
     try:
-        fe = ImageWAMTorchFrontendThor(
-            precision=args.precision, dims_override=dims, ckpt_path=ckpt,
-            ae_model_path=os.environ.get("FLUX2_AE_MODEL_PATH", os.environ.get("AE_MODEL_PATH")),
-            flux2_src=os.environ["FLUX2_SRC"], dataset_stats_path=stats,
-            text_trim=args.text_trim, **frontend_kwargs)
+        # The deployment entry on the LIBERO workload: the profile and the
+        # expert overrides are resolved (and refused when illegal) before
+        # anything is allocated. `text_trim` is the --text-trim flag; the
+        # overrides cannot carry it (parse_override).
+        fe = load_imagewam(
+            ckpt, ImageWAMWorkload.libero(), profile=args.profile, precision=args.precision,
+            ae_model_path=ae_model_path, flux2_src=os.environ["FLUX2_SRC"], dataset_stats_path=stats,
+            text_trim=args.text_trim, **overrides, **frontend_kwargs)
     except (RuntimeError, ValueError) as exc:
         return emit(GateReport.not_run(args.precision, policy.device, VERDICT_BLOCKED,
                                        f"frontend construction failed: {type(exc).__name__}: {exc}",
                                        context), output_dir)
     context["construct_s"] = round(time.time() - start, 1)
-    context["config"]["use_fa4"] = fe.use_fa4   # what the frontend resolved on this machine
+    record_configuration(fe, context)
+    print(context["config"]["effective_config"], flush=True)
+    changed = dims_mismatch(dims, fe.resolved_config.dims)
+    if changed:
+        return emit(GateReport.not_run(
+            args.precision, policy.device, VERDICT_BLOCKED,
+            f"the frontend resolved dims that differ from the fixture's fp16 reference dims "
+            f"(fixture, resolved): {changed}", context), output_dir)
     fp4 = sys.modules.get("flash_rt.flash_rt_fp4")
     if fp4 is not None:
         context["flash_rt_fp4_sha256"] = file_sha256(Path(fp4.__file__))
@@ -458,9 +659,28 @@ def main() -> int:
     context["latency"] = asdict(latency)
     context["peak_gpu_gib"] = round(torch.cuda.max_memory_allocated() / 2**30, 2)
 
-    checks = FidelityGate(thresholds).evaluate(measurement) + [LatencyGate(policy).evaluate(args.precision, latency)]
+    # FA4 can fall back to the cuBLAS chain at the first capture, so the
+    # configuration is read again after the runs: what actually ran.
+    record_configuration(fe, context)
+    print(context["config"]["effective_config"], flush=True)
+    config = resolved_configuration(fe.resolved_config.options, use_fa4=fe.use_fa4,
+                                    use_fa4_mot=fe.use_fa4_mot)
+    configuration, why = baseline_configuration(args.profile, overrides, config)
+    context["config"]["baseline_configuration"] = configuration
+    context["config"]["baseline_configuration_reason"] = why
+    latency_gate = LatencyGate(policy)
+    latency_check = latency_gate.evaluate(args.precision, latency, configuration, config,
+                                          configuration_reason=why)
+    seed = latency_gate.seed_entry(
+        args.precision, configuration, latency, config, resolved_config=config,
+        source=seed_source(stamp=stamp, git=context["git"], device_name=device_name,
+                           capability=capability, clock_state=context["clock_state"],
+                           warmup=args.warmup, iters=args.iters, fixture=manifest.name,
+                           effective_config=context["config"]["effective_config"]))
+
+    checks = FidelityGate(thresholds).evaluate(measurement) + [latency_check]
     return emit(GateReport.evaluated(args.precision, policy.device, checks, context,
-                                     require_latency=args.require_latency), output_dir)
+                                     require_latency=args.require_latency, latency_seed=seed), output_dir)
 
 
 if __name__ == "__main__":

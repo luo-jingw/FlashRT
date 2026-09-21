@@ -10,12 +10,22 @@ compares it with fixed limits:
   from ``flash_rt.core.parity.parity_metrics``; this module only judges
   them.
 * Latency: ``p50 < baseline_p50 * (1 + margin)``, from a per-device
-  policy. Latency is ungated when the device is marked ungated (for
-  example a shared GPU whose timings are contaminated by another
-  tenant), when the device matches no policy, or when a gated device has
-  no baseline for the precision. An ungated latency is never silent: the
-  report's top-level ``latency`` field says ``ungated``, ``latency_reason``
-  says why, and the verdict reason repeats it. With
+  policy. A baseline describes one configuration: the policy file
+  (``LATENCY_SCHEMA_VERSION`` 2) holds, per device and per precision,
+  NAMED configuration entries, each stating the configuration it
+  describes (``config``) beside its ``p50_ms`` / ``margin`` / ``source``,
+  and a run is compared with the entry of its own configuration name only.
+  Latency is ungated when the device is marked ungated (for example a
+  shared GPU whose timings are contaminated by another tenant), when the
+  device matches no policy, when the run's configuration has no name,
+  when a gated device has no baseline for the precision or for the
+  configuration, when the entry is not seeded yet (``p50_ms`` null), or
+  when the run's resolved configuration is not the one the entry states.
+  An ungated latency is never silent: the report's top-level ``latency``
+  field says ``ungated``, ``latency_reason`` says why (naming the
+  configuration) and the verdict reason repeats it. For a missing or
+  unseeded entry the report also carries ``latency_seed``: the measured
+  P50 and the JSON entry to paste into the policy file. With
   ``require_latency=True`` an ungated latency makes the verdict
   ``blocked``.
 
@@ -44,6 +54,14 @@ import numpy as np
 
 RESULT_SCHEMA_VERSION = 1
 CONFIG_SCHEMA_VERSION = 1
+# The latency policy file is per configuration since version 2; version 1
+# (one bound per precision) is refused, with no compatibility path.
+LATENCY_SCHEMA_VERSION = 2
+# The margin a freshly seeded entry gets when the file has none to reuse.
+DEFAULT_SEED_MARGIN = 0.05
+# An entry's `config` value that matches whatever the machine resolves
+# (`use_fa4`: FA4 where it can run, the cuBLAS chain elsewhere).
+CONFIG_AUTO = "auto"
 LATENCY_GROUP_COUNT = 10
 
 CHECK_PASS = "pass"
@@ -194,25 +212,41 @@ class LatencySummary:
 
 @dataclass(frozen=True)
 class LatencyBaseline:
-    """A recorded P50 and the allowed relative regression."""
+    """One named configuration's recorded P50 and the allowed relative regression.
 
-    p50_ms: float
+    ``config`` states the configuration the number describes (the resolved
+    switches, in the terms the run reports them in); a value of ``"auto"``
+    matches whatever the machine resolves. ``p50_ms`` is ``None`` while the
+    entry is unseeded: it then gates nothing.
+    """
+
+    p50_ms: float | None
     margin: float
     source: str
+    config: Mapping[str, object] = field(default_factory=dict)
+
+    @property
+    def seeded(self) -> bool:
+        return self.p50_ms is not None
 
     @property
     def limit_ms(self) -> float:
+        if self.p50_ms is None:
+            raise ValueError("an unseeded baseline (p50_ms null) has no limit")
         return self.p50_ms * (1.0 + self.margin)
 
 
 @dataclass(frozen=True)
 class DeviceLatencyPolicy:
-    """Whether latency is gated on one device, and its per-precision baselines."""
+    """Whether latency is gated on one device, and its baselines.
+
+    ``baselines[precision][configuration_name]`` is one entry.
+    """
 
     device: str
     gated: bool
     reason: str
-    baselines: dict[str, LatencyBaseline] = field(default_factory=dict)
+    baselines: dict[str, dict[str, LatencyBaseline]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -236,15 +270,21 @@ class LatencyPolicyTable:
     @classmethod
     def load(cls, path: Path) -> LatencyPolicyTable:
         record = json.loads(Path(path).read_text())
-        if record.get("schema_version") != CONFIG_SCHEMA_VERSION:
-            raise ValueError(f"{path}: schema_version {record.get('schema_version')} != {CONFIG_SCHEMA_VERSION}")
+        version = record.get("schema_version")
+        if version != LATENCY_SCHEMA_VERSION:
+            hint = (" (one bound per precision): latency baselines are per configuration now, each "
+                    "precision holds named configuration entries with their `config`, p50_ms, margin "
+                    "and source; re-seed the file in that form" if version == 1 else "")
+            raise ValueError(f"{path}: latency baseline schema_version {version} is not supported, "
+                             f"expected {LATENCY_SCHEMA_VERSION}{hint}")
         entries = []
         for device in record["devices"]:
             match = DeviceMatch(name_contains=str(device["match"]["name_contains"]),
                                 compute_capability=tuple(int(x) for x in device["match"]["compute_capability"]))
-            baselines = {precision: LatencyBaseline(p50_ms=float(b["p50_ms"]), margin=float(b["margin"]),
-                                                    source=str(b["source"]))
-                         for precision, b in device.get("baselines", {}).items()}
+            baselines = {
+                precision: {name: _load_baseline(path, device["device"], precision, name, entry)
+                            for name, entry in configurations.items()}
+                for precision, configurations in device.get("baselines", {}).items()}
             entries.append((match, DeviceLatencyPolicy(device=str(device["device"]), gated=bool(device["gated"]),
                                                        reason=str(device["reason"]), baselines=baselines)))
         return cls(entries=tuple(entries))
@@ -264,18 +304,109 @@ class LatencyGate:
     def __init__(self, policy: DeviceLatencyPolicy) -> None:
         self.policy = policy
 
-    def evaluate(self, precision: str, summary: LatencySummary) -> GateCheck:
+    def evaluate(self, precision: str, summary: LatencySummary, configuration: str | None,
+                 resolved_config: Mapping[str, object] | None = None, *,
+                 configuration_reason: str = "") -> GateCheck:
+        """The ``latency_p50`` check of a run of ``configuration``.
+
+        ``configuration`` is the run's baseline name, or ``None`` when the
+        run's configuration is none of the named ones (``configuration_reason``
+        says which configuration it is). ``resolved_config`` is what the run
+        resolved, compared with the entry's ``config`` so an entry only
+        judges a run of the configuration it describes.
+        """
+        device = self.policy.device
         if not self.policy.gated:
             return GateCheck(LATENCY_CHECK, CHECK_UNGATED, summary.p50_ms, None,
-                             f"{self.policy.device}: {self.policy.reason}")
-        baseline = self.policy.baselines.get(precision)
+                             f"{device}: {self.policy.reason}")
+        measured = f"measured P50 {summary.p50_ms:.2f} ms"
+        if configuration is None:
+            return GateCheck(LATENCY_CHECK, CHECK_UNGATED, summary.p50_ms, None,
+                             f"{device}: this run's configuration has no latency baseline "
+                             f"({configuration_reason or 'no configuration name'}); {measured}")
+        configurations = self.policy.baselines.get(precision)
+        if not configurations:
+            return GateCheck(LATENCY_CHECK, CHECK_UNGATED, summary.p50_ms, None,
+                             f"{device}: no baseline for precision {precision!r} "
+                             f"(configuration {configuration!r}); {measured}")
+        baseline = configurations.get(configuration)
         if baseline is None:
             return GateCheck(LATENCY_CHECK, CHECK_UNGATED, summary.p50_ms, None,
-                             f"{self.policy.device}: no baseline for precision {precision!r}")
+                             f"{device}: no baseline for configuration {configuration!r} at precision "
+                             f"{precision!r} (known: {sorted(configurations)}); {measured}")
+        if resolved_config is not None:
+            differences = config_differences(baseline.config, resolved_config)
+            if differences:
+                return GateCheck(LATENCY_CHECK, CHECK_UNGATED, summary.p50_ms, None,
+                                 f"{device}: the baseline for configuration {configuration!r} at precision "
+                                 f"{precision!r} describes {dict(baseline.config)}, this run resolved "
+                                 f"{dict(resolved_config)} (differs in {differences}); {measured}")
+        if not baseline.seeded:
+            return GateCheck(LATENCY_CHECK, CHECK_UNGATED, summary.p50_ms, None,
+                             f"{device}: baseline for configuration {configuration!r} at precision "
+                             f"{precision!r} is not seeded yet (p50_ms null); {measured}; the report's "
+                             f"latency_seed is the entry to paste")
         passed = summary.p50_ms < baseline.limit_ms
         return GateCheck(LATENCY_CHECK, CHECK_PASS if passed else CHECK_FAIL, summary.p50_ms,
                          baseline.limit_ms,
-                         f"p50 < {baseline.p50_ms} ms x (1 + {baseline.margin}); baseline: {baseline.source}")
+                         f"configuration {configuration!r}: p50 < {baseline.p50_ms} ms x "
+                         f"(1 + {baseline.margin}); baseline: {baseline.source}")
+
+    def seed_entry(self, precision: str, configuration: str | None, summary: LatencySummary,
+                   config: Mapping[str, object], source: str,
+                   resolved_config: Mapping[str, object] | None = None) -> dict[str, object] | None:
+        """What to paste into the policy file to seed this run's baseline.
+
+        ``None`` unless the latency is ungated for want of an entry: a gated
+        device, a named configuration and no entry for it at ``precision``,
+        or an entry that is not seeded yet and describes this run's
+        configuration. Otherwise the record has the measured ``p50_ms`` and
+        the JSON ``entry`` (``config``, ``p50_ms``, ``margin``, ``source``)
+        to put at ``path`` in the file. An unseeded entry keeps its own
+        ``config`` and margin; a new one takes ``config`` (the run's
+        resolved configuration) and ``DEFAULT_SEED_MARGIN``.
+        """
+        if not self.policy.gated or configuration is None:
+            return None
+        existing = self.policy.baselines.get(precision, {}).get(configuration)
+        if existing is not None:
+            if existing.seeded:
+                return None
+            if resolved_config is not None and config_differences(existing.config, resolved_config):
+                return None
+        entry = {"config": dict(existing.config if existing is not None else config),
+                 "p50_ms": round(summary.p50_ms, 2),
+                 "margin": existing.margin if existing is not None else DEFAULT_SEED_MARGIN,
+                 "source": source}
+        return {"device": self.policy.device, "precision": precision, "configuration": configuration,
+                "p50_ms": entry["p50_ms"],
+                "path": f'devices["{self.policy.device}"].baselines["{precision}"]["{configuration}"]',
+                "entry": entry}
+
+
+def config_differences(described: Mapping[str, object], resolved: Mapping[str, object]) -> list[str]:
+    """Keys of ``described`` (an entry's ``config``) the resolved configuration does not satisfy.
+
+    A described value of ``"auto"`` matches any resolved value; every
+    other value must be equal (``True`` is not ``1``); a key the resolved
+    configuration lacks differs.
+    """
+    return sorted(key for key, want in described.items()
+                  if want != CONFIG_AUTO and (key not in resolved or type(resolved[key]) is not type(want)
+                                              or resolved[key] != want))
+
+
+def _load_baseline(path: Path, device: str, precision: str, name: str,
+                   entry: Mapping[str, object]) -> LatencyBaseline:
+    where = f"{path}: {device}/{precision}/{name}"
+    config = entry.get("config")
+    if not isinstance(config, Mapping) or not config:
+        raise ValueError(f"{where}: `config` must state the configuration the baseline describes")
+    p50 = entry.get("p50_ms")
+    if p50 is not None and (isinstance(p50, bool) or not isinstance(p50, (int, float)) or p50 <= 0):
+        raise ValueError(f"{where}: p50_ms must be a positive number or null (unseeded), got {p50!r}")
+    return LatencyBaseline(p50_ms=None if p50 is None else float(p50), margin=float(entry["margin"]),
+                           source=str(entry["source"]), config=dict(config))
 
 
 @dataclass
@@ -290,17 +421,20 @@ class GateReport:
     context: dict[str, object]
     latency: str
     latency_reason: str
+    latency_seed: dict[str, object] | None = None
 
     @classmethod
     def evaluated(cls, precision: str, device: str, checks: list[GateCheck],
-                  context: dict[str, object], *, require_latency: bool = False) -> GateReport:
+                  context: dict[str, object], *, require_latency: bool = False,
+                  latency_seed: dict[str, object] | None = None) -> GateReport:
         """Verdict from the checks.
 
         ``latency`` is the status of the ``latency_p50`` check (``pass``,
         ``fail``, ``ungated``), or ``not_measured`` when there is none.
         Anything other than ``pass``/``fail`` is ungated: it is named in
         the reason, and with ``require_latency`` it makes the verdict
-        ``blocked`` unless a check already failed.
+        ``blocked`` unless a check already failed. ``latency_seed`` is
+        ``LatencyGate.seed_entry``'s record, carried into the report.
         """
         failed = [c.name for c in checks if c.status == CHECK_FAIL]
         latency_check = next((c for c in checks if c.name == LATENCY_CHECK), None)
@@ -320,7 +454,7 @@ class GateReport:
             reason = "all gated checks passed" + (f"; {ungated_note}" if ungated else "")
         return cls(precision=precision, device=device, verdict=verdict, reason=reason,
                    checks=list(checks), context=dict(context), latency=latency,
-                   latency_reason=latency_reason)
+                   latency_reason=latency_reason, latency_seed=latency_seed)
 
     @classmethod
     def not_run(cls, precision: str, device: str, verdict: str, reason: str,
@@ -345,6 +479,7 @@ class GateReport:
             "passed": self.verdict == VERDICT_PASS,
             "latency": self.latency,
             "latency_reason": self.latency_reason,
+            "latency_seed": self.latency_seed,
             "checks": [asdict(c) for c in self.checks],
             "context": self.context,
         }
