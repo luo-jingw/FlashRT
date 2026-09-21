@@ -40,7 +40,9 @@ Environment:
     TRIM_POISON_MIB  size of the regular-cache poison, default 1024
 
 A precision this machine cannot run (NVFP4 / E0M3 / SM100 CUTLASS without
-an sm_110 build, FP8 cuBLASLt before issues.md ISSUE-001 is fixed) skips
+an sm_110 build, or FP8 cuBLASLt in a layout this GPU does not support: the
+frontend picks NN on compute capability >= 10 and TN below,
+`quant_linear.fp8_cublaslt_layout()`) skips
 with the reason. Example (Thor):
 
     TRIM_PRECISION=nvfp4 TRIM_FA4=on python -m pytest \\
