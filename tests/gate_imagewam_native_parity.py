@@ -32,6 +32,11 @@ one `io="native"` tick (both SWAP image tokens) and of the two graphs.
 Env: CKPT_PATH (dataset_stats.json beside it), FLUX2_AE_MODEL_PATH (or
 AE_MODEL_PATH), FLUX2_SRC, QWEN3_MODEL_SPEC. Needs exec/build,
 runtime/build and the `flashrt_imagewam_native` target.
+
+The frontend is built with `use_fa4=False` on purpose: the native face
+serves the cuBLAS attention chain (the native C++ pipeline has no FA4
+attention, rule R6), so this gate's rows and node counts do not depend on
+`FLASHRT_THOR_FA4` or on whether the machine can run FA4.
 """
 from __future__ import annotations
 
@@ -126,7 +131,7 @@ def main() -> int:
 
     t0 = time.time()
     fe = ImageWAMTorchFrontendThor(
-        precision=args.precision, dims_override=dict(REAL_DIMS), ckpt_path=ckpt,
+        precision=args.precision, use_fa4=False, dims_override=dict(REAL_DIMS), ckpt_path=ckpt,
         ae_model_path=ae_path, flux2_src=flux2_src, qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"],
         dataset_stats_path=os.path.join(os.path.dirname(ckpt), "dataset_stats.json"))
     fe.set_prompt(PROMPT)

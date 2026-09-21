@@ -196,14 +196,14 @@ class ImageWAMNativeRuntime:
         (which installs for the key the table carries and selects it), then
         `capture`.
 
-        The lengths are `source.captured_text_lengths()`, ascending, and each
-        one must be a length this handle was created with (the surface's
-        `graph_variants` keys at `create`). The source's active length is what
-        it was before the call, and the handle serves that key again
-        afterwards, so the one-key path and this per-length one leave the same
-        state. Returns the keys, ascending; `step` serves each of them once
-        `set_text_length` selects it."""
-        keys = source.captured_text_lengths()
+        The lengths are `source.captured_text_lengths` (the property, as on
+        the frontend), ascending, and each one must be a length this handle
+        was created with (the surface's `graph_variants` keys at `create`).
+        The source's active length is what it was before the call, and the
+        handle serves that key again afterwards, so the one-key path and this
+        per-length one leave the same state. Returns the keys, ascending;
+        `step` serves each of them once `set_text_length` selects it."""
+        keys = source.captured_text_lengths
         if not keys:
             raise ValueError("capture_pipeline_text_lengths: the source has captured no text length; "
                              "call set_prompt() or precapture_text_lengths() first")

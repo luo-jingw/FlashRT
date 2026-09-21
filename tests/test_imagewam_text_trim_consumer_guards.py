@@ -357,6 +357,8 @@ class _CpuPipelineFrontend:
         self._lengths = tuple(lengths)
         # `_graph` is None until a prompt is set, as in the frontend.
         self._graph = None
+        # The native path's own contract (rule R6): no FA4 attention, so
+        # `pipeline_resources()` is legal on this stub.
         self.use_fa4 = False
         self.use_fa4_mot = False
         self._vae_stage = None
@@ -439,7 +441,10 @@ class _CpuPipelineFrontend:
     def active_dims(self) -> dict:
         return dict(self._active_dims)
 
+    @property
     def captured_text_lengths(self) -> tuple[int, ...]:
+        """The frontend's own form: a property, not a method
+        (`ImageWAMTextLengthPipelineSource`)."""
         return tuple(sorted(self._lengths))
 
     def pipeline_resources(self) -> ImageWAMPipelineResources:
@@ -566,8 +571,14 @@ def test_capture_pipeline_text_lengths_installs_and_captures_every_length():
 # -- the surface and the export -------------------------------------------
 
 def _frontend(text_trim: bool, valid: int = SHORT_VALID) -> ImageWAMTorchFrontendThor:
+    """`use_fa4=False`: the rows this file checks over a real frontend are
+    the native consumer's own table (`pipeline_resources()`, the surface the
+    `io="native"` face adopts), and the native pipeline has no FA4 attention
+    (rule R6), so the attention path is not part of them and
+    `FLASHRT_THOR_FA4` must not decide whether they run."""
     torch.manual_seed(0)
-    fe = ImageWAMTorchFrontendThor(precision="fp16", dims_override=dict(DIMS), text_trim=text_trim)
+    fe = ImageWAMTorchFrontendThor(precision="fp16", use_fa4=False, dims_override=dict(DIMS),
+                                   text_trim=text_trim)
     mask = torch.zeros(TEXT_LEN, dtype=torch.bool)
     mask[:valid] = True
     fe.set_prompt(context=torch.randn(TEXT_LEN, DIMS["joint_attention_dim"]).to(torch.bfloat16),

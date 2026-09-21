@@ -831,7 +831,7 @@ class ImageWAMTorchFrontendThor:
 
         `precapture_text_lengths`: the deployment's known context lengths,
         as `x0` values (valid text tokens + 1 with proprio, the units of
-        `captured_text_lengths()`). When given, the frontend's own
+        the `captured_text_lengths` property). When given, the frontend's own
         `precapture_text_lengths(x0s)` runs once, after construction and
         before this call returns, so no length is captured while serving.
         `None` captures nothing. It is not a constructor argument and not
@@ -2443,7 +2443,7 @@ def load_imagewam(ckpt_path: str | None, workload: ImageWAMWorkload, *,
 
     `precapture_text_lengths`: the deployment's known context lengths, as
     `x0` values (valid text tokens + 1 with proprio, the units of
-    `captured_text_lengths()`). The frontend captures a graph for each of
+    `captured_text_lengths`). The frontend captures a graph for each of
     them once, before this call returns, so a `text_trim=True` deployment
     serves without capturing. `None` captures nothing; it needs
     `text_trim=True` (the method's own `ValueError`) and the lengths must

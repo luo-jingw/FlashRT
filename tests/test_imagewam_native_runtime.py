@@ -13,6 +13,11 @@ built (docs/imagewam_native_cpp.md).
 (`use_graph(key, exec)`, `set_text_length(key)`), and the tick at either
 length is bit-exact against `infer()` at that length — the native mirror of
 `tests/test_imagewam_model_runtime_export.py::test_abi_tick_matches_infer_at_every_captured_length`.
+
+Every frontend here states `use_fa4=False`: the native face serves the
+cuBLAS chain (the native C++ pipeline has no FA4 attention, rule R6), so
+nothing in this file depends on `FLASHRT_THOR_FA4` or on what the machine
+can run.
 """
 import json
 import os
@@ -62,7 +67,8 @@ def frontend(tmp_path_factory):
     }
     path = tmp_path_factory.mktemp("imagewam_stats") / "dataset_stats.json"
     path.write_text(json.dumps(stats))
-    fe = ImageWAMTorchFrontendThor(precision=PRECISION, dims_override={"proprio_dim": PROPRIO_DIM},
+    fe = ImageWAMTorchFrontendThor(precision=PRECISION, use_fa4=False,
+                                   dims_override={"proprio_dim": PROPRIO_DIM},
                                    dataset_stats_path=str(path))
     fe.set_prompt("pick up the red cup")
     return fe
@@ -284,8 +290,8 @@ def trimmed(tmp_path_factory):
     }
     path = tmp_path_factory.mktemp("imagewam_stats_trim") / "dataset_stats.json"
     path.write_text(json.dumps(stats))
-    fe = ImageWAMTorchFrontendThor(precision=PRECISION, dims_override=dict(TRIM_DIMS), text_trim=True,
-                                   dataset_stats_path=str(path))
+    fe = ImageWAMTorchFrontendThor(precision=PRECISION, use_fa4=False, dims_override=dict(TRIM_DIMS),
+                                   text_trim=True, dataset_stats_path=str(path))
     for valid in TRIM_LENGTHS:
         _set_trimmed_prompt(fe, valid)
     return fe
@@ -301,7 +307,17 @@ def test_native_tick_matches_infer_at_every_captured_length(trimmed):
     The ticks run at the shorter length first, which is not the export-time
     default, so a `step` replaying the default key would fail here. The
     handle's own `text_length` follows the key, and the manifest states the
-    adopted table."""
+    adopted table.
+
+    The comparison is the length's own outputs — `actions` and
+    `actions_raw`, both compared in full — because those are what the
+    per-length contract fixes; the state buffers a tick leaves behind
+    (`backbone_hidden`, `K_cache`, `V_cache`) are not read here: a graph
+    recorded for `x0` writes only the rows of that length's sequence, so the
+    rows past them are outside what the length owns and are not a
+    per-length output. `tests/test_imagewam_native_pipeline.py` covers the
+    same lengths over the state buffers, from the same poisoned baseline on
+    both sides."""
     keys = tuple(valid + 1 for valid in TRIM_LENGTHS)
     surface = trimmed.runtime_surface()
     assert tuple(entry.key for entry in surface.graph_variants.entries) == keys

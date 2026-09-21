@@ -58,8 +58,13 @@ def _frames(hw: tuple[int, int]) -> list[np.ndarray]:
 
 
 def _build(vae_graph_input):
-    fe = ImageWAMTorchFrontendThor(precision="fp16", dims_override=dict(IMG_DIMS), ae_model_path=_AE_PATH,
-                                   flux2_src=_FLUX2_SRC, vae_graph_input=vae_graph_input)
+    """FA4 off explicitly: this test fixes where the VAE runs, not the
+    attention path, and `FLASHRT_THOR_FA4` defaults to the machine's answer,
+    so stating the choice keeps the two placements' rows the same on every
+    machine."""
+    fe = ImageWAMTorchFrontendThor(precision="fp16", use_fa4=False, dims_override=dict(IMG_DIMS),
+                                   ae_model_path=_AE_PATH, flux2_src=_FLUX2_SRC,
+                                   vae_graph_input=vae_graph_input)
     fe.set_prompt("pick up the red cup")
     frames = _frames(FRAME_HW)
     obs = {"view1": torch.from_numpy(frames[0]), "view2": torch.from_numpy(frames[1])}

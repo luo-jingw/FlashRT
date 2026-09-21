@@ -244,7 +244,11 @@ class ImageWAMTextLengthPipelineSource(ImageWAMPipelineSource, Protocol):
     length it is active on. `ImageWAMNativeRuntime.capture_pipeline_text_lengths`
     walks them to install and capture the native pipeline once per length."""
 
+    @property
     def captured_text_lengths(self) -> tuple[int, ...]:
+        """The context lengths `x0` this source has captured, ascending; a
+        read, as on the frontend
+        (`ImageWAMTorchFrontendThor.captured_text_lengths`)."""
         ...
 
     def _activate_text_length(self, x0: int) -> None:

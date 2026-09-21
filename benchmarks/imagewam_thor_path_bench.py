@@ -427,7 +427,7 @@ def main() -> int:
 
     # The length of each captured graph is `x0` (valid text tokens + 1 with
     # proprio), the units `precapture_text_lengths` and
-    # `captured_text_lengths()` use.
+    # `captured_text_lengths` use.
     trim_on = (PROFILES[args.profile].text_trim if args.text_trim is None
                else args.text_trim == "on")
     if args.precapture and not trim_on:

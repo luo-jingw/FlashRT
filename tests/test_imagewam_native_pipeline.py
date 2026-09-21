@@ -23,6 +23,10 @@ carries one pipeline and one graph per captured length
 with the graphs this handle recorded instead of the frontend's.
 Runs the served layer structure (merged single-stream `linear2`,
 gated residual fused with the next AdaLN) and the split/unfused one.
+Every frontend here states `use_fa4=False`: the native pipeline has no FA4
+attention (rule R6), so this path is the cuBLAS chain on every machine and
+nothing in this file depends on `FLASHRT_THOR_FA4` or on what the machine
+can run.
 Skips when exec/, runtime/ or the native library is not built.
 """
 import ctypes
@@ -71,7 +75,7 @@ class Harness:
     input state both sides start from."""
 
     def __init__(self, dims_override: dict):
-        self.fe = ImageWAMTorchFrontendThor(precision=PRECISION,
+        self.fe = ImageWAMTorchFrontendThor(precision=PRECISION, use_fa4=False,
                                             dims_override={"proprio_dim": PROPRIO_DIM, **dims_override})
         self.fe.set_prompt("pick up the red cup")
         self.native = ImageWAMNativeRuntime.create(self.fe.runtime_surface(), LIBRARY)
@@ -205,8 +209,22 @@ def test_native_graph(h):
 
 def _infer_reference(fe) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray]:
     """infer() on fixed proprio and noise: the reference outputs, and the
-    image tokens, noise and proprio a consumer must send to reproduce it."""
+    image tokens, noise and proprio a consumer must send to reproduce it.
+
+    The state buffers are NaN-poisoned (`poison_tick_state`) BEFORE the
+    reference runs, exactly as `_poisoned_native_tick` poisons them before
+    the native tick: both sides then start from the same baseline, which is
+    what makes the whole-buffer comparison below honest. A graph recorded
+    for a trimmed length writes only the rows of its own sequence
+    (`backbone_hidden` up to its `a0`, the K/V caches up to its `total`), so
+    the rows beyond them hold the baseline on both sides instead of whatever
+    the previous tick or capture left there — and a side that wrote one of
+    those rows anyway, or wrote it differently, still fails the comparison
+    against the other side's baseline. The reference's own outputs do not
+    move: `infer()` writes `img_raw`, the proprio row and the action latent
+    in full, and the graph writes the rows it owns."""
     proprio = np.linspace(-0.4, 0.5, PROPRIO_DIM, dtype=np.float32)
+    poison_tick_state(fe)
     torch.manual_seed(3)
     noise = torch.empty_like(fe._action_latent).normal_().mul_(0.01)
     actions = fe.infer({"proprio": proprio}, action_noise=noise)["actions"]
@@ -236,6 +254,9 @@ def _poisoned_native_tick(fe, native, tokens, noise, proprio) -> dict:
 
 
 def _differing(out: dict, ref: dict) -> list[str]:
+    """Buffers that differ over their whole contents between the two poisoned
+    sides (`_infer_reference` poisons before `infer()`, `_poisoned_native_tick`
+    before the native tick)."""
     return [k for k in ref if not np.array_equal(out[k], ref[k])]
 
 
@@ -321,7 +342,8 @@ def _replay_native_graph(native, tensors) -> np.ndarray:
 def test_native_handle_keeps_the_frontend_alive():
     """The captured graph reads the frontend's weights and buffers; the
     handle must keep the frontend alive when nothing else refers to it."""
-    fe = ImageWAMTorchFrontendThor(precision=PRECISION, dims_override={"proprio_dim": PROPRIO_DIM})
+    fe = ImageWAMTorchFrontendThor(precision=PRECISION, use_fa4=False,
+                                   dims_override={"proprio_dim": PROPRIO_DIM})
     fe.set_prompt("pick up the red cup")
     native = ImageWAMNativeRuntime.create(fe.runtime_surface(), LIBRARY)
     native.set_pipeline(fe)
@@ -381,8 +403,22 @@ def test_pipeline_records_one_graph_per_text_length():
 
     The ticks run at the shorter length first, which is not the export-time
     default key, so a tick replaying the default key would fail here. Every
-    graph is the handle's own, so `graph_producer` is `native`."""
-    fe = ImageWAMTorchFrontendThor(precision=PRECISION, dims_override=dict(TRIM_DIMS), text_trim=True)
+    graph is the handle's own, so `graph_producer` is `native`.
+
+    The state buffers are compared whole, and both sides start from the same
+    poisoned baseline: `_infer_reference` poisons the state before `infer()`,
+    `_poisoned_native_tick` poisons it before the native tick. That is the
+    per-length contract — a graph recorded for `x0` writes the rows of that
+    length's own sequence (`backbone_hidden` up to its `a0`, `K_cache` and
+    `V_cache` up to its `total`), so at `x0=6` the rows past them are outside
+    what the length's graph owns and hold the baseline on both sides instead
+    of the previous tick's values. What the length does own is still compared
+    exactly: the active span bit for bit, and `actions` — that length's own
+    output — in full. The untrimmed one-key rows above are unchanged: that
+    frontend's single graph IS the longest length, so its tick writes those
+    buffers in full (no row is left at any baseline)."""
+    fe = ImageWAMTorchFrontendThor(precision=PRECISION, use_fa4=False, dims_override=dict(TRIM_DIMS),
+                                   text_trim=True)
     keys = tuple(valid + 1 for valid in TRIM_LENGTHS)
     for valid in TRIM_LENGTHS:
         _set_trimmed_prompt(fe, valid)

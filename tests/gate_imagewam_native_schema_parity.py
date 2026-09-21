@@ -14,6 +14,10 @@ Weights do not enter the schema: without CKPT_PATH the frontend uses
 random weights at the real dims. Needs exec/build, runtime/build and
 `cmake --build build --target flashrt_imagewam_native`.
 
+The frontend is built with `use_fa4=False`, like every native-path
+consumer: the native face serves the cuBLAS attention chain (rule R6), so
+none of this gate's records depend on `FLASHRT_THOR_FA4`.
+
     python tests/gate_imagewam_native_schema_parity.py [--precision nvfp4]
 """
 from __future__ import annotations
@@ -48,7 +52,7 @@ def main() -> int:
 
     ckpt = os.environ.get("CKPT_PATH")
     fe = ImageWAMTorchFrontendThor(
-        precision=args.precision, dims_override=dict(REAL_DIMS), ckpt_path=ckpt,
+        precision=args.precision, use_fa4=False, dims_override=dict(REAL_DIMS), ckpt_path=ckpt,
         dataset_stats_path=os.path.join(os.path.dirname(ckpt), "dataset_stats.json") if ckpt else None)
     fe.set_prompt("pick up the black bowl")
     surface = fe.runtime_surface()
