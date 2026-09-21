@@ -261,8 +261,8 @@ Thor (`nvfp4`): `sm110_check.sh` builds `flashrt_imagewam_native` for
 sm_110. The io config carries the text-length table and `use_graph` takes
 the key, so a **rebuild is required**; a stale library fails at load in
 `native_library._check_layout` ("config struct sizes differ from the
-ctypes mirror; rebuild the library"). the parity tests and gates above run there with
-`IMAGEWAM_NATIVE_PRECISION=nvfp4` and `--precision nvfp4` (plan.md,
-"Native C++ overlay", Thor checklist) and pass, with the node counts
-unchanged (`0920s4`, `0920t`). The native pipeline's own per-length
+ctypes mirror; rebuild the library"). The parity tests and gates above run
+there with `IMAGEWAM_NATIVE_PRECISION=nvfp4` and `--precision nvfp4`
+(plan.md, "Native C++ overlay", Thor checklist) and pass, with the node
+counts unchanged (`0920s4`, `0920t`). The native pipeline's own per-length
 capture is the one row of this surface still waiting for its Thor re-run.
