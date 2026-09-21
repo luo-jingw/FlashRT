@@ -75,13 +75,8 @@ python tests/gate_imagewam_native_schema_parity.py --precision nvfp4 2>&1 | tee 
 
 ---
 
-## E. 收尾
+## 已决定、不在这里测的
 
+`text_trim` 转默认（原 E1）已经决定并落库：`default` profile 带 `text_trim=True`，FA4 与原生 VAE 留在 `fast`，新增 `native` profile；门禁与矩阵的默认口径跟着服务默认走；这些结论在 `plan.md` 的 "Decisions pending"、`opportunities.md` OPT-019/030 与 `THOR_STATUS_SUMMARY.md`。
 
-### E1 `text_trim` 转默认 —— 已决定（(c)）
-
-`default` profile 现在带 `text_trim=True`，FA4 与原生 VAE 留在 `fast`；新增 `native` profile（不 trim、FA4 显式关、torch VAE 图外，内容等于旧的 `default`），给 S4 之前的 ABI/native 调用按名字切换，避免踩 R5。改 profile 是 plan 编辑，已记入 `plan.md` 的 "Decisions pending"。
-
-配套已做/已记：矩阵脚本的开关行现在显式写 `TEXT_TRIM`（否则 `default` 行会悄悄变成 `vae_trim` 行，阶梯失去意义）；门禁自己的默认口径仍是"未裁剪参考配置"，要门禁服务默认就是 `--text-trim --manifest ...v2`（那条已经跑过并通过，P50 远低于未裁剪的延迟基线，不需要重测）。
-
-**本轮没有新的 Thor 项。** S4（native 按长度带图）落地后要加的 Thor 项：native 多长度 tick 逐位一致，以及门禁默认口径若改成服务默认，再跑一次 `--text-trim --manifest ...v2` 记录数字。
+唯一还等 owner 的延迟口径问题也记在 `plan.md` 的 "Open"：`latency_baselines.json` 的 202.2 ms 描述的是未裁剪、FA4 关的配置，而它现在被用在服务默认上（同一 gate 里服务默认 125.86 ms），是否按服务默认重新定基线、以及文件里是否逐条写明各数字对应的配置，是那次决定的内容。它不是 Thor 测试项。
