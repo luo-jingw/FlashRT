@@ -53,7 +53,56 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ---
 
+## T. 服务默认变了：重测它的数字（FA4 自动 + 门禁默认跟服务默认）
+
+这一轮两处默认变了，所以**当前记录的服务默认数字（trim-only、门禁 v1/未裁剪那条）不再描述服务默认**：
+
+- `FLASHRT_THOR_FA4` 的默认从 `"0"` 改成 `"1"`：`use_fa4=None`（`default` profile 的值）现在是"这台机器能跑 FA4 就用，否则走 cuBLAS 链"，`FLASHRT_THOR_FA4=0` 强制回退，显式 `use_fa4` 仍然优先。ActionDiT 位点（`use_fa4_mot`）仍是关。
+- 门禁（`tests/gate_imagewam_libero.py`）默认改成 fixture **v2（裁剪参考）+ 裁剪开**；未裁剪参考要用 `--no-text-trim --manifest ..._v1.manifest.json`。`scripts/imagewam_thor_validation.sh` 的旧行已显式写成未裁剪，保持原记录含义。
+
+前置：把 `imagewam_libero_gate_v2` 的 fixture 目录放进 `$BUNDLE`（现在 bundle 里只有 v1）。
+
+```
+# 1) 服务默认的门禁（不带任何 flag）：nvfp4 与 fp16 各一次
+python tests/gate_imagewam_libero.py --precision nvfp4 --fixture-dir "$BUNDLE/imagewam_libero_gate_v2" 2>&1 | tee $OUT/T_gate_nvfp4.log
+python tests/gate_imagewam_libero.py --precision fp16  --fixture-dir "$BUNDLE/imagewam_libero_gate_v2" 2>&1 | tee $OUT/T_gate_fp16.log
+# 2) 未裁剪参考（旧记录的含义，现在带 FA4）
+python tests/gate_imagewam_libero.py --precision nvfp4 --no-text-trim \
+  --manifest tests/fixtures/imagewam_gate/imagewam_libero_gate_v1.manifest.json \
+  --fixture-dir "$BUNDLE/imagewam_libero_gate_v1" 2>&1 | tee $OUT/T_gate_v1.log
+# 3) 端到端与三路径（effective_config 应打印 use_fa4=True）
+PRECISION=nvfp4 N_TASKS=10 FRAMES=0,60 SEEDS=0,1 python benchmarks/imagewam_e2e_official_compare.py 2>&1 | tee $OUT/T_e2e_default.log
+python benchmarks/imagewam_thor_path_bench.py 2>&1 | tee $OUT/T_path_default.log
+python benchmarks/imagewam_thor_path_bench.py --profile fast --precapture 2>&1 | tee $OUT/T_path_fast.log
+python benchmarks/imagewam_thor_path_bench.py --profile native 2>&1 | tee $OUT/T_path_native.log
+# 4) A/B 归因：同样的命令加 FLASHRT_THOR_FA4=0（关的那条腿现在必须显式给）
+FLASHRT_THOR_FA4=0 PRECISION=nvfp4 N_TASKS=10 FRAMES=0,60 SEEDS=0,1 python benchmarks/imagewam_e2e_official_compare.py 2>&1 | tee $OUT/T_e2e_fa4off.log
+```
+
+判据：三条 gate 都 pass（服务默认那条对 v2 的 fp16 参考、未裁剪那条对 v1）；`effective_config` 打印 `use_fa4=True`（服务默认）与 `use_fa4=False`（`FLASHRT_THOR_FA4=0`）；P50 与 vs official 记进 OPT-019 / OPT-030；`--profile native` 现在也是**裁剪**集合（只把 FA4 显式关掉），所以它不该再被 R5 跳过。**不设阈值、不判定**。延迟基线 `latency_baselines.json`（202.2 ms，未裁剪、FA4 关）仍是单边界，若要把基线改成描述服务默认，用第 1 条的数再说。
+去向：`opportunities.md` OPT-019/OPT-028/OPT-029/OPT-030、`THOR_STATUS_SUMMARY.md`。
+
+---
+
+## S4-pipeline. native 自录图也按长度（本轮新增，需重编）
+
+上一轮的 S4 只做了"采纳前端每长度图"那条；这一轮 native **pipeline 自己录的图**也按长度了，所以 C++ 又变了，**必须重编** `flashrt_imagewam_native`。
+
+```
+cmake --build build -j --target flashrt_imagewam_native
+IMAGEWAM_NATIVE_PRECISION=nvfp4 python -m pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q -s 2>&1 | tee $OUT/S4p_native.log
+IMAGEWAM_NATIVE_PRECISION=nvfp4 python -m pytest tests/test_imagewam_text_trim_consumer_guards.py -q 2>&1 | tee $OUT/S4p_guards.log
+python tests/gate_imagewam_native_parity.py --precision nvfp4 --graph native --bench-iters 50 2>&1 | tee $OUT/S4p_parity_native.log
+python tests/gate_imagewam_native_schema_parity.py --precision nvfp4 2>&1 | tee $OUT/S4p_schema.log
+```
+
+判据：`test_pipeline_records_one_graph_per_text_length` 两个长度（`x0=6` 先、`14` 后）由 handle 自己装管线并录图，`graph_producer=native`，manifest `text_lengths={'default_key': 14, 'keys': [6, 14], 'per_prompt_length': True}`，两个长度的 tick 都 `array_equal` 到 `infer()`（`actions max_abs=0`）；未裁剪一 key 路径逐行不变（节点数仍 native 5324 / Python 5348、`test_set_pipeline_drops_the_captured_graph` 的 `graph_exec=0 graph_nodes=0 graph_producer=''` 不变）；guards 里那条 GPU 行打印 x0=6 与 x0=10 的 dims / AdaLN 行数 / RoPE 指针随活动长度变化而 buffers 相同；parity `--graph native` 六个 mutant 全检出、节点数不变；schema gate 7 条记录与 golden 逐行相同。
+去向：`opportunities.md` OPT-029、`THOR_STATUS_SUMMARY.md`。
+
+---
+
 ## E. 收尾
+
 
 ### E1 `text_trim` 转默认 —— 已决定（(c)）
 

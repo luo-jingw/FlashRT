@@ -1314,7 +1314,7 @@ Rules (each has an id, a test, and moves an existing check):
 | R2 | `gemm_variant_autotune` with a precision that does not support it | `imagewam_thor.py:226` |
 | R3 | native VAE in graph without `ae_model_path`/`flux2_src` | `imagewam_thor.py:255` |
 | R4 | `nvfp4_awq` with a non-AWQ precision or without calibration | AWQ setup |
-| R5 | `text_trim=True` together with a consumer that needs one fixed graph (`runtime_surface`, `pipeline_resources`, ABI export, native runtime) | `_refuse_text_trim` (`imagewam_thor.py:1779`); stays a refusal until ISSUE-080 condition 5 |
+| R5 | *retired in S2 for the ABI face and in S4 for the native pipeline*: with every consumer carrying one graph per trimmed length, the refusal has no referent. `text_trim` is legal for `consumer="infer"`, `"abi"` and `"native"` | was `_refuse_text_trim`, removed |
 | R6 | native runtime with AWQ | native runtime |
 | R7 | workload layout inconsistent (`ref_h * ref_w != img_len`, horizon above structure limit) | `imagewam_thor.py:485` |
 | R8 | calibration file identity mismatch vs the workload and `text_trim` | `calibration_file.py:validate_for` |
@@ -1483,7 +1483,7 @@ Thor line (independent of W0-W10; T4 feeds W11 and the profile contents):
    -> T3 C (configuration matrix) -> T4 decide preset contents
    -> T5 FA4 / native VAE default decision (THOR_CHECKLIST C criteria)
 
-Side track S (blocks R5 becoming a non-refusal, not the rest):
+Side track S (S1-S4 completed: the R5 refusal fell in S2 for the ABI face and in S4 for the native pipeline):
  S1 ISSUE-080 condition 4: fixture v2 with trim (fp16 reference)
  S2 ISSUE-080 condition 5: runtime surface / ABI / native for per-length graphs
  S3 ISSUE-080 condition 6: bounded per-length graph cache + startup use of
@@ -1790,14 +1790,25 @@ Phase Status: completed
   `08_gate_native` round's ~182 ms, with the node counts unchanged and the
   untrimmed values identical: recorded as a session difference, not a
   measured regression.
-- **R5 is not lifted**, deliberately: the native *pipeline* (its own
-  `capture()` from `pipeline_resources()`'s one resource table) still records
-  one graph at one context length, so `consumer="native"` keeps refusing
-  `text_trim` and the `native` profile stays the only resolved native set. A
-  deployment that wants trimmed prompts on the native face constructs the
-  frontend with the resolved configuration and adopts the per-length execs,
-  which is what the tests do. Making the pipeline itself per-length needs the
-  decision below.
+- **R5 is lifted**: the native pipeline carries one resource table and one
+  graph per text length. `pipeline_resources()` describes the ACTIVE length
+  (sequence dims and RoPE table active, buffers max-size and shared); the
+  handle installs one pipeline per key (`set_pipeline` installs the key its
+  config carries, replaces only that key's pipeline and graph, and makes it the
+  active text length; `gemm_shapes` / `set_gemm_algo` / `run` / `capture` all
+  resolve against the active key); `ImageWAMNativeRuntime.capture_pipeline_text_lengths(source)`
+  activates each of `source.captured_text_lengths()`, installs its table and
+  captures its graph, then restores the active length. `graph_producer` follows
+  the active key. Rule R5 is removed from `config_resolver.py` and from the
+  table above; the `native` profile is the native consumer's set — the served
+  `default`'s switches with FA4 explicitly off, contents otherwise equal to
+  `default`.
+- Observation (pipeline): on CPU the per-length resource table and the install
+  loop's call sequence are pinned over a stub frontend and handle, and the
+  13-file list stays green. On Thor `test_pipeline_records_one_graph_per_text_length`
+  installs and captures two lengths (`x0` 6 and 14) with the handle's own
+  graphs and the tick at each is `array_equal` to `infer()`, with the untrimmed
+  one-key numbers and node counts unchanged (checklist item S4-pipeline).
 
 ### Phase S3: a bounded per-length graph cache, precaptured at construction
 Phase Status: completed
@@ -1932,10 +1943,24 @@ Decided after the `0920` re-run (E1, `text_trim` as the served default):
   FA4 and the native VAE pass their criteria with smaller margins and change
   more (FA4 compiles on first use and can fall back; the in-graph VAE changes
   the graph). `fast` keeps the three together.
-- **A new `native` profile** carries the non-trimming set the ABI and native
-  consumer paths can still serve (rule R5; the native pipeline holds one graph
-  and one context length until phase S4). Its contents are what `default` used
-  to be, so a native caller switches by name instead of falling into R5.
+- **The `native` profile** carries the native consumer's set: the served
+  `default`'s switches with `use_fa4` stated off (the native pipeline has no
+  FA4 attention) and everything else equal to `default`. It was the way around
+  R5 until S4; R5 is gone, so it is the name for that consumer's
+  configuration. The served `default` is trim + FA4 left to the machine.
+- **FA4 is part of the served default, as auto**: `FLASHRT_THOR_FA4`'s default
+  is now `"1"`, so `use_fa4=None` means FA4 wherever `thor_default_enabled()`
+  holds (compute capability 11.x plus an importable FA4 runtime) and the cuBLAS
+  chain elsewhere, never raising for a missing runtime. `FLASHRT_THOR_FA4=0`
+  forces the chain and an explicit `use_fa4` still wins. The ActionDiT site
+  (`use_fa4_mot`) stays off. This is the "fastest configuration that always
+  constructs": FA4 and the in-graph native VAE both measured faster, but FA4
+  can be absent and the in-graph VAE needs `ae_model_path` (rule R3), so the
+  latter stays in `fast`.
+- **The regression gate's defaults follow the served configuration**: fixture
+  v2 and trimming on, with `--no-text-trim` (plus the v1 manifest) selecting
+  the untrimmed reference, which `scripts/imagewam_thor_validation.sh`'s rows
+  now state explicitly so their recorded numbers keep their meaning.
 - The profiles therefore mean **the served configuration**, while the
   constructor keeps its own historical defaults (untrimmed) for a caller that
   passes dims by hand. That divergence is deliberate.
@@ -1947,20 +1972,19 @@ Decided after the `0920` re-run (E1, `text_trim` as the served default):
   and its P50 stays far under the untrimmed latency baseline, so nothing needs
   re-measuring for it).
 
+Answered in S4: the native pipeline takes option (a), one pipeline install per
+length with the handle's owned graphs surviving `set_pipeline` (a per-key
+pipeline table in `native_runtime.{h,cpp}`). Rule R5 is gone; the `native`
+profile remains the name for that consumer's set because it is the only named
+set that turns FA4 off.
+
 Open:
 
-- Whether the regression gate's *default* invocation should follow the served
-  configuration (trimmed, fixture v2) instead of staying the untrimmed
-  reference. Either answer is measured; only the gate's own defaults change.
-- Whether the native **pipeline** (native-owned capture) gets per-length
-  resource tables, which would let rule R5 go away entirely instead of only
-  for the model-runtime face. Three shapes, none of them a flag:
-  (a) one pipeline install per length with owned graphs surviving
-  `set_pipeline` (a per-key pipeline table in `native_runtime.{h,cpp}`);
-  (b) a pipeline config carrying per-key dims and RoPE tables (touches
-  `native_pipeline.cpp`); or (c) the pipeline stays one-length for good and
-  R5 stays. The trimmed face works today through adoption, so (c) costs only
-  the native-owned capture path.
+- Nothing outstanding in this plan. The served default's *numbers* changed
+  with the FA4 default and the gate's defaults (a trimmed, FA4-on
+  configuration where the machine supports FA4), so those need a Thor
+  re-measure before they are recorded as measurements; the checklist carries
+  that run.
 - Profile contents (T4): keep `fast` as `text_trim` + FA4 (backbone and mot)
   + native VAE in graph. The FA4 criterion was met in the `c20f3a0` round
   (`stack` 9.7 ms below `vae_trim`, agreement with official not worse) and

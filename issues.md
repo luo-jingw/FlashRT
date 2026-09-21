@@ -1185,20 +1185,21 @@ Status of the six conditions after the `eccf14f` round:
    official 0.99931 / min 0.99898, vs the fixture's fp16 reference
    0.99935 / 0.99907, P50 114.6 ms). Only its manifest is committed; the
    fixture data stays in the bundle.
-5. satisfied for both model-runtime faces, not for the native pipeline's own
-   capture. The ABI serves trimmed prompts (one adopted graph per text
-   length, selected by the replay key; the tick at two different lengths is
-   bit-exact against `infer()`), and the native model runtime now does the
-   same: the io config declares the deployment's lengths, `use_graph(key,
-   exec)` fills the handle's variant table, `set_text_length(key)` selects the
-   active one on the hot path (with `set_proprio_row`), and
-   `export_model_runtime(io="native")` adopts one exec per captured length and
-   records the same manifest table (plan.md phase S4). The native *pipeline* —
-   its own `capture()` from `pipeline_resources()`'s single resource table —
-   still records one graph at one context length, so rule R5 keeps refusing
-   `text_trim` for `consumer="native"` and the `native` profile stays the only
-   resolved native set. Making the pipeline per-length is an open owner
-   decision (plan.md, "Decisions pending").
+5. satisfied for all three faces, the native pipeline's own capture included.
+   The ABI serves trimmed prompts (one adopted graph per text length, selected
+   by the replay key; the tick at two different lengths is bit-exact against
+   `infer()`), the native model runtime does the same (the io config declares
+   the deployment's lengths, `use_graph(key, exec)` fills the handle's variant
+   table, `set_text_length(key)` selects the active one on the hot path with
+   `set_proprio_row`, and `export_model_runtime(io="native")` adopts one exec
+   per captured length), and the native C++ pipeline now records one pipeline
+   and one graph per text length itself: `pipeline_resources()` describes the
+   active length, `set_pipeline` installs the key its table carries and makes
+   it active, and `ImageWAMNativeRuntime.capture_pipeline_text_lengths`
+   installs and captures every length the frontend has captured, restoring the
+   active one afterwards. Rule R5 is removed: `text_trim=True` is legal for
+   `consumer="infer"`, `"abi"` and `"native"`, and the `native` profile is the
+   native consumer's set (the served `default`'s switches with FA4 off).
 6. satisfied: the per-length cache is bounded (`text_trim_cache_size`,
    default 32) and `precapture_text_lengths` fills it at construction. On
    Thor a precaptured length switches in 0.000-0.012 s where a length
@@ -1222,8 +1223,8 @@ Then the owner decides the default.
 
 ### Shape of condition 5: exact lengths or 16-token buckets
 
-Two ways to give the ABI and the native pipeline the per-length graphs that
-R5 refuses today, with different costs:
+Two ways to give the ABI and the native pipeline the per-length graphs (rule
+R5 refused them until phase S4), with different costs:
 
 - **Exact length + a bounded cache** (what `text_trim` does now): one graph
   per distinct `x0 = n_valid + 1`, exactly the official masked math, no mask
