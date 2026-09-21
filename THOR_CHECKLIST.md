@@ -26,7 +26,7 @@
 
 ## 前置（每轮一次）
 
-环境变量与构建见 `scripts/imagewam_thor_validation.sh` 文件头。自上一轮起代码改动包含 VAE 几何（`vae_stage.py`、`vae_encoder.py`、前端），仍是 Python，**不含 kernel 与 C++ 改动，不需要重编**；ABI 行需要 `exec/`，native 行需要 `runtime/` 与 `flashrt_imagewam_native`。
+环境变量与构建见 `scripts/imagewam_thor_validation.sh` 文件头。native 的 C++（pipeline 自己按长度录图）在 `0920t` 那一轮已经编过，此后没有新的 C++ 或 kernel 改动：`43c49ce` 只在 Python 侧（长度表改成 property、native 的测试与门禁各自显式写 `use_fa4=False`）。所以本轮**不需要为了新代码重编**；ABI 行需要 `exec/`，native 行需要 `runtime/` 与 `flashrt_imagewam_native`。
 
 ```
 export OUT=$HOME/thor_val/$(date +%m%d)
@@ -60,7 +60,7 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 `0920t` 一轮的结果：未裁剪一 key 路径**全过**（state `array_equal`、`graph_exec=0 graph_nodes=0 graph_producer=''`）、guards 11 passed（GPU 行给出每长度资源表：`x0=6` dims `(6,16,20)`、`x0=10` dims `(10,20,24)`、AdaLN 与 RoPE 随活动长度变、`buffers identical=True`）、parity `--graph native` PASS（native 5324 / Python 5348 节点、六个 mutant 全检出、tick `array_equal` / `max_abs=0`、P50 native 205.27 vs python 207.13）、schema PASS（7 条记录 identical）。
 **只有** `test_pipeline_records_one_graph_per_text_length` 红，两条原因已在 `43c49ce` 修掉：`captured_text_lengths` 是 property 但 Protocol 与调用按方法用（`TypeError`），以及该测试拿一边的参考跟另一边的残留行比（`actions` 已经对上，`backbone_hidden`/`K_cache`/`V_cache` 的越界行本来就不同）。修法是两侧跑之前都 `poison_tick_state`，比较保持整块。另：FA4 默认变成"能跑就开"之后，native 路径的测试/门禁各自显式声明 `use_fa4=False`（R6：native pipeline 没有 FA4），不再靠环境变量 `FLASHRT_THOR_FA4=0`；`43c49ce` 也补上了这些显式声明（含 guards 的 `_frontend`，那条 GPU 行会走 `pipeline_resources()`）。下面四条命令重跑本节。
 
-C++ 变了，**必须重编** `flashrt_imagewam_native`。
+重跑前确认 `flashrt_imagewam_native` 是当前源码编出来的；本轮没有新的 C++ 改动，这条命令只是幂等地保证二进制不旧。
 
 ```
 cmake --build build -j --target flashrt_imagewam_native
