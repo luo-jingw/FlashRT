@@ -76,10 +76,11 @@ read. `--profile`, `--precision` and the switch flags are expert overrides on
 top of a named profile (`config_resolver.PROFILES`, `EXPERT_KEYS`): an unset
 flag leaves the profile's own value in place, so `--profile fast` alone runs
 the whole `fast` profile. `use_fa4` is `None` in `default`, which resolves at
-construction from `FLASHRT_THOR_FA4`; `--use-fa4 on|off` is the explicit
-override. A static-FP8 precision needs a calibration file (rule R1) and this
-bench takes none, so `--precision fp8_static*` raises the resolver's `R1`
-before anything is allocated -- build one with
+construction to FA4 where `fa4_backend.thor_default_enabled()` holds and the
+cuBLAS chain elsewhere (`FLASHRT_THOR_FA4=0` forces the chain); `--use-fa4
+on|off` is the explicit override. A static-FP8 precision needs a calibration
+file (rule R1) and this bench takes none, so `--precision fp8_static*` raises
+the resolver's `R1` before anything is allocated -- build one with
 `benchmarks/imagewam_build_calibration.py` and run the comparison through
 `benchmarks/imagewam_e2e_official_compare.py`'s `CALIBRATION`.
 """

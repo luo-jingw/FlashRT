@@ -18,13 +18,13 @@
 解析链是 `workload + structure + profile + precision + calibration_path` → `resolve_config(...)` → `(dims, options)` → `from_config` → frontend；解析在构造后不再改变。
 
 - **workload**：服务的工作负载，由 `ImageWAMWorkload` 描述。部署方给出相机数、每视角图像尺寸、文本长度、action horizon、动作维度、proprio 维度、去噪步数、调度 shift；序列布局由它派生：`x0`、`img_len`、`a0`、`total`、`ref_h`、`ref_w`、`dt`，以及原生 VAE 进图时的 `vae_graph_input`。派生值互相矛盾时在解析阶段报错，不再手填这些整数。LIBERO 工作负载是 `ImageWAMWorkload.libero()`：两个 224×224 视角、512 token 文本、horizon 64、7 维动作、8 维 proprio、10 步去噪、shift=5.0，派生 `x0=513`、`img_len=392`、`a0=905`、`total=969`、`ref_h×ref_w=14×28`。
-- **profile**：一组开关的具名集合，按名字选用，代表**服务配置**（构造函数保留自己的历史默认：不裁文本）。`default` 是服务默认：nvfp4、**裁文本**、FA4 由 `FLASHRT_THOR_FA4` 决定、torch VAE 编码器在图外、无 AWQ。`fast` 在 `default` 之上再加 FA4 双位点与原生 VAE 进图（opt-in：FA4 首次调用要编译且可能回退，进图 VAE 改的是图结构）。`native` 是不裁文本的具名集合（FA4 显式关、torch VAE 图外），内容等于旧的 `default`，给 S4 落地前的 native/ABI 单图调用按名字切换，避免 `profile="default"` 踩规则 R5。
+- **profile**：一组开关的具名集合，按名字选用，代表**服务配置**（构造函数保留自己的历史默认：不裁文本）。`default` 是服务默认：nvfp4、**裁文本**、backbone 位点的 FA4 按机器自动解析（`use_fa4=None`：compute capability 11.x 且 FA4 runtime 可导入就用 FA4，否则走 cuBLAS 链；`FLASHRT_THOR_FA4=0` 强制走链，显式 `use_fa4` 优先）、torch VAE 编码器在图外、无 AWQ。`fast` 在 `default` 之上再加 FA4 的 mot 位点与原生 VAE 进图（opt-in：FA4 首次调用要编译且可能回退，进图 VAE 改的是图结构）。`native` 是 native 消费方的具名集合：**同样裁文本**，与 `default` 只差 FA4——两个位点都显式关，因为 native C++ pipeline 没有 FA4 注意力。
 - **precision**：覆盖 profile 的精度档位。
 - **calibration_path**：静态 FP8 与 AWQ 所需的校准文件。
 
 `resolve_config` 是唯一的合法性判定点，非法组合抛一条带规则编号（R1–R11，以及值域规则 V1）的错误。日志里的 `effective_config` 行由 `config_resolver.format_effective_config` 产出，比较脚本、矩阵脚本与 runtime 身份打印同一个字符串，因此 profile 与精度是一份可记录的部署身份。
 
-同一组按长度捕获的图也由 native 侧承载：native model runtime（`io="native"`）按长度 adopt 前端的每张图（`use_graph(key, exec)`，key 就是 `x0`），服务时用 `set_text_length(key)` 在热路径上选长度；native **pipeline** 自己的捕获（`pipeline_resources()` + `capture()`）仍是单长度，所以规则 R5 继续拒绝 `consumer="native"` 的 `text_trim`，`native` profile 仍是 native 路径唯一的具名集合。这条采纳路径不改动未裁剪的一 key 路径：节点数不变（native 5324 / Python 5348），native-vs-Python graph 的 `array_equal` 行仍全绿；schema 记录也不变（Python 声明与 C++ native verbs 各 7 条记录，与 golden 逐字节相同）。
+同一组按长度捕获的图也由 native 侧承载：native model runtime（`io="native"`）按长度 adopt 前端的每张图（`use_graph(key, exec)`，key 就是 `x0`），服务时用 `set_text_length(key)` 在热路径上选长度；native **pipeline** 自己也按文本长度记录：`pipeline_resources()` 描述**当前**长度（序列维度与 backbone RoPE 表跟着当前长度，缓冲区仍是按最长长度分配的那一套），`set_pipeline` 安装它那张表携带的 key 的 pipeline 并把它选为当前长度——只替换该 key 的 pipeline 与该 key 的图，其它 key 的 pipeline 与图都保留；`capture_pipeline_text_lengths` 把前端已捕获的每个长度装上并各记一张图，最后恢复原来的长度。所以 `text_trim` 对 native 路径与另外两条一样可用，对 native 消费方特有的只剩规则 R6。这条路径不改动未裁剪的一 key 路径：节点数不变（native 5324 / Python 5348），native-vs-Python graph 的 `array_equal` 行仍全绿；schema 记录也不变（Python 声明与 C++ native verbs 各 7 条记录，与 golden 逐字节相同）。
 
 同一 workload 也是 runtime 与校准文件身份的一部分：ABI 描述与 `setup_identity` 在 `dims.<key>` 之外带 `workload.<field>`（`num_views`、`image_h`、`image_w`、`text_max_len`、`action_horizon`、`action_dim`、`proprio_dim`、`num_steps`、`shift`）；这些条目是附加描述，已记录的校准文件仍然有效。
 
@@ -58,11 +58,11 @@
 | 选项 | 当前默认 | 作用 | 限制 |
 |---|---|---|---|
 | `workload` | `ImageWAMWorkload.libero()` | 服务的工作负载；序列布局与 `vae_graph_input` 由它派生并校验 | 字段必须与 checkpoint 的结构一致（规则 R7） |
-| `profile` | `default` | 开关的具名集合；`default` 含 `text_trim`（故 native 路径被规则 R5 拒绝），`fast` = 再加 FA4 双位点 + 原生 VAE 进图（93.2 ms 对 default 的约 115 ms，nvfp4，libero_spatial） |`native` = 不裁文本 + FA4 显式关，给 native/ABI 单图调用；`fast` 的 FA4 首次调用编译、失败回退 |
+| `profile` | `default` | 开关的具名集合；`default` 含 `text_trim`，backbone 位点的 FA4 按机器自动解析；`fast` = 再加 FA4 的 mot 位点 + 原生 VAE 进图（93.2 ms 对 default 的约 115 ms，nvfp4，libero_spatial） |`native` = 同样裁文本 + FA4 两位点显式关（native pipeline 没有 FA4 注意力），其余与 `default` 相同；`fast` 的 FA4 首次调用编译、失败回退 |
 | `precision` | `nvfp4` | 精度/速度档位 | `fp8_static*` 需要校准文件 |
-| `text_trim` | 关 | 按有效文本长度裁剪；开启后每个有效文本长度一张采纳图，Python `infer()` 与 ABI 都能服务 | native 路径被规则 R5 拒绝（原生管线只 replay 一张固定图） |
+| `text_trim` | 关 | 按有效文本长度裁剪；开启后每个有效文本长度一张图，Python `infer()`、ABI 与 native 三条路径都能服务（native 侧由 `capture_pipeline_text_lengths` 逐长度安装并捕获） | — |
 | `text_trim_cache_size` | 32 | `text_trim` 预捕获图的张数上限，超出按 LRU 淘汰 | 显存只在首次捕获付出：首图 +218.0 MiB reserved / +206.3 MiB allocated，其后每张 +0.0 / +0.1 MiB，默认上限 32 的总代价在 221 MiB 量级（`a84916a`，nvfp4，15 个 LIBERO 长度） |
-| FA4（`FLASHRT_THOR_FA4`、`use_fa4_mot`） | 关 | 注意力 kernel | 首次调用编译，失败自动回退 |
+| FA4（`FLASHRT_THOR_FA4`、`use_fa4_mot`） | backbone 位点：机器能跑就开（`FLASHRT_THOR_FA4=0` 强制走 cuBLAS 链）；mot 位点：关 | 注意力 kernel | 首次调用编译，失败自动回退 |
 | `vae_encoder="native"` / `vae_graph_input` | 关（torch 编码器） | 原生 VAE / 进图 | — |
 | `nvfp4_awq` | 关 | NVFP4 精度补偿 | 需要校准文件；原生 runtime 不支持 |
 | `gemm_variant_autotune` | 关 | ActionDiT tile 逐形状选择 | 仅 NVFP4/FP8 CUTLASS 档位 |
@@ -117,7 +117,7 @@ fp16 的链式复核：`default` 306.6 ms → `vae_trim` 234.9 ms → `stack` 22
 
 AWQ（nvfp4 + AWQ）：动作 cosine 对 fp16 为 0.99970，未加 AWQ 的 nvfp4 为 0.99939；P50 202.2–202.9 ms，没有增加。真实 FP8 校准：对 fp16 的 cosine 0.99997、MAE 比 1.000；占位校准约 0.90、MAE 比 1.77。
 
-三条服务路径（同一进程，LIBERO）：`default` 的 `infer()` 202.3 ms、ABI 184.2 ms、native 183.8 ms；`profile=fast` 在文本长度已预捕获时 `infer()` 93.2 ms、ABI 95.1 ms，native 按规则 R5 跳过。
+三条服务路径（同一进程，LIBERO）：`default` 的 `infer()` 202.3 ms、ABI 184.2 ms、native 183.8 ms；`profile=fast` 在文本长度已预捕获时 `infer()` 93.2 ms、ABI 95.1 ms，native 该轮跳过（当时 native 面不接受裁剪）。
 
 `text_trim` 的捕获开销：已预捕获的文本长度切换一张图用 0.000–0.012 s，首次使用时才捕获的长度用 0.42–0.58 s。
 
@@ -130,7 +130,7 @@ commit `a84916a`：Jetson AGX Thor、MAXN、GPC 1.575 GHz、`emc_locked=null`、
 | 配置 | `infer()` | ABI | native |
 |---|---:|---:|---:|
 | `default` | 216.93 | 173.55 | 173.27 |
-| `fast`（预捕获） | 137.64 | 139.35 | 跳过（R5） |
+| `fast`（预捕获） | 137.64 | 139.35 | 跳过（当时 native 面不接受裁剪） |
 
 `fast` 相对 `default` 省 79.3 ms；文本长度已预捕获，因此 `fast` 的行不含首次捕获开销。
 
@@ -138,11 +138,11 @@ commit `a84916a`：Jetson AGX Thor、MAXN、GPC 1.575 GHz、`emc_locked=null`、
 
 | 有效文本 token | `infer()` | ABI | native |
 |---|---:|---:|---:|
-| 16 | 197.00 | 153.51 | 跳过（R5） |
-| 72 | 207.06 | 161.68 | 跳过（R5） |
-| 128 | 217.50 | 172.05 | 跳过（R5） |
+| 16 | 197.00 | 153.51 | 跳过（当时 native 面不接受裁剪） |
+| 72 | 207.06 | 161.68 | 跳过（当时 native 面不接受裁剪） |
+| 128 | 217.50 | 172.05 | 跳过（当时 native 面不接受裁剪） |
 
-ABI 面能服务裁剪后的 prompt（每个长度一张采纳图），native 面还不能（规则 R5）。
+ABI 面能服务裁剪后的 prompt（每个长度一张采纳图），native 面在该轮还不能（当时 native 面不接受裁剪）。
 
 上一轮（`eccf14f`）测得的布局与两行仍成立：viewport 正确报出 `view_shape=(3,256,256)`，ABI 152.7 ms、native 154.5 ms（图像 token 用占位值）。
 
@@ -168,7 +168,7 @@ commit `a4852be`：Jetson AGX Thor、MAXN、GPC 1.575 GHz、`emc_locked=null`、
 
 节点数 native 5324 / Python 5348，与上一轮 `08_gate_native.log` 相同。这轮的 P50 比那一轮 `08_gate_native` 的约 182 ms 高约 22 ms：本轮测到的是节点数不变、未裁剪路径的数值不变，没有测同一二进制在两轮机器状态下的 A/B，所以这 22 ms 记作会话差异，而不是实测到的回退。
 
-native **pipeline** 自己的捕获仍是单长度，所以这些长度上的 native 服务来自 model runtime 的采纳路径；`consumer="native"` 的 `text_trim` 仍被规则 R5 拒绝。
+该轮 native **pipeline** 自己的捕获还是单长度，所以这些长度上的 native 服务来自 model runtime 的采纳路径（当时 `consumer="native"` 的 `text_trim` 不被接受；native pipeline 现在自己按文本长度安装并捕获，见「Pipeline 架构」一节）。
 
 ### 新入口下的同一会话阶梯（`c20f3a0`，libero_spatial，nvfp4，`infer()` P50）
 

@@ -43,7 +43,10 @@ The switch variables below are expert overrides of the profile
 environment: an unset variable leaves the profile's own value in place, so
 `PROFILE=fast` alone runs the whole `fast` profile. `use_fa4` is never set
 from here -- the profile's own `use_fa4` (`None` in `default`) lets the
-frontend resolve the `FLASHRT_THOR_FA4` opt-in exactly as before.
+frontend resolve it: FA4 at the backbone site exactly when
+`fa4_backend.thor_default_enabled()` holds (compute capability 11.x and an
+importable FA4 runtime), the cuBLAS chain otherwise, and `FLASHRT_THOR_FA4=0`
+forces the chain.
 
 VAE options (roadmap items 2 and 5, plan.md):
   VAE_ENCODER torch | native -- frontend vae_encoder.
@@ -119,7 +122,8 @@ RAW_VIEWS = os.environ.get("RAW_VIEWS", "0") == "1"
 RAW_SIZE = int(os.environ.get("RAW_SIZE", "0"))
 TEXT_TRIM = os.environ.get("TEXT_TRIM", "0") == "1"
 # FA4_MOT=1 also runs the ActionDiT ("mot") attention through FA4; the
-# backbone site is switched by FLASHRT_THOR_FA4=1 as before.
+# backbone site follows the frontend's own resolution (FA4 where the machine
+# can run it, FLASHRT_THOR_FA4=0 forces the cuBLAS chain).
 FA4_MOT = os.environ.get("FA4_MOT", "0") == "1"
 
 
@@ -130,8 +134,9 @@ def expert_overrides() -> dict:
     A variable that is not in the environment is absent from the dict, so the
     profile's own value for that switch is what runs: a profile row is the
     profile, not the profile plus this script's defaults. `use_fa4` is not an
-    override here (the profile decides, and `None` leaves the
-    `FLASHRT_THOR_FA4` opt-in to the frontend).
+    override here (the profile decides, and `None` leaves the resolution to
+    the frontend: FA4 where the machine can run it, and `FLASHRT_THOR_FA4=0`
+    forces the cuBLAS chain).
     """
     expert = {}
     if "TEXT_TRIM" in os.environ:

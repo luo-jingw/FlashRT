@@ -121,5 +121,21 @@ The result does not depend on the calibration set's size or suite mix
 the same `backbone_hidden` (0.99993-0.99994 median) and `actions`
 (0.99997 median) cosines and MAE ratio (1.000-1.001).
 `tests/gate_imagewam_libero.py --precision fp8_static --fp8-calibration
-<file>` passes on H100 (vs official median 0.99830, min 0.99553; vs its
+<file> --no-text-trim --manifest
+tests/fixtures/imagewam_gate/imagewam_libero_gate_v1.manifest.json` passes
+on H100 (vs official median 0.99830, min 0.99553; vs its
 `fp16` reference median 0.999969; MAE 0.18373 against 0.18364).
+
+Every recorded number on this page belongs to the untrimmed configuration.
+The gate row is fixture v1, whose `fp16` reference is untrimmed, and it
+loads the untrimmed N = 64 build of the Build section (a frontend refuses a
+calibration file recorded with the other `text_trim`). Both switches are
+stated in the invocation because the gate's own defaults are the served
+configuration now: fixture v2 and trimming on, so a bare run gates the
+trimmed pipeline. That gate has run at `nvfp4` only, and no `fp8_static`
+number against fixture v2 is recorded. The two accuracy tables are the same
+untrimmed configuration: the e2e rows were recorded before `text_trim` was
+served, and `imagewam_precision_fidelity.py` runs untrimmed unless
+`TEXT_TRIM=1`. All of them are H100 rows, where `use_fa4=None` resolves to
+the cuBLAS chain (FA4 needs a compute-capability-11.x device), so the
+backbone site's FA4 default does not enter them.

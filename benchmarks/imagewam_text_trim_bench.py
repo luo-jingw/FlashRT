@@ -30,8 +30,10 @@ graph's own driver allocations), and the device-wide
 Weights are random unless CKPT_PATH is set (latency and memory do not
 depend on the values). `--vae-graph` puts the real VAE stage in every
 graph (needs FLUX2_SRC and AE_MODEL_PATH or FLUX2_AE_MODEL_PATH).
-`--use-fa4 on|off|auto` (auto = `FLASHRT_THOR_FA4=1` opt-in rule) and
-`--use-fa4-mot on|off` select FA4 per site (Thor only).
+`--use-fa4 on|off|auto` (auto = FA4 where
+`fa4_backend.thor_default_enabled()` holds, the cuBLAS chain elsewhere;
+`FLASHRT_THOR_FA4=0` forces the chain) and `--use-fa4-mot on|off` select FA4
+per site (Thor only).
 
 On a shared GPU the timings are indicative only. Prints one
 `__TEXT_TRIM_BENCH__ <json>` line per result.

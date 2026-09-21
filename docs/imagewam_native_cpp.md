@@ -21,14 +21,20 @@ holds the runtime surface, whose `owner` is the frontend, and the source
 of its installed pipeline; the model runtime anchors the frontend through
 the declaration's Python owner and retains the native handle through the
 verb override. Borrowed memory therefore outlives every verb call, with or
-without an export. Replacing the pipeline (`set_pipeline`) destroys the
-graph captured from the previous one; while a model runtime over the
-handle is live, `use_graph` (adoption), `set_pipeline` and `capture` are
-refused; `set_text_length` and `set_proprio_row` stay legal, because they
-carry the prompt change on the hot path. The native-owned `capture()` path
-records one graph at one context length (`pipeline_resources()` describes
-one resource table), which is why rule R5 still refuses `text_trim` for
-`consumer="native"` while the adopted per-length table above serves it.
+without an export. The handle holds one native pipeline and one
+graph per text length: `set_pipeline` installs the pipeline of the key its
+resource table carries and selects that key as the active text length —
+replacing that key's pipeline and destroying the graph captured for it,
+while every other key keeps both. `gemm_shapes`, `set_gemm_algo`, `run` and
+`capture` all resolve against the active text length. While a model runtime
+over the handle is live, `use_graph` (adoption), `set_pipeline` and
+`capture` are refused; `set_text_length` and `set_proprio_row` stay legal,
+because they carry the prompt change on the hot path. The native-owned
+capture path therefore serves `text_trim` like the adopted table above:
+`pipeline_resources()` describes the ACTIVE length, and
+`capture_pipeline_text_lengths` installs and captures every length the
+frontend has captured, restoring the active length afterwards. No rule
+refuses `text_trim`; R6 is what remains specific to the native consumer.
 The Python graph and the native graph share the same buffers and must not
 run concurrently.
 
@@ -89,15 +95,19 @@ Buffers `img_raw`, `context`, `action_latent`; region `rollout_boundary`
 (the `action_latent` window); one GRAPH stage `infer` whose graphs are the
 handle's, one per text length `x0` (the variant key), with the C `step`
 replaying the handle's active length. Identity adds `io=native` and
-`graph_producer` (`python` when the native verbs replay the frontend's
-graphs, `native` after `capture`). `images` and `prompt` are not declared:
+`graph_producer`, who recorded the active text length's graph: `python`
+when the native verbs replay the frontend's exec for it, `native` when
+`capture` recorded it. `images` and `prompt` are not declared:
 their transforms (VAE, Qwen3) run in Python. The prompt is set through the
 frontend in setup, followed by
 `ImageWAMNativeRuntime.set_text_length(x0)` and then
 `set_proprio_row(runtime_surface().proprio_row)`; a length the handle holds
 no graph for is refused by both (`-2`), and lengths are adopted
 (`use_graph(key, exec)`) before the export, because adoption is refused
-while a model runtime over the handle is live. The lengths a handle can
+while a model runtime over the handle is live.
+The handle's own capture path fills the same table: each length gets one
+installed pipeline and one graph this handle recorded, so `graph_producer`
+is `native` instead of `python`. The lengths a handle can
 serve are declared when it is created (`frt_imagewam_io_config`'s
 `num_text_lengths` / `text_lengths`), so a deployment declares or
 precaptures them first.
@@ -124,7 +134,12 @@ Verbs:
 ## Native pipeline
 
 `ImageWAMNativeRuntime.set_pipeline(frontend)` passes
-`frontend.pipeline_resources()`: dimensions and the two layer-structure
+`frontend.pipeline_resources()`. One table describes one context length,
+the active one: its sequence dims (`x0`, `a0`, `total`) and its backbone
+RoPE table, while the pipeline buffers are the ones the frontend allocated
+for the longest declared length and every length's table points at them.
+`set_pipeline` installs that key's pipeline and makes it the active text
+length. The table carries dimensions and the two layer-structure
 flags, every pipeline buffer, the attention pointers (shared `Q_O`,
 per-layer K/V at base + layer × stride, logits), RoPE tables, each
 weight as a linear descriptor (`fp16_nn`, `bf16_nn` or NVFP4 packed
@@ -146,7 +161,8 @@ pipelines launch the same GEMM kernels. The `csrc` kernels are compiled
 into the library from the same sources with the `flash_rt_kernels` CUDA
 flags; on SM100-class builds the `flash_rt_fp4` objects are linked in.
 `capture()` runs one eager warm-up, then records prefill + denoise on the
-native stream (thread-local capture mode) into a graph the handle owns.
+native stream (thread-local capture mode) into a graph the handle owns for
+the ACTIVE text length, whose pipeline must be installed (`-1` when none is).
 The library links with `--no-undefined` and exports only
 `frt_imagewam_native_*`.
 
@@ -162,8 +178,10 @@ plus `exec/build` and `runtime/build` as in
 
 ```python
 native = ImageWAMNativeRuntime.create(fe.runtime_surface())   # declares fe's text lengths
-native.set_pipeline(fe)          # resource table + GEMM algorithm hand-off
-native.capture()                 # native graph (one context length)
+native.set_pipeline(fe)          # resource table + GEMM algorithm hand-off (one key)
+native.capture()                 # native graph of the active text length (the one-key path)
+# or, per captured length, one installed pipeline + one graph this handle
+# records, which is what serves text_trim: native.capture_pipeline_text_lengths(fe)
 # or, per captured length, adopt the frontend's graphs instead of capturing:
 #   for key, exec in fe.runtime_surface().graph_variants.entries:
 #       native.use_graph(key, exec)
@@ -190,9 +208,24 @@ parity row is re-run against mutants that must make it fail.
   Native pipelines built from a mutated resource table (no backbone
   block, last single-stream block dropped, last denoise step dropped, one
   block fed another block's `linear1` weight) all fail that tick. Also:
-  a second `set_pipeline` leaves no graph and frees the first pipeline's
-  resources; a native handle alone keeps the frontend alive (without it
-  the replay faults); an AWQ frontend is refused.
+  a second `set_pipeline` for a key leaves no graph for that key and frees
+  the replaced pipeline's resources; a native handle alone keeps the frontend
+  alive (without it the replay faults); an AWQ frontend is refused.
+  `test_pipeline_records_one_graph_per_text_length` installs and captures one
+  pipeline per captured length of a `text_trim=True` frontend (`x0` 6 and 14),
+  records the manifest's `text_lengths` table, and the poisoned `io="native"`
+  tick at either length — the shorter one first, which is not the export's
+  default key — is `array_equal` to `infer()` at that same length with
+  `graph_producer=native`.
+- `tests/test_imagewam_text_trim_consumer_guards.py`: the per-length resource
+  table and the install loop are pinned without a GPU, over a stub frontend
+  and the stub native handle: `pipeline_resources()` describes the active
+  length (sequence dims, AdaLN row counts and the backbone RoPE table follow
+  it) while the buffers stay the maximal ones, and
+  `capture_pipeline_text_lengths`'s call sequence is `set_pipeline` +
+  `gemm_shapes` + `set_gemm_algo` + `capture` per length, ascending, with the
+  source's active length restored. A real trimmed frontend on that path needs
+  a GPU.
 - `tests/test_imagewam_native_runtime.py`: the Python declaration's
   records equal the C++ records; the poisoned tick matches `infer()` with
   proprio staged by the frontend or by the native verb, and fails when

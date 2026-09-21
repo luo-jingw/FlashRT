@@ -20,8 +20,9 @@ graph replay alone).
 Env (all optional): PRECISIONS ("nvfp4,e0m3_hadamard"; the compared
 precisions, `fp16` allowed as a sanity row), SUITE (libero_spatial),
 N_TASKS (10), FRAMES ("0,20,40,60,80"), LAT_ITERS (50). Attention
-follows the frontend's own rule (`use_fa4=None`: cuBLAS unless
-`FLASHRT_THOR_FA4=1`); the resolved choice is printed.
+follows the frontend's own rule (`use_fa4=None`: FA4 where
+`fa4_backend.thor_default_enabled()` holds, the cuBLAS chain elsewhere;
+`FLASHRT_THOR_FA4=0` forces the chain); the resolved choice is printed.
 
 Expected from the H100 simulation (`opportunities.md` OPT-024, merged
 `linear2`, 20 frames): `e0m3_hadamard` actions cosine vs fp16 about

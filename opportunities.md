@@ -4203,12 +4203,15 @@ attempted.
 # OPT-019: attention-chain fusion recheck at ImageWAM's real shapes (roadmap item 6)
 
 Status: analysis done. The H100 numbers are indicative only, because a
-co-tenant training job shares the GPU. Two changes are implemented, and
-both are opt-in:
+co-tenant training job shares the GPU. Two changes are implemented; FA4 at
+the backbone site is the served default where the machine can run it, and
+FA4 at the `mot` site stays opt-in:
 
-- FA4 at the backbone site: `use_fa4=True`, or `FLASHRT_THOR_FA4=1`
-  with the default `use_fa4=None`.
-- FA4 at the `mot` site: `use_fa4_mot=True`.
+- FA4 at the backbone site: the default `use_fa4=None` is FA4 where
+  `fa4_backend.thor_default_enabled()` holds and the cuBLAS chain
+  elsewhere; `FLASHRT_THOR_FA4=0` forces the chain, and an explicit
+  `use_fa4=True` / `False` wins over the environment.
+- FA4 at the `mot` site: `use_fa4_mot=True`, opt-in.
 
 FA4 has run on Thor only at `a0 = 896` in the per-layer bench
 (OPT-005). It has not run at the served backbone shape (q = kv = 905,
@@ -4319,16 +4322,20 @@ On Thor, FA4 at the backbone site already measured 3.75x per call and
 - `fa4_backend.thor_default_enabled()` returns True only on a
   compute-capability-11.x device whose FA4 runtime imports. It checks
   the device first, so FA4 is never imported off Thor.
-- `ImageWAMTorchFrontendThor(use_fa4=None)` is the default and
-  resolves to the cuBLAS chain. `FLASHRT_THOR_FA4=1` opts in: FA4 at
-  the backbone site exactly when `thor_default_enabled()` holds, and
-  the chain otherwise, with no error for a missing runtime.
-  `use_fa4=True` forces FA4 and raises without a runtime, and
+- `ImageWAMTorchFrontendThor(use_fa4=None)` is the default and takes the
+  machine's answer: FA4 at the backbone site exactly when
+  `thor_default_enabled()` holds, the cuBLAS chain otherwise, with no
+  error for a missing runtime. `_FA4_OPT_IN_DEFAULT` in
+  `imagewam_thor.py` is `"1"`, so `FLASHRT_THOR_FA4=1` and leaving the
+  variable unset are the same answer, and `FLASHRT_THOR_FA4=0` forces the
+  chain. `use_fa4=True` forces FA4 and raises without a runtime, and
   `use_fa4=False` forces the chain regardless of the environment. The
-  resolved value is `frontend.use_fa4`. Making FA4 the default is a
-  one-line change: `_FA4_OPT_IN_DEFAULT` in `imagewam_thor.py` goes
-  from `"0"` to `"1"`. `FLASHRT_THOR_FA4=0` also stops `fa4_backend`
-  from importing FA4 at all, for every model.
+  resolved value is `frontend.use_fa4`, and the regression gate records it
+  in its result. `FLASHRT_THOR_FA4=0` also stops `fa4_backend`
+  from importing FA4 at all, for every model. The served default's own
+  Thor numbers are not measured yet: the rows recorded for `default` were
+  taken with FA4 off, so a Thor round that re-measures the served
+  configuration is outstanding.
 - `ImageWAMAttnBackend(use_fa4_mot=True)` and
   `ImageWAMTorchFrontendThor(use_fa4_mot=True)` run the `mot` site
   through FA4. Q is the action rows at row offset `a0`, K/V are the
@@ -4383,16 +4390,20 @@ On Thor, FA4 at the backbone site already measured 3.75x per call and
 
 ## Thor check
 
-FA4 is opt-in, so every FA4 step below opts in explicitly: an
-environment variable, `--fa4 on`, or the bench's own FA4
-configurations. In any run with FA4 on, a line containing `falling back
-to the cuBLAS attention chain` means FA4 failed and the numbers are the
-chain's. Report it with the reason.
+FA4 at the backbone site is the served default where the machine can run
+it, so a step that means the FA4 configuration names it explicitly: the
+environment variable, `--fa4 on`, or the bench's own FA4 configurations,
+and `FLASHRT_THOR_FA4=0` is the off leg. In any run with FA4 on, a line
+containing `falling back to the cuBLAS attention chain` means FA4 failed
+and the numbers are the chain's. Report it with the reason.
 
 1. Runtime:
-   `FLASHRT_THOR_FA4=1 python -c "from flash_rt.hardware.thor import fa4_backend as f; from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor as F; print(f.status(), F._resolve_use_fa4(None))"`.
-   Expect `active True`. Without the variable, the second value must be
-   `False`.
+   `python -c "from flash_rt.hardware.thor import fa4_backend as f; from flash_rt.frontends.torch.imagewam_thor import ImageWAMTorchFrontendThor as F; print(f.status(), F._resolve_use_fa4(None))"`.
+   On Thor expect `active True` and the second value `True`. Where the
+   runtime does not import, `f.status()` names the reason and the second
+   value is `False`; a device that is not compute capability 11.x gives
+   `False` even with the runtime importable. `FLASHRT_THOR_FA4=0` in front
+   of the same command must print `disabled (FLASHRT_THOR_FA4=0) False`.
 2. Real-FA4 correctness at the served shapes:
    `pytest tests/test_imagewam_fa4_backbone.py -q -s -k both_sites_real_shapes`
    (`test_fa4_matches_cublas_both_sites_real_shapes`). This covers the
@@ -4410,20 +4421,20 @@ chain's. Report it with the reason.
    The bench builds chain, backbone-FA4 and both-sites-FA4 graphs from
    one frontend. Report each configuration's action cosine against the
    chain (expect >= 0.999) and the P10/P50/P90 plus delta.
-6. nvfp4 end-to-end official compare, FA4 off then on:
-   `PRECISION=nvfp4 N_TASKS=10 FRAMES=0,60 SEEDS=0,1 python benchmarks/imagewam_e2e_official_compare.py`,
-   then the same command with `FLASHRT_THOR_FA4=1` in front. Report
+6. nvfp4 end-to-end official compare, the served default vs FA4 forced
+   off: `PRECISION=nvfp4 N_TASKS=10 FRAMES=0,60 SEEDS=0,1 python benchmarks/imagewam_e2e_official_compare.py`
+   is the served default, which is FA4 where the machine can run it, so the
+   off leg states `FLASHRT_THOR_FA4=0` in front of the same command. Report
    `fr_vs_off` median/min, mean `mae_fr_vs_gt`, and the printed `infer()`
-   P50 for both runs. Expect the FA4 run to match the FA4-off run
+   P50 for both runs. Expect the two runs to match
    closely: `fr_vs_off` within about 1e-4 at the median.
 
 ## Recommendation
 
-1. Backbone: make FA4 the Thor default (`_FA4_OPT_IN_DEFAULT = "1"`)
-   once Thor passes three checks, each run with FA4 opted in:
-   - the real-shape test at q = kv = 905 and at 64 over 969;
-   - an nvfp4 end-to-end official compare with FA4 on vs off;
-   - an `infer()` A/B with FA4 on vs off.
+1. Backbone: FA4 is the Thor default (`_FA4_OPT_IN_DEFAULT = "1"`), so
+   `use_fa4=None` is FA4 where the machine can run it and the cuBLAS chain
+   where it cannot. The Thor round that measures the served default's own
+   numbers is the one outstanding item.
 2. `mot`: FA4 is the strongest remaining attention lever. It computes
    the same math as FlashRT's current unmasked chain (not official's
    padded-key-masked rule; Finding 1), and on H100 an sm_90 fused
@@ -4454,8 +4465,9 @@ The backbone site is 3.9 ms below the no-FA4 row and adding the `mot` site
 takes another 5.8 ms, so the section C criterion for making FA4 the default
 (at least 2 ms of P50 against the FA4-off row, and not worse against
 official) held in this pass, with no fallback on any row. `use_fa4` and
-`use_fa4_mot` therefore remain profile switches; the default is unchanged
-and the decision is the owner's (plan.md "Decisions pending"). ISSUE-082
+`use_fa4_mot` therefore remain profile switches; the decision on the
+backbone site was the owner's and FA4 is the served default there now
+(Implemented above), while the `mot` site stays opt-in. ISSUE-082
 applies to the size of these marginals.
 
 
@@ -5490,7 +5502,7 @@ LIBERO at `profile=fast`, every text length precaptured:
 |---|---:|
 | `infer()` | 93.2 |
 | ABI tick | 95.1 |
-| native tick | skipped (rule R5: the native pipeline has one graph and one context length) |
+| native tick | skipped (the native pipeline held one graph and one context length then) |
 
 `text_trim` through the ABI is one adopted graph exec per text length,
 selected by the replay key: every swept length produced a number, and
@@ -5513,10 +5525,10 @@ Target workload (three views of 256x256, horizon 32, `text_max_len=128`):
 | row | `infer()` | ABI tick (`io="python"`) | native tick (`io="native"`) |
 |---|---:|---:|---:|
 | `default` | 216.93 | 173.55 | 173.27 |
-| `profile=fast`, lengths precaptured | 137.64 | 139.35 | skipped (rule R5) |
-| `text_trim`, 16 valid tokens | 197.00 | 153.51 | skipped (rule R5) |
-| `text_trim`, 72 valid tokens | 207.06 | 161.68 | skipped (rule R5) |
-| `text_trim`, 128 valid tokens | 217.50 | 172.05 | skipped (rule R5) |
+| `profile=fast`, lengths precaptured | 137.64 | 139.35 | skipped (the native face refused the trim then) |
+| `text_trim`, 16 valid tokens | 197.00 | 153.51 | skipped (the native face refused the trim then) |
+| `text_trim`, 72 valid tokens | 207.06 | 161.68 | skipped (the native face refused the trim then) |
+| `text_trim`, 128 valid tokens | 217.50 | 172.05 | skipped (the native face refused the trim then) |
 
 The workload serves with its own VAE encode geometry now (issues.md ISSUE-086),
 so these rows carry the workload's own image geometry rather than the
@@ -5524,7 +5536,7 @@ placeholder image tokens of the layout-only rows the section above records.
 
 The ABI serves the trimmed lengths: one adopted graph exec per text length,
 selected by the replay key, so every swept length produced a number. The native
-face still refuses them (rule R5).
+face refused them then; its own per-length capture serves them now.
 
 
 # OPT-029: ImageWAM native C++ overlay (`io="native"`)
@@ -5651,7 +5663,7 @@ and the ABI tick 184.2 ms in the same process.
 
 Target workload (three views of 256x256, horizon 32): the native tick measures
 154.5 ms, also measured with placeholder image tokens, so it is a layout-only
-number as well. `text_trim` remains refused for this face (rule R5).
+number as well. `text_trim` was refused for this face then.
 
 ## Thor, both workloads (`0919e`)
 
@@ -5666,16 +5678,16 @@ same process as the ABI rows:
 | row | native tick (`io="native"`) | ABI tick (`io="python"`) | `infer()` |
 |---|---:|---:|---:|
 | `default` | 173.27 | 173.55 | 216.93 |
-| `profile=fast`, lengths precaptured | skipped (rule R5) | 139.35 | 137.64 |
-| `text_trim`, 16 valid tokens | skipped (rule R5) | 153.51 | 197.00 |
-| `text_trim`, 72 valid tokens | skipped (rule R5) | 161.68 | 207.06 |
-| `text_trim`, 128 valid tokens | skipped (rule R5) | 172.05 | 217.50 |
+| `profile=fast`, lengths precaptured | skipped (the native face refused the trim then) | 139.35 | 137.64 |
+| `text_trim`, 16 valid tokens | skipped (the native face refused the trim then) | 153.51 | 197.00 |
+| `text_trim`, 72 valid tokens | skipped (the native face refused the trim then) | 161.68 | 207.06 |
+| `text_trim`, 128 valid tokens | skipped (the native face refused the trim then) | 172.05 | 217.50 |
 
 The `default` row is the workload served with its own VAE encode geometry; the
 native row the section above records for this workload is the earlier
-layout-only measurement with placeholder image tokens. `text_trim` stays
-refused for this face: rule R5 gives the native pipeline one graph and one
-context length, so the trimmed rows have no native number.
+layout-only measurement with placeholder image tokens. `text_trim` was refused
+for this face then: the native pipeline held one graph and one context length,
+so the trimmed rows have no native number.
 
 ## Thor, native model runtime (`0920s4`, nvfp4)
 
@@ -5720,11 +5732,12 @@ native-vs-Python-graph rows). Not measured: any A/B of the same binary under
 both sessions' machine state, so the 22 ms carries no attribution and is
 recorded as a session difference rather than a measured regression.
 
-`text_trim` stays refused for the native *pipeline*: rule R5 gives it one graph
-and one context length from one resource table, so `consumer="native"` keeps
-refusing `text_trim` and the `native` profile remains the only resolved native
-set. The adopted per-length execs above come from the frontend's captures, which
-the native model runtime takes by key.
+`text_trim` was refused for the native *pipeline* then: the native pipeline held
+one graph and one context length from one resource table, so `consumer="native"`
+refused `text_trim` and the `native` profile was the only resolved native set.
+The adopted per-length execs above come from the frontend's captures, which the
+native model runtime takes by key; the pipeline's own per-length capture now
+serves the trim there too.
 
 
 # OPT-030: text context trimmed to the prompt's valid length (issues.md ISSUE-020)
@@ -5887,13 +5900,15 @@ What the consumers needed, and what they now have:
   captured length on the native handle (`use_graph(key, exec)`), which
   selects it with `set_text_length(key)` before `set_proprio_row`;
 - the native *pipeline*'s own capture (`pipeline_resources()` →
-  `frt_imagewam_native_set_pipeline` → `capture()`) still records one graph
-  at one context length from one resource table, so rule R5 keeps refusing
-  `text_trim` for `consumer="native"` and the `native` profile remains the
-  only resolved native set. Per-length native-owned capture needs either one
-  pipeline install per length with owned graphs surviving `set_pipeline`, a
-  pipeline config carrying per-key dims and RoPE tables, or the decision to
-  leave that path one-length (plan.md, "Decisions pending").
+  `frt_imagewam_native_set_pipeline` → `capture()`) records one graph per
+  text length: `pipeline_resources()` describes the active length,
+  `set_pipeline` installs the key its table carries (replacing that key's
+  pipeline and graph while the other keys keep both) and selects it as the
+  active length, and
+  `ImageWAMNativeRuntime.capture_pipeline_text_lengths` installs and captures
+  every length the frontend has captured, restoring the active length
+  afterwards. `consumer="native"` therefore accepts `text_trim` like the
+  other two consumers, and rule R6 is what remains specific to it.
 
 Activation statistics for a trimmed frontend are recorded at the active
 dims (`run_eager()` runs them). The untrimmed forward's text and
