@@ -39,6 +39,7 @@ from flash_rt.frontends.torch.imagewam_thor import (
     ImageWAMTorchFrontendThor,
     frontend_kwargs_from_config,
 )
+from flash_rt.hardware.thor import fa4_backend
 from flash_rt.models.imagewam.config_resolver import (
     ConfigError,
     ImageWAMOptions,
@@ -166,12 +167,30 @@ def test_native_profile_maps_to_the_constructor_defaults():
     assert kwargs["vae_resize"] == defaults["vae_resize"] == "area"
 
     # the served default differs from both, in exactly the two switches that
-    # make it the served set: text_trim on, FA4 left to the environment
+    # make it the served set: text_trim on, FA4 left to the machine's own answer
     served = frontend_kwargs_from_config(resolved())
     assert served["text_trim"] is True and defaults["text_trim"] is False
     assert served["use_fa4"] is None
     differing = sorted(key for key, value in served.items() if value != kwargs[key])
     assert differing == ["text_trim", "use_fa4"], differing
+
+
+def test_use_fa4_none_resolves_on_the_machine(monkeypatch):
+    """`use_fa4=None`, the served profile's value, is the machine's own answer:
+    with the environment untouched, the frontend takes whatever
+    `fa4_backend.thor_default_enabled()` (compute capability 11.x plus an
+    importable FA4 runtime) returns, and `FLASHRT_THOR_FA4=0` forces the
+    cuBLAS chain. The explicit argument still wins."""
+    monkeypatch.delenv("FLASHRT_THOR_FA4", raising=False)
+    monkeypatch.setattr(fa4_backend, "thor_default_enabled", lambda: True)
+    assert ImageWAMTorchFrontendThor._resolve_use_fa4(None) is True
+    assert ImageWAMTorchFrontendThor._resolve_use_fa4(False) is False
+    monkeypatch.setenv("FLASHRT_THOR_FA4", "0")
+    assert ImageWAMTorchFrontendThor._resolve_use_fa4(None) is False
+    monkeypatch.delenv("FLASHRT_THOR_FA4", raising=False)
+    monkeypatch.setattr(fa4_backend, "thor_default_enabled", lambda: False)
+    assert ImageWAMTorchFrontendThor._resolve_use_fa4(None) is False
+    assert ImageWAMTorchFrontendThor._resolve_use_fa4(True) is True
 
 
 def test_path_arguments_are_passed_through():

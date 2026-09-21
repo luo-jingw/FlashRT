@@ -45,6 +45,13 @@ FULL="N_TASKS=10 FRAMES=0,60 SEEDS=0,1"
 mkdir -p "$OUT"
 cd "$(dirname "$0")/.."
 
+# The gate's own defaults are now the served configuration (fixture v2,
+# trimming on), so every gate row below names the untrimmed reference it was
+# recorded with: v1's manifest plus --no-text-trim. To gate the served default
+# instead, copy the imagewam_libero_gate_v2 fixture into the bundle and run the
+# same line without --manifest and --no-text-trim.
+MANIFEST_V1=tests/fixtures/imagewam_gate/imagewam_libero_gate_v1.manifest.json
+
 run() {  # run <log-name> <command...>
   local name=$1; shift
   echo "[$(date +%T)] $name: $*"
@@ -76,8 +83,8 @@ if want 2; then
   run 02_fusion_ab_both AB=merge_linear2,fuse_res_norm PRECISIONS=$PREC,fp16 COUNT_KERNELS=1 python benchmarks/imagewam_fusion_ab.py
   run 02_fusion_ab_linear2 AB=merge_linear2 PRECISIONS=$PREC COUNT_KERNELS=1 python benchmarks/imagewam_fusion_ab.py
   run 02_fusion_ab_resnorm AB=fuse_res_norm PRECISIONS=$PREC COUNT_KERNELS=1 python benchmarks/imagewam_fusion_ab.py
-  run 02_gate_$PREC python tests/gate_imagewam_libero.py --precision $PREC --fixture-dir "$FIX" --output-dir "$OUT/gate_$PREC"
-  run 02_gate_fp16 python tests/gate_imagewam_libero.py --precision fp16 --fixture-dir "$FIX" --output-dir "$OUT/gate_fp16"
+  run 02_gate_$PREC python tests/gate_imagewam_libero.py --precision $PREC --no-text-trim --manifest "$MANIFEST_V1" --fixture-dir "$FIX" --output-dir "$OUT/gate_$PREC"
+  run 02_gate_fp16 python tests/gate_imagewam_libero.py --precision fp16 --no-text-trim --manifest "$MANIFEST_V1" --fixture-dir "$FIX" --output-dir "$OUT/gate_fp16"
   run 02_vae_preprocess python benchmarks/imagewam_vae_stage_bench.py --section preprocess --iters 200
 fi
 
@@ -108,7 +115,7 @@ if want 4; then
   run 04_fid_fp8_static_cutlass REF_CACHE=$REF PRECISION=fp8_static_cutlass CALIBRATION="$CAL" python benchmarks/imagewam_precision_fidelity.py
   run 04_fid_fp8_static_cutlass_placeholder REF_CACHE=$REF PRECISION=fp8_static_cutlass python benchmarks/imagewam_precision_fidelity.py
   run 04_fp8_layout ITERS=50 ROUNDS=20 python benchmarks/imagewam_fp8_layout_bench.py
-  run 04_gate_fp8_static python tests/gate_imagewam_libero.py --precision fp8_static --fixture-dir "$FIX" --fp8-calibration "$CAL" --iters 100 --output-dir "$OUT/gate_fp8_static"
+  run 04_gate_fp8_static python tests/gate_imagewam_libero.py --precision fp8_static --no-text-trim --manifest "$MANIFEST_V1" --fixture-dir "$FIX" --fp8-calibration "$CAL" --iters 100 --output-dir "$OUT/gate_fp8_static"
   run 04_e2e_goal_fp8_static_trim PRECISION=fp8_static_cutlass CALIBRATION="$CAL_TRIM" SUITE=libero_goal TEXT_TRIM=1 $FULL python benchmarks/imagewam_e2e_official_compare.py
 fi
 

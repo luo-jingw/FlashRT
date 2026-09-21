@@ -120,10 +120,10 @@ class ImageWAMOptions:
     """Every optimisation switch of the frontend, resolved.
 
     `use_fa4`: `None` means "resolve at construction", exactly what
-    `ImageWAMTorchFrontendThor._resolve_use_fa4(None)` does today (False
-    unless `FLASHRT_THOR_FA4=1`, then FA4 when the hardware/runtime allow);
-    it depends on the machine that constructs the frontend, so it is not
-    decided here. `True` / `False` are explicit.
+    `ImageWAMTorchFrontendThor._resolve_use_fa4(None)` does today (FA4 when
+    the machine that constructs the frontend can run it, the cuBLAS chain
+    otherwise; `FLASHRT_THOR_FA4=0` forces the chain); it depends on that
+    machine, so it is not decided here. `True` / `False` are explicit.
 
     `vae_graph_input`: `(num_views, in_h, in_w)` when the VAE runs inside
     the CUDA graph (derived from the workload), else `None`.
@@ -181,7 +181,8 @@ PROFILES: dict[str, ProfileSpec] = {
         name="default",
         description=(
             "The served configuration: nvfp4, text_trim (one graph per prompt length), FA4 "
-            "backbone as the frontend resolves it (opt-in through FLASHRT_THOR_FA4), no FA4 "
+            "backbone as the frontend resolves it (on where the machine can run it, the cuBLAS "
+            "chain elsewhere; FLASHRT_THOR_FA4=0 forces the chain), no FA4 "
             "mot, torch VAE encoder outside the graph, no AWQ. The frontend constructor's own "
             "defaults differ in one switch: they leave text_trim off, which is the set "
             "profile=\"native\" carries."),
@@ -192,9 +193,11 @@ PROFILES: dict[str, ProfileSpec] = {
         description=(
             "PROVISIONAL. text_trim + FA4 backbone + FA4 mot + native VAE encoder inside the "
             "CUDA graph (vae_graph_input from the workload). Measured on Thor at 106.1 ms vs "
-            "203.3 ms for the untrimmed configuration (THOR_STATUS_SUMMARY.md, nvfp4). FA4 "
-            "(both sites) and the in-graph native VAE encoder stay the opt-in tier on top of a "
-            "`default` that already trims. The owner has not approved them as part of the "
+            "203.3 ms for the untrimmed configuration (THOR_STATUS_SUMMARY.md, nvfp4). The FA4 "
+            "mot site and the in-graph native VAE encoder stay the opt-in tier on top of a "
+            "`default` that already trims and already runs FA4 at the backbone site where the "
+            "machine can; this profile states both FA4 sites explicitly True. The owner has not "
+            "approved FA4 mot or the in-graph native VAE as part of the "
             "served default (plan.md 'Decisions pending', T4/T5): they stay opt-in by name. "
             "text_trim is refused with the native consumer (rule R5); the abi and infer "
             "consumers serve it. It needs ae_model_path (rule R3); use_fa4=True "

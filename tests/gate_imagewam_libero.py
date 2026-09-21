@@ -33,14 +33,23 @@ fixture format: ``flash_rt/datasets/imagewam_gate_fixture.py``; fixture
 generation: ``benchmarks/imagewam_gate_fixture_generate.py``.
 
 The fixture's ``text_trim`` must match the configuration under test
-(``--text-trim``, absent = untrimmed): the ``fp16`` reference was recorded
-with that switch, and comparing a run against a reference recorded the
-other way measures the switch, not the precision (issues.md ISSUE-080).
-A mismatch is ``blocked``, naming the fixture, the fixture's value and the
-one under test, before the checkpoint is hashed. Fixture v1
-(``imagewam_libero_gate_v1``) is untrimmed and runs untrimmed exactly as
-before; a trimmed configuration needs fixture v2 and its manifest
-(``--manifest`` defaults to v1's).
+(``--text-trim`` / ``--no-text-trim``, default on): the ``fp16`` reference
+was recorded with that switch, and comparing a run against a reference
+recorded the other way measures the switch, not the precision (issues.md
+ISSUE-080). A mismatch is ``blocked``, naming the fixture, the fixture's
+value and the one under test, before the checkpoint is hashed.
+
+The gate's own defaults are the served configuration: fixture v2
+(``imagewam_libero_gate_v2``, the trimmed fp16 reference) and trimming on, so
+a bare run gates what is served. The untrimmed reference stays reachable and
+unchanged: fixture v1 (``imagewam_libero_gate_v1``) with ``--no-text-trim``
+and v1's manifest (``--manifest`` defaults to v2's, and stays overridable).
+
+The frontend resolves FA4 itself (``use_fa4=None`` in the served profile):
+FA4 where the machine can run it, the cuBLAS chain elsewhere, with the
+resolved value recorded in ``context["config"]["use_fa4"]``. The committed
+latency baseline was measured with FA4 off; the served default's own numbers
+need a Thor re-measure.
 
 ``fp8_static`` (thresholds marked ``requires_calibration``) is gated only
 with a real activation-calibration file, given by ``--fp8-calibration``
@@ -72,18 +81,18 @@ a manifest without a checkpoint hash requires that flag. A mismatch, or
 a ``dataset_stats.json`` that differs from the fixture's, is ``blocked``.
 
 Required env: ``CKPT_PATH`` (``dataset_stats.json`` beside it),
-``FLUX2_AE_MODEL_PATH`` (or ``AE_MODEL_PATH``), ``FLUX2_SRC``. Example::
+``FLUX2_AE_MODEL_PATH`` (or ``AE_MODEL_PATH``), ``FLUX2_SRC``. The served
+default, fixture v2 and trimming on, with no flags::
 
     python tests/gate_imagewam_libero.py --precision nvfp4 \\
-        --fixture-dir /path/to/imagewam_libero_gate_v1
-
-and, for a trimmed configuration, the same run against a fixture recorded
-trimmed (``--text-trim`` plus that fixture's manifest, since ``--manifest``
-defaults to v1's)::
-
-    python tests/gate_imagewam_libero.py --precision nvfp4 --text-trim \\
-        --manifest tests/fixtures/imagewam_gate/imagewam_libero_gate_v2.manifest.json \\
         --fixture-dir /path/to/imagewam_libero_gate_v2
+
+and the untrimmed reference, the same run against fixture v1 with
+``--no-text-trim`` and v1's manifest::
+
+    python tests/gate_imagewam_libero.py --precision nvfp4 --no-text-trim \\
+        --manifest tests/fixtures/imagewam_gate/imagewam_libero_gate_v1.manifest.json \\
+        --fixture-dir /path/to/imagewam_libero_gate_v1
 """
 from __future__ import annotations
 
@@ -132,7 +141,9 @@ from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state  # no
 from flash_rt.models.imagewam.dataset_stats import MinMaxNormalizer, load_real_normalizers  # noqa: E402
 
 CONFIG_DIR = REPO / "tests" / "fixtures" / "imagewam_gate"
-DEFAULT_MANIFEST = CONFIG_DIR / "imagewam_libero_gate_v1.manifest.json"
+# The served configuration's fixture: trimmed (v2). The untrimmed reference is
+# imagewam_libero_gate_v1, reached with --no-text-trim and --manifest.
+DEFAULT_MANIFEST = CONFIG_DIR / "imagewam_libero_gate_v2.manifest.json"
 FIXTURE_DIR_ENV = "IMAGEWAM_GATE_FIXTURE_DIR"
 FP8_CALIBRATION_ENV = "IMAGEWAM_FP8_CALIBRATION"
 # The constructor keyword a real fp8_static calibration file is handed to.
@@ -318,15 +329,20 @@ def emit(report: GateReport, output_dir: Path) -> int:
     return report.exit_code
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The command line, whose defaults are the served configuration."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--precision", required=True)
     parser.add_argument("--fixture-dir", type=Path, default=os.environ.get(FIXTURE_DIR_ENV),
                         help=f"directory holding {FIXTURE_FILE} (default ${FIXTURE_DIR_ENV})")
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument("--text-trim", action="store_true",
-                        help="run the configuration under test with text_trim=True; must equal the "
-                             "fixture's own text_trim (absent: untrimmed)")
+    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST,
+                        help="fixture manifest; defaults to the served fixture "
+                             "(imagewam_libero_gate_v2, trimmed), while the untrimmed reference is "
+                             "imagewam_libero_gate_v1")
+    parser.add_argument("--text-trim", action=argparse.BooleanOptionalAction, default=True,
+                        help="run the configuration under test with text_trim=True, the served "
+                             "default; --no-text-trim runs the untrimmed reference. Either way it "
+                             "must equal the fixture's own text_trim")
     parser.add_argument("--thresholds", type=Path, default=CONFIG_DIR / "fidelity_thresholds.json")
     parser.add_argument("--baselines", type=Path, default=CONFIG_DIR / "latency_baselines.json")
     parser.add_argument("--fp8-calibration", type=Path, default=os.environ.get(FP8_CALIBRATION_ENV))
@@ -337,6 +353,11 @@ def main() -> int:
                         help="an ungated latency (no policy or no baseline) makes the verdict blocked")
     parser.add_argument("--skip-checkpoint-hash", action="store_true",
                         help="verify the checkpoint by byte size only, not by the manifest's SHA-256")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
     if args.fixture_dir is None:
         parser.error(f"--fixture-dir is required (or set ${FIXTURE_DIR_ENV})")
@@ -368,7 +389,10 @@ def main() -> int:
                     "text_trim": manifest.text_trim},
         "checkpoint": {"path": ckpt, "bytes": os.path.getsize(ckpt)},
         "latency_policy": {"device": policy.device, "gated": policy.gated, "reason": policy.reason},
-        "config": {"warmup": args.warmup, "iters": args.iters, "use_fa4": False,
+        # FA4 is not set from here: the frontend resolves it (the served
+        # default). `None` is "not resolved yet"; the value the frontend
+        # resolved replaces it after construction.
+        "config": {"warmup": args.warmup, "iters": args.iters, "use_fa4": None,
                    "text_trim": args.text_trim, "require_latency": args.require_latency},
     }
 
@@ -417,6 +441,7 @@ def main() -> int:
                                        f"frontend construction failed: {type(exc).__name__}: {exc}",
                                        context), output_dir)
     context["construct_s"] = round(time.time() - start, 1)
+    context["config"]["use_fa4"] = fe.use_fa4   # what the frontend resolved on this machine
     fp4 = sys.modules.get("flash_rt.flash_rt_fp4")
     if fp4 is not None:
         context["flash_rt_fp4_sha256"] = file_sha256(Path(fp4.__file__))

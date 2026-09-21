@@ -57,6 +57,7 @@ BENCHMARKS = Path(__file__).resolve().parents[1] / "benchmarks"
 GENERATOR = BENCHMARKS / "imagewam_gate_fixture_generate.py"
 COMPARE = BENCHMARKS / "imagewam_e2e_official_compare.py"
 V1_MANIFEST = CONFIG_DIR / "imagewam_libero_gate_v1.manifest.json"
+V2_MANIFEST = CONFIG_DIR / "imagewam_libero_gate_v2.manifest.json"
 
 
 def gate_runner() -> types.ModuleType:
@@ -307,6 +308,28 @@ def test_absent_text_trim_in_a_manifest_means_untrimmed():
 def test_gate_accepts_the_committed_v1_manifest_untrimmed():
     manifest = FixtureManifest.read(V1_MANIFEST)
     assert gate_runner().text_trim_mismatch(manifest, False) is None
+
+
+def test_gate_parser_defaults_are_the_served_configuration():
+    """A bare gate run gates what is served: the trimmed fixture v2 and
+    trimming on, so its defaults are self-consistent (fixture and switch
+    agree). ``--no-text-trim`` selects the untrimmed reference, and
+    ``--manifest`` stays overridable for it."""
+    runner = gate_runner()
+    parser = runner.build_parser()
+    required = ["--precision", "nvfp4", "--fixture-dir", "/fixture"]
+    served = parser.parse_args(required)
+    assert served.text_trim is True
+    assert served.manifest == V2_MANIFEST == runner.DEFAULT_MANIFEST
+    assert parser.parse_args(required + ["--text-trim"]).text_trim is True
+    manifest = FixtureManifest.read(served.manifest)
+    assert manifest.name == "imagewam_libero_gate_v2" and manifest.text_trim is True
+    assert runner.text_trim_mismatch(manifest, served.text_trim) is None
+    reference = parser.parse_args(required + ["--no-text-trim"])
+    assert reference.text_trim is False and reference.manifest == V2_MANIFEST
+    overridden = parser.parse_args(required + ["--no-text-trim", "--manifest", str(V1_MANIFEST)])
+    assert overridden.manifest == V1_MANIFEST and overridden.text_trim is False
+    assert runner.text_trim_mismatch(FixtureManifest.read(overridden.manifest), overridden.text_trim) is None
 
 
 def test_gate_refuses_a_text_trim_mismatch_naming_both_values():

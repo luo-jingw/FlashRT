@@ -151,13 +151,17 @@ _STATIC_FP8_PRECISIONS = tuple(p.value for p in Precision if p.needs_calibration
 # plan.md "Plan: ActionDiT small-M CUTLASS tile selection"): the only ones
 # `gemm_variant_autotune=True` applies to.
 _VARIANT_TUNED_PRECISIONS = tuple(p.value for p in Precision if p.supports_tile_autotune)
-# FA4 at the "backbone" site stays opt-in until Thor confirms it at the served
-# shapes, inside the captured graph, end to end (opportunities.md OPT-019).
-# `use_fa4=None` resolves to False unless this environment variable is "1"
-# (then FA4 is used exactly when `fa4_backend.thor_default_enabled()` holds).
-# Making FA4 the default is a one-line change: the "0" below becomes "1".
+# FA4 at the "backbone" site is the served default where the machine can run
+# it (opportunities.md OPT-019): `use_fa4=None` resolves exactly when
+# `fa4_backend.thor_default_enabled()` holds -- compute capability 11.x and an
+# importable FA4 runtime -- and stays on the cuBLAS chain everywhere else,
+# never raising for a missing runtime. `FLASHRT_THOR_FA4=0` forces the cuBLAS
+# chain; unset and "1" both leave the choice to the machine. FA4 is measured
+# at `a0=896` in the per-layer bench (OPT-005); the served default's own
+# numbers need a Thor re-measure (the previous ones were recorded with FA4
+# off).
 _FA4_OPT_IN_ENV = "FLASHRT_THOR_FA4"
-_FA4_OPT_IN_DEFAULT = "0"
+_FA4_OPT_IN_DEFAULT = "1"
 
 logger = logging.getLogger(__name__)
 
@@ -847,12 +851,14 @@ class ImageWAMTorchFrontendThor:
 
         - `True`: FA4; `ImageWAMAttnBackend` raises if the runtime is missing.
         - `False`: the cuBLAS chain.
-        - `None` (default): opt-in. False unless `FLASHRT_THOR_FA4=1`; with
-          it, FA4 exactly when `fa4_backend.thor_default_enabled()` holds
-          (compute capability 11.x and an importable FA4 runtime), so it
-          never raises for a missing runtime. FA4 has been measured on Thor
-          at `a0=896` in the per-layer bench (OPT-005), not yet at the
-          served shapes or end to end (OPT-019).
+        - `None` (the served default): the machine's answer -- FA4 exactly
+          when `fa4_backend.thor_default_enabled()` holds (compute capability
+          11.x and an importable FA4 runtime), the cuBLAS chain otherwise, so
+          it never raises for a missing runtime. `FLASHRT_THOR_FA4=0` forces
+          the cuBLAS chain; `=1` and unset both leave the choice to the
+          machine. FA4 has been measured on Thor at `a0=896` in the per-layer
+          bench (OPT-005); the served shapes and the end-to-end path are what
+          the Thor re-measure has to confirm (OPT-019).
         """
         if use_fa4 is not None:
             return bool(use_fa4)
@@ -872,7 +878,8 @@ class ImageWAMTorchFrontendThor:
             # (benchmarks/imagewam_real_checkpoint_validation.py).
             use_perhead_kv=True, use_real_mot_mask=True,
             # OPT-005 / OPT-019: FA4 for the "backbone" site, resolved by
-            # `_resolve_use_fa4` (opt-in; see `_FA4_OPT_IN_ENV`).
+            # `_resolve_use_fa4` (the machine's answer; `FLASHRT_THOR_FA4=0`
+            # forces the cuBLAS chain).
             use_fa4=self.use_fa4,
             # OPT-019: FA4 for the "mot" site. Opt-in until Thor confirms it.
             use_fa4_mot=self.use_fa4_mot,

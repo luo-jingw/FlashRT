@@ -194,10 +194,11 @@ def _frontend(**kw):
 
 
 @pytest.mark.parametrize("env,runtime,arg,expected", [
-    (None, True, None, False),    # default: opt-in, off even where FA4 would work
-    ("0", True, None, False),
-    ("1", True, None, True),      # FLASHRT_THOR_FA4=1 opts in where FA4 works
-    ("1", False, None, False),    # ... and never raises where it does not
+    (None, True, None, True),     # default: FA4 where this machine can run it
+    (None, False, None, False),   # ... and the cuBLAS chain where it cannot
+    ("0", True, None, False),     # FLASHRT_THOR_FA4=0 forces the cuBLAS chain
+    ("1", True, None, True),      # "1" is the machine's answer too, not an opt-in
+    ("1", False, None, False),    # ... and never raises where FA4 does not work
     (None, True, True, True),     # explicit argument wins over the environment
     ("1", True, False, False),
 ])
@@ -212,15 +213,23 @@ def test_frontend_fa4_resolution(monkeypatch, fa4_calls, env, runtime, arg, expe
     assert ImageWAMTorchFrontendThor._resolve_use_fa4(arg) is expected
 
 
-def test_frontend_default_is_the_cublas_chain(monkeypatch, fa4_calls):
+def test_frontend_default_follows_the_machine(monkeypatch, fa4_calls):
+    """`use_fa4=None` with the environment untouched takes
+    `fa4_backend.thor_default_enabled()`: FA4 at the backbone site where this
+    machine can run it, the cuBLAS chain where it cannot; `FLASHRT_THOR_FA4=0`
+    forces the chain. The "mot" site is a separate switch and stays off."""
     monkeypatch.delenv("FLASHRT_THOR_FA4", raising=False)
     monkeypatch.setattr(fa4_backend, "thor_default_enabled", lambda: True)
     fe = _frontend()
-    assert fe.use_fa4 is False and fe._attn._use_fa4 is False
-    assert fe.use_fa4_mot is False and fe._attn._use_fa4_mot is False
-    monkeypatch.setenv("FLASHRT_THOR_FA4", "1")
-    fe = _frontend()
     assert fe.use_fa4 is True and fe._attn._use_fa4 is True
+    assert fe.use_fa4_mot is False and fe._attn._use_fa4_mot is False
+    monkeypatch.setattr(fa4_backend, "thor_default_enabled", lambda: False)
+    fe = _frontend()
+    assert fe.use_fa4 is False and fe._attn._use_fa4 is False
+    monkeypatch.setattr(fa4_backend, "thor_default_enabled", lambda: True)
+    monkeypatch.setenv("FLASHRT_THOR_FA4", "0")
+    fe = _frontend()
+    assert fe.use_fa4 is False and fe._attn._use_fa4 is False
 
 
 @pytest.mark.parametrize("dims", [dict(), dict(num_action=16, total=24)])

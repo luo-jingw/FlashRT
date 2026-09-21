@@ -173,7 +173,11 @@ def test_use_fa4_none_is_the_frontends_env_resolution():
     tree = ast.parse(FRONTEND_SRC.read_text())
     consts = {t.id: ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
               for t in n.targets if isinstance(t, ast.Name) and t.id in ("_FA4_OPT_IN_ENV", "_FA4_OPT_IN_DEFAULT")}
-    assert consts == {"_FA4_OPT_IN_ENV": "FLASHRT_THOR_FA4", "_FA4_OPT_IN_DEFAULT": "0"}
+    # The served default: the environment variable unset means the machine's own
+    # answer (`fa4_backend.thor_default_enabled()`); only an explicit "0" forces
+    # the cuBLAS chain. This file reads the source; the behavioural pin is
+    # tests/test_imagewam_frontend_from_config.py::test_use_fa4_none_resolves_on_the_machine.
+    assert consts == {"_FA4_OPT_IN_ENV": "FLASHRT_THOR_FA4", "_FA4_OPT_IN_DEFAULT": "1"}
     assert "def _resolve_use_fa4" in FRONTEND_SRC.read_text()
 
 
