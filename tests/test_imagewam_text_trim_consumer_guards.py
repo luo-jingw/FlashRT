@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import ctypes
 import dataclasses
+import inspect
 import json
 
 import numpy as np
@@ -49,6 +50,8 @@ from flash_rt.models.imagewam.native_resources import build_io_config
 from flash_rt.models.imagewam.native_runtime import ImageWAMNativeError, ImageWAMNativeRuntime
 from flash_rt.models.imagewam.pipeline_resources import (
     ImageWAMPipelineResources,
+    ImageWAMPipelineSource,
+    ImageWAMTextLengthPipelineSource,
     PipelineBuffers,
 )
 from flash_rt.models.imagewam.quant_linear import Bf16OutLinear, Fp16Linear
@@ -454,6 +457,57 @@ class _CpuPipelineFrontend:
     def gemm_algo(self, kind: int, m: int, n: int, k: int) -> bytes:
         # One planned algorithm per shape: what the hand-off installs.
         return bytes([kind, m, n, k]) + bytes(60)
+
+
+# -- the interface: the protocols, the frontend and the stand-in ----------
+
+def _declared_member_kinds(protocol: type) -> dict[str, str]:
+    """`{name: "property" | "method"}` for every member a pipeline-source
+    protocol declares. Read off the class, so no instance is built (and no
+    CUDA device is needed)."""
+    kinds: dict[str, str] = {}
+    for name, raw in vars(protocol).items():
+        if name.startswith("__"):
+            continue
+        if isinstance(raw, property):
+            kinds[name] = "property"
+        elif inspect.isfunction(raw):
+            kinds[name] = "method"
+    return kinds
+
+
+def _member_kind(cls: type, name: str) -> str:
+    raw = inspect.getattr_static(cls, name, None)
+    if isinstance(raw, property):
+        return "property"
+    if inspect.isfunction(raw):
+        return "method"
+    return "missing" if raw is None else type(raw).__name__
+
+
+def test_the_pipeline_source_protocol_frontend_and_stand_in_agree_on_member_kinds():
+    """A member read with the wrong kind fails at the read, and the failure is
+    a `TypeError` in the consumer rather than a difference in a number: the
+    native per-length capture read `source.captured_text_lengths()` while the
+    frontend and the protocol make it a property, so the path raised before
+    installing anything (ISSUE-080 condition 5). The stand-in in this file had
+    drifted to a method in the same way, which is what kept the CPU checks
+    here from catching it, so both the frontend and the stand-in are compared
+    against the protocol's own declaration."""
+    for protocol in (ImageWAMPipelineSource, ImageWAMTextLengthPipelineSource):
+        declared = _declared_member_kinds(protocol)
+        assert declared, f"{protocol.__name__} declares no member to compare"
+        for name, expected in declared.items():
+            frontend, stand_in = (_member_kind(ImageWAMTorchFrontendThor, name),
+                                  _member_kind(_CpuPipelineFrontend, name))
+            print(f"{protocol.__name__}.{name}: declared={expected} frontend={frontend} "
+                  f"stand_in={stand_in}")
+            assert frontend == expected, \
+                f"{protocol.__name__}.{name} is a {expected}, but " \
+                f"ImageWAMTorchFrontendThor has a {frontend}"
+            assert stand_in == expected, \
+                f"{protocol.__name__}.{name} is a {expected}, but the stand-in in this " \
+                f"file has a {stand_in}"
 
 
 def test_pipeline_resources_describes_the_active_text_length():
