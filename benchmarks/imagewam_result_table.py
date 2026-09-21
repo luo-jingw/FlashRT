@@ -248,8 +248,8 @@ def render(doc: dict) -> str:
                 speed = "1.00x"
             elif row["scope"] == "gemm_only":
                 speed = "—"
-                note = ("† GEMM-only upper bound: random packed operands, no activation "
-                        "quantization; not comparable to a full call. " + note).strip()
+                note = ("† synthetic upper bound: GEMMs on random packed operands, no activation "
+                        "quantization, a stand-in VAE; not comparable to a full call. " + note).strip()
             elif official["status"] != "measured":
                 speed = "—"
             elif _row_session(t, row) != _row_session(t, official) or _row_session(t, row) is None:

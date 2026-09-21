@@ -1979,8 +1979,7 @@ Phase Status: completed (code); its Thor run is THOR_CHECKLIST.md L1
   gained `--calibration` so the fp8 row can run through it.
 
 ### Phase R4: int8 and int4 at a workload
-Phase Status: pending for RoboTwin; the LIBERO row needs nothing (the benches
-are written for the LIBERO dims and run unchanged, THOR_CHECKLIST.md L4)
+Phase Status: completed (code); its Thor run is THOR_CHECKLIST.md L4
 - Goal: the two benches take `--workload` and the step count, and emit the
   same latency record; their rows stay `gemm_only`.
 - Open decision: whether a real full-pipeline INT8 tier (activation
@@ -1988,7 +1987,16 @@ are written for the LIBERO dims and run unchanged, THOR_CHECKLIST.md L4)
   is worth building so the int8 row can be `full_infer`. int4 cannot be
   (no hardware path, OPT-007), so its row is `gemm_only` either way.
 - Modified files: `benchmarks/imagewam_thor_int8_bench.py`,
-  `imagewam_thor_int4_bench.py`, `imagewam_thor_graph_bench.py`.
+  `imagewam_thor_int4_bench.py`, `benchmarks/_imagewam_int_workload.py` (new).
+  The benches took the LIBERO dims as module constants, and at the untrimmed
+  `x0 = 513`: run as they were, the int rows would have timed a sequence 20
+  times longer than the FlashRT rows'. They now take the workload flags, the
+  valid-token count (`x0 = valid + 1`, the same trimmed sequence) and the
+  step count, rebind the sequence constants before building the model, and
+  print a `__INT_BENCH__` JSON line with the prefill, the step and the
+  composed p50 the schema's `gemm_only` row records. The backbone widths stay
+  as the scripts state them. Not run here (no kernels); `configure` is checked
+  on CPU for LIBERO and the target workload.
 
 ### Phase R5: the session driver and importer
 Phase Status: decided against

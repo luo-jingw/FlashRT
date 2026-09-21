@@ -525,7 +525,29 @@ class FullImageWAMInt8:
 
 
 def main():
+    import argparse
+    import json
+    import sys
+
+    import _imagewam_int_workload
+    from _imagewam_workload_cli import VALID_TOKENS, add_workload_args, workload_from_args
+
+    ap = argparse.ArgumentParser(description="ImageWAM full-scale GEMM benchmark at a workload (random packed operands, no activation quantization)")
+    add_workload_args(ap)
+    ap.add_argument("--valid-tokens", type=int, default=None,
+                    help="valid text tokens (the sequence is this + 1 rows with the trim; default: the "
+                         "named workload's representative count, _imagewam_workload_cli.VALID_TOKENS)")
+    ap.add_argument("--no-trim", action="store_true", help="time the padded text_max_len + 1 rows instead")
+    args = ap.parse_args()
+    workload = workload_from_args(args)
+    valid = args.valid_tokens if args.valid_tokens is not None else VALID_TOKENS[args.workload]
+    shape = _imagewam_int_workload.configure(sys.modules[__name__], workload, valid_tokens=valid,
+                                             trim=not args.no_trim)
+    steps = workload.num_steps
+
     report_jetson_clock_state()
+    print(f"Workload: {workload}")
+    print(f"Sequence: valid_tokens={valid} trim={not args.no_trim} " + " ".join(f"{k}={v}" for k, v in shape.items()))
     print(f"Dims: hidden={HIDDEN} HD={HD} NH={NH} mlp_hidden={MLP_HIDDEN} "
           f"| action_hidden_dim={ACTION_HIDDEN_DIM} action_attn_width={ACTION_ATTN_WIDTH} "
           f"action_mlp_hidden={ACTION_MLP_HIDDEN} "
@@ -540,12 +562,16 @@ def main():
     p50, p90, mean = _time_ms(lambda: model.run_prefill())
     print(f"prefill (VAE+txt_in+25L backbone): P50={p50:9.3f}  P90={p90:9.3f}  mean={mean:9.3f}")
 
-    dt = 1.0 / 10
+    dt = 1.0 / steps
     p50s, p90s, means = _time_ms(lambda: model.run_denoise_step(dt))
     print(f"one denoise step (25L ActionDiT):  P50={p50s:9.3f}  P90={p90s:9.3f}  mean={means:9.3f}")
 
-    for n in (1, 10):
+    for n in sorted({1, steps}):
         print(f"prefill + {n}-step denoise loop: {p50 + n * p50s:.2f} ms")
+    # The result tables' `gemm_only` row: p50 = prefill + num_steps x step.
+    print("__INT_BENCH__ " + json.dumps({"kind": "int8", "prefill_p50_ms": round(p50, 3),
+                                        "denoise_step_p50_ms": round(p50s, 3), "num_steps": steps,
+                                        "p50_ms": round(p50 + steps * p50s, 3), **shape}))
 
 
 if __name__ == "__main__":

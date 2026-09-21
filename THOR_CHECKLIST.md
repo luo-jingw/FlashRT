@@ -2,6 +2,31 @@
 
 `0921_final` 那一轮的结果已记入 `THOR_STATUS_SUMMARY.md`：官方 torch 456.97 ms（L1），`fp16` 在服务默认下 274.70 ms、与未裁剪几乎相同（L2 的先决判据没过，L2 余下与 L3–L5 停了，现记为 ISSUE-088），ISSUE-087 的探针跑完（Thor 上 `synchronize()` 打断捕获会留下 generator 标志，一次成功小捕获可复位）。本节次待测：**D 组（先做）**：查 fp16 为什么不随裁剪变快，并用哨兵找出污染 generator 的测试；**L 组**：最终结果表 LIBERO 一张，D 组做完后**整组重跑**（表里只有同一 session 的行才算相对官方的倍数，上一轮停在 L2，不能接着用）。RoboTwin 那张要等它的 workload 声明，不在本清单。
 
+## 指挥令（给 Thor 上执行清单的 agent）
+
+目标：一次到位拿到 LIBERO 那张最终表的全部数字，并把 RoboTwin 所需的配置信息从 Thor 上查出来。不要在中间停下来等确认。
+
+1. **顺序（不要并行，GPU 上同时只跑一件事）**：`git pull` → 前置 → D1 → D2 → D3 → L 组整组（L1…L6，一个 session）→ 下面的 R 组（RoboTwin 信息盘点，只读文件，不占 GPU）。
+2. **遇到异常不停**：某一行失败或数字反常（包括 fp16 不随裁剪变快，那是已知的 ISSUE-088），把命令、退出码、报错原文写进报告，然后继续下一行。只有环境坏了（`git pull` 失败、checkpoint 不见了、GPU 被别的进程占用、构建缺失）才停，并说明缺什么。
+3. **不要提交、不要推送**；不要为了让某一行通过而改代码或改判据。发现清单里的命令有错，照原样跑一遍、把报错带回，然后另外给出你认为正确的命令并标明它是你改的。
+4. **同一 session 的口径**：L 组整组之间不要跑别的 GPU 任务；D 组的 profiler 不要与 L 组交叠。
+5. **一次性汇报**：全部跑完后发一份报告，含：`P0_*` 前置记录；D1/D2 的表与判据结论（一句话）；D3 被点名的测试 id 与复位后的 failed/passed/errors；L1–L6 要求的全部数；R 组的发现。原始日志留在 `$OUT`。
+
+### R 组：RoboTwin 信息盘点（只读，不占 GPU；在 L 组之后做）
+
+要回答的是：RoboTwin 版 ImageWAM 的标准配置是什么、材料在 Thor 上的哪里。什么都别猜，找不到就明说找不到。
+```
+find / -iname '*robotwin*' -not -path '*/proc/*' 2>/dev/null | head -60
+ls -la $HOME/thor_bundle $HOME/checkpoints 2>/dev/null
+grep -ril robotwin "$(dirname "$FLUX2_SRC")" 2>/dev/null | head -30
+```
+报告：
+- 有没有 RoboTwin 的 ImageWAM checkpoint（`model.pt`、`config.yaml`、`dataset_stats.json`），路径与 `sha256sum <model.pt> | cut -c1-16`。没有就写"没有"。
+- 该 `config.yaml` 里这些段的原文：`model`（`variant`、`action_dit_config`、`proprio_dim`、schedulers）、`data`（相机键、图像尺寸、`context_len`、`qwen_context_len`、动作 horizon、动作维度）、以及任何写着推理步数或 shift 的字段（`eval_num_inference_steps`、`infer_shift` 等）。
+- 数据：RoboTwin 数据集的位置、`meta/info.json` 里的 `features`（图像键与形状、`observation.state` 维度、`action` 维度）、fps；每个 episode 的指令文本几条示例（用来估计有效 token 数的范围）。
+- 官方 RoboTwin 评测脚本怎么拼相机（几路、是否沿宽度拼接、送进 VAE 前的尺寸），文件路径与相关几行原文。
+- 官方 RoboTwin 推理用多少去噪步（我们的标准是 30，确认是否一致）。
+
 ## 用法
 
 1. `git pull` 后按顺序做。每项的命令、判据、结论去向都写在项内。
@@ -115,12 +140,12 @@ CALIBRATION=$CAL_TRIM SUITE=libero_spatial PRECS="fp8_static_cutlass" PROFILES="
 ```
 要的数：`matrix_libero_spatial_*_L3*.md` 里每行的 vs official min / median、MAE vs GT median、样本数（`N_TASKS x FRAMES x SEEDS`）。判据：`rc=0`，`FA4 fallback` 为 `None`。
 
-**L4 int8 / int4**（SM80 CUTLASS 的 GEMM 基准，随机 packed 操作数、无激活量化，是上界，不是全流程数字；两个各自一个进程）
+**L4 int8 / int4**（SM80 CUTLASS 的合成基准：GEMM 用随机 packed 操作数、无激活量化，VAE 是替身编码器，整层其余数学是真的；是上界，不是全流程数字；两个各自一个进程）。这两个脚本现在按 workload 和有效 token 数配置：默认 `--workload libero`、`--valid-tokens 24`（序列 `x0=25`，与 FlashRT 各行的裁剪序列相同）、10 步。
 ```
-python benchmarks/imagewam_thor_int8_bench.py 2>&1 | tee $OUT/L4_int8.log
-python benchmarks/imagewam_thor_int4_bench.py 2>&1 | tee $OUT/L4_int4.log
+python benchmarks/imagewam_thor_int8_bench.py --workload libero 2>&1 | tee $OUT/L4_int8.log
+python benchmarks/imagewam_thor_int4_bench.py --workload libero 2>&1 | tee $OUT/L4_int4.log
 ```
-要的数：每个日志里的 `prefill (VAE+txt_in+25L backbone): P50=...` 与 `one denoise step (25L ActionDiT): P50=...`（表里这一行 = prefill + 10 × 单步）。如果报缺 kernel，说明扩展没带 `ENABLE_SM80_INT8_CUTLASS` 构建，把报错带回，不要静默重编。
+要的数：每个日志末尾的 `__INT_BENCH__ {...}` 一行（`prefill_p50_ms`、`denoise_step_p50_ms`、`num_steps`、`p50_ms` = prefill + 步数 × 单步、`x0/a0/total`）。如果报缺 kernel，说明扩展没带 `ENABLE_SM80_INT8_CUTLASS` 构建，把报错带回，不要静默重编。
 
 **L5 收尾复测（夹住 session 内漂移）**：把 L1 与 fp4 的 L2 各再跑一次，日志名 `L5_official.log`、`L5_nvfp4.log`。判据：两次的 P50 与开头的差在 1–2% 内，才认为同一 session 内可比；差更大就在报告里写出来。
 
