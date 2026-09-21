@@ -401,6 +401,12 @@ def test_pipeline_records_one_graph_per_text_length():
     manifest, and the poisoned `io="native"` tick at EITHER length — the
     shorter one first — is `array_equal` to `infer()` at that same length.
 
+    Every installed length hands off an algorithm for every GEMM shape its
+    pipeline launches (`gemm_installed_by_key`), one entry per length: the
+    per-length form of what the untrimmed row above asserts for its single
+    install, and what makes "both sides run the same kernel" hold at every
+    length and not only at the one installed last.
+
     The ticks run at the shorter length first, which is not the export-time
     default key, so a tick replaying the default key would fail here. Every
     graph is the handle's own, so `graph_producer` is `native`.
@@ -430,6 +436,21 @@ def test_pipeline_records_one_graph_per_text_length():
         print(f"native pipelines: {native.gemm_algos_installed} algorithms handed off for the active "
               f"x0={native.text_length} ({len(native.gemm_shapes)} GEMM shapes: "
               f"{native.gemm_shapes[:3]}...), graph {native.graph_nodes} nodes")
+        # The hand-off of EVERY installed length, not just the last one: one
+        # entry per key, `(algorithms handed off, shapes the source offered)`.
+        # Equal numbers of a positive count mean the source planned an
+        # algorithm for every shape of that length's pipeline, so the C++
+        # ran the same kernel that length's frontend autotuned; a shape the
+        # source never planned (`gemm_algo` is None) leaves the C++ on its
+        # own algorithm and would show up as a smaller first number.
+        handed_off = native.gemm_installed_by_key
+        print(f"GEMM hand-off per installed length (x0 -> (handed off, offered)): {handed_off}")
+        assert sorted(handed_off) == list(keys), \
+            f"one hand-off record per installed length: {sorted(handed_off)} vs {list(keys)}"
+        for key in keys:
+            installed, offered = handed_off[key]
+            assert installed == offered > 0, \
+                f"x0={key}: {installed} of {offered} GEMM shapes handed off"
         assert all(native.has_variant(key) for key in keys)
         assert native.graph_producer == "native"
         assert native.text_length == fe.active_dims["x0"] == keys[-1]

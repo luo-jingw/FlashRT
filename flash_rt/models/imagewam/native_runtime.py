@@ -57,7 +57,12 @@ class ImageWAMNativeRuntime:
         # Who recorded the graph the handle holds for a text length: "python"
         # after use_graph, "native" after capture.
         self._graph_producers: dict[int, str] = {}
-        self.gemm_algos_installed = 0
+        # The GEMM hand-off of the pipeline installed last (0 and [] while
+        # none is installed), and one entry per text length a pipeline has
+        # been installed for: (algorithms handed off, shapes offered).
+        self.gemm_algos_installed: int = 0
+        self.gemm_shapes: list[tuple[int, int, int, int]] = []
+        self._gemm_installed_by_key: dict[int, tuple[int, int]] = {}
 
     @classmethod
     def create(cls, surface: ImageWAMRuntimeSurface,
@@ -122,6 +127,14 @@ class ImageWAMNativeRuntime:
         handle's active length."""
         return self._graph_producers.get(self.text_length, "")
 
+    @property
+    def gemm_installed_by_key(self) -> dict[int, tuple[int, int]]:
+        """A copy of the GEMM hand-off of every text length `set_pipeline`
+        has installed: one entry per installed key, the value being
+        `(algorithms handed off, GEMM shapes the source offered)` for that
+        length's pipeline."""
+        return dict(self._gemm_installed_by_key)
+
     def use_graph(self, key: int, graph_exec: int) -> None:
         """Replay a graph the Python frontend captured, for the text length
         `key` (the context length `x0` of the capture); the exec is
@@ -161,7 +174,9 @@ class ImageWAMNativeRuntime:
         length, so the call is one of a set: a key installed again replaces
         its own pipeline and drops the graph this handle captured for it,
         while the other keys keep their pipeline and their graph. The GEMM
-        shapes and algorithms below describe the pipeline just installed."""
+        shapes and algorithms below describe the pipeline just installed;
+        `gemm_installed_by_key` records the hand-off of this call under its
+        key, and so the hand-off of every length installed so far."""
         handoff = build_pipeline_config(source.pipeline_resources())
         key = int(handoff.config.x0)
         self._check("set_pipeline", self.library.lib.frt_imagewam_native_set_pipeline(
@@ -188,6 +203,7 @@ class ImageWAMNativeRuntime:
             installed += 1
         self.gemm_algos_installed = installed
         self.gemm_shapes = [(s.kind, s.m, s.n, s.k) for s in shapes]
+        self._gemm_installed_by_key[key] = (installed, len(shapes))
 
     def capture_pipeline_text_lengths(self, source: ImageWAMTextLengthPipelineSource) -> tuple[int, ...]:
         """Record this handle's own native graph for every text length
