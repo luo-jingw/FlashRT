@@ -6048,14 +6048,22 @@ gain.
 
 ## Open
 
-- Thor: `nvfp4` end-to-end compare off/on, `infer()` P50 A/B, capture
-  time per new length, FA4 on/off, VAE-in-graph memory, and the
-  multi-length safety check at `nvfp4`, `e0m3_hadamard` and with FA4
-  (`plan.md` "Thor validation checklist", steps 3, 5 and 6).
+- Thor: the multi-length safety check at `e0m3_hadamard`. It has run at
+  `nvfp4` with FA4 off and with FA4 on (`0920`), and `e0m3_hadamard`'s own
+  gate passes, so what is missing is that precision's trimmed
+  multi-length row.
+- The memory the in-graph native VAE adds. The memory figures recorded so
+  far are the per-length `text_trim` graphs (first graph +218.0 MiB
+  reserved / +206.3 MiB allocated, later ones about 0; `0919e`).
 - `fp8`/`fp8_static` run on H100 since the TN FP8 path (issues.md
   ISSUE-001) and are verified with trimming above;
   `fp8_static_cutlass` runs on Thor only.
-- Owner decision: serve `text_trim=True` by default (ISSUE-080).
+- Decision: `text_trim` serves by default (`plan.md`, "Decisions pending",
+  E1; ISSUE-080). With that, the Thor rows this list used to carry have
+  run: the `nvfp4` end-to-end compare and `infer()` P50 A/B, the capture
+  time per new length and the cache's eviction behaviour (`0919e`,
+  `eccf14f`), and FA4 on against off in one session (`0920t`: 126.5 ms
+  against 131.3 ms end to end).
 
 ## Thor, one matrix session (`c20f3a0`, libero_spatial, nvfp4)
 
