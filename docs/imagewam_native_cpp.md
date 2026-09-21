@@ -273,4 +273,8 @@ ctypes mirror; rebuild the library"). The parity tests and gates above run
 there with `IMAGEWAM_NATIVE_PRECISION=nvfp4` and `--precision nvfp4`
 (plan.md, "Native C++ overlay", Thor checklist) and pass, with the node
 counts unchanged (`0920s4`, `0920t`). The native pipeline's own per-length
-capture is the one row of this surface still waiting for its Thor re-run.
+capture is verified there too (`0920c`): the native pair collects 39 tests
+with no skip, `test_pipeline_records_one_graph_per_text_length` installs and
+captures one pipeline per captured length from the handle itself with a
+complete per-length GEMM hand-off, both ticks are `array_equal` to
+`infer()`, and the untrimmed one-key path is unchanged.

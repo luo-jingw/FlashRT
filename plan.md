@@ -133,7 +133,7 @@ the served configuration changed. Each row's full results are in the
 | 3 | Gated residual fused with the following AdaLN, including across layer boundaries; bit-exact over the whole pass. On. | OPT-017 |
 | 4 | Single-stream `attn_out_proj` + `mlp_down` merged into one `linear2` GEMM; the NVFP4 operands are identical to the split path, only the accumulation order changes. On, except `fp16_cutlass`. | OPT-016 |
 | 5 | VAE stage capturable in the main graph, plus a native NHWC encoder with fused GroupNorm(+SiLU): the stage takes 4.3 ms on H100 against about 12 ms for the torch encoder. Off (`vae_encoder="native"`, `vae_graph_input`). | OPT-021 |
-| 6 | FA4 backbone and `mot` attention with a dedicated output buffer and a fallback to cuBLAS on failure; not run on Thor at the served shapes. Off (`FLASHRT_THOR_FA4=1`, `use_fa4_mot=True`). | OPT-019 |
+| 6 | FA4 backbone and `mot` attention with a dedicated output buffer and a fallback to cuBLAS on failure. The backbone site is the served default where the machine can run FA4 (`use_fa4=None` resolves it; `FLASHRT_THOR_FA4=0` forces the chain); the `mot` site stays off (`use_fa4_mot=True` opts in). Thor measured it at the served shapes: the `c20f3a0` ladder's `vae_trim_fa4bb` row is 99.0 against `vae_trim`'s 102.9 ms, and the `0920t` end-to-end pair is 126.5 against 131.3 ms with FA4 forced off, with no row falling back. | OPT-019 |
 | 7 | Real `fp8_static` calibration from 64 LIBERO frames (142 sites); against fp16, actions cos is 0.99997 with the real calibration against 0.90 with the placeholder, and it resolves ISSUE-001 with a TN FP8 layout on sm_89/sm_90. Opt-in (`calibration_path=`). | OPT-022 |
 | 8 | AWQ per-channel scales folded into NVFP4 weights; in simulation the backbone cos goes from 0.99820 to 0.99956. Off (`nvfp4_awq=True`). | OPT-023 |
 | 9 | `e0m3_hadamard` precision tier; simulated 1 − actions cos is 2.97e-4 against 6.71e-4 for `nvfp4`. Off (`precision="e0m3_hadamard"`). | OPT-024 |
@@ -142,7 +142,7 @@ the served configuration changed. Each row's full results are in the
 | 12 | `frt_model_runtime_v1` export (`io="python"`); bit-exact to `infer()`, with parity gates carrying mutation tests. n/a. | OPT-028 |
 | 13 | LIBERO fidelity and latency gate: fixture v1, runner, per-device baselines; fp16 passes on H100. n/a. | OPT-027 |
 | 14 | Native C++ overlay (`io="native"`); bit-exact, runs a tick without Python, and its latency equals `io="python"`'s (4974 against 4998 graph nodes at fp16 on H100; the Thor `nvfp4` runs measure 5324 against 5348, `0920t`). n/a. | OPT-029 |
-| ISSUE-020 | `text_trim`: each prompt runs at its valid text length, which reproduces official's masked attention; against official on libero_goal (fp16) the median/min goes from 0.99680/0.92997 to 0.99998/0.99963, and H100 `infer()` is about 30% faster. Off (`text_trim=True`). | OPT-030, ISSUE-080 |
+| ISSUE-020 | `text_trim`: each prompt runs at its valid text length, which reproduces official's masked attention; against official on libero_goal (fp16) the median/min goes from 0.99680/0.92997 to 0.99998/0.99971, and H100 `infer()` is about 30% faster. Off (`text_trim=True`). | OPT-030, ISSUE-080 |
 
 Rounds that closed items: items 2-5 and 7-14 plus the ISSUE-020 fix
 merged into `roadmap/integration` on the H100 numbers above; Thor
