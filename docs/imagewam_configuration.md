@@ -50,6 +50,11 @@ precapture_text_lengths=None, **expert)`.
   bounded by `text_trim_cache_size` (expert option, default 32): the least
   recently used non-active length is dropped when the bound is reached, and a
   dropped length captures again the next time it is used.
+- A precomputed `context` is applied on every `set_prompt` call. The prompt
+  cache key covers only the live-Qwen3-text-encoder path and the random-weight
+  path, which return early when they are called again with the same
+  `prompt_text`; a caller that passes `context=` gets its context written every
+  time, so a second prompt of the same length is never silently ignored.
 - `**expert` carries the expert tier only (`config_resolver.EXPERT_KEYS`:
   `use_fa4`, `use_fa4_mot`, `text_trim`, `text_trim_cache_size`,
   `vae_encoder`, `vae_graph`, `nvfp4_awq`, `awq_alpha`, `awq_scope`,
@@ -91,6 +96,22 @@ the `resolved_config` property (both `None` on the constructor path).
 Rejected: an image side that is not a multiple of the patch stride (16), an
 `action_horizon` above `structure.max_action_horizon`, and any non-positive
 field. `resolve_config` reports these as rule R7.
+
+The same fields own the staged views and their encode geometry.
+`observation_views(observation, num_views)` reads `view1` ... `view<num_views>`
+from an observation, `stage_images` takes exactly that many views, and
+`encode_to_tokens(ae, views, ...)` encodes the N views as one image
+concatenated along the width. Each view is encoded at its own size:
+`VaeStageSpec.encode_hw` defaults to the staged views' own size, so a workload
+other than LIBERO is not forced to 224x224.
+
+`text_max_len` also fixes how the encoder pads. The live-Qwen3 path of
+`set_prompt` passes the length its own dims imply as `encode_prompts`'s
+`max_length`, `dims["x0"] - 1` when a proprio row is set (the row takes one
+context row, so a workload's `text_max_len` is `x0 - 1`) and `dims["x0"]`
+otherwise, so the padded token count is the workload's own `text_max_len`, not
+the encoder module's 512 default. `text_trim` is a separate mechanism: it drops
+the padding rows a prompt does not use.
 
 ## Structure
 
@@ -154,6 +175,11 @@ own historical defaults (untrimmed) for a caller that passes dims by hand.
 | `default` | the served configuration: `nvfp4`, **`text_trim` on**, FA4 backbone as the frontend resolves it (`FLASHRT_THOR_FA4`, on where the machine can run FA4, the cuBLAS chain elsewhere; `FLASHRT_THOR_FA4=0` forces the chain), no FA4 mot, torch VAE encoder outside the graph, no AWQ |
 | `fast` | `default` plus FA4 at the `mot` site and the native VAE encoder inside the graph (FA4 stated `True` at both sites). Opt-in: FA4 compiles on first use and can fall back, and the in-graph VAE changes the graph |
 | `native` | the native consumer's set: the served default's contents (`nvfp4`, `text_trim` on, one graph per prompt length, torch VAE outside the graph, no AWQ) with FA4 explicitly off at both sites, because the native C++ pipeline has no FA4 attention (rule R6). The native pipeline carries one resource table and one captured graph per text length, so it serves the trim like the other two consumers |
+
+A capture that fails leaves the capture pool's allocation recording open; the
+frontend abandons that state before retrying, so the cuBLAS fallback's retry is
+a first capture rather than a capture into a pool an invalidated attempt left
+recording.
 
 `resolve_config` raises `ConfigError("<rule id>: <combination>")`:
 

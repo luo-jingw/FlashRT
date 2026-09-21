@@ -47,8 +47,10 @@ omitted; the others keep this relative order.
 
 Shapes are for the LIBERO release (`img_len=392`, `HD=128`,
 `num_action=64`, `action_dim=7`, `proprio_dim=8`); they follow the
-frontend's `dims`. `(views, H, W)` is `(2, 224, 224)` with the VAE outside
-the graph and the frontend's `vae_graph_input` with the VAE inside it.
+frontend's `dims`. `(views, H, W)` is the frontend's resolved view shape
+(`_input_view_shape`): the resolved workload's `vae_graph_input()` when the
+frontend has a workload, else the in-graph VAE stage's own spec, else
+`(2, 224, 224)` for a caller that passed dims by hand.
 
 - `images`: `views` `frt_image_view`, RGB8, `W x H`, any row stride, in
   view order `view1` (agent view), `view2` (wrist view). `set_input` runs
@@ -153,4 +155,6 @@ must make its row fail.
   the `image_tokens` / `image_views` SWAP path, and the `prompt` SETUP
   path (all `array_equal`, `max_abs = 0`). All five mutants are detected
   in both placements (images, proprio on each image path, prompt, step).
-  On Thor the gate runs with `--precision nvfp4` and has not been run yet.
+  On Thor the gate runs with `--precision nvfp4`, with the VAE outside and
+  inside the graph, and every parity row is `array_equal` with its five
+  mutants detected (`0920c`).
