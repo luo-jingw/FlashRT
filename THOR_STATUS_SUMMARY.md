@@ -195,12 +195,34 @@ commit `4cd06e5`：Jetson AGX Thor、MAXN、GPC 1.575 GHz / NVD 1.692 GHz、`emc
 | `fast --precapture` | 108.08 | 110.09 | 跳过（native VAE 进图） | 裁剪，FA4 两个位点，原生 VAE 进图；文本长度已预捕获 |
 | `native` | 145.93 | 126.58 | 126.38 | 裁剪，`use_fa4=False`；不再被任何规则跳过 |
 
-native C++ 本轮重建。`FLASHRT_THOR_FA4=0 IMAGEWAM_NATIVE_PRECISION=nvfp4 pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q`：38 passed、1 failed；未裁剪的一 key 路径整文件绿（state `array_equal`、`graph_exec=0`、`graph_nodes=0`、`graph_producer=''`）。失败的是 `test_pipeline_records_one_graph_per_text_length`，两个成因已在 `43c49ce` 修复（长度表是 property、比较覆盖了当前长度以外的行），但 native pipeline 自己的按长度捕获要等这一节在 `THOR_CHECKLIST.md` 的 S4-pipeline 行重跑过才算已验证的能力。`tests/test_imagewam_text_trim_consumer_guards.py` 11 passed，其 GPU 行打印逐长度资源表（`x0=6` 维度 `(6,16,20)`、`x0=10` 维度 `(10,20,24)`，AdaLN 行与 backbone RoPE 表跟着当前长度，`buffers identical=True`）。
+native C++ 本轮重建。`FLASHRT_THOR_FA4=0 IMAGEWAM_NATIVE_PRECISION=nvfp4 pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q`：38 passed、1 failed；未裁剪的一 key 路径整文件绿（state `array_equal`、`graph_exec=0`、`graph_nodes=0`、`graph_producer=''`）。失败的是 `test_pipeline_records_one_graph_per_text_length`，两个成因已在 `43c49ce` 修复（长度表是 property、比较覆盖了当前长度以外的行）；native pipeline 自己的按长度捕获在 `0920c` 一轮重跑后已验证（下一节）。`tests/test_imagewam_text_trim_consumer_guards.py` 11 passed，其 GPU 行打印逐长度资源表（`x0=6` 维度 `(6,16,20)`、`x0=10` 维度 `(10,20,24)`，AdaLN 行与 backbone RoPE 表跟着当前长度，`buffers identical=True`）。
 
 | gate | 结果 |
 |---|---|
 | native parity（`nvfp4`） | PASS；节点数 native 5324 / Python 5348，六个 mutant 全检出，tick `array_equal` / `max_abs=0`，P50 native 205.27 对 Python 207.13 |
 | native schema parity | PASS；7 条记录与 golden 文件完全相同 |
+
+### `0920c` 轮：三项收尾（native 自录图、ABI 导出 gate、`e0m3_hadamard` 裁剪安全检查）
+
+commit `c495cb2`：Jetson AGX Thor、MAXN、GPC 1.575 GHz / NVD 1.692 GHz、`emc_locked=null`、GPU 空闲；原始日志在 `/home/jingwu/thor_val/0920c/`。本轮没有新的 C++ 或 kernel 改动，`flashrt_imagewam_native` 是上一轮编出来的那个（幂等确认，未为新代码重编）；FA4 由各测试自己显式声明，未设 `FLASHRT_THOR_FA4`。延迟是 P50（ms）。
+
+native model runtime 与 pipeline 按长度带图（OPT-029，`FLASHRT_THOR_FA4=0 IMAGEWAM_NATIVE_PRECISION=nvfp4`）：native 两条 pytest **39 passed**、guards **15 passed**，两者都没有 skip（`exec/` 与库都在位）。`test_pipeline_records_one_graph_per_text_length` 里 handle 自己装管线并录图，先 `x0=6` 再 `14`，manifest `text_lengths={'default_key': 14, 'keys': [6, 14], 'per_prompt_length': True}`，每个长度的 GEMM 交接 `{6: (4, 4), 14: (4, 4)}`——每个长度都把该长度的全部 shape 交了出去；两个长度的 tick 都是 `differing=[]`、`actions max_abs=0`。未裁剪的一 key 路径整文件不变（`graph_exec=0`、`graph_nodes=0`、`graph_producer=''`）。guards 的 GPU 行给出逐长度资源表：`x0=6` dims `(6,16,20)`、`x0=10` dims `(10,20,24)`，AdaLN 行数与 backbone RoPE 表跟着活动长度，`buffers identical=True`。
+
+| gate | 结果 |
+|---|---|
+| native parity，`--graph native` | PASS；节点数 native 5324 / Python 5348（与 `0920s4` 相同），六个 mutant 全部 `detected=True`，tick `array_equal` / `max_abs=0`，P50 native tick 204.43 对 Python 206.37 |
+| native schema parity | PASS；7 条记录与 golden 逐行相同 |
+
+ABI 面的导出 gate（OPT-028 自己记的 promotion condition，此前从未在 Thor 上跑过）：`--precision nvfp4` 的两条腿都 PASS，脚都打印 `use_fa4=False`。每一行 `array_equal=True` / `max_abs=0`（含 `images` 端口 stage 出来的 VAE token bits），确定性对照（同噪声两次 `infer()`）通过，五个 mutant 在 VAE 图外与图内两种放置下都被检出。
+
+| 腿 | VAE 放置 | `infer()` / ABI tick P50 | 进程显存峰值 |
+|---|---|---:|---:|
+| plain | `vae_graph_input=None`（图外） | 226.93 / 227.49 | 19.7 GiB |
+| `--vae-graph-input 224 224` | 图内 | 226.24 / 226.64 | 19.7 GiB |
+
+裁剪的多长度安全检查补上最后一个精度（OPT-030）：`TRIM_PRECISION=e0m3_hadamard` **4 passed**。五个长度与"新建的单长度前端"逐位一致（`equal=True cosine=1 max_abs=0`），一次失败 capture 之后同样逐位一致，graph pool 与 regular cache 下毒后 20 次 replay 全部 equal、**poison bytes overwritten = 0**。`nvfp4`（FA4 关与开）与真实 dims 的行在 `0920` 一轮已绿。
+
+三项跑完后 `THOR_CHECKLIST.md` 上不再有待测项，ISSUE-080 的六个条件全部满足并已关闭。
 
 ### 新入口下的同一会话阶梯（`c20f3a0`，libero_spatial，nvfp4，`infer()` P50）
 

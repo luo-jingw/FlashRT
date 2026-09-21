@@ -1085,11 +1085,12 @@ Resolved 2026-09-18: a race in the test harness, not in the Python graph.
 
 # ISSUE-080
 
-Status: open — the decision is made (`text_trim` serves by default,
-`plan.md` "Decisions pending", E1) and all six conditions below are
-satisfied in the code; the one row not yet confirmed on Thor is the native
-pipeline's own per-length capture, whose two causes were fixed at `43c49ce`
-and which `THOR_CHECKLIST.md`'s S4-pipeline row re-runs.
+Status: resolved — `text_trim` serves by default (`plan.md` "Decisions
+pending", E1), all six conditions below are satisfied, and the `0920c` Thor
+round confirmed the last one (the native pipeline's own per-length capture,
+whose two defects were found by the first run of that row and fixed at
+`43c49ce`). Conclusions in `opportunities.md` OPT-019/OPT-028/OPT-029/OPT-030
+and `THOR_STATUS_SUMMARY.md`.
 
 Area: `ImageWAMTorchFrontendThor(text_trim=...)`
 (`flash_rt/frontends/torch/imagewam_thor.py`, opportunities.md OPT-030)
@@ -1210,8 +1211,13 @@ Status of the six conditions after the `eccf14f` round:
    both fixed at `43c49ce`: `captured_text_lengths` is a property on the
    pipeline source but was read as a method, and the per-length tick compared
    one side's rows against the other side's leftovers instead of a baseline
-   both sides start from. The Thor re-run of that half is the S4-pipeline row
-   in `THOR_CHECKLIST.md`.
+   both sides start from. The re-run at `0920c` confirms the half: the native
+   pair collects 39 tests with no skip, `test_pipeline_records_one_graph_per_text_length`
+   installs and captures one pipeline per captured length from the handle
+   itself with a complete per-length GEMM hand-off
+   (`{6: (4, 4), 14: (4, 4)}`), both ticks are `array_equal` to `infer()` with
+   `differing=[]`, and the untrimmed one-key path is unchanged
+   (`graph_exec=0`, `graph_nodes=0`, `graph_producer=''`).
 6. satisfied: the per-length cache is bounded (`text_trim_cache_size`,
    default 32) and `precapture_text_lengths` fills it at construction. On
    Thor a precaptured length switches in 0.000-0.012 s where a length
@@ -1231,7 +1237,10 @@ deployment: exact trimmed lengths, precaptured at construction and bounded by
 an LRU cache, no 16-token buckets (the instruction set is fixed and short, so
 the graph count stays small and no padding mask is needed anywhere).
 
-Then the owner decides the default.
+The default followed from that: `text_trim` is the served default
+(`plan.md` "Decisions pending", E1), the constructor keeps its historical
+untrimmed defaults for a caller that passes dims by hand, and the gate's own
+defaults are the served configuration (fixture v2, trimming on).
 
 ### Shape of condition 5: exact lengths or 16-token buckets
 

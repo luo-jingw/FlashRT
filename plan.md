@@ -1685,18 +1685,19 @@ Phase Status: completed
     running the target workload as an `ImageWAMWorkload`.
 
 ### Phase T1-T5: Thor line
-Phase Status: pending
+Phase Status: completed
 - Goal: the Thor-only rows. The lettered checklist sections A, B, C, D and E
-  have run and were removed as their conclusions were recorded (T1-T3 the
-  matrix, the switch ladder and the target-workload table; T4 the preset
-  contents in `plan.md` "Decisions pending"; T5 the FA4 and native-VAE
-  default criteria). What is left of the line is `THOR_CHECKLIST.md`'s three
-  pending rows: the native pipeline's own per-length capture re-run, the
-  `frt_model_runtime_v1` export gate at `nvfp4`, and the `e0m3_hadamard`
-  trim-safety row.
+  ran and were removed as their conclusions were recorded (T1-T3 the matrix,
+  the switch ladder and the target-workload table; T4 the preset contents in
+  `plan.md` "Decisions pending"; T5 the FA4 and native-VAE default criteria).
+  The line's last three rows ran in the `0920c` round — the native pipeline's
+  own per-length capture, the `frt_model_runtime_v1` export gate at `nvfp4`,
+  and the `e0m3_hadamard` trim-safety check — all three green, so
+  `THOR_CHECKLIST.md` carries no pending item.
 - Modified files: `THOR_CHECKLIST.md` (finished items removed),
   `opportunities.md`, `issues.md`.
-- Observation: matrix CSV/MD per THOR_CHECKLIST.
+- Observation: matrix CSV/MD per THOR_CHECKLIST. Result: every Thor condition
+  this plan named is met or recorded; ISSUE-080 is resolved.
 
 ### Phase S1: a gate fixture whose `fp16` reference is recorded trimmed
 Phase Status: completed
@@ -1881,9 +1882,9 @@ Not done, and why:
   machine. `THOR_CHECKLIST.md` carries the commands, each item's 判据 and
   where its conclusion goes, so one pass covers what is still pending. The
   rounds after `c20f3a0` (`eccf14f`, the `0919e` round at `a84916a`, and the
-  `0920`, `0920s4` and `0920t` rounds) ran the rest of the line, and each
-  section left the checklist as its conclusions were recorded; the three rows
-  still there are the ones the T1-T5 goal names.
+  `0920`, `0920s4`, `0920t` and `0920c` rounds) ran the rest of the line, and
+  each section left the checklist as its conclusions were recorded; the last
+  three rows cleared in `0920c`, so nothing is pending there.
 - S1-S3 are untouched: S1 needs the fixture data regenerated on a GPU (the
   generator's own `fp16` reference), S2 and S3 change the runtime surface
   and the capture cache, whose only observation is a captured graph. Their
@@ -1986,8 +1987,10 @@ Open:
   against fixture v2 0.99889 / 0.99934 at P50 125.86 ms, gate fp16 284.38 ms,
   the untrimmed reference (`--no-text-trim` + v1) 0.99418 / 0.99758 at
   191.79 ms, end-to-end `default` 126.5 ms against 131.3 ms with
-  `FLASHRT_THOR_FA4=0`. What is left of this plan on Thor is the S4-pipeline
-  row, the native pipeline's own per-length capture (`THOR_CHECKLIST.md`).
+  `FLASHRT_THOR_FA4=0`. The `0920c` round then closed the last three Thor
+  rows (the native pipeline's own per-length capture, the ABI export gate,
+  the `e0m3_hadamard` trim-safety check), so no phase of this plan is waiting
+  on the machine.
 - The latency gate's baseline (`tests/fixtures/imagewam_gate/latency_baselines.json`,
   nvfp4 202.2 ms, margin 0.05) describes the untrimmed, FA4-off configuration
   as a one-sided bound. With the served default measuring 125.86 ms in the

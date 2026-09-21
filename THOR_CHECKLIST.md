@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-本节次（配置整合 + `text_trim` 服务化）剩余的待测项。已完成的项已按"用法"第 2 条删除，结论在下面表格指定的文件里。目前剩三项：S4-pipeline、ABI-export、trim-safety 的 `e0m3_hadamard`（最后一项是可选的）。
+本节次（配置整合 + `text_trim` 服务化）的待测项已全部做完：`0920c` 一轮把最后三项（S4-pipeline、ABI-export、trim-safety 的 `e0m3_hadamard`）跑绿，项按"用法"第 2 条删除，结论在下面表格指定的文件里。**本清单目前没有待测项。**
 
 ## 用法
 
@@ -62,57 +62,9 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 - `0920t`：**服务默认（trim + FA4 自动）的三条 gate 全过**——gate nvfp4 对 v2 fixture 0.99889 / 0.99934，P50 **125.86 ms**；gate fp16 对 v2 0.99993 / 0.99997，284.38 ms；未裁剪参考（`--no-text-trim` + v1）0.99418 / 0.99758，191.79 ms（相对旧的 202.2 基线，那条仍只描述"未裁剪 + FA4 关"）。e2e `default` 126.5 ms（served_vs_off 0.99432 / 0.99750），`FLASHRT_THOR_FA4=0` 腿 131.3 ms（0.99441 / 0.99743）——同会话 FA4 开快约 5 ms。三路径（`x0=25`）：`default` 139.47 / 120.29 / 120.05，`fast --precapture` 108.08 / 110.09 / 跳过，`native` 145.93 / 126.58 / 126.38（全部裁剪，native 不再被跳过）。相对 `0919e` 的 114.6 ms 是约 +11 ms 的会话差，不是回归。数字进 `opportunities.md` OPT-019/028/029/030 与 `THOR_STATUS_SUMMARY.md`。
 
+- `0920c`：**最后三项全绿**（commit `c495cb2`）——S4-pipeline：native 两条 pytest **39 passed**、guards **15 passed**，都无 skip；handle 自录 `x0=6`→`14`，每长度 GEMM 交接 `{6: (4, 4), 14: (4, 4)}`，两次 tick `differing=[]` / `actions max_abs=0`，未裁剪一 key 路径不变；parity `--graph native` PASS（native 5324 / Python 5348 不变、六个 mutant 全检出、P50 native 204.43 对 Python 206.37）、schema 7 条 identical。ABI-export：两条腿都 PASS 且打印 `use_fa4=False`，每一行 `array_equal` / `max_abs=0`（含 VAE token bits），确定性对照通过，五个 mutant 两种放置全检出（plain 226.93 / 227.49 ms，`--vae-graph-input 224 224` 226.24 / 226.64 ms，峰值都 19.7 GiB）——OPT-028 的 promotion condition 满足。trim-safety `e0m3_hadamard`：4 passed，五个长度 `equal=True cosine=1 max_abs=0`，poison 后 20 次 replay 全 equal、`poison bytes overwritten = 0`。数字进 `opportunities.md` OPT-028/029/030 与 `THOR_STATUS_SUMMARY.md`。ISSUE-080 随之关闭。
+
 数字与结论在 `opportunities.md`、`THOR_STATUS_SUMMARY.md`、`issues.md`（ISSUE-080/085/086）。
-
----
-
-## S4-pipeline. native 自录图也按长度（只看一条：双长度自录图）
-
-`0920t` 一轮的结果：未裁剪一 key 路径**全过**（state `array_equal`、`graph_exec=0 graph_nodes=0 graph_producer=''`）、guards 11 passed（GPU 行给出每长度资源表：`x0=6` dims `(6,16,20)`、`x0=10` dims `(10,20,24)`、AdaLN 与 RoPE 随活动长度变、`buffers identical=True`）、parity `--graph native` PASS（native 5324 / Python 5348 节点、六个 mutant 全检出、tick `array_equal` / `max_abs=0`、P50 native 205.27 vs python 207.13）、schema PASS（7 条记录 identical）。
-**只有** `test_pipeline_records_one_graph_per_text_length` 红，两条原因已在 `43c49ce` 修掉：`captured_text_lengths` 是 property 但 Protocol 与调用按方法用（`TypeError`），以及该测试拿一边的参考跟另一边的残留行比（`actions` 已经对上，`backbone_hidden`/`K_cache`/`V_cache` 的越界行本来就不同）。修法是两侧跑之前都 `poison_tick_state`，比较保持整块。另：FA4 默认变成"能跑就开"之后，native 路径的测试/门禁各自显式声明 `use_fa4=False`（R6：native pipeline 没有 FA4），不再靠环境变量 `FLASHRT_THOR_FA4=0`；`43c49ce` 也补上了这些显式声明（含 guards 的 `_frontend`，那条 GPU 行会走 `pipeline_resources()`）。下面四条命令重跑本节。
-
-重跑前确认 `flashrt_imagewam_native` 是当前源码编出来的；本轮没有新的 C++ 改动，这条命令只是幂等地保证二进制不旧。
-
-```
-cmake --build build -j --target flashrt_imagewam_native
-IMAGEWAM_NATIVE_PRECISION=nvfp4 python -m pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q -s 2>&1 | tee $OUT/S4p_native.log   # 期望 39 passed；不需要 FLASHRT_THOR_FA4。若是 "2 skipped" / 0 collected，那是 exec/build 不在（前置失败），不是通过
-python -m pytest tests/test_imagewam_text_trim_consumer_guards.py -q 2>&1 | tee $OUT/S4p_guards.log   # 期望 15 passed（上一轮 11；该文件本轮新增 3 条 CPU 行与 1 条口径 pin）。这个文件不读 IMAGEWAM_NATIVE_PRECISION，它的前端固定 fp16
-python tests/gate_imagewam_native_parity.py --precision nvfp4 --graph native --bench-iters 50 2>&1 | tee $OUT/S4p_parity_native.log
-python tests/gate_imagewam_native_schema_parity.py --precision nvfp4 2>&1 | tee $OUT/S4p_schema.log
-```
-
-判据（四条各自的读法）：native 两条 pytest 合计 **39 passed**、guards **15 passed**、parity 打印 PASS 且六个 mutant 全检出、schema 打印 `7 records, identical`。任何一条报 "skipped" 或 0 collected 都表示二进制/`exec/` 没就位，不算做过。`test_pipeline_records_one_graph_per_text_length` 两个长度（`x0=6` 先、`14` 后）由 handle 自己装管线并录图，`graph_producer=native`，manifest `text_lengths={'default_key': 14, 'keys': [6, 14], 'per_prompt_length': True}`，两个长度的 tick 都 `array_equal` 到 `infer()`、`differing=[]`、`actions max_abs=0`。两侧的 state 缓冲都是整块比对（`np.array_equal` 全长度），且两边都先 NaN 填过再跑（`_infer_reference` 与 `_poisoned_native_tick` 各在跑之前 `poison_tick_state`），所以一条长度自己的图没写到的行在两侧都停在基线上——哪一侧越界写了自己不拥有的行，或者写得不一样，仍然会红，不再靠"残留 vs NaN"；未裁剪一 key 路径逐行不变（节点数仍 native 5324 / Python 5348、`test_set_pipeline_drops_the_captured_graph` 的 `graph_exec=0 graph_nodes=0 graph_producer=''` 不变）；guards 里那条 GPU 行打印 x0=6 与 x0=10 的 dims / AdaLN 行数 / RoPE 指针随活动长度变化而 buffers 相同；parity `--graph native` 六个 mutant 全检出、节点数不变；schema gate 7 条记录与 golden 逐行相同。
-去向：`opportunities.md` OPT-029、`THOR_STATUS_SUMMARY.md`。
-
----
-
-## ABI-export. `frt_model_runtime_v1` 的导出 gate（OPT-028 的 promotion condition，Thor 上还没跑过）
-
-OPT-028 在 H100 上全绿、在 Thor 上 `tests/test_imagewam_model_runtime_export.py`（两个长度逐位一致）也过了，但它自己记的 promotion condition 是**这条 gate**：`## Promotion Condition` 写的是"Thor gate at `nvfp4` reports every parity row `array_equal=True`"。这条 gate 与那个 test 不是同一个东西：gate 每次 tick 前把每个待写缓冲填 NaN、并且逐行关掉一个 verb（五个 mutant 必须让对应行失败），所以它能抓"这一行是靠参考 `infer()` 的残留通过的"。
-
-要 `exec/build` 与 `runtime/build`，以及 `CKPT_PATH`、`FLUX2_AE_MODEL_PATH`（或 `AE_MODEL_PATH`）、`FLUX2_SRC`、`QWEN3_MODEL_SPEC`；`DATA_ROOT` 可选（不给就用固定种子的随机帧与状态）。
-
-```
-python tests/gate_imagewam_model_runtime_export.py --precision nvfp4 2>&1 | tee $OUT/ABIg_plain.log
-python tests/gate_imagewam_model_runtime_export.py --precision nvfp4 --vae-graph-input 224 224 2>&1 | tee $OUT/ABIg_vaegraph.log
-```
-
-FA4 在这里是显式的（`--use-fa4`，默认关），所以这两行的 `use_fa4=False` 与 `FLASHRT_THOR_FA4` 无关；脚会打印 `use_fa4=False` 供核对。
-
-判据：两条都打印每一行 `array_equal` / `max_abs = 0`（images、proprio、prompt、step 的 parse；`actions`、`actions_raw`、VAE token），五个 mutant 在两种放置下都被检出，确定性对照（`infer()` 跑两次同噪声）通过。第二条只有把 `fast` 档的"原生 VAE 进图"也算进本项时才需要——它要求 `ae_model_path`（规则 R3），VAE 输入走 224×224。
-去向：`opportunities.md` OPT-028 的 `## Thor` 段、`docs/imagewam_model_runtime.md`、`THOR_STATUS_SUMMARY.md`。
-
----
-
-## trim-safety 的最后一格：`e0m3_hadamard`（可选，只有要服务这个精度时才需要）
-
-裁剪的多长度安全检查已经在 `nvfp4`（FA4 关与 FA4 开各 4 条）与真实 dims 上跑过（`0920`），只剩 `e0m3_hadamard` 那个精度没跑。`opportunities.md` OPT-030 的 `## Open` 里它是唯一还剩的 trim 相关 Thor 行；如果 `e0m3_hadamard` 不在服务集合里，这一项可以不做。
-
-```
-TRIM_PRECISION=e0m3_hadamard python -m pytest tests/test_imagewam_text_trim_graph_safety.py -q -s 2>&1 | tee $OUT/trim_e0m3.log
-```
-
-判据：每个长度与"新建的单长度前端"逐位一致，没有权重/中间张量被重新分配，没有写进被下毒的释放内存。去向：`opportunities.md` OPT-030、`THOR_STATUS_SUMMARY.md`。
 
 ---
 
@@ -121,3 +73,5 @@ TRIM_PRECISION=e0m3_hadamard python -m pytest tests/test_imagewam_text_trim_grap
 `text_trim` 转默认（原 E1）已经决定并落库：`default` profile 带 `text_trim=True`，FA4 与原生 VAE 留在 `fast`，新增 `native` profile；门禁与矩阵的默认口径跟着服务默认走；这些结论在 `plan.md` 的 "Decisions pending"、`opportunities.md` OPT-019/030 与 `THOR_STATUS_SUMMARY.md`。
 
 唯一还等 owner 的延迟口径问题也记在 `plan.md` 的 "Open"：`latency_baselines.json` 的 202.2 ms 描述的是未裁剪、FA4 关的配置，而它现在被用在服务默认上（同一 gate 里服务默认 125.86 ms），是否按服务默认重新定基线、以及文件里是否逐条写明各数字对应的配置，是那次决定的内容。它不是 Thor 测试项。
+
+`plan.md` 的 "Open" 里另有三个非 Thor 项：T4 的 profile 内容（`fast` 的 FA4 mot 位点与原生 VAE 进图是否继续按名字 opt-in）、标定文件 identity 是否加入 `num_views`/`image_h`/`image_w`、以及目标工作负载自身未确认的声明与其 checkpoint / 标定文件 / 图显存预算。

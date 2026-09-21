@@ -5426,11 +5426,11 @@ fold moves work into the quantizer, it does not add a per-forward kernel.
 # OPT-028: ImageWAM through `frt_model_runtime_v1` (Python producer)
 
 Status: implemented and verified on H100 (fp16, real checkpoint,
-bit-exact) and on Thor at `nvfp4` for the tick test
+bit-exact) and on Thor at `nvfp4` — the tick test
 (`tests/test_imagewam_model_runtime_export.py`, two captured lengths
-bit-exact against `infer()`). The export gate this entry's promotion
-condition names has not been run on Thor; it is a pending row in
-`THOR_CHECKLIST.md`.
+bit-exact against `infer()`) and the export gate this entry's promotion
+condition names (`0920c`, both VAE placements, every row bit-exact with
+the five mutants detected).
 
 Area: deployment engineering, roadmap item 12.
 
@@ -5522,10 +5522,42 @@ skip); 316 / 35 without any of the three (the two model-runtime modules
 also skip). Every skip in the full build needs Thor, FA4 or an FP8
 cuBLASLt layout this GPU lacks.
 
-## Promotion Condition
+## Promotion Condition — met
 
 Thor gate at `nvfp4` reports every parity row `array_equal=True`. The
 export is additive and opt-in; `infer()` behavior is unchanged.
+
+Met at `0920c`: `tests/gate_imagewam_model_runtime_export.py --precision
+nvfp4` passes with every row `array_equal=True` / `max_abs=0` (the VAE
+token bits `images` stages included), its determinism control passes, and
+all five mutants are detected with the VAE outside the graph and inside it
+(`--vae-graph-input 224 224`). The gate prints `use_fa4=False` on both
+legs: its own `--use-fa4` is a `store_true` flag, so neither leg depends on
+the machine's FA4 default. Measured on that round: `infer()` / ABI tick P50
+226.93 / 227.49 ms with the VAE outside the graph and 226.24 / 226.64 ms
+with it inside, process peak 19.7 GiB in both placements.
+
+## Thor, `nvfp4` export gate (`0920c`)
+
+`c495cb2`, Jetson AGX Thor, MAXN, GPC 1.575 GHz / NVD 1.692 GHz,
+`emc_locked=null`, GPU idle; logs under `/home/jingwu/thor_val/0920c/`. The
+real checkpoint, `--precision nvfp4`, `DATA_ROOT` unset (seeded random
+frames and state), one leg per VAE placement:
+
+| leg | VAE placement | `infer()` P50 | ABI tick P50 | process peak |
+|---|---|---:|---:|---:|
+| plain | outside the graph | 226.93 | 227.49 | 19.7 GiB |
+| `--vae-graph-input 224 224` | inside the graph | 226.24 | 226.64 | 19.7 GiB |
+
+The ABI tick measures within 0.7 ms of `infer()` on both legs, so a tick
+through the C verbs costs what the served call costs at these dims. The two
+VAE placements measure within 0.7 ms of each other as well: this round does
+not show the in-graph VAE's win end to end, and it does not attribute the
+difference either — the round was not run as an A/B of one variable (the
+frames come from `DATA_ROOT` when it is set, and the two legs were measured
+in one process but sequentially). What the round establishes is the
+promotion condition: every parity row bit-exact in both placements, with
+the mutants that make each row fail.
 
 ## Thor, both workloads (`eccf14f`)
 
@@ -5610,12 +5642,12 @@ having no FA4 attention), serves the trim, and is no longer refused by any rule.
 # OPT-029: ImageWAM native C++ overlay (`io="native"`)
 
 Status: implemented and verified bit-exact on H100 (fp16, small dims and
-real checkpoint) and on Thor at `nvfp4` (`0920s4`, `0920t`: both gates
-pass, node counts unchanged); NVFP4 wiring compiles and links for
-sm_110. The native pipeline's own per-length capture is the one item
-still waiting for its Thor re-run —
-`test_pipeline_records_one_graph_per_text_length`, whose two causes are
-fixed at `43c49ce`.
+real checkpoint) and on Thor at `nvfp4` (`0920s4`, `0920t`, `0920c`: both
+gates pass, node counts unchanged). The native pipeline's own per-length
+capture is verified as of `0920c`: `test_pipeline_records_one_graph_per_text_length`
+passes with a complete GEMM hand-off per installed length, and the native
+pair collects 39 tests with no skip on Thor. NVFP4 wiring compiles and
+links for sm_110.
 
 Area: deployment engineering, roadmap item 14; interface record
 `docs/imagewam_native_cpp.md`.
@@ -5835,9 +5867,9 @@ state rows are `array_equal` with `graph_exec=0`, `graph_nodes=0` and
 `graph_producer=''`. The failing test is
 `test_pipeline_records_one_graph_per_text_length`, and its two causes are fixed
 at `43c49ce`: the length table is a property, and the comparison covered rows
-beyond the active length. The native pipeline's own per-length capture is
-therefore not a verified capability yet; the section it is re-run by is
-`THOR_CHECKLIST.md`'s S4-pipeline row.
+beyond the active length. The native pipeline's own per-length capture was
+re-run after that fix in the `0920c` round (next section) and is a verified
+capability there.
 
 | gate | result |
 |---|---|
@@ -5852,6 +5884,37 @@ length, `buffers identical=True`.
 Service paths at `valid_tokens=24` are tabulated in OPT-028's `0920t` section;
 for this face the `native` profile ticks 126.38 ms against 126.58 ms through the
 ABI, and the served `default` ticks 120.05 ms against 120.29 ms.
+
+## Thor, native pipeline per-length capture re-run (`0920c`, nvfp4)
+
+`0920c`, commit `c495cb2`, Jetson AGX Thor, MAXN, GPC 1.575 GHz / NVD
+1.692 GHz, `emc_locked=null`, GPU idle; raw logs under
+`/home/jingwu/thor_val/0920c/`. The native C++ did not change in this round, so
+the library from `0920t` was reused.
+
+`IMAGEWAM_NATIVE_PRECISION=nvfp4 pytest tests/test_imagewam_native_pipeline.py
+tests/test_imagewam_native_runtime.py -q`: **39 passed** with no skip (the
+`0920t` failure is fixed and `exec/` is present). `tests/test_imagewam_text_trim_consumer_guards.py`: **15 passed**, no skip. No test sets `FLASHRT_THOR_FA4`; every frontend on this path states `use_fa4=False` itself (rule R6).
+
+`test_pipeline_records_one_graph_per_text_length` installs and captures one
+pipeline per captured length from the handle itself, `x0=6` first and `14`
+second, and the per-length GEMM hand-off is complete for both:
+`gemm_installed_by_key == {6: (4, 4), 14: (4, 4)}` — every shape each length's
+pipeline launches had an algorithm handed over. Both ticks are `array_equal` to
+`infer()` at the same length with `differing=[]` and `actions max_abs=0`, and
+the untrimmed one-key path is unchanged (`graph_exec=0`, `graph_nodes=0`,
+`graph_producer=''`).
+
+| gate | result |
+|---|---|
+| native parity, `--graph native` | PASS; native 5324 nodes against Python 5348 (unchanged from `0920s4`), all six mutants `detected=True`, tick `array_equal` / `max_abs=0`, P50 native tick 204.43 ms against Python 206.37 ms |
+| native schema parity | PASS; its seven records identical to the golden file |
+
+The guards' GPU row repeats the per-length resource table: `x0=6` dims
+`(6,16,20)`, `x0=10` dims `(10,20,24)`, AdaLN rows and backbone RoPE table
+following the active length, `buffers identical=True`. With this round the
+native pipeline's own per-length capture — the last unverified half of
+ISSUE-080 condition 5 — is confirmed on Thor.
 
 
 # OPT-030: text context trimmed to the prompt's valid length (issues.md ISSUE-020)
@@ -6059,13 +6122,11 @@ gain.
 
 ## Open
 
-- Thor: the multi-length safety check at `e0m3_hadamard`. It has run at
-  `nvfp4` with FA4 off and with FA4 on (`0920`), and `e0m3_hadamard`'s own
-  gate passes, so what is missing is that precision's trimmed
-  multi-length row.
 - The memory the in-graph native VAE adds. The memory figures recorded so
   far are the per-length `text_trim` graphs (first graph +218.0 MiB
-  reserved / +206.3 MiB allocated, later ones about 0; `0919e`).
+  reserved / +206.3 MiB allocated, later ones about 0; `0919e`) and the
+  `0920c` export-gate runs, where the process peaked at 19.7 GiB with the
+  VAE outside the graph and 19.7 GiB with it inside at the real dims.
 - `fp8`/`fp8_static` run on H100 since the TN FP8 path (issues.md
   ISSUE-001) and are verified with trimming above;
   `fp8_static_cutlass` runs on Thor only.
@@ -6073,8 +6134,24 @@ gain.
   E1; ISSUE-080). With that, the Thor rows this list used to carry have
   run: the `nvfp4` end-to-end compare and `infer()` P50 A/B, the capture
   time per new length and the cache's eviction behaviour (`0919e`,
-  `eccf14f`), and FA4 on against off in one session (`0920t`: 126.5 ms
-  against 131.3 ms end to end).
+  `eccf14f`), FA4 on against off in one session (`0920t`: 126.5 ms
+  against 131.3 ms end to end), and the multi-length safety check at every
+  precision the deployment offers — `nvfp4` with FA4 off and on at the
+  real dims (`0920`) and `e0m3_hadamard` (`0920c`, next section).
+
+## Thor, `e0m3_hadamard` trim safety (`0920c`)
+
+`c495cb2`, Jetson AGX Thor, MAXN, `emc_locked=null`, GPU idle; logs under
+`/home/jingwu/thor_val/0920c/`.
+
+`TRIM_PRECISION=e0m3_hadamard pytest tests/test_imagewam_text_trim_graph_safety.py -q`:
+**4 passed**. Every captured length is bit-identical to a freshly built
+single-length frontend (`equal=True cosine=1 max_abs=0`), a failed capture
+leaves the same bit-for-bit state, and 20 replays after poisoning the graph
+pool and the regular allocator cache are all `equal` with **poison bytes
+overwritten = 0**. That closes the multi-length safety check for every
+precision this deployment offers: `nvfp4` with FA4 off and with FA4 on at the
+real dims (`0920`), and `e0m3_hadamard` here.
 
 ## Thor, one matrix session (`c20f3a0`, libero_spatial, nvfp4)
 
