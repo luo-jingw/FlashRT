@@ -127,7 +127,7 @@ this fork covers Jetson AGX Thor (sm_110).
   that constructs a frontend (it allocates CUDA tensors), captures a graph
   or measures latency cannot.
   The CPU-only test set for that work (green at
-  `73dc802`: 316 passed, 40 skipped; the skips are the CUDA guards and the
+  `244718e`: 322 passed, 40 skipped; the skips are the CUDA guards and the
   rows needing the real flux2 clone / AE checkpoint):
   ```
   .venv/bin/python -m pytest tests/test_imagewam_workload.py tests/test_imagewam_structure.py \
@@ -136,12 +136,12 @@ this fork covers Jetson AGX Thor (sm_110).
     tests/test_imagewam_frontend_from_config.py tests/test_imagewam_public_entry.py \
     tests/test_imagewam_text_trim.py tests/test_imagewam_text_trim_cache.py \
     tests/test_imagewam_regression_gate.py tests/test_imagewam_native_pipeline.py \
-    tests/test_imagewam_native_runtime.py -q
+    tests/test_imagewam_native_runtime.py tests/test_imagewam_native_layout_agreement.py -q
   ```
-  `pytest tests/test_imagewam_*.py --collect-only -q` collects 645 without
+  `pytest tests/test_imagewam_*.py --collect-only -q` collects 652 without
   errors; the rest of the ImageWAM test modules need a CUDA device and fail
   here regardless of the change under test (102 failures across 33 modules,
-  423 passed and 125 skipped in the same run: 26 of the failures report
+  429 passed and 125 skipped in the same run: 26 of the failures report
   `RuntimeError: cuBLAS error` from `csrc/gemm/gemm_runner.cu`, the rest the
   absence of a CUDA driver or runtime).
 - `pandas` is not installed in `FlashRT/.venv`, so

@@ -256,6 +256,14 @@ parity row is re-run against mutants that must make it fail.
   resource-table mutants). Without `--graph native` (the native verbs
   replay the Python graph) the same tick rows and the two call mutants
   pass.
+- `tests/test_imagewam_native_layout_agreement.py` (CPU only, so it runs on
+  every machine): the C header's member names, in order, against the two
+  ctypes mirrors, each nested struct member expanded through the header's own
+  declarations, and `PIPELINE_DIM_FIELDS` / `PIPELINE_BUFFER_FIELDS` against
+  the header's blocks and against the dataclasses they are copied from. The
+  library's own layout check compares four sizes only, so a reorder that keeps
+  every size — which would misroute a device pointer — is caught here and
+  nowhere else.
 
 Thor (`nvfp4`): `sm110_check.sh` builds `flashrt_imagewam_native` for
 sm_110. The io config carries the text-length table and `use_graph` takes
