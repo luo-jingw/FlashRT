@@ -285,20 +285,21 @@ Do not record token values or other secrets here.
 - **Superseded 2026-09-15**: the note that used to stand here ("current
   work uses randomly initialized weights... explicitly excludes FP8
   quantization, calibration") is no longer accurate. Real checkpoint
-  loading is DONE (`opportunities.md` OPT-001, `plan.md`'s own
-  "OPT-001" plan, Phases 1-3 completed, verified end-to-end on this
-  machine). FP8/NVFP4 quantized GEMM (dynamic, static-scale, and
-  static-scale+CUTLASS) is DONE with real Thor numbers (`opportunities.md`
-  OPT-004 steps 5-6). What is genuinely still deferred: the FULL house
-  calibration mechanism (`docs/calibration.md`'s multi-sample/
-  percentile calibration against real OBSERVATION data, not just a
-  disposable random tensor) — `_calibrate_fp8`'s own current
-  implementation freezes a scale from random noise, not a real
-  activation distribution; upgrading this needs real per-model
-  observation data whose tensor shapes actually match this project's
-  own `img_raw`/`context`/`action_latent` conventions, still an open
-  question as of this note (see `opportunities.md` OPT-004's own
-  calibration entry for the exact gap and what was tried).
+  loading is DONE (`plan.md`'s own "OPT-001" plan, Phases 1-3 completed,
+  verified end-to-end on this machine). FP8/NVFP4 quantized GEMM (dynamic,
+  static-scale, and static-scale+CUTLASS) is DONE with real Thor numbers,
+  and the calibration itself is the real one: `_calibrate_fp8` reads a
+  calibration file built from real LIBERO observations through the real
+  `fp16` pipeline (`benchmarks/imagewam_build_calibration.py`,
+  `docs/imagewam_calibration.md`), and rule R1 refuses a static-FP8
+  precision without one unless `allow_placeholder_calibration` is passed.
+  Without a file the scale is a placeholder calibrated on `N(0, 0.1)`
+  noise of the site's shape, which on Thor collapsed `backbone_hidden`
+  cosine against `fp16` to about 0.46 — that path is a diagnostic, not a
+  served configuration.
+  What is genuinely still deferred: nothing about the served static-FP8
+  path; `docs/calibration.md`'s generic multi-sample house mechanism is
+  the framework this project's builder replaced with its own recorder.
 - **Confirmed end goal (2026-09-14, explicit user direction): this
   targets real Thor deployment, not an indefinitely-scoped structural
   dry run.** `pipeline_thor.py`/`_imagewam_thor_spec.py`/
