@@ -28,6 +28,12 @@ config's length table, the handle's key plumbing, the per-length resource
 table and the install loop are checked here against stubs of the native
 library and of the frontend. Those are covered without a GPU; everything
 that captures a real frontend needs one.
+
+The protocols on this path are pinned against the frontend by member kind
+(`test_the_pipeline_source_protocol_frontend_and_stand_in_agree_on_member_kinds`):
+a member called as a method while the frontend makes it a property raises
+`TypeError` at the read, which is how the native per-length capture missed
+`captured_text_lengths` and no CPU check of a number could see it.
 """
 from __future__ import annotations
 
@@ -57,6 +63,7 @@ from flash_rt.models.imagewam.pipeline_resources import (
 from flash_rt.models.imagewam.quant_linear import Bf16OutLinear, Fp16Linear
 from flash_rt.models.imagewam.runtime_surface import (
     GraphVariants,
+    ImageWAMRuntimeSource,
     ImageWAMRuntimeSurface,
     TextLengthGraph,
     graph_variant_plan,
@@ -164,6 +171,10 @@ class _StubNativeLib:
     def __init__(self) -> None:
         self.lib = self
         self.calls: list[tuple] = []
+        # One `(capacity, count)` per `gemm_shapes` call, in call order: the
+        # probe asks for the count with no storage (capacity 0), the read that
+        # follows passes the capacity the count needs.
+        self.gemm_shape_requests: list[tuple[int, int]] = []
         self.created_config: ImageWAMIoConfig | None = None
         self.handle = 0x1000
         self.variants: dict[int, int] = {}
@@ -189,7 +200,15 @@ class _StubNativeLib:
         self.calls.append(("release", handle))
 
     def frt_imagewam_native_set_proprio_row(self, handle, row):
+        # The row is bounded by the ACTIVE text length, as the C handle does
+        # (`row < 0 || uint32_t(row) >= context_rows_` -> -1, native_runtime.cpp
+        # `NativeRuntime::set_proprio_row`): that bound is what makes
+        # `set_text_length(key)` mandatory before `set_proprio_row(row)` after
+        # a prompt change. The call is recorded even when it is refused, so a
+        # test can read the sequence a deployment attempted.
         self.calls.append(("set_proprio_row", handle, int(row)))
+        if not 0 <= int(row) < self.active:
+            return -1
         return 0
 
     def frt_imagewam_native_use_graph(self, handle, key, graph_exec):
@@ -239,13 +258,20 @@ class _StubNativeLib:
 
     def frt_imagewam_native_gemm_shapes(self, handle, out, capacity, count):
         # One context GEMM shape per pipeline, with the key's own row count:
-        # the shapes a length adds are what the hand-off is installed for.
+        # the shapes a length adds are what the hand-off is installed for. The
+        # count is answered first and a capacity that cannot hold the shapes is
+        # refused (-5) before anything is written, as the C handle does
+        # (native_runtime.cpp `NativeRuntime::gemm_shapes`): a Python-side
+        # short allocation cannot be written past, it is reported.
         shapes = [(0, self.active, 8, 8)]
         ctypes.cast(count, ctypes.POINTER(ctypes.c_uint64)).contents.value = len(shapes)
+        self.gemm_shape_requests.append((int(capacity), len(shapes)))
+        self.calls.append(("gemm_shapes", handle, None if not out else tuple(shapes)))
+        if int(capacity) < len(shapes):
+            return -5
         if out:
             for i, (kind, m, n, k) in enumerate(shapes):
                 out[i] = ImageWAMGemmShape(kind=kind, m=m, n=n, k=k)
-        self.calls.append(("gemm_shapes", handle, None if not out else tuple(shapes)))
         return 0
 
     def frt_imagewam_native_set_gemm_algo(self, handle, shape, algo, bytes_):
@@ -485,6 +511,13 @@ def _member_kind(cls: type, name: str) -> str:
     return "missing" if raw is None else type(raw).__name__
 
 
+# The protocols of this path `_CpuPipelineFrontend` implements: it is a
+# pipeline source (and carries the one resource table per length the
+# text-length protocol adds) and nothing else, so the runtime source protocol
+# is the frontend's alone.
+_STAND_IN_PIPELINE_SOURCES = (ImageWAMPipelineSource, ImageWAMTextLengthPipelineSource)
+
+
 def test_the_pipeline_source_protocol_frontend_and_stand_in_agree_on_member_kinds():
     """A member read with the wrong kind fails at the read, and the failure is
     a `TypeError` in the consumer rather than a difference in a number: the
@@ -493,21 +526,33 @@ def test_the_pipeline_source_protocol_frontend_and_stand_in_agree_on_member_kind
     installing anything (ISSUE-080 condition 5). The stand-in in this file had
     drifted to a method in the same way, which is what kept the CPU checks
     here from catching it, so both the frontend and the stand-in are compared
-    against the protocol's own declaration."""
-    for protocol in (ImageWAMPipelineSource, ImageWAMTextLengthPipelineSource):
+    against the protocol's own declaration.
+
+    `ImageWAMRuntimeSource` — the interface `ImageWAMPythonVerbs` consumes:
+    its `step` reads `active_dims["x0"]` and its verbs call `stage_images` /
+    `stage_proprio` / `set_prompt` / `read_actions` — is compared against the
+    frontend only, because this file has no stand-in for it:
+    `_CpuPipelineFrontend` is a pipeline source, and a second stand-in would
+    be an object compared against itself instead of against the frontend. A
+    wrong kind there is the same `TypeError` on every `io="python"` tick,
+    which no CPU check of a number would see either."""
+    for protocol in (*_STAND_IN_PIPELINE_SOURCES, ImageWAMRuntimeSource):
         declared = _declared_member_kinds(protocol)
         assert declared, f"{protocol.__name__} declares no member to compare"
+        has_stand_in = protocol in _STAND_IN_PIPELINE_SOURCES
         for name, expected in declared.items():
-            frontend, stand_in = (_member_kind(ImageWAMTorchFrontendThor, name),
-                                  _member_kind(_CpuPipelineFrontend, name))
+            frontend = _member_kind(ImageWAMTorchFrontendThor, name)
+            stand_in = (_member_kind(_CpuPipelineFrontend, name) if has_stand_in
+                        else "(no stand-in)")
             print(f"{protocol.__name__}.{name}: declared={expected} frontend={frontend} "
                   f"stand_in={stand_in}")
             assert frontend == expected, \
                 f"{protocol.__name__}.{name} is a {expected}, but " \
                 f"ImageWAMTorchFrontendThor has a {frontend}"
-            assert stand_in == expected, \
-                f"{protocol.__name__}.{name} is a {expected}, but the stand-in in this " \
-                f"file has a {stand_in}"
+            if has_stand_in:
+                assert stand_in == expected, \
+                    f"{protocol.__name__}.{name} is a {expected}, but the stand-in in this " \
+                    f"file has a {stand_in}"
 
 
 def test_pipeline_resources_describes_the_active_text_length():
@@ -618,6 +663,106 @@ def test_capture_pipeline_text_lengths_installs_and_captures_every_length():
             native.capture_pipeline_text_lengths(empty)
         print(f"calls after the refused call: {unused.calls}")
         assert not any(call[0] == "set_pipeline" for call in unused.calls)
+    finally:
+        native.close()
+
+
+def _row_outside_the_selected_length(calls: list[tuple]) -> str:
+    """The first recorded `set_proprio_row` whose row is outside the text
+    length the last length call selected, as one line ("" when every recorded
+    row is inside). The C handle answers -1 for such a row
+    (`row >= context_rows_`), so a log with one is a sequence the native
+    handle never accepted: it tells a prompt change that selected the length
+    after writing the row from one that selected it before."""
+    selected = 0
+    for call in calls:
+        if call[0] in ("create", "set_text_length", "set_pipeline"):
+            selected = call[2]
+        elif call[0] == "set_proprio_row" and not 0 <= call[2] < selected:
+            return (f"set_proprio_row({call[2]}) after the selected length was {selected}: "
+                    f"row outside 0..{selected - 1}")
+    return ""
+
+
+def test_the_pipeline_install_reads_the_shapes_with_the_capacity_the_count_needs():
+    """`set_pipeline` asks the handle for the count of the installed pipeline's
+    shapes, allocates that many, and reads them with that capacity: the real
+    handle answers -5 before writing when `capacity` is short
+    (native_runtime.cpp `NativeRuntime::gemm_shapes`), so the second call must
+    pass the count the first one answered. The stub mirrors that rule, so a
+    Python-side capacity that is too small is caught here instead of on a GPU
+    box."""
+    dims = dict(MAX_DIMS, x0=LONG_KEY, a0=LONG_KEY + 10, total=LONG_KEY + 14)
+    source = _CpuPipelineFrontend(dims, (SHORT_KEY, LONG_KEY))
+    source._activate_text_length(SHORT_KEY)
+    library = _StubNativeLib()
+    native = ImageWAMNativeRuntime.create(_cpu_surface((SHORT_KEY, LONG_KEY)), library)
+    try:
+        native.set_pipeline(source)
+        probe, read = library.gemm_shape_requests
+        print(f"gemm_shapes requests (capacity, count): {library.gemm_shape_requests}; "
+              f"shapes read: {native.gemm_shapes}")
+        assert probe == (0, 1), "the count is asked for with no storage"
+        assert read[0] == read[1], \
+            f"the shapes are read with capacity {read[0]} for the {read[1]} they hold"
+        assert native.gemm_shapes == [(0, SHORT_KEY, 8, 8)]
+
+        # The rule the stub mirrors: a short capacity is refused with the count
+        # answered and nothing written, so a short allocation cannot pass.
+        shapes = (ImageWAMGemmShape * 1)()
+        count = ctypes.c_uint64(0)
+        status = library.lib.frt_imagewam_native_gemm_shapes(
+            library.handle, shapes, 0, ctypes.byref(count))
+        print(f"gemm_shapes(capacity=0): rc={status} count={count.value} m={shapes[0].m}")
+        assert status == -5, f"a capacity of 0 for {count.value} shapes must be refused, got {status}"
+        assert count.value == 1 and shapes[0].m == 0, "the count is answered, no shape is written"
+    finally:
+        native.close()
+
+
+def test_a_prompt_change_selects_the_text_length_before_the_proprio_row():
+    """After a prompt change the setup producer calls `set_text_length(key)`
+    and then `set_proprio_row(row)`, because the row is bounded by the ACTIVE
+    text length: the row of a longer length is outside the shorter one that is
+    still selected, and the handle answers -1 (c_api.h on set_proprio_row,
+    native_runtime.cpp `row >= context_rows_`). The order is read off the
+    recorded call log of a deployment that changes length twice — each length
+    selected before its row — and the reversed order is shown to fail on the
+    same bound."""
+    dims = dict(MAX_DIMS, x0=LONG_KEY, a0=LONG_KEY + 10, total=LONG_KEY + 14)
+    source = _CpuPipelineFrontend(dims, (SHORT_KEY, LONG_KEY))
+    source._activate_text_length(SHORT_KEY)        # the prompt the deployment serves
+    library = _StubNativeLib()
+    native = ImageWAMNativeRuntime.create(_cpu_surface((SHORT_KEY, LONG_KEY)), library)
+    try:
+        native.capture_pipeline_text_lengths(source)
+        mark = len(library.calls)
+        for key in (SHORT_KEY, LONG_KEY):
+            native.set_text_length(key)
+            native.set_proprio_row(key - 1)
+        changed = library.calls[mark:]
+        print(f"prompt-change calls: {changed}")
+        for key in (SHORT_KEY, LONG_KEY):
+            length_at = changed.index(("set_text_length", library.handle, key))
+            row_at = changed.index(("set_proprio_row", library.handle, key - 1))
+            assert length_at < row_at, \
+                f"x0={key}: the row {key - 1} is written at {row_at} before its length is " \
+                f"selected at {length_at}"
+        # No recorded row is outside the length selected when it was written.
+        outside = _row_outside_the_selected_length(library.calls)
+        assert not outside, outside
+
+        # The reversed order: the longer length's row while the shorter one is
+        # selected has no valid row, so the handle refuses it and the row the
+        # deployment meant to write is never accepted.
+        native.set_text_length(SHORT_KEY)
+        with pytest.raises(ImageWAMNativeError) as exc:
+            native.set_proprio_row(LONG_KEY - 1)
+        print(f"set_proprio_row({LONG_KEY - 1}) while x0={SHORT_KEY}: {exc.value}")
+        assert exc.value.status == -1
+        native.set_text_length(LONG_KEY)
+        native.set_proprio_row(LONG_KEY - 1)
+        assert native.text_length == LONG_KEY, "the selected length and the row agree after the pair"
     finally:
         native.close()
 
