@@ -127,16 +127,22 @@ this fork covers Jetson AGX Thor (sm_110).
   that constructs a frontend (it allocates CUDA tensors), captures a graph
   or measures latency cannot.
   The CPU-only test set for that work (green at
-  `d374b70`: 242 passed, 3 skipped; the skips are the CUDA guards):
+  `43c49ce`: 315 passed, 40 skipped; the skips are the CUDA guards and the
+  rows needing the real flux2 clone / AE checkpoint):
   ```
   .venv/bin/python -m pytest tests/test_imagewam_workload.py tests/test_imagewam_structure.py \
     tests/test_imagewam_config_resolver.py tests/test_imagewam_precision_table.py \
     tests/test_imagewam_thor_precision_routing.py tests/test_imagewam_text_trim_consumer_guards.py \
-    tests/test_imagewam_frontend_from_config.py tests/test_imagewam_public_entry.py -q
+    tests/test_imagewam_frontend_from_config.py tests/test_imagewam_public_entry.py \
+    tests/test_imagewam_text_trim.py tests/test_imagewam_text_trim_cache.py \
+    tests/test_imagewam_regression_gate.py tests/test_imagewam_native_pipeline.py \
+    tests/test_imagewam_native_runtime.py -q
   ```
-  `pytest tests/test_imagewam_*.py --collect-only -q` collects 542 without
+  `pytest tests/test_imagewam_*.py --collect-only -q` collects 645 without
   errors; the rest of the ImageWAM test modules need a CUDA device and fail
-  here regardless of the change under test.
+  here regardless of the change under test (102 such failures across 33
+  modules at `43c49ce`: 76 `RuntimeError: Found no NVIDIA driver` and 26
+  `RuntimeError: cuBLAS error` from `csrc/gemm/gemm_runner.cu`).
 - `pandas` is not installed in `FlashRT/.venv`, so
   `benchmarks/imagewam_e2e_official_compare.py`,
   `imagewam_e0m3_accuracy_study.py` and

@@ -44,8 +44,8 @@ precapture_text_lengths=None, **expert)`.
   the ABI (one graph per trimmed length) and still refused for the native
   pipeline, which describes one fixed graph.
 - `precapture_text_lengths` (x0 values, valid tokens + 1 with proprio, as
-  `captured_text_lengths()` reports them): the frontend captures a graph for
-  each of those lengths once at construction, so the first `set_prompt` of
+  the `captured_text_lengths` property reports them): the frontend captures
+  a graph for each of those lengths once at construction, so the first `set_prompt` of
   one of them only switches graphs. It needs `text_trim=True`. The cache is
   bounded by `text_trim_cache_size` (expert option, default 32): the least
   recently used non-active length is dropped when the bound is reached, and a

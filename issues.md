@@ -1200,6 +1200,12 @@ Status of the six conditions after the `eccf14f` round:
    active one afterwards. Rule R5 is removed: `text_trim=True` is legal for
    `consumer="infer"`, `"abi"` and `"native"`, and the `native` profile is the
    native consumer's set (the served `default`'s switches with FA4 off).
+   The Thor round that first ran this last half also found its two defects,
+   both fixed at `43c49ce`: `captured_text_lengths` is a property on the
+   pipeline source but was read as a method, and the per-length tick compared
+   one side's rows against the other side's leftovers instead of a baseline
+   both sides start from. The Thor re-run of that half is the S4-pipeline row
+   in `THOR_CHECKLIST.md`.
 6. satisfied: the per-length cache is bounded (`text_trim_cache_size`,
    default 32) and `precapture_text_lengths` fills it at construction. On
    Thor a precaptured length switches in 0.000-0.012 s where a length

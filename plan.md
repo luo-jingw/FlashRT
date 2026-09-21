@@ -1378,7 +1378,8 @@ W0 addendum: names frozen while executing W6-W12, each one a plan edit:
   keyword and an expert option (default 32, rule V1 for a non-int or `< 1`);
   `precapture_text_lengths` is a keyword of `from_config` and
   `load_imagewam` taking `x0` values (valid tokens + 1 with proprio, the units
-  of `captured_text_lengths()`) and capturing them once at construction.
+  of the `captured_text_lengths` property) and capturing them once at
+  construction.
 - Runtime identity: `runtime_surface` `setup_identity` describes the
   workload explicitly, as `workload.<field>` entries beside the existing
   `dims.<key>` entries. The field list is
@@ -1797,8 +1798,8 @@ Phase Status: completed
   config carries, replaces only that key's pipeline and graph, and makes it the
   active text length; `gemm_shapes` / `set_gemm_algo` / `run` / `capture` all
   resolve against the active key); `ImageWAMNativeRuntime.capture_pipeline_text_lengths(source)`
-  activates each of `source.captured_text_lengths()`, installs its table and
-  captures its graph, then restores the active length. `graph_producer` follows
+  activates each of `source.captured_text_lengths` (a property), installs its
+  table and captures its graph, then restores the active length. `graph_producer` follows
   the active key. Rule R5 is removed from `config_resolver.py` and from the
   table above; the `native` profile is the native consumer's set — the served
   `default`'s switches with FA4 explicitly off, contents otherwise equal to
@@ -1863,20 +1864,12 @@ claimed here.
 | W11 | `load_imagewam` signature, `ConfigError` before construction, structure read only when given | `tests/test_imagewam_public_entry.py` |
 | W12 | run on Thor at `c20f3a0`; the identity checks pass and `fast`/`stack` reproduce their recorded values, `default`'s like-for-like baseline is open | see the phase's own "Result on Thor" block, `THOR_CHECKLIST.md` item E2 and ISSUE-082 |
 
-The CPU test set used for every phase above, green at the last commit of
-this work (242 passed, 3 skipped; the skips are the CUDA guards):
-
-```
-.venv/bin/python -m pytest tests/test_imagewam_workload.py tests/test_imagewam_structure.py \
-  tests/test_imagewam_config_resolver.py tests/test_imagewam_precision_table.py \
-  tests/test_imagewam_thor_precision_routing.py tests/test_imagewam_text_trim_consumer_guards.py \
-  tests/test_imagewam_frontend_from_config.py tests/test_imagewam_public_entry.py -q
-```
-
-`pytest tests/test_imagewam_*.py --collect-only -q` collects 542 without
-errors; the five directory-wide collection errors are pre-existing and
-outside ImageWAM (`flash_rt.flash_rt_fp4`, `_flashrt_exec`, `ml_dtypes` are
-not built or installed on this machine).
+The CPU test set used for every phase above, and the directory-wide
+collection count, are recorded once in `PROJECT.md` under the CPU-only work
+note; that record is the current one and is not repeated here. Outside
+ImageWAM, whole-directory collection still reports errors from modules whose
+extensions are not built or installed on this machine (`flash_rt.flash_rt_fp4`,
+`_flashrt_exec`, `ml_dtypes`).
 
 Not done, and why:
 
