@@ -616,6 +616,34 @@ tests and re-run; all five should pass.
 
 ## Resolution
 
+# ISSUE-087
+
+Status: open
+
+Area: the full imagewam pytest run on Thor (`tests/test_imagewam_fa4_dispatch.py`, `tests/test_imagewam_infer_action_noise.py` and the tests after them in file order); the frontend's FA4 fallback path (`ImageWAMTorchFrontendThor._capture_graph_or_fall_back`)
+
+## Observation
+
+The `0921` Thor run (commit `de0ef51`, torch 2.9.1) ended with `86 failed, 631 passed, 2 skipped, 55 errors` for `tests/test_imagewam_*.py tests/test_jetson_clock_state.py`. The first failing test is `test_static_fp8_set_activation_scale_equals_calibrate` (a 1 ULP scale difference between the device kernel and numpy, fixed in the test and recorded in `THOR_STATUS_SUMMARY.md`). The first ERROR is in `tests/test_imagewam_infer_action_noise.py`: constructing the module-scoped frontend fails in `torch.randn` with `RuntimeError: Offset increment outside graph capture encountered unexpectedly.`, after the FA4 tests that fail captures on purpose. The ABI and native gates run afterwards in new processes and pass.
+
+## Impact
+
+The pass count of the full run cannot be read: everything after the first poisoned test in the same process may fail for that reason and not for its own. The production frontend is affected only if a real capture failure leaves the same state behind (the fallback path recaptures and a successful capture may reset it; a second failure propagates and the process is done anyway).
+
+## Evidence
+
+The error text is the CUDA generator's check that no capture is open; it fires when the generator still holds the "capturing" flag while the stream is not capturing. Measured on the development GPU (torch 2.14, RTX 4060): none of three ways of failing a capture (a device sync inside it, a Python error inside it, an RNG use then an error) leaves the generator unusable (`scripts/probe_capture_generator_state.py`). So the poisoning is not reproduced off Thor and the torch 2.9.1 build on Thor is the untested variable. Not measured: which failed capture leaves the flag set, and whether one tiny successful capture repairs it.
+
+## Hypotheses
+
+A capture that fails inside `capture_end` (the `synchronize()` in the `capture_sync` mode of `test_fa4_failure_falls_back_to_the_cuBLAS_chain`) skips the generator's epilogue on torch 2.9.1, so the flag stays set for the rest of the process. Alternative: a failed second capture (the fallback also failing) in another test does the same.
+
+## Next Experiment
+
+On the Thor: run `python scripts/probe_capture_generator_state.py` (each case prints whether `torch.randn` works afterwards, and whether one successful capture repairs it). Then `python -m pytest tests/test_imagewam_fa4_dispatch.py -x -q`, and `python -m pytest tests/test_imagewam_fa4_dispatch.py -k capture_sync tests/test_imagewam_infer_action_noise.py -q` in one process to see whether the second file errors. If a case poisons the generator, either the tests reset it (one successful capture in a fixture after the failing ones) or the fallback path does, depending on whether the frontend's own retry leaves it set.
+
+## Resolution
+
 ## Index: resolved entries and where their conclusions are recorded
 
 This file carries the open problems only. Each entry below states a problem
