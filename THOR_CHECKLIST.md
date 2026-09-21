@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-0921 一轮的待测项已做完并落库（`THOR_STATUS_SUMMARY.md` 的 `0921` 小节）。本节次有两组：**L0–L6：最终结果表的 LIBERO 一张**（官方 torch 对 FlashRT fp16 / fp8 / fp4 / int8 / int4，稳态延迟，10 步；表的格式与规则见 `benchmarks/imagewam_result_table.py`，方案见 `plan.md` 的 "Plan: the final result tables"），以及 **P1：ISSUE-087 的探针**。RoboTwin 那一张（30 步）要等它的 workload 声明，不在本清单。
+`0921_final` 那一轮的结果已记入 `THOR_STATUS_SUMMARY.md`：官方 torch 456.97 ms（L1），`fp16` 在服务默认下 274.70 ms、与未裁剪几乎相同（L2 的先决判据没过，L2 余下与 L3–L5 停了，现记为 ISSUE-088），ISSUE-087 的探针跑完（Thor 上 `synchronize()` 打断捕获会留下 generator 标志，一次成功小捕获可复位）。本节次待测：**D 组（先做）**：查 fp16 为什么不随裁剪变快，并用哨兵找出污染 generator 的测试；**L 组**：最终结果表 LIBERO 一张，D 组做完后**整组重跑**（表里只有同一 session 的行才算相对官方的倍数，上一轮停在 L2，不能接着用）。RoboTwin 那张要等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,7 +52,38 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-### L0–L6 最终结果表，LIBERO（10 步）：一个 session，按顺序连续跑
+### D 组：fp16 在 `text_trim` 下不变快（ISSUE-088）与污染 generator 的测试（ISSUE-087）
+
+**D1 逐 kernel 看哪部分不随行数缩小**（`benchmarks/imagewam_graph_kernel_profile.py`：同一进程按有效 token 数各建一个 frontend，对捕获的图做 `torch.profiler`，打印图 replay 耗时、图内 kernel 总耗时与占比、kernel 数、按 GEMM / 注意力 / 其他的分类耗时和耗时最高的 12 个 kernel；FA4 关，去掉一个变量；随机权重即可，设了 `CKPT_PATH` 就用真权重）
+```
+for P in fp16 nvfp4 fp16_cutlass; do
+  python benchmarks/imagewam_graph_kernel_profile.py --precision $P --valid-tokens 24,512 --use-fa4 off 2>&1 | tee $OUT/D1_$P.log
+done
+```
+要的数：每个精度在 24 与 512 有效 token 下的 `graph replay ... ms; kernels inside ... ms (..%)`、分类耗时、top kernel 表。判据（读表，不是过/不过）：
+- 两个长度下总 replay 是否相差（fp16 预计接近，nvfp4 预计差约 90 ms）；
+- fp16 里哪些 kernel 的每次 replay 耗时在 24 与 512 下相同：那就是不随行数缩小的部分，写出它的名字与耗时；
+- `kernels inside` 占 replay 的比例：显著低于 100% 说明图里有 kernel 之间的空隙；
+- `fp16_cutlass`（CUTLASS 的 fp16 档位）随裁剪缩小而 `fp16`（cuBLASLt）不缩小，就指向 cuBLASLt 的算法选择。
+如果 profiler 在图 replay 里抓不到 kernel（输出 0 个 kernel），把报错带回，改用 `nsys profile --cuda-graph-trace=node`。
+
+**D2 同进程的 replay A/B**（`imagewam_text_trim_bench.py` 的 `ab`：同一 frontend，20 有效 token 与 512 有效 token 交替，图 replay 用 CUDA events）
+```
+for P in fp16 nvfp4; do
+  python benchmarks/imagewam_text_trim_bench.py --precision $P --section ab --use-fa4 off --iters 20 --rounds 5 2>&1 | tee $OUT/D2_$P.log
+done
+```
+要的数：两边的 replay 时间。fp16 两边相同、nvfp4 差很多，就与上一轮一致，D1 的表给出原因；fp16 两边就不同，说明问题在 `path_bench` / `set_prompt` 的路径，而不在图。
+
+**D3 污染 generator 的测试**（`tests/conftest.py` 的哨兵：每个测试后做一次 `normal_()`，第一个让 generator 停在"正在捕获"状态的测试在它的收尾报错并点名，同时用一次成功小捕获复位，后面的测试各自判定）
+```
+FLASHRT_GENERATOR_SENTINEL=1 python -m pytest tests/test_imagewam_*.py tests/test_jetson_clock_state.py -q -rfE 2>&1 | tee $OUT/D3_sentinel.log
+```
+要的数：日志里含 "left the CUDA generator in the capturing state" 的测试 id（可能不止一个）；总数 `failed / passed / errors`，与上一轮的 86 / 631 / 55 相比，哨兵复位之后还剩多少失败（这才是没有被污染放大的真实失败数）。若没有测试被点名而整体仍大量失败，把 `01_pytest` 第一处失败之前最近一个失败的完整报错带回。
+
+---
+
+### L0–L6 最终结果表，LIBERO（10 步）：D 组之后，一个 session，整组重跑，按顺序连续跑
 
 原则：**同一个 session 内一口气跑完**（表里只有同一 session 的行才会算相对官方的倍数）；期间不要跑别的 GPU 任务；日志名固定。session 的口径：GPU 空闲、`emc_locked` 记录、MAXN、GPU 锁频（`P0_clock.log`）。计时边界对所有行相同：相机帧 + proprio（文本已编码）→ 反归一化 action，稳态；不含 Qwen3。
 
@@ -75,7 +106,7 @@ for P in fp16 nvfp4; do
 done
 python benchmarks/imagewam_thor_path_bench.py --workload libero --profile default --precision fp8_static_cutlass --calibration $CAL_TRIM --paths infer --precapture --warmup 20 --bench-iters 100 2>&1 | tee $OUT/L2_fp8.log
 ```
-要的数：每行 `infer` 的 `P10 / P50 / P90 / n`，以及打印的 `effective_config`（必须是 `text_trim=True vae_encoder=native vae_graph=True use_fa4=True use_fa4_mot=True fa4_fallback_reason=None`；有回退这一行作废）。判据：`fp16` 应明显低于 fp16 未裁剪的 275 ms（裁剪与精度无关，之前 fp16 叠满 273.8 ms 的异常就是这个判据没满足）；不满足先停，把 `effective_config` 和日志带回，不要继续。
+要的数：每行 `infer` 的 `P10 / P50 / P90 / n`，以及打印的 `effective_config`（必须是 `text_trim=True vae_encoder=native vae_graph=True use_fa4=True use_fa4_mot=True fa4_fallback_reason=None`；有回退这一行作废）。`fp16` 行：`0921_final` 测到 274.70 ms、与未裁剪几乎相同（ISSUE-088，D 组在查原因）。它是一个真实测得的数，**不再作为停止条件**：照常记录，行的备注写 "fp16 does not speed up under text_trim, ISSUE-088"；`effective_config` 必须是完整默认形态，有回退这一行才作废。
 
 **L3 三个精度的精度指标**（真实 LIBERO 数据；`profile default`，同一 session；这是 `imagewam_e2e_official_compare.py` 的口径：vs official 的余弦与 MAE，它自己的延迟列不用于表）
 ```
@@ -94,16 +125,6 @@ python benchmarks/imagewam_thor_int4_bench.py 2>&1 | tee $OUT/L4_int4.log
 **L5 收尾复测（夹住 session 内漂移）**：把 L1 与 fp4 的 L2 各再跑一次，日志名 `L5_official.log`、`L5_nvfp4.log`。判据：两次的 P50 与开头的差在 1–2% 内，才认为同一 session 内可比；差更大就在报告里写出来。
 
 **L6 带回什么**：`SESSION`、`P0_clock.log`、`P0_commit.log`、GPU 是否独占；L1/L2/L5 的 P10/P50/P90/n；L2 三行的 `effective_config`；L3 的表；L4 的两个 P50；官方与 FlashRT 用的 checkpoint 的 sha256 前 16 位（`sha256sum $CKPT_PATH | cut -c1-16`）。由有凭据的一方录进 `docs/imagewam_results.json`（先 `check` 再 `render`）。
-
-### P1 ISSUE-087：失败的捕获是否让 CUDA generator 遗留"正在捕获"标志
-背景：`0921` 的全量 pytest（torch 2.9.1）在 FA4 测试之后，`test_imagewam_infer_action_noise.py` 构造 frontend 时 `torch.randn` 抛 `Offset increment outside graph capture encountered unexpectedly`。开发机（torch 2.14）上三种失败捕获的方式都不会留下这个状态，所以只能在 Thor 上查。
-```
-python scripts/probe_capture_generator_state.py 2>&1 | tee $OUT/P1_probe.log
-python -m pytest tests/test_imagewam_fa4_dispatch.py -x -q 2>&1 | tee $OUT/P1_fa4_dispatch.log
-python -m pytest tests/test_imagewam_fa4_dispatch.py -k capture_sync tests/test_imagewam_infer_action_noise.py -q 2>&1 | tee $OUT/P1_cascade.log
-```
-判据：探针每个 case 打印 `randn afterwards: ok` 还是那条错误、以及"一次成功捕获之后"是否恢复；`P1_cascade.log` 里第二个文件是否出错。全 ok → 污染另有来源（把 `01_pytest.log` 里第一处 ERROR 之前最近一个失败的测试带回）。有 case 留下状态 → 判断是测试收尾要复位（fixture 里做一次成功的小捕获），还是 frontend 的回退路径要复位（`_capture_graph_or_fall_back`）。
-去向：`issues.md` ISSUE-087。
 
 ---
 

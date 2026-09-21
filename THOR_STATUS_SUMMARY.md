@@ -306,6 +306,14 @@ gate 的 P50（105.4）与同配置端到端行（下表 `stack` 94.4、`profile
 
 **全量 pytest**：86 failed / 631 passed / 2 skipped / 55 errors。第一处 FAIL 是 `test_static_fp8_set_activation_scale_equals_calibrate`：`act_scale` 相差 1 ULP（0.0093122218 对 0.0093122208）。`compute_scale_kernel` 的 `amax / 448.0f` 在带 `--use_fast_math` 的构建里不是 IEEE 除法，标定文件的 numpy 除法是，所以不逐位相等；这个原因是从编译选项推断的，没有看 SASS。测试已改为对该标度用 1 ULP 容差，`set_activation_scale` 的逐位一致改用设备自己的标度检查。第一处 ERROR 是 `test_imagewam_infer_action_noise.py` 构造 frontend 时 `torch.randn` 抛 `Offset increment outside graph capture encountered unexpectedly`，发生在 FA4 测试之后；那是 CUDA generator 的"正在捕获"标志没有复位的错误，成因（哪一个失败的捕获遗留了它）没有确认，见 issues.md ISSUE-087。ABI / native 门禁是随后的新进程，所以不受影响。
 
+### `0921_final` 轮（部分）：最终表 LIBERO 一张的前两行与 ISSUE-087 探针（commit `22d3801`）
+
+MAXN，GPC 1.575 / NVD 1.692 GHz，`emc_locked=null`，GPU 空闲；checkpoint sha256 前 16 位 `53620f93f8772d20`；日志在 Thor 的 `thor_val/0921_final`。这一轮**停在 L2 的 fp16**，L2 的 nvfp4 / fp8、L3–L5 没有跑，所以这里没有可用的表行：表里只有同一 session 的行才算相对官方的倍数，D 组之后整组重跑。
+
+- **官方 torch（bf16 eager，`imagewam_official_torch_bench.py --workload libero`，10 步，horizon 64）**：P10 456.25 / P50 456.97 / P90 457.74 ms（n=30），相对另一次会话的 453.6 ms 约 +0.7%。
+- **FlashRT fp16，服务 `default` profile**（`effective_config precision=fp16 text_trim=True vae_encoder=native vae_graph=True use_fa4=True use_fa4_mot=True fa4_fallback_reason=None`）：`infer` P10 274.20 / P50 274.70 / P90 275.86 ms（n=100），`valid_tokens=24`（活动 `x0=25`）。与未裁剪的 275 ms 几乎相同，而 nvfp4 同样的开关从 202 降到 103 ms：fp16 是唯一不随裁剪变快的精度，三个不同的轮次都是这样（284.38 / 273.8 / 274.70 ms），记为 issues.md ISSUE-088，成因未知。
+- **ISSUE-087 探针（torch 2.9.1+cu130）**：`case_sync_inside_capture` 之后 `torch.randn` 抛 `Offset increment outside graph capture encountered unexpectedly`，一次成功的小捕获之后恢复；另外两种失败方式（捕获体内 Python 异常、捕获体内用了 RNG 再出错）不留下这个状态。`test_imagewam_fa4_dispatch.py` 单独 24 passed；`capture_sync` 之后紧接 `infer_action_noise.py` 5 passed（FA4 回退成功再录图，标志被复位）。清单里的 `-k capture_sync` 作用在两个文件上，把第二个文件的测试都 deselect 了，所以没有测到级联；是哪个测试留下标志仍未确定，D3 用哨兵去找。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

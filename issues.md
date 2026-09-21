@@ -632,15 +632,64 @@ The pass count of the full run cannot be read: everything after the first poison
 
 ## Evidence
 
-The error text is the CUDA generator's check that no capture is open; it fires when the generator still holds the "capturing" flag while the stream is not capturing. Measured on the development GPU (torch 2.14, RTX 4060): none of three ways of failing a capture (a device sync inside it, a Python error inside it, an RNG use then an error) leaves the generator unusable (`scripts/probe_capture_generator_state.py`). So the poisoning is not reproduced off Thor and the torch 2.9.1 build on Thor is the untested variable. Not measured: which failed capture leaves the flag set, and whether one tiny successful capture repairs it.
+The error text is the CUDA generator's check that no capture is open; it fires when the generator still holds the "capturing" flag while the stream is not capturing. Development GPU (torch 2.14, RTX 4060): none of three ways of failing a capture leaves the generator unusable (`scripts/probe_capture_generator_state.py`).
+
+Thor, `0921_final` round (commit `22d3801`, torch 2.9.1+cu130), the same probe:
+
+| case | `torch.randn` after the failed capture | after one successful small capture |
+|---|---|---|
+| `case_sync_inside_capture` | `RuntimeError: Offset increment outside graph capture encountered unexpectedly.` | ok |
+| `case_python_error_inside_capture` | ok | not needed |
+| `case_rng_inside_capture_then_error` | ok | not needed |
+
+`tests/test_imagewam_fa4_dispatch.py` alone: 24 passed. `-k capture_sync` followed by `tests/test_imagewam_infer_action_noise.py` in one process: 5 passed (the FA4 fallback test recaptures successfully, which repairs the flag). The checklist's own command (`-k capture_sync` over both files) deselected the second file's tests (`1 passed, 27 deselected`) and so did not test the cascade.
+
+So on torch 2.9.1 a device sync inside a capture leaves the generator's flag set, and one successful capture clears it. The FA4 fallback path recaptures, so it repairs the state whenever the retry succeeds. Not established: which test leaves the flag set with no successful capture after it.
 
 ## Hypotheses
 
-A capture that fails inside `capture_end` (the `synchronize()` in the `capture_sync` mode of `test_fa4_failure_falls_back_to_the_cuBLAS_chain`) skips the generator's epilogue on torch 2.9.1, so the flag stays set for the rest of the process. Alternative: a failed second capture (the fallback also failing) in another test does the same.
+A test that fails a capture on purpose and ends without a successful capture after it (a final failure: "after a second failure the frontend holds no graph", or a test that only checks the refusal) leaves the process in this state, and every later CUDA random draw then fails. It is in the tests between `test_imagewam_fa4_dispatch.py` and `test_imagewam_infer_action_noise.py` in file order, or in the file order of the run that erred.
 
 ## Next Experiment
 
-On the Thor: run `python scripts/probe_capture_generator_state.py` (each case prints whether `torch.randn` works afterwards, and whether one successful capture repairs it). Then `python -m pytest tests/test_imagewam_fa4_dispatch.py -x -q`, and `python -m pytest tests/test_imagewam_fa4_dispatch.py -k capture_sync tests/test_imagewam_infer_action_noise.py -q` in one process to see whether the second file errors. If a case poisons the generator, either the tests reset it (one successful capture in a fixture after the failing ones) or the fallback path does, depending on whether the frontend's own retry leaves it set.
+`FLASHRT_GENERATOR_SENTINEL=1 python -m pytest tests/test_imagewam_*.py tests/test_jetson_clock_state.py -q` (`tests/conftest.py`): after every test it draws one random number and, on the first test that leaves the flag set, names it in a teardown failure and repairs the state with one small capture, so the rest of the run is judged on its own. Then the fix is that test's own (a small successful capture in its cleanup), not the frontend's.
+
+## Resolution
+
+# ISSUE-088
+
+Status: open
+
+Area: `precision="fp16"` on Thor under `text_trim` (`flash_rt/frontends/torch/imagewam_thor.py`, `flash_rt/models/imagewam/pipeline_thor.py`, the `fp16_nn` GEMM path)
+
+## Observation
+
+Trimming the text context shortens the graph's sequence (LIBERO `valid_tokens=24` gives `x0=25`, `a0=417` against 905). It removes about 87 ms from `nvfp4` and about 105 ms from `fp8_static_cutlass` on Thor, and removes nothing from `fp16`.
+
+## Impact
+
+The `fp16` row of every table is the untrimmed speed whatever the profile says, so `fp16` looks about as fast at the served default as untrimmed (about 275 ms), and the `default` profile's whole gain over the official implementation for that tier is only the FlashRT graph itself. It also means some part of the `fp16` graph does not scale with the row count, which is not what a compute-bound GEMM path does.
+
+## Evidence
+
+| round | configuration | fp16 P50 |
+|---|---|---:|
+| earlier matrix `default` row | untrimmed | 275.2 ms |
+| `0920t` gate, fixture v2 (trimmed reference) | trim + FA4 backbone | 284.38 ms |
+| earlier stacked row | trim + FA4 + native VAE | 273.8 ms |
+| `0921_final`, `imagewam_thor_path_bench.py --profile default --precision fp16` | trim, FA4 both sites, native VAE (`effective_config` full, no fallback) | 274.70 ms (P10 274.20, P90 275.86, n=100), active `x0=25` |
+
+The same switches on `nvfp4`: 202.2 to 103.3 ms (`0921` ladder, `default` to `vae_trim`). On `fp8_static_cutlass`: about 220 to 115 ms. `fp16` is the only precision whose trimmed run shows no gain, and it does so in three separate harnesses and rounds, so it is not noise.
+
+The `fp16` tier differs from the others in its GEMM path (`Fp16Linear` over `GemmRunner.fp16_nn`, cuBLASLt with a per-shape autotune, `_autotune_gemm(..., fp16_nn_shapes=True)` on every new length); the quantized tiers run CUTLASS.
+
+## Hypotheses
+
+Not tested: (a) the cuBLASLt algorithm the autotune picks at the trimmed shapes (`M = x0` and `M = a0`, such as 25 and 417) is slow enough to cancel the smaller row count; (b) a kernel outside the GEMMs, in the fp16 path only, costs the same at any length; (c) the trimmed graph is not the one replayed for `fp16`. `active x0=25` in the bench output speaks against (c) but does not exclude it.
+
+## Next Experiment
+
+`benchmarks/imagewam_graph_kernel_profile.py --precision fp16 --valid-tokens 24,512 --use-fa4 off` and the same with `--precision nvfp4`: the kernel time by category and the top kernels at 24 and 512 valid tokens. The kernels whose per-replay time is the same at both lengths are the part that does not scale. And `benchmarks/imagewam_text_trim_bench.py --precision fp16 --section ab --use-fa4 off` for the graph-replay A/B in one process.
 
 ## Resolution
 
