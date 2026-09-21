@@ -400,6 +400,9 @@ def main() -> int:
                     help="valid text tokens per prompt, comma-separated to sweep (default: the named "
                          "workload's own, benchmarks/_imagewam_workload_cli.VALID_TOKENS); this is what a "
                          "--text-trim comparison turns on")
+    ap.add_argument("--text-trim-cache-size", type=int, default=None,
+                    help="per-length graph cache bound (S3; default: the resolver's 32); a value below "
+                         "--valid-tokens' count makes the eviction path observable")
     ap.add_argument("--precapture", action="store_true",
                     help="hand the --valid-tokens lengths to "
                          "load_imagewam(precapture_text_lengths=...), so the startup precapture captures "
