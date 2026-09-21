@@ -62,8 +62,8 @@
 | `precision` | `nvfp4` | 精度/速度档位 | `fp8_static*` 需要校准文件 |
 | `text_trim` | 关（服务 `default` 档位为**开**） | 按有效文本长度裁剪；开启后每个有效文本长度一张图，Python `infer()`、ABI 与 native 三条路径都能服务（native 侧由 `capture_pipeline_text_lengths` 逐长度安装并捕获）；服务默认即裁剪，`0920t` 的 nvfp4 gate 125.86 ms、端到端 126.5 ms | native pipeline 自己的按长度捕获已验证（`0920c`）：`test_pipeline_records_one_graph_per_text_length` 通过，该轮 native 两条 pytest 39 passed 且无 skip，逐长度 tick `differing=[]`，每个长度的 GEMM 交接完整（`{6: (4, 4), 14: (4, 4)}`） |
 | `text_trim_cache_size` | 32 | `text_trim` 预捕获图的张数上限，超出按 LRU 淘汰 | 显存只在首次捕获付出：首图 +218.0 MiB reserved / +206.3 MiB allocated，其后每张 +0.0 / +0.1 MiB，默认上限 32 的总代价在 221 MiB 量级（`a84916a`，nvfp4，15 个 LIBERO 长度） |
-| FA4（`FLASHRT_THOR_FA4`、`use_fa4_mot`） | backbone 位点：机器能跑就开（`FLASHRT_THOR_FA4=0` 强制走 cuBLAS 链）；mot 位点：关 | 注意力 kernel；`0920t` 同一裁剪配置下开比关快约 5 ms（端到端 126.5 对 131.3 ms），`effective_config` 对服务默认打印 `use_fa4=True`、对 `FLASHRT_THOR_FA4=0` 打印 `use_fa4=False` | 首次调用编译，失败自动回退 |
-| `vae_encoder="native"` / `vae_graph_input` | 关（torch 编码器） | 原生 VAE / 进图 | — |
+| FA4（`FLASHRT_THOR_FA4`、`use_fa4_mot`） | 两个位点都是 auto：机器能跑就开（`FLASHRT_THOR_FA4=0` 强制走 cuBLAS 链，两个位点一起） | 注意力 kernel；捕获失败自动回退 cuBLAS 链。`0921` 的服务默认 gate 三次都是 `use_fa4=True use_fa4_mot=True fa4_fallback_reason=None`；`FLASHRT_THOR_FA4=0` 时 `use_fa4=False use_fa4_mot=False`，P50 103.2 ms（与 `vae_trim` 行 103.3 ms 同量级），不报错 | 首次调用要编译：`0921` 清缓存后冷构造 14.67 s、紧接着的热构造 11.79 s，差额 2.89 s 是一次性的；native pipeline 没有 FA4，`native` profile 显式关 |
+| `vae_encoder` / `vae_graph_input` | auto：给了 `ae_model_path` 就用原生编码器并进图，没给就没有 VAE 阶段（可显式写 `vae_encoder="torch"`） | 原生 NHWC VAE 编码器 + 预处理，进主图 | native 面拒绝进图 VAE（`native` profile 图外；`default` 在 path bench 里 native 行 SKIP 是预期） |
 | `nvfp4_awq` | 关 | NVFP4 精度补偿 | 需要校准文件；原生 runtime 不支持 |
 | `gemm_variant_autotune` | 关 | ActionDiT tile 逐形状选择 | 仅 NVFP4/FP8 CUTLASS 档位 |
 | 融合项 | 开 | 见上 | `fp16_cutlass` 档位不做 `linear2` 合并 |
@@ -74,7 +74,8 @@
 
 | 配置 | P50 | vs official cosine（median） |
 |---|---:|---:|
-| 当前默认（裁文本 + FA4，`0920t` 的 gate / 端到端） | **125.86 / 126.5 ms** | 0.99934（min 0.99889） |
+| 当前默认（0921 起：裁文本 + FA4 双位点 + 原生 VAE 进图；gate 三次 / 端到端 `profile_default`） | **105.42 / 105.93 / 105.66 ms（gate）/ 93.1 ms（端到端，各 prompt）** | 0.99932（gate median；min 0.99884–0.99896） |
+| 上一版默认（裁文本 + FA4 backbone + torch VAE 图外，`0920t` 的 gate / 端到端） | 125.86 / 126.5 ms | 0.99934（min 0.99889） |
 | 旧默认（未裁剪 + FA4 关；`eccf14f` 一轮 `default` 202.0–202.4；gate 203.3 属更早的会话） | 约 202–203 ms | 0.9976 |
 | 只开 `text_trim` | 115.2 ms（libero_10 115.0，goal 129.9） | 0.99936 |
 | 只开原生 VAE 进图 | 190.9 ms | — |
@@ -259,6 +260,52 @@ FA4 两个位点都不回退（`FA4 fallback` 为 `None`）。按这张表的判
 
 微基准（随机权重、不含 VAE）：融合项合计约 −9.7 ms；FA4 backbone −26.9 ms，backbone + mot −58.5 ms；VAE 编码 stage 19.4 → 8.3 ms（进图）；VAE 预处理 kernel 0.97 → 0.13 ms。
 
+### `0921` 轮：服务默认提升为最快配置的观察（nvfp4，LIBERO，commit `de0ef51`）
+
+MAXN，GPC 1.575 / NVD 1.692 GHz，`emc_locked=null`，GPU 空闲；日志在 Thor 的 `thor_val/0921`。
+
+**标定 v3**：两个 bundle 文件重录成功，version 3，identity 带 `num_views/image_h/image_w = 2/224/224`（`text_trim` 分别为 False、True），64 个 sample、约 0.96 s/sample；旧 v2 文件被拒并提示重录，符合预期。
+
+**服务默认的 gate（fixture v2，`--warmup 20 --iters 100`，同一命令三次）**：三次的 `effective_config` 都是 `text_trim=True vae_encoder=native vae_graph=True use_fa4=True use_fa4_mot=True fa4_fallback_reason=None`；fidelity 全过（FA4 双位点 + 原生 VAE 对 fixture 里 cuBLAS + torch VAE 录的 fp16 参考，余弦仍高于阈值）。
+
+| 次 | vs official min / median | P50 |
+|---|---|---:|
+| r1 | 0.99896 / 0.99931 | 105.42 ms |
+| r2 | 0.99884 / 0.99932 | 105.93 ms |
+| r3 | 0.99894 / 0.99933 | 105.66 ms |
+
+极差 0.51 ms，基线余量 5%（约 5.3 ms）是它的十倍。`served_default` 用 r1 的记录播种（`latency_baselines.json`）。旧基线仍管它自己：`untrimmed_reference` 的 gate 通过，P50 202.38 ms。相对 `0920t` 的 125.86 ms（裁文本 + FA4 backbone + torch VAE 图外）约 −20 ms。
+
+gate 的 P50（105.4）与同配置端到端行（下表 `stack` 94.4、`profile_default` 93.1）差约 11 ms：两个口径用的 prompt 不同（gate 测 fixture 的最后一条观测，端到端在各任务上取 P50），裁文本的延迟随有效 token 数变化。这是对差异来源的推断，没有单独验证；两列不要互相比较。
+
+**三个风险**：
+- FA4 首次编译（清 cute 缓存后同进程两次 `load_imagewam(profile="default")`）：冷 14.672 s、热 11.787 s，一次性差额 2.89 s。
+- `FLASHRT_THOR_FA4=0`：不报错，`use_fa4=False use_fa4_mot=False`，P50 103.2 ms，与 `vae_trim` 行（103.3 ms）同量级。
+- 目标工作负载（3×256×256，`img_len=768`）：`--profile default` 的 infer 121.92 / ABI 123.64 ms，native 行跳过（进图 VAE，预期），相对 `0919e`（216.93 / 173.55 ms）分别 −95.0 / −49.9 ms；`--profile native`（trim、FA4 关、图外 VAE）infer 180.01 / ABI 140.26 / native 139.97 ms。
+
+**配置矩阵（flag 行现在每行写明 VAE 与两个 FA4 位点；libero_spatial，nvfp4，全部 rc=0，FA4 fallback=None）**：
+
+| 行 | vs official min / median | P50 | FA4 bb / mot |
+|---|---|---:|---|
+| `default`（未裁剪阶梯底） | 0.99418 / 0.99764 | 202.2 | F / F |
+| `vae` | 0.99410 / 0.99744 | 190.2 | F / F |
+| `vae_trim` | 0.99905 / 0.99932 | 103.3 | F / F |
+| `vae_trim_fa4bb` | 0.99895 / 0.99934 | 98.9 | T / F |
+| `stack` | 0.99896 / 0.99931 | 94.4 | T / T |
+| `stack_no_vae` | 0.99898 / 0.99931 | 105.3 | T / T |
+| `stack_no_trim` | 0.99437 / 0.99750 | 131.2 | T / T |
+| `profile_default` | — | 93.1 | 与 `stack` 同一组开关 |
+| `profile_fast` | — | 93.3 | 同上 |
+| `profile_native`（trim，无 FA4，无进图 VAE） | — | 115.0 | F / F |
+
+`profile_default`、`profile_fast` 与 `stack` 在跑间波动内相同，vs official 不劣于 `stack`。边际（相对上一行）：原生 VAE 进图 −12.0，`text_trim` −86.9，FA4 backbone −4.4，FA4 mot −4.5 ms。
+
+**fp8 标定重录后**：`fp8_static_cutlass` 的 `stack` 行接受新文件，vs official min 0.99989 / median 0.99994（`c20f3a0` 为 0.99995），P50 104.7 ms，FA4 双开、无回退。
+
+**ABI / native 回归**：`08_gate_abi`、`08_gate_abi_vae_graph`、`08_gate_native_schema`（仍 7 records identical）、`08_gate_native`（5324 / 5348 节点，6 个 mutant 全检出）全过；native pytest 39 passed。
+
+**全量 pytest**：86 failed / 631 passed / 2 skipped / 55 errors。第一处 FAIL 是 `test_static_fp8_set_activation_scale_equals_calibrate`：`act_scale` 相差 1 ULP（0.0093122218 对 0.0093122208）。`compute_scale_kernel` 的 `amax / 448.0f` 在带 `--use_fast_math` 的构建里不是 IEEE 除法，标定文件的 numpy 除法是，所以不逐位相等；这个原因是从编译选项推断的，没有看 SASS。测试已改为对该标度用 1 ULP 容差，`set_activation_scale` 的逐位一致改用设备自己的标度检查。第一处 ERROR 是 `test_imagewam_infer_action_noise.py` 构造 frontend 时 `torch.randn` 抛 `Offset increment outside graph capture encountered unexpectedly`，发生在 FA4 测试之后；那是 CUDA generator 的"正在捕获"标志没有复位的错误，成因（哪一个失败的捕获遗留了它）没有确认，见 issues.md ISSUE-087。ABI / native 门禁是随后的新进程，所以不受影响。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |
@@ -288,6 +335,7 @@ FA4 两个位点都不回退（`FA4 fallback` 为 `None`）。按这张表的判
 | 官方 bf16 eager，端到端 | 453.6 ms | 2.2× |
 | FlashRT nvfp4 默认（该行未裁剪 + FA4 关） | 203.3 ms | 1.00× |
 | FlashRT nvfp4 叠满 | 106.1 ms（`c20f3a0`） | 0.52×（快 1.9×；相对官方约 4.3×） |
+| FlashRT nvfp4 服务默认（`0921`，端到端各 prompt） | 93.1 ms | 0.46×（快 2.2×；相对官方约 4.9×，官方数字来自另一会话，不是同一机器状态的比值） |
 
 官方侧 `torch.compile`：`inductor` 在 Thor 上无法编译；`cudagraphs` 比 eager 更慢（514.4 ms）。
 

@@ -922,12 +922,12 @@ Blocker: no sm_110 device and no FA4 runtime on the dev box (`issues.md` ISSUE-0
 
 # Plan: configuration consolidation (workload / precision / profile)
 
-Plan Status: completed for W0-W12, T1-T5 and S1-S4 (the `0920c` round ran
-the line's last three Thor rows and ISSUE-080 is resolved). The follow-up
-phases F1-F3 (the served default promoted to the fastest configuration, the
-latency baselines per configuration, the workload in the calibration
-identity) have their code and CPU tests in place; their Thor observations
-are the pending rows of `THOR_CHECKLIST.md`.
+Plan Status: completed. W0-W12, T1-T5 and S1-S4 finished with the `0920c`
+round (ISSUE-080 resolved); the follow-up phases F1-F3 (the served default
+promoted to the fastest configuration, the latency baselines per
+configuration, the workload in the calibration identity) finished with the
+`0921` Thor round (THOR_STATUS_SUMMARY.md). What that round left open is
+ISSUE-087 (the full pytest run's capture-state cascade), not a phase.
 
 ## Problem
 
@@ -1580,7 +1580,7 @@ captures share the pool), so 15 lengths sit under one graph's fixed cost and
 the default bound of 32 is on the order of 221 MiB, not 32 x 218 MiB.
 
 ### Phase F1: the served default is the fastest configuration
-Phase Status: code complete; Thor observation pending (THOR_CHECKLIST.md)
+Phase Status: completed
 - Goal: `resolve_config(profile="default")` resolves to text_trim + FA4 at
   both sites + the native VAE inside the graph, degrading where the machine
   or the inputs cannot carry it. `use_fa4_mot` becomes tri-state (`None`
@@ -1604,9 +1604,15 @@ Phase Status: code complete; Thor observation pending (THOR_CHECKLIST.md)
   default's own gate run and matrix row (FA4 at both sites, no fallback, the
   VAE inside the graph), and the three risks (FA4 first-call compile, an
   FA4 capture failure falling back, the in-graph VAE's fixed input).
+- Observed (`0921`, `de0ef51`): the gate on the default ran three times with
+  FA4 at both sites, the native VAE in the graph and no fallback
+  (105.42 / 105.93 / 105.66 ms); the flag-row ladder and the profile rows
+  reproduce (`stack` 94.4, `profile_default` 93.1, `profile_fast` 93.3 ms);
+  `FLASHRT_THOR_FA4=0` degrades without an error (103.2 ms); the first FA4
+  compile costs 2.89 s once; the target workload runs on `infer()` and ABI.
 
 ### Phase F2: latency baselines per configuration
-Phase Status: code complete; Thor observation pending (THOR_CHECKLIST.md)
+Phase Status: completed
 - Goal: a baseline judges only a run of the configuration it describes. The
   gate names the configuration from what the frontend resolved, and an
   unseeded or unknown configuration is ungated with a paste-ready seed record.
@@ -1621,9 +1627,13 @@ Phase Status: code complete; Thor observation pending (THOR_CHECKLIST.md)
   the default seeds `served_default`; the fidelity checks against fixture v2
   (recorded with the plain chain and the torch VAE) must still pass with FA4
   at both sites and the native VAE.
+- Observed (`0921`): it passed (vs official 0.99931-0.99933) and seeded
+  `served_default` at 105.42 ms; the three repeats' spread is 0.51 ms, ten
+  times smaller than the 5% margin. `untrimmed_reference` still gates its own
+  configuration (202.38 ms).
 
 ### Phase F3: the calibration identity carries the workload
-Phase Status: code complete; Thor observation pending (THOR_CHECKLIST.md)
+Phase Status: completed
 - Goal: two workloads with equal `ref_h`/`ref_w` but different camera
   geometry (2 x 224x224 vs 4 x 224x112) no longer share a calibration
   identity.
@@ -1638,6 +1648,9 @@ Phase Status: code complete; Thor observation pending (THOR_CHECKLIST.md)
   The bundle's calibration files are refused until re-recorded.
 - Observation: CPU tests reproduce the collision and the refusals. On Thor:
   re-record the two bundle files and load them.
+- Observed (`0921`): both files re-recorded as version 3 with identity
+  `2/224/224`, loaded by the trimmed `fp8_static_cutlass` `stack` row (vs
+  official median 0.99994), the version-2 files refused.
 
 ## Execution record
 
