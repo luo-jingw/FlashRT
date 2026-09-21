@@ -16,15 +16,29 @@ pipeline, reduced across samples with the house reducer
 
 Identity: the checkpoint (`flash_rt.core.quant.calibrator._checkpoint_hash`:
 SHA-256 of the first 64KB + file size, first 16 hex chars), every dims
-entry that changes GEMM shapes or activation distributions, and
-`text_trim`: whether the statistics were recorded with the text context
-trimmed to the prompt's valid tokens (`ImageWAMTorchFrontendThor(text_trim=True)`,
-issues.md ISSUE-020). Untrimmed text and single-stream GEMM inputs include
-about 490 padded context rows that a trimmed frontend never computes. A
-frontend refuses a file whose identity differs from its own.
+entry that changes GEMM shapes or activation distributions
+(`IDENTITY_DIM_KEYS`), and `text_trim`: whether the statistics were
+recorded with the text context trimmed to the prompt's valid tokens
+(`ImageWAMTorchFrontendThor(text_trim=True)`, issues.md ISSUE-020).
+Untrimmed text and single-stream GEMM inputs include about 490 padded
+context rows that a trimmed frontend never computes. A frontend refuses a
+file whose identity differs from its own.
 
-Format versions: 2 records `text_trim`; version-1 files predate the field
-and were recorded untrimmed, so they load as `text_trim=False`.
+The dims include the workload's camera geometry: `num_views`, `image_h`,
+`image_w`. The sequence layout alone does not fix it (two 224x224 views and
+four 224x112 views both give `ref_h x ref_w = 14 x 28`, the same `x0` and
+`a0`), yet the VAE input, and so the image-token statistics, differ. A
+frontend supplies the three keys only when its dims come from a workload:
+build it through `load_imagewam` / `ImageWAMTorchFrontendThor.from_config`,
+or include them in `dims_override` (`libero_dims.LIBERO_REAL_DIMS` has
+them). A frontend built by hand without them cannot validate a file, and
+the error says so.
+
+Format version: 3 (the workload identity above). There is no reader for
+earlier files: version 1 (no `text_trim`) and version 2 (no camera
+geometry) predate the workload identity, `load_calibration` refuses them,
+and they are re-recorded with `benchmarks/imagewam_build_calibration.py`
+rather than migrated.
 
 On disk: one safetensors file. Arrays are tensors named
 `<site>.channel_amax` / `<site>.sample_absmax`; everything else is JSON
@@ -46,10 +60,10 @@ from flash_rt.core.quant.calibrator import _checkpoint_hash
 from flash_rt.models.imagewam.activation_recorder import ABS_PERCENTILES, SampleStats
 
 FORMAT_NAME = "imagewam_activation_calibration"
-FORMAT_VERSION = 2
-# Versions `load_calibration` reads. Version 1 has no `text_trim` entry:
-# every version-1 file was recorded with the untrimmed frontend.
-SUPPORTED_VERSIONS = (1, 2)
+FORMAT_VERSION = 3
+# Versions `load_calibration` reads: the current one only. Files of an
+# earlier version are refused, not migrated (see `load_calibration`).
+SUPPORTED_VERSIONS = (3,)
 FP8_E4M3_MAX = 448.0
 DEFAULT_PERCENTILE = 99.9
 IDENTITY_DIM_KEYS = (
@@ -58,6 +72,8 @@ IDENTITY_DIM_KEYS = (
     "action_mlp_hidden", "num_action", "action_dim", "action_num_layers_double",
     "action_num_layers_single", "num_denoise_steps", "shift", "num_train_timesteps",
     "proprio_dim", "ref_h", "ref_w", "merge_qkv_mlp", "merge_linear2",
+    # The workload's camera geometry (`ImageWAMWorkload.num_views/image_h/image_w`).
+    "num_views", "image_h", "image_w",
 )
 
 
@@ -90,7 +106,12 @@ class ImageWAMCalibration:
 
     def validate_for(self, *, checkpoint_path: str, dims: dict, text_trim: bool) -> None:
         """Raise `ValueError` unless this file was built for exactly this
-        checkpoint, these dims and this `text_trim` setting."""
+        checkpoint, these dims and this `text_trim` setting.
+
+        `dims` must carry every `IDENTITY_DIM_KEYS` entry, the camera
+        geometry (`num_views`, `image_h`, `image_w`) included: a frontend
+        built by hand without them is refused (the diff shows the file's
+        value against `None`)."""
         if self.version not in SUPPORTED_VERSIONS:
             raise ValueError(f"calibration file version {self.version} not in {SUPPORTED_VERSIONS}")
         if bool(text_trim) != self.text_trim:
@@ -103,9 +124,15 @@ class ImageWAMCalibration:
                              f"({ckpt_id}, {ckpt_size} bytes)")
         want = identity_dims(dims)
         if want != self.dims:
-            diff = {k: (self.dims.get(k), want.get(k)) for k in set(want) | set(self.dims)
+            diff = {k: (self.dims.get(k), want.get(k)) for k in sorted(set(want) | set(self.dims))
                     if self.dims.get(k) != want.get(k)}
-            raise ValueError(f"calibration file dims differ (file, frontend): {diff}")
+            missing = sorted(k for k in diff if k not in want)
+            hint = ""
+            if missing:
+                hint = (f"; the frontend's dims do not carry {missing}: build the frontend through "
+                        f"load_imagewam / ImageWAMTorchFrontendThor.from_config, or include those keys "
+                        f"in dims_override")
+            raise ValueError(f"calibration file dims differ (file, frontend): {diff}{hint}")
 
 
 def checkpoint_identity(checkpoint_path: str) -> tuple[str, int]:
@@ -170,6 +197,9 @@ def save_calibration(cal: ImageWAMCalibration, path: str) -> None:
 
 
 def load_calibration(path: str) -> ImageWAMCalibration:
+    """Read a version-3 file. A file of an earlier version predates the
+    workload identity and raises `ValueError` naming its version; it is
+    re-recorded, not migrated."""
     with safe_open(path, framework="pt") as f:
         raw = (f.metadata() or {}).get("imagewam_calibration")
         if raw is None:
@@ -178,9 +208,12 @@ def load_calibration(path: str) -> ImageWAMCalibration:
         if meta.get("format") != FORMAT_NAME:
             raise ValueError(f"{path}: format {meta.get('format')!r} != {FORMAT_NAME!r}")
         version = int(meta["version"])
+        if version < FORMAT_VERSION:
+            raise ValueError(f"{path}: calibration file version {version} predates the workload identity "
+                             f"(camera geometry num_views/image_h/image_w, format version {FORMAT_VERSION}) "
+                             f"and is not read; re-record it with benchmarks/imagewam_build_calibration.py")
         if version not in SUPPORTED_VERSIONS:
             raise ValueError(f"{path}: calibration file version {version} not in {SUPPORTED_VERSIONS}")
-        text_trim = False if version == 1 else bool(meta["text_trim"])
         sites = {}
         for n, sm in meta["sites"].items():
             sites[n] = SiteCalibration(
@@ -193,4 +226,4 @@ def load_calibration(path: str) -> ImageWAMCalibration:
         version=version, checkpoint_id=meta["checkpoint_id"],
         checkpoint_size=int(meta["checkpoint_size"]), dims=meta["dims"],
         percentile=float(meta["percentile"]), frames=[tuple(f) for f in meta["frames"]],
-        noise=meta["noise"], sites=sites, text_trim=text_trim)
+        noise=meta["noise"], sites=sites, text_trim=bool(meta["text_trim"]))

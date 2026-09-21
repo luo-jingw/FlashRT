@@ -64,9 +64,26 @@ percentiles. Site names are the frontend's weight keys joined with dots,
 e.g. `backbone.single.3.linear1.weight`.
 
 Identity: checkpoint hash (`_checkpoint_hash`: SHA-256 of the first 64KB
-plus the file size) and size, and every dims entry that changes GEMM
-shapes or activations (`calibration_file.IDENTITY_DIM_KEYS`). The
-frontend raises `ValueError` on any mismatch.
+plus the file size) and size, every dims entry that changes GEMM
+shapes or activations (`calibration_file.IDENTITY_DIM_KEYS`), and
+`text_trim`. The dims include the workload's camera geometry
+(`num_views`, `image_h`, `image_w`): two workloads can share `ref_h`,
+`ref_w`, `x0` and `a0` (2 views of 224x224 and 4 views of 224x112 both
+give the 14 x 28 grid) while the VAE is fed different images, so the
+layout alone does not identify the workload. The frontend raises
+`ValueError` on any mismatch, naming the differing keys.
+
+A frontend gets the camera geometry from its workload
+(`load_imagewam` / `ImageWAMTorchFrontendThor.from_config`). One built by
+hand with `dims_override` has none unless the override carries the three
+keys (`libero_dims.LIBERO_REAL_DIMS` does), and it cannot validate a file:
+the error shows each missing key against the file's value.
+
+Format version 3 is the only one read. Version 1 (no `text_trim`) and
+version 2 (no camera geometry) files predate the workload identity;
+`load_calibration` refuses them, naming the version, and they are
+re-recorded with `benchmarks/imagewam_build_calibration.py` (the command
+above; add `--text-trim` for the trimming build), not migrated.
 
 ## Frontend
 
@@ -128,7 +145,7 @@ The result does not depend on the calibration set's size or suite mix
 the same `backbone_hidden` (0.99993-0.99994 median) and `actions`
 (0.99997 median) cosines and MAE ratio (1.000-1.001).
 `tests/gate_imagewam_libero.py --precision fp8_static --fp8-calibration
-<file> --no-text-trim --manifest
+<file> --no-text-trim --override vae_graph=false --override vae_encoder=torch --manifest
 tests/fixtures/imagewam_gate/imagewam_libero_gate_v1.manifest.json` passes
 on H100 (vs official median 0.99830, min 0.99553; vs its
 `fp16` reference median 0.999969; MAE 0.18373 against 0.18364).
@@ -136,10 +153,11 @@ on H100 (vs official median 0.99830, min 0.99553; vs its
 Every recorded number on this page belongs to the untrimmed configuration.
 The gate row is fixture v1, whose `fp16` reference is untrimmed, and it
 loads the untrimmed N = 64 build of the Build section (a frontend refuses a
-calibration file recorded with the other `text_trim`). Both switches are
+calibration file recorded with the other `text_trim`). The switches are
 stated in the invocation because the gate's own defaults are the served
-configuration now: fixture v2 and trimming on, so a bare run gates the
-trimmed pipeline. That gate has run at `nvfp4` only, and no `fp8_static`
+configuration now: fixture v2, trimming on and the native VAE encoder inside
+the graph, so a bare run gates the trimmed pipeline (the two `--override`s put
+the torch VAE back outside the graph, as it was in the recorded run). That gate has run at `nvfp4` only, and no `fp8_static`
 number against fixture v2 is recorded. The two accuracy tables are the same
 untrimmed configuration: the e2e rows were recorded before `text_trim` was
 served, and `imagewam_precision_fidelity.py` runs untrimmed unless

@@ -81,7 +81,10 @@ if DIMS_NAME == "real":
         num_action=64, total=TEXT_LEN + 1 + 392 + 64,
         action_num_layers_double=5, action_num_layers_single=20,
         dt=0.1, num_denoise_steps=10, ref_h=14, ref_w=28, proprio_dim=8, shift=5.0,
-        num_train_timesteps=1000)
+        num_train_timesteps=1000,
+        # The camera geometry: part of a calibration file's identity
+        # (TRIM_CALIBRATION), which a hand-built frontend must carry itself.
+        num_views=2, image_h=224, image_w=224)
     SEQUENCE = (20, 31, 16, 20, TEXT_LEN, 16, 31, 20, TEXT_LEN, 25)
 else:
     TEXT_LEN = 16

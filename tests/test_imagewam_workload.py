@@ -30,7 +30,8 @@ LAYOUT_KEYS = ("x0", "a0", "total", "ref_h", "ref_w", "dt")
 
 # The literal dims of the real ImageWAM-FLUX.2-4B-LIBERO release: the keys
 # `LIBERO_REAL_DIMS` held before it was derived from the workload and the
-# structure, plus `action_dim`, which the resolver's mapping adds.
+# structure, plus `action_dim` and the camera geometry (`num_views`,
+# `image_h`, `image_w`), which the resolver's mapping adds.
 LIBERO_LITERAL_DIMS: dict = dict(
     hidden=3072, HD=128, NH=24, mlp_hidden=9216, joint_attention_dim=7680,
     x0=513, a0=905, num_layers_double=5, num_layers_single=20,
@@ -39,6 +40,7 @@ LIBERO_LITERAL_DIMS: dict = dict(
     action_num_layers_double=5, action_num_layers_single=20,
     dt=0.1, num_denoise_steps=10,
     ref_h=14, ref_w=28, proprio_dim=8, shift=5.0, num_train_timesteps=1000,
+    num_views=2, image_h=224, image_w=224,
 )
 # `img_len` is not a `dims` key; it is the image token count, `a0 - x0`.
 LIBERO_LITERAL_IMG_LEN = 392
@@ -66,7 +68,7 @@ def test_libero_layout_equals_libero_real_dims():
 
 def test_resolve_config_dims_equal_libero_real_dims():
     """plan.md: `LIBERO_REAL_DIMS` is the resolver's dims mapping for
-    `libero()` and the real structure, so its 24 literals are one
+    `libero()` and the real structure, so its 27 literals are one
     definition and not a copy."""
     r = resolve_config(ImageWAMWorkload.libero(), ImageWAMStructure.libero())
     assert r.dims == LIBERO_REAL_DIMS
@@ -81,6 +83,12 @@ def test_libero_scalars_equal_libero_real_dims():
     assert w.num_steps == LIBERO_REAL_DIMS["num_denoise_steps"] == LIBERO_STEPS
     assert w.shift == LIBERO_REAL_DIMS["shift"] == LIBERO_SHIFT
     assert w.num_train_timesteps == LIBERO_REAL_DIMS["num_train_timesteps"]
+    # The camera geometry the layout was derived from is part of the dims
+    # (the calibration file's identity reads it, calibration_file.py).
+    for key in ("num_views", "image_h", "image_w"):
+        assert getattr(w, key) == LIBERO_REAL_DIMS[key] == LIBERO_LITERAL_DIMS[key], key
+    assert (LIBERO_REAL_DIMS["num_views"], LIBERO_REAL_DIMS["image_h"], LIBERO_REAL_DIMS["image_w"]) \
+        == (2, 224, 224)
 
 
 @pytest.mark.parametrize("views,h,w,ref_h,ref_w", [

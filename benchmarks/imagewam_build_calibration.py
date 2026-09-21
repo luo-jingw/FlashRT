@@ -22,6 +22,14 @@ context trimmed to the prompt's valid tokens, issues.md ISSUE-020); the
 file's identity then records `text_trim=True`, and only a
 `text_trim=True` frontend loads it.
 
+The file's identity (`calibration_file.py`, format version 3) is the
+checkpoint, the frontend's dims and `text_trim`. The dims include the
+workload's camera geometry (`num_views`, `image_h`, `image_w`), which
+comes from `libero_dims.LIBERO_REAL_DIMS` through the frontend's `dims`;
+the frames staged here are two `VIEW_HW x VIEW_HW` views, and the run
+refuses to start if those dims name another geometry. Files of an earlier
+format version are not read: re-record them with this script.
+
   python benchmarks/imagewam_build_calibration.py --out <file>.safetensors [--n 64] [--text-trim]
 """
 from __future__ import annotations
@@ -42,7 +50,7 @@ from flash_rt.models.imagewam.calibration_file import (
 from flash_rt.models.imagewam.libero_dims import LIBERO_HORIZON, LIBERO_REAL_DIMS
 
 from _imagewam_libero_frames import (  # benchmarks/ helper, on sys.path when run as a script
-    CALIBRATION_SUITES, EVAL_SUITE, evaluation_frames, load_frame, select_calibration_frames,
+    CALIBRATION_SUITES, EVAL_SUITE, VIEW_HW, evaluation_frames, load_frame, select_calibration_frames,
 )
 
 DEV = "cuda"
@@ -92,6 +100,13 @@ def main() -> None:
         dataset_stats_path=os.path.join(os.path.dirname(ckpt), "dataset_stats.json"),
         text_trim=args.text_trim)
     print(f"fp16 frontend (text_trim={args.text_trim}) constructed in {time.time() - t0:.1f}s", flush=True)
+    # The identity recorded below is `fe.dims`; the frames staged below are
+    # two VIEW_HW x VIEW_HW views. They must be the same geometry.
+    staged = (2, VIEW_HW, VIEW_HW)
+    named = tuple(fe.dims.get(k) for k in ("num_views", "image_h", "image_w"))
+    if named != staged:
+        raise RuntimeError(f"the frontend's dims name (num_views, image_h, image_w)={named} but this script "
+                           f"stages {staged}; the calibration file would record the wrong workload identity")
 
     rec = ActivationRecorder()
     wrapped = rec.wrap(fe.weights)
