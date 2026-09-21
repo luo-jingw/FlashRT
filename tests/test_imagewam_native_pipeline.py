@@ -13,14 +13,21 @@ and through the `io="native"` model runtime against `infer()`, with every
 buffer the tick writes NaN-filled first. Native pipelines built from a
 mutated resource table (no backbone block, last single-stream block or
 denoise step dropped, one block fed another block's weight) must fail that
-tick. A second `set_pipeline` drops the graph captured from the first,
-and a native handle alone keeps its frontend alive.
+tick. A second `set_pipeline` for a key drops the graph captured for that
+key (one pipeline and one graph per text length), and a native handle alone
+keeps its frontend alive. With `text_trim=True` the handle's own capture path
+carries one pipeline and one graph per captured length
+(`capture_pipeline_text_lengths`), and the tick at either length is
+`array_equal` to `infer()` at that length — the native mirror of
+`test_imagewam_native_runtime.py::test_native_tick_matches_infer_at_every_captured_length`,
+with the graphs this handle recorded instead of the frontend's.
 Runs the served layer structure (merged single-stream `linear2`,
 gated residual fused with the next AdaLN) and the split/unfused one.
 Skips when exec/, runtime/ or the native library is not built.
 """
 import ctypes
 import gc
+import json
 import os
 import weakref
 
@@ -262,14 +269,15 @@ def test_pipeline_mutant_fails_the_tick(h, mutation):
 
 def test_set_pipeline_drops_the_captured_graph(h):
     """The captured graph records the pipeline's GEMM handles and resource
-    pointers: replacing the pipeline destroys it, so the old resources can
-    be freed and nothing can replay the graph over them. Refused while a
-    model runtime over the handle is live."""
+    pointers: installing the pipeline of a key again destroys that key's
+    graph, so the old resources can be freed and nothing can replay the graph
+    over them. Refused while a model runtime over the handle is live."""
     fe = h.fe
     native = ImageWAMNativeRuntime.create(fe.runtime_surface(), LIBRARY)
     try:
         native.set_pipeline(fe)
         native.capture()
+        key = native.text_length
         rt = fe.export_model_runtime(io="native", native=native)
         with pytest.raises(ImageWAMNativeError) as exc:
             native.set_pipeline(fe)
@@ -277,7 +285,7 @@ def test_set_pipeline_drops_the_captured_graph(h):
         assert native.graph_exec and native.graph_producer == "native"
         rt.release()
 
-        first = weakref.ref(native._pipeline_handoff)
+        first = weakref.ref(native._pipeline_handoffs[key])
         native.set_pipeline(fe)
         gc.collect()
         print(f"after a second set_pipeline: graph_exec={native.graph_exec} graph_nodes={native.graph_nodes} "
@@ -341,3 +349,82 @@ def test_pipeline_resources_refuses_awq(h, monkeypatch):
     with pytest.raises(ValueError, match="AWQ") as exc:
         h.fe.pipeline_resources()
     print(f"pipeline_resources() with nvfp4_awq: {exc.value}")
+
+
+# -- text_trim=True: one native pipeline and one graph per text length -----
+
+TRIM_TEXT_ROWS = 16
+# `x0 = valid + 1` (the proprio row), `a0 = x0 + 10` and
+# `total = a0 + num_action` keep the image and action blocks at their default
+# lengths (the rows test_imagewam_native_runtime.py's trimmed fixture uses).
+TRIM_DIMS = dict(x0=TRIM_TEXT_ROWS + 1, a0=TRIM_TEXT_ROWS + 1 + 10, total=TRIM_TEXT_ROWS + 1 + 10 + 4,
+                 proprio_dim=PROPRIO_DIM)
+TRIM_LENGTHS = (5, 13)          # valid text tokens, i.e. x0 = 6 and 14
+
+
+def _set_trimmed_prompt(fe: ImageWAMTorchFrontendThor, valid: int) -> None:
+    """One precomputed prompt of `valid` real text tokens; the trimmed
+    context length is `valid + 1` (the proprio row)."""
+    mask = torch.zeros(TRIM_TEXT_ROWS, dtype=torch.bool)
+    mask[:valid] = True
+    torch.manual_seed(valid)
+    fe.set_prompt(context=torch.randn(TRIM_TEXT_ROWS, 64).to(torch.bfloat16), context_mask=mask)
+
+
+def test_pipeline_records_one_graph_per_text_length():
+    """The native pipeline's own capture path, one length at a time: a
+    `text_trim=True` frontend with two captured lengths gets one installed
+    pipeline and one graph this handle recorded per length
+    (`capture_pipeline_text_lengths`), the lengths are declared in the
+    manifest, and the poisoned `io="native"` tick at EITHER length — the
+    shorter one first — is `array_equal` to `infer()` at that same length.
+
+    The ticks run at the shorter length first, which is not the export-time
+    default key, so a tick replaying the default key would fail here. Every
+    graph is the handle's own, so `graph_producer` is `native`."""
+    fe = ImageWAMTorchFrontendThor(precision=PRECISION, dims_override=dict(TRIM_DIMS), text_trim=True)
+    keys = tuple(valid + 1 for valid in TRIM_LENGTHS)
+    for valid in TRIM_LENGTHS:
+        _set_trimmed_prompt(fe, valid)
+    surface = fe.runtime_surface()
+    assert tuple(entry.key for entry in surface.graph_variants.entries) == keys
+    native = ImageWAMNativeRuntime.create(surface, LIBRARY)
+    try:
+        assert native.capture_pipeline_text_lengths(fe) == keys
+        print(f"native pipelines: {native.gemm_algos_installed} algorithms handed off for the active "
+              f"x0={native.text_length} ({len(native.gemm_shapes)} GEMM shapes: "
+              f"{native.gemm_shapes[:3]}...), graph {native.graph_nodes} nodes")
+        assert all(native.has_variant(key) for key in keys)
+        assert native.graph_producer == "native"
+        assert native.text_length == fe.active_dims["x0"] == keys[-1]
+
+        rt = fe.export_model_runtime(io="native", native=native)
+        try:
+            manifest = json.loads(rt.manifest)
+            print(f"trimmed native manifest graphs={manifest['graphs']} "
+                  f"text_lengths={manifest['text_lengths']}")
+            assert manifest["text_lengths"] == {"default_key": keys[-1], "keys": list(keys),
+                                                "per_prompt_length": True}
+            assert manifest["graphs"][0] == {"name": "infer", "default_key": keys[-1],
+                                             "keys": list(keys), "stream": "main"}
+        finally:
+            rt.release()
+
+        for valid in (TRIM_LENGTHS[0], TRIM_LENGTHS[1]):
+            key = valid + 1
+            _set_trimmed_prompt(fe, valid)
+            shifted = fe.runtime_surface()
+            # The prompt changed: the length reaches the handle before the
+            # proprio row it bounds is set again.
+            native.set_text_length(key)
+            native.set_proprio_row(shifted.proprio_row)
+            assert native.text_length == key
+            assert native.graph_exec == native.variant_exec(key)
+            ref, tokens, noise, proprio = _infer_reference(fe)
+            out = _poisoned_native_tick(fe, native, tokens, noise, proprio)
+            differing = _differing(out, ref)
+            print(f"x0={key}: graph {native.graph_nodes} nodes vs infer(), differing={differing} "
+                  f"actions max_abs={np.abs(out['actions'] - ref['actions']).max():.3g}")
+            assert differing == [], f"x0={key}: {differing}"
+    finally:
+        native.close()

@@ -27,10 +27,9 @@ Each path is measured the way the gates measure (warmup, then
 as P10/P50/P90 and n. A path that cannot be built in this process is reported
 as skipped with the reason and does not stop the run: `exec/build` (Python
 ABI) and `runtime/build` + the `flashrt_imagewam_native` target (native face)
-are separate builds (docs/imagewam_model_runtime.md), and the ABI and native
-faces refuse configurations the Python path accepts (rules R5/R6: `text_trim`
-with a single-graph consumer, FA4 and the in-graph VAE on the native face, so
-`--profile fast` measures `infer` only).
+are separate builds (docs/imagewam_model_runtime.md), and the native
+face refuses configurations the Python path accepts (rule R6: FA4 and the
+in-graph native VAE, so `--profile fast` measures `infer` only).
 
 The numbers are LATENCY ONLY. With no `CKPT_PATH` the weights are random (the
 model structure is then `ImageWAMStructure.libero()`, the real 4B release

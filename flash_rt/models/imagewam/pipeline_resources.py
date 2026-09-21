@@ -9,6 +9,14 @@ the per-step Euler sizes. The frontend builds it
 (`ImageWAMTorchFrontendThor.pipeline_resources`) and keeps owning every
 buffer; the tensors materialized here (fp16 modulation) are owned by the
 returned object and must outlive the native handle.
+
+One table describes one context length: the sequence dims (`x0`, `a0`,
+`total`) and the backbone RoPE table are the frontend's active length's,
+while the buffers are the ones it allocated for the longest declared
+length and every length's table points at them. A deployment that serves
+several text lengths therefore hands over one table per length
+(`ImageWAMTextLengthPipelineSource`), each installed and captured as its
+own native pipeline.
 """
 from __future__ import annotations
 
@@ -226,4 +234,22 @@ class ImageWAMPipelineSource(Protocol):
         ...
 
     def gemm_algo(self, kind: int, m: int, n: int, k: int) -> bytes | None:
+        ...
+
+
+class ImageWAMTextLengthPipelineSource(ImageWAMPipelineSource, Protocol):
+    """A `ImageWAMPipelineSource` that carries one resource table per text
+    length: the context lengths `x0` it has captured, the call that makes one
+    of them the active length (its table then describes that one), and the
+    length it is active on. `ImageWAMNativeRuntime.capture_pipeline_text_lengths`
+    walks them to install and capture the native pipeline once per length."""
+
+    def captured_text_lengths(self) -> tuple[int, ...]:
+        ...
+
+    def _activate_text_length(self, x0: int) -> None:
+        ...
+
+    @property
+    def active_dims(self) -> dict:
         ...

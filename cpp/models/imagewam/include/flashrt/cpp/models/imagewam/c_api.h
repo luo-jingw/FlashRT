@@ -138,9 +138,10 @@ FLASHRT_IMAGEWAM_C_API void* frt_imagewam_native_variant_exec(
     frt_imagewam_native* h, uint64_t key);
 
 /* Select the text length (x0) the next ticks serve: the graph `step`
- * replays, the bound of set_proprio_row and the x0 set_pipeline checks
- * against. Setup only, and legal while a model runtime is live: the setup
- * producer calls it after every prompt change, next to set_proprio_row
+ * replays, the bound of set_proprio_row and the text length every pipeline
+ * call (set_pipeline, gemm_shapes, set_gemm_algo, run, capture) resolves its
+ * pipeline against. Setup only, and legal while a model runtime is live: the
+ * setup producer calls it after every prompt change, next to set_proprio_row
  * (C++ cannot see the Python prompt). -2 for a length the handle has no
  * variant for. */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_set_text_length(
@@ -286,10 +287,15 @@ typedef struct frt_imagewam_pipeline_config {
 } frt_imagewam_pipeline_config;
 
 /* Install the pipeline (copies the tables, creates the pipeline's own
- * GemmRunner and cuBLAS handle). Setup only. Replacing a pipeline destroys
- * the graph captured from it (after synchronizing the native stream):
- * `step` fails until the next `capture`, and the resources the old table
- * pointed to may be freed once this returns. */
+ * GemmRunner and cuBLAS handle) for the text length `config.x0`, which must be
+ * one of the config's declared lengths, and select that key as the active text
+ * length. One pipeline (and one captured graph) per length: installing a key
+ * again replaces that key's pipeline and destroys the graph captured from it
+ * (after synchronizing the native stream), while the other keys keep both.
+ * `step` fails for a key whose graph was dropped until its next `capture`, and
+ * the resources the replaced table pointed to may be freed once this returns.
+ * Setup only. The pipeline calls that follow (gemm_shapes, set_gemm_algo, run,
+ * capture) all resolve against the active text length. */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_set_pipeline(
     frt_imagewam_native* h, const frt_imagewam_pipeline_config* config);
 
@@ -299,19 +305,22 @@ typedef struct frt_imagewam_gemm_shape {
     int32_t m, n, k;
 } frt_imagewam_gemm_shape;
 
-/* The distinct GEMM shapes of the installed pipeline; `count` receives the
- * number; -5 when `capacity` is too small. */
+/* The distinct GEMM shapes of the pipeline installed for the ACTIVE text
+ * length; `count` receives the number; -5 when `capacity` is too small, -1
+ * when no pipeline is installed for it. */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_gemm_shapes(
     const frt_imagewam_native* h, frt_imagewam_gemm_shape* out, uint64_t capacity,
     uint64_t* count);
 
 /* Install the cuBLASLt algorithm (GemmRunner::kAlgoBytes bytes) the setup
- * producer selected for one shape, so both pipelines run the same kernel. */
+ * producer selected for one shape, so both pipelines run the same kernel:
+ * into the pipeline installed for the ACTIVE text length. */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_set_gemm_algo(
     frt_imagewam_native* h, const frt_imagewam_gemm_shape* shape,
     const void* algo, uint64_t bytes);
 
-/* Eager segments on the native stream. They write the frontend's buffers,
+/* Eager segments on the native stream, of the pipeline installed for the
+ * ACTIVE text length. They write the frontend's buffers,
  * so `run` (and `capture`, which runs FULL once as its warm-up) first waits
  * for all prior work on the device (cudaDeviceSynchronize), then
  * synchronizes the native stream before return. */
@@ -327,9 +336,10 @@ FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_run(
     frt_imagewam_native* h, uint32_t segment, int32_t index);
 
 /* Warm up once eagerly, then capture prefill + denoise on the native stream
- * into a graph the handle owns (replacing the one it holds, if it captured
- * one) for the ACTIVE text length; `step` replays it from then on. -4 when
- * the active text length differs from the installed pipeline's x0. */
+ * into a graph the handle owns (replacing the one it holds for that length, if
+ * it captured one) for the ACTIVE text length, whose pipeline must be
+ * installed; `step` replays it from then on. -1 when no pipeline is installed
+ * for the active text length. */
 FLASHRT_IMAGEWAM_C_API int frt_imagewam_native_capture(frt_imagewam_native* h);
 
 /* Number of kernel nodes in the graph `step` replays, when this handle
