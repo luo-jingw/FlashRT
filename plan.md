@@ -133,7 +133,7 @@ the served configuration changed. Each row's full results are in the
 | 3 | Gated residual fused with the following AdaLN, including across layer boundaries; bit-exact over the whole pass. On. | OPT-017 |
 | 4 | Single-stream `attn_out_proj` + `mlp_down` merged into one `linear2` GEMM; the NVFP4 operands are identical to the split path, only the accumulation order changes. On, except `fp16_cutlass`. | OPT-016 |
 | 5 | VAE stage capturable in the main graph, plus a native NHWC encoder with fused GroupNorm(+SiLU): the stage takes 4.3 ms on H100 against about 12 ms for the torch encoder. Off (`vae_encoder="native"`, `vae_graph_input`). | OPT-021 |
-| 6 | FA4 backbone and `mot` attention with a dedicated output buffer and a fallback to cuBLAS on failure. The backbone site is the served default where the machine can run FA4 (`use_fa4=None` resolves it; `FLASHRT_THOR_FA4=0` forces the chain); the `mot` site stays off (`use_fa4_mot=True` opts in). Thor measured it at the served shapes: the `c20f3a0` ladder's `vae_trim_fa4bb` row is 99.0 against `vae_trim`'s 102.9 ms, and the `0920t` end-to-end pair is 126.5 against 131.3 ms with FA4 forced off, with no row falling back. | OPT-019 |
+| 6 | FA4 backbone and `mot` attention with a dedicated output buffer and a fallback to cuBLAS on failure. The backbone site is the served default where the machine can run FA4 (`use_fa4=None` resolves it; `FLASHRT_THOR_FA4=0` forces the chain); the `mot` site resolves the same way since 0921 (`use_fa4_mot=None`; it was opt-in before phase F1). Thor measured it at the served shapes: the `c20f3a0` ladder's `vae_trim_fa4bb` row is 99.0 against `vae_trim`'s 102.9 ms, and the `0920t` end-to-end pair is 126.5 against 131.3 ms with FA4 forced off, with no row falling back. | OPT-019 |
 | 7 | Real `fp8_static` calibration from 64 LIBERO frames (142 sites); against fp16, actions cos is 0.99997 with the real calibration against 0.90 with the placeholder, and it resolves ISSUE-001 with a TN FP8 layout on sm_89/sm_90. Opt-in (`calibration_path=`). | OPT-022 |
 | 8 | AWQ per-channel scales folded into NVFP4 weights; in simulation the backbone cos goes from 0.99820 to 0.99956. Off (`nvfp4_awq=True`). | OPT-023 |
 | 9 | `e0m3_hadamard` precision tier; simulated 1 − actions cos is 2.97e-4 against 6.71e-4 for `nvfp4`. Off (`precision="e0m3_hadamard"`). | OPT-024 |
@@ -391,11 +391,11 @@ RESULT_SCHEMA_VERSION = 1
     mae_vs_gt_ratio_max: float; requires_calibration: bool
 @dataclass(frozen=True) class LatencySummary:   p10/p50/p90/min/max_ms, iters, group_medians_ms
     @classmethod from_samples(samples_ms) -> LatencySummary
-@dataclass(frozen=True) class LatencyBaseline:  p50_ms: float; margin: float; source: str
-@dataclass(frozen=True) class DeviceLatencyPolicy: device: str; gated: bool; reason: str; baselines: dict[str, LatencyBaseline]
+@dataclass(frozen=True) class LatencyBaseline:  p50_ms: float | None (None = unseeded); margin: float; source: str; config: Mapping
+@dataclass(frozen=True) class DeviceLatencyPolicy: device: str; gated: bool; reason: str; baselines: dict[str, dict[str, LatencyBaseline]]  # precision -> configuration name -> entry
 @dataclass(frozen=True) class GateCheck:        name: str; status: "pass"|"fail"|"ungated"|"skipped"; value; limit; detail
 class FidelityGate:  evaluate(vs_official, vs_fp16_reference, mae_mean, reference_mae_mean, all_finite) -> list[GateCheck]
-class LatencyGate:   evaluate(precision, summary) -> GateCheck   # p50 < baseline*(1+margin)
+class LatencyGate:   evaluate(precision, summary, configuration, resolved_config=None) -> GateCheck   # p50 < baseline*(1+margin) of that configuration's entry; seed_entry(...) -> paste-ready record
 @dataclass class GateReport: checks + context; verdict ("pass"|"fail"|"skipped"|"blocked"); to_dict()
 
 # flash_rt/datasets/imagewam_gate_fixture.py
@@ -922,9 +922,12 @@ Blocker: no sm_110 device and no FA4 runtime on the dev box (`issues.md` ISSUE-0
 
 # Plan: configuration consolidation (workload / precision / profile)
 
-Plan Status: completed. Every phase is completed (W0-W12, T1-T5, S1-S4);
-the `0920c` round ran the line's last three Thor rows, which left
-`THOR_CHECKLIST.md` with no pending item, and ISSUE-080 is resolved.
+Plan Status: completed for W0-W12, T1-T5 and S1-S4 (the `0920c` round ran
+the line's last three Thor rows and ISSUE-080 is resolved). The follow-up
+phases F1-F3 (the served default promoted to the fastest configuration, the
+latency baselines per configuration, the workload in the calibration
+identity) have their code and CPU tests in place; their Thor observations
+are the pending rows of `THOR_CHECKLIST.md`.
 
 ## Problem
 
@@ -1226,10 +1229,9 @@ W0 addendum: names frozen while executing W6-W12, each one a plan edit:
   `proprio_dim`, `num_steps`, `shift`) and
   `runtime_surface.workload_identity(workload)` renders the pairs, so the
   ABI identity, the native path and the tests read one list. The entries
-  are additive and descriptive: no stored calibration file is invalidated
-  by them, and `calibration_file.IDENTITY_DIM_KEYS` keeps its current key
-  set (a new key there would refuse every file recorded before it, which is
-  an owner decision, not part of W10).
+  are additive and descriptive: they invalidate no stored calibration file.
+  (`calibration_file.IDENTITY_DIM_KEYS` kept its key set in W10; phase F3
+  later added `num_views`, `image_h` and `image_w` to it, format version 3.)
 
 State transitions: `Workload` + `Structure` -> `resolve_config` ->
 `ResolvedConfig` (immutable) -> frontend construction. No state is
@@ -1577,6 +1579,66 @@ reserved / +206.3 MiB allocated and every following one +0.0 / +0.1 MiB (the
 captures share the pool), so 15 lengths sit under one graph's fixed cost and
 the default bound of 32 is on the order of 221 MiB, not 32 x 218 MiB.
 
+### Phase F1: the served default is the fastest configuration
+Phase Status: code complete; Thor observation pending (THOR_CHECKLIST.md)
+- Goal: `resolve_config(profile="default")` resolves to text_trim + FA4 at
+  both sites + the native VAE inside the graph, degrading where the machine
+  or the inputs cannot carry it. `use_fa4_mot` becomes tri-state (`None`
+  resolves through the same machine rule as the backbone site), the profile
+  table's `vae_encoder`/`vae_graph` accept an "auto" that means "native and
+  in the graph when `ae_model_path` is given", and the native consumer
+  resolves every auto value to off.
+- Modified files: `flash_rt/models/imagewam/config_resolver.py` (`PROFILES`,
+  `ProfileSpec`, `ImageWAMOptions`, `resolve_config`, `format_effective_config`),
+  `flash_rt/frontends/torch/imagewam_thor.py` (`use_fa4_mot` resolved by
+  `_resolve_use_fa4`), `scripts/imagewam_thor_matrix.sh` (every flag row states
+  its VAE and both FA4 sites: a row that left one unstated would take the new
+  default), `benchmarks/imagewam_gate_fixture_generate.py` (the fp16
+  reference is pinned to the cuBLAS chain and the torch VAE, whatever the
+  default runs), `benchmarks/imagewam_thor_path_bench.py` (docs),
+  `tests/test_imagewam_config_resolver.py`, `tests/test_imagewam_frontend_from_config.py`.
+- Affected modules: the deployment entry `load_imagewam`; the constructor's own
+  defaults are unchanged (untrimmed, FA4 mot off, torch VAE).
+- Observation: CPU tests pin the profile contents, the auto resolution, the
+  native-consumer resolution and the `effective_config` line. On Thor: the
+  default's own gate run and matrix row (FA4 at both sites, no fallback, the
+  VAE inside the graph), and the three risks (FA4 first-call compile, an
+  FA4 capture failure falling back, the in-graph VAE's fixed input).
+
+### Phase F2: latency baselines per configuration
+Phase Status: code complete; Thor observation pending (THOR_CHECKLIST.md)
+- Goal: a baseline judges only a run of the configuration it describes. The
+  gate names the configuration from what the frontend resolved, and an
+  unseeded or unknown configuration is ungated with a paste-ready seed record.
+- Modified files: `tests/fixtures/imagewam_gate/latency_baselines.json`
+  (schema 2: `served_default`, unseeded, and `untrimmed_reference`, the
+  202.2 ms record), `flash_rt/core/regression_gate.py` (`LatencyPolicyTable`,
+  `LatencyGate`, seeding), `tests/gate_imagewam_libero.py` (builds through
+  `load_imagewam`, `--profile`, `--override`), `scripts/imagewam_thor_validation.sh`
+  (its gate rows state the untrimmed-reference switches),
+  `tests/test_imagewam_regression_gate.py`.
+- Observation: CPU tests for lookup, seeding and naming. On Thor: the gate on
+  the default seeds `served_default`; the fidelity checks against fixture v2
+  (recorded with the plain chain and the torch VAE) must still pass with FA4
+  at both sites and the native VAE.
+
+### Phase F3: the calibration identity carries the workload
+Phase Status: code complete; Thor observation pending (THOR_CHECKLIST.md)
+- Goal: two workloads with equal `ref_h`/`ref_w` but different camera
+  geometry (2 x 224x224 vs 4 x 224x112) no longer share a calibration
+  identity.
+- Modified files: `flash_rt/models/imagewam/calibration_file.py` (format
+  version 3, only version 3 read), `flash_rt/models/imagewam/config_resolver.py`
+  (`_dims` adds `num_views`, `image_h`, `image_w`),
+  `benchmarks/imagewam_build_calibration.py`, `tests/test_imagewam_calibration_file.py`,
+  `tests/test_imagewam_workload.py`, docs.
+- Affected: a frontend built by hand (`dims_override` without a workload) has
+  no camera keys and is refused a version-3 file with a diff that names them;
+  it must be built through `load_imagewam` or carry the keys in `dims_override`.
+  The bundle's calibration files are refused until re-recorded.
+- Observation: CPU tests reproduce the collision and the refusals. On Thor:
+  re-record the two bundle files and load them.
+
 ## Execution record
 
 Observed on the development machine that ran W1-W11 (WSL2,
@@ -1700,11 +1762,9 @@ Decided after the `0920` re-run (E1, `text_trim` as the served default):
   passes dims by hand. That divergence is deliberate.
 - Consequences recorded rather than solved: the configuration matrix's flag
   rows now state their trim explicitly (otherwise the `default` row would
-  silently become the `vae_trim` row); the regression gate's own default is
-  still the untrimmed reference configuration, and gating the served default
-  means `--text-trim --manifest ...v2` (the trimmed gate run already passes,
-  and its P50 stays far under the untrimmed latency baseline, so nothing needs
-  re-measuring for it).
+  silently become the `vae_trim` row). Superseded for the gate by F2: the
+  regression gate now builds through `load_imagewam` and its baseline is per
+  configuration.
 
 Answered in S4: the native pipeline takes option (a), one pipeline install per
 length with the handle's owned graphs surviving `set_pipeline` (a per-key
@@ -1712,38 +1772,37 @@ pipeline table in `native_runtime.{h,cpp}`). Rule R5 is gone; the `native`
 profile remains the name for that consumer's set because it is the only named
 set that turns FA4 off.
 
+Decided (owner, 0921):
+
+- **The served default is the fastest configuration**, so a run on the device
+  needs the fewest changes (F1). Profile `default` is nvfp4 + `text_trim` +
+  FA4 at the backbone and the `mot` site + the native VAE encoder inside the
+  graph, where "auto" degrades instead of raising: FA4 at either site is used
+  where the machine can run it and falls back to the cuBLAS chain at capture
+  time otherwise; the VAE goes native and into the graph exactly when an
+  autoencoder path is given (without one there is no VAE stage). Both
+  criteria of the `c20f3a0` round were met for the two promoted switches.
+  The three risks that came with promoting them (FA4's first-call compile,
+  an FA4 capture failure, the in-graph VAE's fixed input shape) are what
+  the F1 Thor rows observe. `fast` stays as the same switches stated
+  explicitly (it raises where `default` degrades); `native` stays as the
+  native consumer's set, and `default` with `consumer="native"` resolves to
+  it.
+- **The latency baseline is per configuration** (F2): the gate names the
+  configuration a run resolved to and compares against that configuration's
+  entry; the untrimmed record keeps its own entry, and the served default's
+  entry is seeded from its own gate run.
+- **The calibration file's identity carries the workload's camera geometry**
+  (`num_views`, `image_h`, `image_w`) (F3): format version 3, no reader for
+  earlier versions, the bundle files re-recorded.
+
 Open:
 
-Four decisions, none of them a Thor run. The plan's own phases are all
-`completed` and `THOR_CHECKLIST.md` carries no pending item; the served
-default's numbers are re-measured and recorded (`0920t`, `0920c`).
+One decision, not a Thor run. Phases F1-F3 are code-complete and wait for
+their Thor rows in `THOR_CHECKLIST.md`; the target workload below is the only
+question left for the owner.
 
-1. The latency gate's baseline
-   (`tests/fixtures/imagewam_gate/latency_baselines.json`, nvfp4 202.2 ms,
-   margin 0.05) describes the untrimmed, FA4-off configuration as a one-sided
-   bound. Both configurations the gate can be asked for are compared to that
-   one number: the served default (trim + FA4) measures 125.86 ms in the same
-   gate, so the bound (202.2 x 1.05 = 212.3 ms) fires only after a regression
-   of about 69%; the untrimmed row it was recorded from measures 191.79 ms in
-   the `0920t` session, leaving that row about 11%. The decision is whether
-   the baseline is re-seeded from the served default's own gate run, which
-   also means the file states the configuration each number describes (trim
-   on or off, FA4 state) instead of one entry per precision; the untrimmed
-   reference row then needs its own entry or none.
-2. Profile contents (T4): whether `fast` stays what it is — `text_trim` + FA4
-   at both attention sites + the native VAE inside the graph — with the FA4
-   `mot` site and the in-graph VAE opt-in by name rather than part of the
-   served default. Both criteria were met in the `c20f3a0` round (`stack`
-   9.7 ms below `vae_trim`, agreement with official not worse; the same for the
-   native VAE), and `text_trim` remains the largest single step on the LIBERO
-   workload, so the question is only whether the two smaller wins are promoted.
-3. Whether the calibration file's identity gains the workload fields
-   (`num_views`, `image_h`, `image_w`): with no compatibility requirement this
-   is a format version bump and a re-recorded file. It closes the one
-   collision the dims-derived identity has — two workloads with the same
-   `ref_h`/`ref_w` (e.g. two 224x224 views and four 224x112 views) have the
-   same dims but different VAE inputs.
-4. The target-workload declaration (`TARGET_WORKLOAD` in
+1. The target-workload declaration (`TARGET_WORKLOAD` in
    `benchmarks/_imagewam_workload_cli.py`: `num_views=3`, `image_h=image_w=256`,
    `action_horizon=32`, `action_dim=7`, `proprio_dim=8`, `num_steps=10`,
    `shift=5.0`, instruction tokens 16-128). The workload serves on all three

@@ -266,10 +266,12 @@ buffer bounds, and fallback are tested with stand-ins for the kernels.
 Both plans stay `approved`, with a `blocked` Thor phase:
 
 - `gemm_variant_autotune` stays default-off.
-- FA4 at the `mot` site stays opt-in (`use_fa4_mot=True`). The backbone
-  site is the served default where the machine can run it (`use_fa4=None`
-  resolves to FA4 on a compute-capability-11.x device with an importable
-  FA4 runtime; `FLASHRT_THOR_FA4=0` forces the cuBLAS chain).
+- FA4 at both sites is the served default where the machine can run it
+  (`use_fa4=None` and `use_fa4_mot=None` resolve to FA4 on a
+  compute-capability-11.x device with an importable FA4 runtime;
+  `FLASHRT_THOR_FA4=0` forces the cuBLAS chain at both). The `mot` site
+  joined the default on 0921 (plan.md, phase F1); its Thor observation is
+  THOR_CHECKLIST.md N1-N3.
 
 ## Evidence
 
@@ -630,4 +632,4 @@ that is no longer open; the pointer names where its conclusion is recorded.
 - `ISSUE-084` — the view count is the workload's: `observation_views(observation, num_views)`, `stage_images` taking exactly that many views, and `encode_to_tokens(ae, views, ...)` encoding N views as one horizontally concatenated image. → `docs/imagewam_configuration.md` (the view-geometry paragraph), `encode_to_tokens` in `flash_rt/models/imagewam/vae_encoder.py`.
 - `ISSUE-085` — one real defect (the cuBLAS fallback re-captured into the pool an invalidated capture had left recording) was fixed by abandoning that capture state, and the other two symptoms were the tests' own comparisons. → `docs/imagewam_configuration.md` (the abandoned capture state before the retry), the `_abandon_capture_state` docstring in `flash_rt/frontends/torch/imagewam_thor.py`, `THOR_STATUS_SUMMARY.md`'s `0920` section (restated in `0920c`).
 - `ISSUE-086` — nothing is fixed at 224x224 any more: `VaeStageSpec.encode_hw` defaults to the staged views' own size, and the frontend resolves the served per-view size in one place (`_input_view_shape()`) for the in-graph and outside-the-graph paths alike. → `docs/imagewam_configuration.md` (the encode-geometry paragraph), `plan.md` (Phase W12).
-- `ISSUE-061` — last line because it was not fixed but satisfied: its subject, a latency baseline with no recorded clock and power state, is met by `latency_baselines.json`'s 202.2 ms `nvfp4` baseline, which carries its clock state (MAXN, GPC 1.575 GHz, `emc_locked=null`, GPU exclusive), and `plan.md` records the 231.6 -> 202.2 ms re-base as closing that item; the only part still open is whether the baseline is re-seeded per configuration. → `tests/fixtures/imagewam_gate/latency_baselines.json` (`source`), `plan.md` ("Rounds that closed items", and "Open" item 1).
+- `ISSUE-061` — last line because it was not fixed but satisfied: its subject, a latency baseline with no recorded clock and power state, is met by `latency_baselines.json`'s 202.2 ms `nvfp4` baseline, which carries its clock state (MAXN, GPC 1.575 GHz, `emc_locked=null`, GPU exclusive), and `plan.md` records the 231.6 -> 202.2 ms re-base as closing that item; the baseline is per configuration now (`untrimmed_reference` holds the 202.2 ms record), and the only part still open is the `served_default` entry, unseeded until a Thor gate run of the promoted default. → `tests/fixtures/imagewam_gate/latency_baselines.json` (`source`), `plan.md` ("Rounds that closed items", and "Open" item 1).

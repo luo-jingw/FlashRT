@@ -18,7 +18,7 @@
 解析链是 `workload + structure + profile + precision + calibration_path` → `resolve_config(...)` → `(dims, options)` → `from_config` → frontend；解析在构造后不再改变。
 
 - **workload**：服务的工作负载，由 `ImageWAMWorkload` 描述。部署方给出相机数、每视角图像尺寸、文本长度、action horizon、动作维度、proprio 维度、去噪步数、调度 shift；序列布局由它派生：`x0`、`img_len`、`a0`、`total`、`ref_h`、`ref_w`、`dt`，以及原生 VAE 进图时的 `vae_graph_input`。派生值互相矛盾时在解析阶段报错，不再手填这些整数。LIBERO 工作负载是 `ImageWAMWorkload.libero()`：两个 224×224 视角、512 token 文本、horizon 64、7 维动作、8 维 proprio、10 步去噪、shift=5.0，派生 `x0=513`、`img_len=392`、`a0=905`、`total=969`、`ref_h×ref_w=14×28`。
-- **profile**：一组开关的具名集合，按名字选用，代表**服务配置**（构造函数保留自己的历史默认：不裁文本）。`default` 是服务默认：nvfp4、**裁文本**、backbone 位点的 FA4 按机器自动解析（`use_fa4=None`：compute capability 11.x 且 FA4 runtime 可导入就用 FA4，否则走 cuBLAS 链；`FLASHRT_THOR_FA4=0` 强制走链，显式 `use_fa4` 优先）、torch VAE 编码器在图外、无 AWQ。`fast` 在 `default` 之上再加 FA4 的 mot 位点与原生 VAE 进图（opt-in：FA4 首次调用要编译且可能回退，进图 VAE 改的是图结构）。`native` 是 native 消费方的具名集合：**同样裁文本**，与 `default` 只差 FA4——两个位点都显式关，因为 native C++ pipeline 没有 FA4 注意力。
+- **profile**：一组开关的具名集合，按名字选用，代表**服务配置**（构造函数保留自己的历史默认：不裁文本）。`default` 是服务默认，也是机器与输入允许的**最快配置**：nvfp4、**裁文本**、FA4 用在 backbone 与 mot 两个位点、原生 VAE 编码器进图、无 AWQ（0921 起；此前 mot 位点与 VAE 进图是 `fast` 的 opt-in）。FA4 与 VAE 是“auto”，条件不满足时降级而不是报错：FA4 在 compute capability 11.x 且 FA4 runtime 可导入时使用，否则走 cuBLAS 链（`FLASHRT_THOR_FA4=0` 强制走链，显式值优先，首次调用要编译，捕获失败自动回退）；VAE 在给了 `ae_model_path` 时用原生编码器并进图，没给就没有 VAE 阶段。`fast` 是同一组开关的显式写法：缺 FA4 或缺 `ae_model_path` 会报错，用来让一次运行失败而不是悄悄测到回退配置。`native` 是 native 消费方的具名集合：**同样裁文本**，FA4 两个位点与 VAE 阶段都关，因为 native C++ pipeline 既没有 FA4 注意力也没有 VAE 阶段；`default` 加 `consumer="native"` 解析成同一组。下文各表里标“`default`”的历史数字是 0921 之前的默认（裁文本 + backbone FA4 auto + torch VAE 图外）测得的，新默认的数字等 Thor 的 N1–N3。
 - **precision**：覆盖 profile 的精度档位。
 - **calibration_path**：静态 FP8 与 AWQ 所需的校准文件。
 
@@ -58,7 +58,7 @@
 | 选项 | 当前默认 | 作用 | 限制 |
 |---|---|---|---|
 | `workload` | `ImageWAMWorkload.libero()` | 服务的工作负载；序列布局与 `vae_graph_input` 由它派生并校验 | 字段必须与 checkpoint 的结构一致（规则 R7） |
-| `profile` | `default` | 开关的具名集合；`default` 含 `text_trim`，backbone 位点的 FA4 按机器自动解析；`fast` = 再加 FA4 的 mot 位点 + 原生 VAE 进图（`0920t`：同进程、LIBERO `valid_tokens=24` 时 `fast --precapture` 的 `infer()` 108.08 ms 对 `default` 139.47 ms；`c20f3a0` 一轮的对应两行是 93.2 对约 115 ms，nvfp4，libero_spatial） |`native` = 同样裁文本 + FA4 两位点显式关（native pipeline 没有 FA4 注意力），其余与 `default` 相同；`fast` 的 FA4 首次调用编译、失败回退 |
+| `profile` | `default` | 开关的具名集合；`default`（0921 起）= `text_trim` + FA4 两个位点 + 原生 VAE 进图，条件不满足时降级；`fast` = 同一组开关的显式写法（缺 FA4 会报错）；下面括号里的数字是提升之前的对比（`0920t`：同进程、LIBERO `valid_tokens=24` 时 `fast --precapture` 的 `infer()` 108.08 ms 对 `default` 139.47 ms；`c20f3a0` 一轮的对应两行是 93.2 对约 115 ms，nvfp4，libero_spatial） |`native` = 同样裁文本 + FA4 两位点显式关（native pipeline 没有 FA4 注意力），其余与 `default` 相同（`default` 加 `consumer="native"` 得同一组）；FA4 首次调用编译、失败回退 |
 | `precision` | `nvfp4` | 精度/速度档位 | `fp8_static*` 需要校准文件 |
 | `text_trim` | 关（服务 `default` 档位为**开**） | 按有效文本长度裁剪；开启后每个有效文本长度一张图，Python `infer()`、ABI 与 native 三条路径都能服务（native 侧由 `capture_pipeline_text_lengths` 逐长度安装并捕获）；服务默认即裁剪，`0920t` 的 nvfp4 gate 125.86 ms、端到端 126.5 ms | native pipeline 自己的按长度捕获已验证（`0920c`）：`test_pipeline_records_one_graph_per_text_length` 通过，该轮 native 两条 pytest 39 passed 且无 skip，逐长度 tick `differing=[]`，每个长度的 GEMM 交接完整（`{6: (4, 4), 14: (4, 4)}`） |
 | `text_trim_cache_size` | 32 | `text_trim` 预捕获图的张数上限，超出按 LRU 淘汰 | 显存只在首次捕获付出：首图 +218.0 MiB reserved / +206.3 MiB allocated，其后每张 +0.0 / +0.1 MiB，默认上限 32 的总代价在 221 MiB 量级（`a84916a`，nvfp4，15 个 LIBERO 长度） |
