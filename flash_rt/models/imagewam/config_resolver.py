@@ -178,8 +178,7 @@ PROFILES: dict[str, ProfileSpec] = {
             "backbone as the frontend resolves it (on where the machine can run it, the cuBLAS "
             "chain elsewhere; FLASHRT_THOR_FA4=0 forces the chain), no FA4 "
             "mot, torch VAE encoder outside the graph, no AWQ. The frontend constructor's own "
-            "defaults differ in one switch: they leave text_trim off, which is the set "
-            "profile=\"native\" carries."),
+            "defaults differ in one switch: they leave text_trim off."),
         precision=Precision.NVFP4, text_trim=True, use_fa4=None, use_fa4_mot=False,
         vae_encoder="torch", vae_graph=False, nvfp4_awq=False),
     "fast": ProfileSpec(
