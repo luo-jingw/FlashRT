@@ -5,11 +5,13 @@
 // Not thread-safe: calls on one instance must not overlap (threading
 // contract in c_api.h); only the declaration count is atomic.
 //
-// One graph per text length: the handle holds a graph variant table keyed
-// by the context length x0 (the same key space the exec contract's ShapeKey
-// uses for this model), the lengths the io config declared. `context_rows_`
-// is the ACTIVE key: `step` replays that key's exec and `set_proprio_row` /
-// `set_pipeline` are validated against it.
+// One graph (and one native pipeline) per text length: the handle holds a
+// graph variant table and an installed pipeline per key, the key being the
+// context length x0 (the same key space the exec contract's ShapeKey uses
+// for this model), the lengths the io config declared. `context_rows_` is
+// the ACTIVE key: `step` replays that key's exec, `set_proprio_row` is
+// validated against it and every pipeline call (set_pipeline, gemm_shapes,
+// set_gemm_algo, run, capture) resolves to that key's pipeline.
 #ifndef FLASHRT_CPP_MODELS_IMAGEWAM_NATIVE_RUNTIME_H
 #define FLASHRT_CPP_MODELS_IMAGEWAM_NATIVE_RUNTIME_H
 
@@ -61,8 +63,11 @@ public:
     int schema_records(char* out, uint64_t capacity, uint64_t* written) const;
     int bind_declaration(const frt_model_runtime_v1* declaration);
 
-    // Native pipeline (setup): install, hand off GEMM algorithms, run eager
-    // segments for parity checks, capture the graph `step` replays.
+    // Native pipeline (setup): install one per text length, hand off GEMM
+    // algorithms, run eager segments for parity checks, capture the graph
+    // `step` replays. Every call below resolves the pipeline installed for
+    // the ACTIVE text length; `set_pipeline` installs the key its config
+    // carries and makes that key active.
     int set_pipeline(const frt_imagewam_pipeline_config& config);
     int gemm_shapes(frt_imagewam_gemm_shape* out, uint64_t capacity, uint64_t* count) const;
     int set_gemm_algo(const frt_imagewam_gemm_shape& shape, const void* algo, uint64_t bytes);
@@ -97,13 +102,23 @@ private:
         uint64_t nodes;
     };
 
-    int fail(int status, const std::string& message);
+    // One installed pipeline: the text length (x0) it records, the key of
+    // the graph variant table it captures into.
+    struct PipelineVariant {
+        uint64_t key;
+        std::unique_ptr<NativePipeline> pipeline;
+    };
+
+    int fail(int status, const std::string& message) const;
     int refuse_while_exported(const char* what);
-    void drop_owned_graphs();
+    void drop_owned_graph(uint64_t key);
+    NativePipeline* active_pipeline() const;    // null: none installed for the active key
     int variant_index(uint64_t key) const;      // -1 when the table has no such key
+    int pipeline_index(uint64_t key) const;     // -1 when no pipeline is installed for it
     bool is_declared(uint64_t key) const;
     std::string declared_keys() const;          // "[6, 14]", for messages
     std::string adopted_keys() const;           // "[6, 14]" / "none", for messages
+    std::string installed_keys() const;         // "[6, 14]" / "none", for messages
     int check_stream(int stream);
     int stage_proprio(const void* data, uint64_t bytes);
     int read_actions(void* out, uint64_t capacity, uint64_t* written);
@@ -122,8 +137,7 @@ private:
 
     cudaStream_t stream_ = nullptr;
     std::vector<GraphVariant> variants_;        // one entry per length the handle holds a graph for
-    uint32_t pipeline_x0_ = 0;                  // x0 of the installed pipeline (0 = none)
-    std::unique_ptr<NativePipeline> pipeline_;
+    std::vector<PipelineVariant> pipelines_;    // one entry per length a pipeline is installed for
     int32_t proprio_row_ = -1;
     void* proprio_device_ = nullptr;           // bf16 (1, proprio_dim) staging scratch
     std::vector<float> proprio_normalized_;
@@ -133,7 +147,7 @@ private:
     bool bound_ = false;
     int export_stream_id_ = -1;
     std::vector<int> port_role_;               // declaration port index -> NativePort (int)
-    std::string last_error_;
+    mutable std::string last_error_;           // `fail` also reports from the const queries
 };
 
 }  // namespace imagewam

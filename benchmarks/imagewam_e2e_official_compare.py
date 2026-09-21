@@ -68,8 +68,9 @@ Text context option (issues.md ISSUE-020):
   TEXT_TRIM   1: frontend text_trim=True, the sequence holds only the
               valid tokens and the proprio row (one graph per length);
               the per-frame `x0` column is the context length used. Unset:
-              the profile's own text_trim (trimmed for `default` and `fast`,
-              all 512 padded text rows for `native`).
+              the profile's own text_trim (`default`, `fast` and `native`
+              all trim; PROFILE="native" is the native consumer's set, the
+              same switches with FA4 off).
 """
 from __future__ import annotations
 

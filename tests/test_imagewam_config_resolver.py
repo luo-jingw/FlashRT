@@ -2,13 +2,13 @@
 
 Pins, against the frontend SOURCE (`ast`, no frontend import):
 
-* the served `default` profile trims, and the `native` profile is the
-  non-trimming set with FA4 pinned off, so a native/one-graph caller does not
-  trip rule R5 on the served default;
+* every named profile trims, and the `native` profile is the native
+  consumer's set: the served default's switches with FA4 pinned off;
 * the profiles are the SERVED configuration while
   `ImageWAMTorchFrontendThor.__init__` keeps its historical untrimmed defaults,
-  and the divergence between the two is exactly the `text_trim` switch (plus
-  the explicitly stated `use_fa4` of `native`);
+  and the divergence between the served profiles and those defaults is exactly
+  the `text_trim` switch (taken with it: the explicitly stated `use_fa4` of
+  `native`);
 * every `dims` key the frontend and pipeline read with a string subscript is
   either produced by the resolver or filled by the frontend itself;
 * the `effective_config` line has the key order of the compare script's
@@ -64,7 +64,8 @@ def resolve(**kw) -> cr.ResolvedConfig:
 
 
 def resolve_native(**kw) -> cr.ResolvedConfig:
-    """The non-trimming set a native/one-graph caller resolves."""
+    """The set a native consumer resolves by name: the served default's
+    switches with `use_fa4` stated off (rule R6 refuses FA4 on that path)."""
     return resolve_config(LIBERO, LIBERO_STRUCT, profile="native", **kw)
 
 
@@ -104,16 +105,16 @@ def _subscript_keys(path: Path) -> set[str]:
 # -- profiles ----------------------------------------------------------------
 
 
-def test_native_profile_is_the_untrimmed_set():
-    """`native` is the set the native/one-graph pipeline can serve until
-    plan.md phase S4: the constructor's own untrimmed defaults, with FA4
-    stated off instead of left to the environment (rule R6 refuses FA4 there,
-    and `False` keeps the `FLASHRT_THOR_FA4` opt-in from switching it on
-    behind the caller's back)."""
+def test_native_profile_is_the_native_consumers_set():
+    """`native` is what a native caller resolves: every switch the
+    constructor defaults to, except `text_trim` (the profiles carry the served
+    configuration and trim) and `use_fa4` (stated off instead of left to the
+    environment: rule R6 refuses FA4 there, and `False` keeps the
+    `FLASHRT_THOR_FA4` opt-in from switching it on behind the caller's back)."""
     fd = _frontend_init_defaults()
     o = resolve_native().options
     assert o.precision == fd["precision"] == "nvfp4"
-    assert o.text_trim is fd["text_trim"] is False
+    assert o.text_trim is True and fd["text_trim"] is False
     assert o.text_trim_cache_size == fd["text_trim_cache_size"] == 32
     assert o.use_fa4 is False                    # the profile states it; the constructor leaves it None
     assert o.use_fa4_mot is fd["use_fa4_mot"] is False
@@ -126,29 +127,29 @@ def test_native_profile_is_the_untrimmed_set():
     assert o.awq_alpha == fd["awq_alpha"] == 0.5
     assert o.awq_scope == fd["awq_scope"] == "adaln+down"
     assert o.merge_qkv_mlp is True and o.merge_linear2 is True   # frontend: precision != "fp16_cutlass"
-    # the native consumer accepts it: no R5, no R6
-    assert resolve_native(consumer="native").options.text_trim is False
+    # the native consumer accepts it: no R6
+    assert resolve_native(consumer="native").options.text_trim is True
 
 
-def test_the_served_default_is_the_native_set_plus_text_trim():
+def test_the_served_default_is_the_native_set_with_fa4_left_to_the_environment():
     """The profiles carry what is SERVED, and the two named sets differ in
-    exactly the two switches that make the served default different from the
-    native one: text_trim on, FA4 left to the frontend's env resolution."""
+    exactly the one switch that makes the native set native: FA4 stated off
+    there and left to the frontend's env resolution in `default`. Both trim."""
     served, native = resolve().options, resolve_native().options
-    assert served.text_trim is True and native.text_trim is False
+    assert served.text_trim is native.text_trim is True
     assert served.use_fa4 is None and native.use_fa4 is False
     other = [f.name for f in dataclasses.fields(ImageWAMOptions)
-             if f.name not in ("text_trim", "use_fa4")
+             if f.name not in ("use_fa4",)
              and getattr(served, f.name) != getattr(native, f.name)]
-    assert other == [], f"the profiles differ in more than text_trim/use_fa4: {other}"
+    assert other == [], f"the profiles differ in more than use_fa4: {other}"
 
 
 def test_the_profiles_diverge_from_the_constructor_defaults_in_text_trim():
     """`ImageWAMTorchFrontendThor.__init__` keeps the historical untrimmed
     defaults for a caller that passes dims and switches by hand; the profiles
     carry the served configuration. That divergence in `text_trim` is the
-    point of the change (and is why `native` exists as a named set), so it is
-    pinned rather than assumed."""
+    point of the change (and is why the trim is a profile, not a constructor
+    default), so it is pinned rather than assumed."""
     fd = _frontend_init_defaults()
     assert fd["text_trim"] is False and fd["use_fa4"] is None
     assert resolve().options.text_trim is True
@@ -187,7 +188,7 @@ def test_profile_table_and_fast_contents():
     assert PROFILES["default"].precision == "nvfp4"
     assert PROFILES["default"].text_trim is True
     assert PROFILES["native"].precision == "nvfp4"
-    assert PROFILES["native"].text_trim is False and PROFILES["native"].use_fa4 is False
+    assert PROFILES["native"].text_trim is True and PROFILES["native"].use_fa4 is False
     fast = resolve(profile="fast", ae_model_path=AE).options
     assert fast.precision == "nvfp4"
     assert fast.text_trim is True
@@ -200,9 +201,9 @@ def test_profile_table_and_fast_contents():
     assert "PROVISIONAL" in desc and "106.1" in desc and "203.3" in desc
     assert "not approved" in desc
     assert "opt-in tier" in desc
-    # the native profile names the consumer it is for, and until when
+    # the native profile names the consumer it is for, and what it states off
     ndesc = PROFILES["native"].description
-    assert "native" in ndesc and "S4" in ndesc
+    assert "native" in ndesc and "FA4" in ndesc and 'profile="default"' in ndesc
     assert resolve_config.__kwdefaults__["profile"] == "default"
 
 
@@ -337,44 +338,30 @@ def test_R4_awq_needs_an_awq_precision_and_a_calibration_file():
     assert resolve(precision="nvfp4_sim", nvfp4_awq=True, calibration_path=CAL).options.nvfp4_awq
 
 
-def test_R5_text_trim_needs_a_per_length_graph_consumer():
-    """The ABI consumer carries one graph per captured text length, so
-    `text_trim` is legal there; the native consumer replays one graph at
-    one context length and stays refused. Since the served `default` trims,
-    the refusal is now what a native caller meets when it resolves `default`."""
-    assert rule_of(text_trim=True, consumer="native") == "R5"
-    assert rule_of(profile="fast", ae_model_path=AE, consumer="native") == "R5"
-    assert resolve(text_trim=True, consumer="infer").options.text_trim
-    assert resolve(text_trim=True, consumer="abi").options.text_trim
-    fast = resolve(profile="fast", ae_model_path=AE, consumer="infer")
+def test_text_trim_is_legal_for_every_consumer():
+    """All three consumers carry one graph per captured text length — the
+    Python `infer()` path, the ABI face's declaration and the native C++
+    pipeline (`pipeline_resources()` describes the active length and the
+    handle installs one pipeline per length) — so no combination of
+    `text_trim=True` with a consumer is refused. R6 is all that remains
+    specific to the native consumer."""
+    for consumer in cr.CONSUMERS:
+        assert resolve(text_trim=True, consumer=consumer).options.text_trim, consumer
+        assert resolve(consumer=consumer).options.text_trim, consumer           # the served default
+        assert resolve_native(consumer=consumer).options.text_trim, consumer     # the native set
+    fast = resolve(profile="fast", ae_model_path=AE)
     assert fast.options.text_trim
-    assert resolve(profile="fast", ae_model_path=AE, consumer="abi").options.text_trim
-    # the served default now trims, so both serving consumers get it and the
-    # native consumer refuses it; `native` is the set that serves the native path
-    assert resolve().options.text_trim and resolve(consumer="abi").options.text_trim
-    assert rule_of(consumer="native") == "R5"
-    assert not resolve_native(consumer="abi").options.text_trim
-    assert not resolve_native(consumer="native").options.text_trim
-
-
-def test_R5_message_names_the_profile_that_serves_the_native_path():
-    """A native caller that trips R5 is told the fix by name, so the served
-    default's trim is not a dead end for the ABI/native consumer path."""
-    with pytest.raises(ConfigError, match=r"^R5: ") as ei:
-        resolve_config(LIBERO, LIBERO_STRUCT, profile="default", consumer="native")
-    assert ei.value.rule == "R5"
-    assert 'profile="native"' in str(ei.value), str(ei.value)
-    assert "text_trim=False" in str(ei.value), str(ei.value)
-    with pytest.raises(ConfigError, match=r"^R5: ") as ei:
-        resolve_config(LIBERO, LIBERO_STRUCT, consumer="native")
-    assert ei.value.rule == "R5" and 'profile="native"' in str(ei.value)
-    # the named fix resolves
-    assert resolve_native(consumer="native").options.text_trim is False
+    for consumer in ("infer", "abi"):
+        assert resolve_config(LIBERO, LIBERO_STRUCT, profile="fast", ae_model_path=AE,
+                              consumer=consumer).options.text_trim, consumer
+    # `fast`'s FA4 is what the native consumer is refused for, not its trim
+    with pytest.raises(ConfigError, match=r"^R6: ") as ei:
+        resolve_config(LIBERO, LIBERO_STRUCT, profile="fast", ae_model_path=AE, consumer="native")
+    assert "FA4" in str(ei.value), str(ei.value)
 
 
 def test_R6_native_consumer_limits():
-    # every native case resolves the non-trimming set, so R6 is what is
-    # reached (R5 is checked first, see the ordering assertion at the end)
+    # the native consumer's own set resolves, so R6 is what is reached
     assert rule_of(profile="native", nvfp4_awq=True, calibration_path=CAL, consumer="native") == "R6"
     for p in ("fp16_cutlass", "fp8", "e0m3_hadamard", "nvfp4_sim"):
         assert rule_of(profile="native", precision=p, consumer="native") == "R6", p
@@ -390,9 +377,10 @@ def test_R6_native_consumer_limits():
     assert resolve_native(use_fa4=False, use_fa4_mot=False, consumer="native").options.use_fa4 is False
     assert resolve_native(consumer="native").options.use_fa4 is False   # the profile states it off
     assert resolve().options.use_fa4 is None                           # the served default leaves it to the env
-    # R5 precedes R6: on the served default a native caller is told to switch
-    # profile first, not told about FA4
-    assert rule_of(use_fa4=True, consumer="native") == "R5"
+    # the trim is not what the native consumer is refused for: the served
+    # default resolves for it, and FA4 on top of it is the R6 case
+    assert resolve(consumer="native").options.text_trim is True
+    assert rule_of(use_fa4=True, consumer="native") == "R6"
 
 
 def test_R7_layout_inconsistent_with_the_structure():
@@ -525,7 +513,7 @@ def test_effective_config_keeps_the_compare_scripts_format():
     assert line == ("effective_config precision=nvfp4 text_trim=True vae_encoder=torch vae_graph=False "
                     "use_fa4=auto use_fa4_mot=False fa4_fallback_reason=None calibration=None awq=False")
     assert resolve(profile="native").effective_config == (
-        "effective_config precision=nvfp4 text_trim=False vae_encoder=torch vae_graph=False "
+        "effective_config precision=nvfp4 text_trim=True vae_encoder=torch vae_graph=False "
         "use_fa4=False use_fa4_mot=False fa4_fallback_reason=None calibration=None awq=False")
 
 

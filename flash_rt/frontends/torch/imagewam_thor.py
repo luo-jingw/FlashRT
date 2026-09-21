@@ -2189,25 +2189,6 @@ class ImageWAMTorchFrontendThor:
 
     # -- runtime export ---------------------------------------------------
 
-    def _refuse_text_trim(self, what: str) -> None:
-        """`pipeline_resources()` describes the native C++ pipeline, which
-        records one graph at one context length from one resource table: the
-        pipeline's own dims, GEMM workspace and capture are built for one
-        `x0`, so this frontend's resources describe one length per install
-        (`cpp/models/imagewam/src/native_pipeline.cpp`). The native model
-        runtime carries one graph per prompt length
-        (`runtime_surface().graph_variants`, adopted with
-        `ImageWAMNativeRuntime.use_graph`); the pipeline's own capture keeps
-        refusing `text_trim` until it has a resource table per length
-        (ISSUE-080 condition 5, plan.md phase S4)."""
-        if self._text_trim:
-            raise ValueError(f"{what} does not support text_trim=True: the native pipeline records one "
-                             f"graph at one context length from one resource table, while a trimmed "
-                             f"frontend runs one graph per prompt length (active_dims). The native model "
-                             f"runtime serves a trimmed frontend (one adopted graph per captured length, "
-                             f"selected with set_text_length); construct with text_trim=False for the "
-                             f"native pipeline")
-
     def _captured_length_graphs(self) -> tuple[TextLengthGraph, ...]:
         """The graph of every captured text length, ascending, for the
         runtime surface's variant table
@@ -2230,9 +2211,8 @@ class ImageWAMTorchFrontendThor:
         so the export adopts one variant per key and `step` replays the
         length the prompt set — on the ABI face and on the native one,
         whose handle the keys are adopted into
-        (`ImageWAMNativeRuntime.use_graph`). `pipeline_resources()` stays
-        refused for a trimmed frontend (the native pipeline records one
-        graph at one context length from one resource table)."""
+        (`ImageWAMNativeRuntime.use_graph`). `pipeline_resources()` describes
+        the same active length for the native pipeline's own capture."""
         if self._graph is None:
             raise RuntimeError("call set_prompt() before runtime_surface()")
         d = self._active_dims
@@ -2291,16 +2271,15 @@ class ImageWAMTorchFrontendThor:
         chunks the fused gated residual + next AdaLN kernel reads
         (`dims["fuse_res_norm"]`).
 
-        Not available with `text_trim=True` (`ValueError`,
-        `_refuse_text_trim`): the native pipeline records one graph at one
-        context length from this resource table, so this describes
-        `self.dims` — the buffer sizes, which with `text_trim=True` are the
-        largest length's — and the max-size RoPE table only. A trimmed
-        frontend serves through `infer()`, through the ABI face and through
-        the native model runtime (one adopted graph per captured length);
-        the native pipeline's own capture gets its per-length resource
-        table in a later phase."""
-        self._refuse_text_trim("pipeline_resources()")
+        One table describes ONE context length, the active one: the sequence
+        dims (`active_dims`' `x0`, `a0`, `total`, and every AdaLN site's row
+        count with them) and the backbone RoPE table are the active length's,
+        while the pipeline buffers are the maximal ones this frontend
+        allocated and every length's table points at them. So a trimmed
+        frontend serves the native pipeline with one table per captured text
+        length — `ImageWAMNativeRuntime.capture_pipeline_text_lengths` walks
+        them, installing and capturing each — which is what makes
+        `text_trim=True` legal for the native consumer."""
         if self._graph is None:
             raise RuntimeError("call set_prompt() before pipeline_resources()")
         if self.use_fa4 or self.use_fa4_mot:
@@ -2310,7 +2289,7 @@ class ImageWAMTorchFrontendThor:
                              "(the VAE then runs outside the graph and feeds image_tokens)")
         if self._nvfp4_awq:
             raise ValueError("the native pipeline has no AWQ input-scale fold; construct with nvfp4_awq=False")
-        d = self.dims
+        d = self._active_dims
         if not d.get("merge_qkv_mlp"):
             raise ValueError("the native pipeline records the merged single-stream linear1 only "
                              f"(precision {self._precision!r} uses the split path)")

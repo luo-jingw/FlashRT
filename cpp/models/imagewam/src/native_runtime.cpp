@@ -156,12 +156,12 @@ NativeRuntime::~NativeRuntime() {
     for (const GraphVariant& variant : variants_) {
         if (variant.owned) cudaGraphExecDestroy(variant.exec);
     }
-    pipeline_.reset();
+    pipelines_.clear();
     if (proprio_device_) cudaFree(proprio_device_);
     if (stream_) cudaStreamDestroy(stream_);
 }
 
-int NativeRuntime::fail(int status, const std::string& message) {
+int NativeRuntime::fail(int status, const std::string& message) const {
     last_error_ = message;
     return status;
 }
@@ -177,6 +177,18 @@ int NativeRuntime::variant_index(uint64_t key) const {
         if (variants_[i].key == key) return static_cast<int>(i);
     }
     return -1;
+}
+
+int NativeRuntime::pipeline_index(uint64_t key) const {
+    for (size_t i = 0; i < pipelines_.size(); ++i) {
+        if (pipelines_[i].key == key) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+NativePipeline* NativeRuntime::active_pipeline() const {
+    const int at = pipeline_index(context_rows_);
+    return at < 0 ? nullptr : pipelines_[at].pipeline.get();
 }
 
 bool NativeRuntime::is_declared(uint64_t key) const {
@@ -204,6 +216,15 @@ std::string NativeRuntime::adopted_keys() const {
     return keys;
 }
 
+std::string NativeRuntime::installed_keys() const {
+    if (pipelines_.empty()) return "none";
+    std::string keys;
+    for (size_t i = 0; i < pipelines_.size(); ++i) {
+        keys += (i ? ", " : "") + std::to_string(pipelines_[i].key);
+    }
+    return keys;
+}
+
 int NativeRuntime::has_variant(uint64_t key) const { return variant_index(key) >= 0 ? 1 : 0; }
 
 cudaGraphExec_t NativeRuntime::variant_exec(uint64_t key) const {
@@ -211,20 +232,12 @@ cudaGraphExec_t NativeRuntime::variant_exec(uint64_t key) const {
     return at < 0 ? nullptr : variants_[at].exec;
 }
 
-void NativeRuntime::drop_owned_graphs() {
-    bool any_owned = false;
-    for (const GraphVariant& variant : variants_) any_owned = any_owned || variant.owned;
-    if (!any_owned) return;
+void NativeRuntime::drop_owned_graph(uint64_t key) {
+    const int at = variant_index(key);
+    if (at < 0 || !variants_[at].owned) return;
     cudaStreamSynchronize(stream_);
-    std::vector<GraphVariant> kept;
-    for (const GraphVariant& variant : variants_) {
-        if (variant.owned) {
-            cudaGraphExecDestroy(variant.exec);
-            continue;
-        }
-        kept.push_back(variant);
-    }
-    variants_.swap(kept);
+    cudaGraphExecDestroy(variants_[at].exec);
+    variants_.erase(variants_.begin() + at);
 }
 
 int NativeRuntime::use_graph(uint64_t key, cudaGraphExec_t graph_exec) {
@@ -272,32 +285,52 @@ int NativeRuntime::set_pipeline(const frt_imagewam_pipeline_config& config) {
         config.context != context_) {
         return fail(kInvalid, "set_pipeline: IO windows differ from the runtime's");
     }
+    // The pipeline records one text length, the key of this table entry: any
+    // declared length, not only the active one, so a handle can carry one
+    // pipeline (and capture one graph) per length it serves.
+    if (config.x0 <= 0 || !is_declared(uint64_t(config.x0))) {
+        return fail(kNotFound, "set_pipeline: text length x0=" + std::to_string(config.x0) +
+                                   " is not a declared text length; this handle declares [" +
+                                   declared_keys() + "]");
+    }
     if (config.num_action != int32_t(dims_.num_action) ||
         config.action_dim != int32_t(dims_.action_dim) ||
-        config.x0 != int32_t(context_rows_) ||
         config.joint_attention_dim != int32_t(context_width_) ||
         config.a0 - config.x0 != int32_t(dims_.img_len) ||
         config.head_dim != int32_t(dims_.token_dim)) {
-        return fail(kShape, "set_pipeline: dimensions differ from the runtime's IO config (the "
-                            "active text length is x0=" + std::to_string(context_rows_) + ")");
+        return fail(kShape, "set_pipeline: dimensions differ from the runtime's IO config (x0=" +
+                                std::to_string(config.x0) + ", img_len=a0-x0)");
     }
     std::string error;
     std::unique_ptr<NativePipeline> pipeline = NativePipeline::create(config, &error);
     if (!pipeline) return fail(kInvalid, "set_pipeline: " + error);
-    // A graph captured from the current pipeline records its GEMM handles,
-    // workspace and resource pointers: drop every captured variant before
-    // the pipeline goes. `step` then fails for a captured length until the
-    // next capture.
-    drop_owned_graphs();
-    pipeline_ = std::move(pipeline);
-    pipeline_x0_ = uint32_t(config.x0);
+    // A graph captured from the pipeline of this key records its GEMM handles,
+    // workspace and resource pointers: drop that key's captured variant before
+    // the pipeline goes. The other keys keep their pipeline and their graph.
+    // `step` then fails for this key until its next capture.
+    drop_owned_graph(uint64_t(config.x0));
+    const int at = pipeline_index(uint64_t(config.x0));
+    if (at < 0) {
+        pipelines_.push_back(PipelineVariant{uint64_t(config.x0), std::move(pipeline)});
+    } else {
+        pipelines_[at].pipeline = std::move(pipeline);
+    }
+    // The pipeline just installed is the one the setup calls operate on, so
+    // its key becomes the active text length: gemm_shapes, set_gemm_algo, run
+    // and capture all resolve against the active key.
+    context_rows_ = uint32_t(config.x0);
     return kOk;
 }
 
 int NativeRuntime::gemm_shapes(frt_imagewam_gemm_shape* out, uint64_t capacity,
                                uint64_t* count) const {
-    if (!pipeline_) return kInvalid;
-    const auto& shapes = pipeline_->gemm_shapes();
+    const NativePipeline* p = active_pipeline();
+    if (!p) {
+        return fail(kInvalid, "gemm_shapes: no pipeline is installed for the active text length x0=" +
+                                  std::to_string(context_rows_) + "; set_pipeline for it (installed: " +
+                                  installed_keys() + ")");
+    }
+    const auto& shapes = p->gemm_shapes();
     if (count) *count = shapes.size();
     if (capacity < shapes.size()) return kStorage;
     for (size_t i = 0; i < shapes.size(); ++i) out[i] = shapes[i];
@@ -306,13 +339,18 @@ int NativeRuntime::gemm_shapes(frt_imagewam_gemm_shape* out, uint64_t capacity,
 
 int NativeRuntime::set_gemm_algo(const frt_imagewam_gemm_shape& shape, const void* algo,
                                  uint64_t bytes) {
-    if (!pipeline_) return fail(kInvalid, "set_gemm_algo: set_pipeline first");
+    NativePipeline* p = active_pipeline();
+    if (!p) {
+        return fail(kInvalid, "set_gemm_algo: no pipeline is installed for the active text length x0=" +
+                                  std::to_string(context_rows_) + "; set_pipeline for it (installed: " +
+                                  installed_keys() + ")");
+    }
     if (!algo || bytes != uint64_t(GemmRunnerAlgoBytes())) {
         return fail(kShape, "set_gemm_algo: algorithm must be " +
                                 std::to_string(GemmRunnerAlgoBytes()) + " bytes");
     }
     try {
-        pipeline_->set_gemm_algo(shape, algo);
+        p->set_gemm_algo(shape, algo);
     } catch (const std::exception& e) {
         return fail(kBackend, std::string("set_gemm_algo: ") + e.what());
     }
@@ -320,7 +358,12 @@ int NativeRuntime::set_gemm_algo(const frt_imagewam_gemm_shape& shape, const voi
 }
 
 int NativeRuntime::run(uint32_t segment, int32_t index) {
-    if (!pipeline_) return fail(kInvalid, "run: set_pipeline first");
+    NativePipeline* p = active_pipeline();
+    if (!p) {
+        return fail(kInvalid, "run: no pipeline is installed for the active text length x0=" +
+                                  std::to_string(context_rows_) + "; set_pipeline for it (installed: " +
+                                  installed_keys() + ")");
+    }
     // The segments write the frontend's buffers from the non-blocking native
     // stream, which is not ordered after work other streams queued on them
     // (a torch copy still reading a buffer, say): wait for that work first.
@@ -328,14 +371,14 @@ int NativeRuntime::run(uint32_t segment, int32_t index) {
     if (prior != cudaSuccess) return fail(kBackend, cuda_message("run: prior device work", prior));
     try {
         switch (segment) {
-            case FRT_IMAGEWAM_SEGMENT_DOUBLE_LAYER: pipeline_->double_layer(index, stream_); break;
-            case FRT_IMAGEWAM_SEGMENT_SINGLE_LAYER: pipeline_->single_layer(index, stream_); break;
-            case FRT_IMAGEWAM_SEGMENT_PREFILL: pipeline_->prefill(stream_); break;
-            case FRT_IMAGEWAM_SEGMENT_DENOISE_STEP: pipeline_->denoise_step(index, stream_); break;
-            case FRT_IMAGEWAM_SEGMENT_DENOISE: pipeline_->denoise(stream_); break;
+            case FRT_IMAGEWAM_SEGMENT_DOUBLE_LAYER: p->double_layer(index, stream_); break;
+            case FRT_IMAGEWAM_SEGMENT_SINGLE_LAYER: p->single_layer(index, stream_); break;
+            case FRT_IMAGEWAM_SEGMENT_PREFILL: p->prefill(stream_); break;
+            case FRT_IMAGEWAM_SEGMENT_DENOISE_STEP: p->denoise_step(index, stream_); break;
+            case FRT_IMAGEWAM_SEGMENT_DENOISE: p->denoise(stream_); break;
             case FRT_IMAGEWAM_SEGMENT_FULL:
-                pipeline_->prefill(stream_);
-                pipeline_->denoise(stream_);
+                p->prefill(stream_);
+                p->denoise(stream_);
                 break;
             default: return fail(kInvalid, "run: unknown segment");
         }
@@ -351,15 +394,11 @@ int NativeRuntime::run(uint32_t segment, int32_t index) {
 
 int NativeRuntime::capture() {
     if (int rc = refuse_while_exported("capture")) return rc;
-    if (!pipeline_) return fail(kInvalid, "capture: set_pipeline first");
-    // The graph bakes the pipeline's own dims: captured under any other
-    // active text length it would replay the wrong length's context.
-    if (context_rows_ != pipeline_x0_) {
-        return fail(kShape, "capture: the active text length x0=" + std::to_string(context_rows_) +
-                                " differs from the installed pipeline's x0=" +
-                                std::to_string(pipeline_x0_) +
-                                "; set_text_length to the pipeline's or set_pipeline for the "
-                                "active length first");
+    NativePipeline* p = active_pipeline();
+    if (!p) {
+        return fail(kInvalid, "capture: no pipeline is installed for the active text length x0=" +
+                                  std::to_string(context_rows_) + "; set_pipeline for it (installed: " +
+                                  installed_keys() + ")");
     }
     // Warm-up: lazy cuBLAS/cuBLASLt initialisation must not happen under capture.
     int rc = run(FRT_IMAGEWAM_SEGMENT_FULL, 0);
@@ -369,8 +408,8 @@ int NativeRuntime::capture() {
     if (err != cudaSuccess) return fail(kBackend, cuda_message("cudaStreamBeginCapture", err));
     std::string record_error;
     try {
-        pipeline_->prefill(stream_);
-        pipeline_->denoise(stream_);
+        p->prefill(stream_);
+        p->denoise(stream_);
     } catch (const std::exception& e) {
         record_error = e.what();
     }
