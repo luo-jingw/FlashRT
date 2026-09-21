@@ -18,6 +18,13 @@ Environment: `CKPT_PATH` (with `dataset_stats.json` beside it),
 `FLUX2_AE_MODEL_PATH`, `FLUX2_SRC`, `QWEN3_MODEL_SPEC`, `DATA_ROOT`
 (LIBERO-fastwam, LeRobot v2.1).
 
+`--text-trim` records with a trimming frontend instead. The file's identity
+carries the switch it was recorded with, and a frontend refuses a file whose
+identity differs from its own, so an untrimmed build serves only untrimmed
+configurations and a `--text-trim` build only trimming ones. The served
+`default` profile trims, so it loads a `--text-trim` build
+(`plan.md`, "Decisions pending": `text_trim` is the served default).
+
 1. Frames (`benchmarks/_imagewam_libero_frames.py`): `n` split
    evenly over `libero_object`, `libero_goal`, `libero_10`; each share
    stratified by episode x frame position with the house sampler
