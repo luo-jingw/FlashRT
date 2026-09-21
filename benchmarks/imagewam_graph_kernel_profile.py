@@ -85,6 +85,11 @@ def profile_graph(graph, replays: int) -> tuple[list[tuple[str, int, float]], fl
     torch.cuda.synchronize()
     replay_ms = start.elapsed_time(end) / replays
 
+    # A throwaway session first: the first profiler session of a process initialises CUPTI and can
+    # record no kernels at all (the 0921d run got 0 kernels for each precision's first graph).
+    with profile(activities=[ProfilerActivity.CUDA]):
+        graph.replay()
+        torch.cuda.synchronize()
     with profile(activities=[ProfilerActivity.CUDA]) as prof:
         for _ in range(replays):
             graph.replay()
@@ -107,6 +112,13 @@ def report(label: str, rows: list[tuple[str, int, float]], replay_ms: float, top
     for name, _, us in rows:
         by_cat[category(name)] = by_cat.get(category(name), 0.0) + us
     print("by category: " + ", ".join(f"{c} {us / 1e3:.2f} ms" for c, us in sorted(by_cat.items())))
+    # How much of the GPU time is in kernels too short to be limited by the tensor cores or the memory
+    # system (launch / tail latency dominates them): the share and the average kernel duration.
+    print(f"average kernel {kernel_us / max(count, 1):.1f} us; " + "; ".join(
+        f"kernels < {cut} us: {sum(n for _, n, us in rows if us / max(n, 1) < cut):.0f} launches, "
+        f"{sum(us for _, n, us in rows if us / max(n, 1) < cut) / 1e3:.2f} ms "
+        f"({100 * sum(us for _, n, us in rows if us / max(n, 1) < cut) / max(kernel_us, 1):.0f}%)"
+        for cut in (10, 25, 100)))
     print(f"top {top} kernels (per replay):")
     for name, n, us in sorted(rows, key=lambda r: -r[2])[:top]:
         print(f"  {us / 1e3:8.3f} ms  x{n:<6.0f} {category(name):<18} {name[:110]}")

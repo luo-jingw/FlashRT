@@ -58,6 +58,15 @@ python benchmarks/imagewam_fp16_gemm_probe.py --x0 25,513 2>&1 | tee $OUT/X1_fp1
 ```
 每个 GEMM 形状（`x0=25` 的裁剪长度与 `x0=513` 的未裁剪长度）各测三种算法：启发式第一名、frontend 用的"零填充上自动调优"、"随机数据上自动调优"，都在随机操作数上用 CUDA event 重测，三个新 runner 取 min..max，并给出实测 TFLOPs。要带回：整份日志。读法：哪些形状的 TFLOPs 远低于 CUTLASS 的水平（几十 TFLOPs 以上）；同一形状三个 runner 的 min..max 是否分叉（说明调优结果不稳定）；"零填充"与"随机"两列是否不同（说明数据填充影响选择）。判据不是过 / 不过，是给 ISSUE-088 定位。
 
+### X4 nvfp4 的 24 token 图：计算、访存还是 kernel 延迟（回答"瓶颈在哪"）
+D1 里每个精度的第一张图抓到 0 个 kernel（profiler 第一次会话要初始化 CUPTI）；脚本已加一次空会话预热，并新增"平均 kernel 时长与短 kernel 的占比"两行。**不要再开 nsys**（会和 torch.profiler 抢 CUPTI）。
+```
+for P in nvfp4 fp16_cutlass; do
+  python benchmarks/imagewam_graph_kernel_profile.py --precision $P --valid-tokens 24 --use-fa4 off 2>&1 | tee $OUT/X4_$P.log
+done
+```
+要带回：每个日志里 `graph replay ... ; kernels inside ...`、`average kernel ... us; kernels < 10 us: ...`、分类耗时、top 12。读法：短 kernel（< 25 us）占 GPU 时间的比例很大，说明是 kernel 数量 / 延迟受限；GEMM 类占大头而平均 TFLOPs 远低于 110，说明 GEMM 效率问题；top kernel 是逐元素类，说明访存受限。
+
 ### X2 官方那一行的漂移（表里官方 L1 = 456.66 ms，末尾复测 L5 = 377.04 ms，−17.4%）
 `emc_locked=null`，官方 eager 更偏访存，FlashRT 的 nvfp4 两端只差 −0.4%，所以怀疑是 EMC 频率没锁。记录 EMC 频率，不改频：
 ```
