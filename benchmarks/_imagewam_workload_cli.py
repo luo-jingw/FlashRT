@@ -40,10 +40,11 @@ BF16 = torch.bfloat16
 
 # The deployment's candidate target configuration (a candidate, not a
 # verified fact): three views at 256x256, a 32-step horizon, 128 padded text
-# tokens. `THOR_CHECKLIST.md` section D carries the same candidate and
-# suggests `text_max_len=512` for it; pass `--text-max-len 512` when that is
-# the confirmed value. Nothing here is measured or confirmed -- the bench
-# that consumes it (`imagewam_thor_path_bench.py`) reports latency only.
+# tokens. `plan.md`'s open list carries the same candidate and the field
+# still open; pass `--text-max-len 512` when the deployment confirms a longer
+# instruction set (`max_length` here is what the frontend pads the encoder to,
+# ISSUE-083). Nothing here is measured or confirmed -- the bench that
+# consumes it (`imagewam_thor_path_bench.py`) reports latency only.
 TARGET_WORKLOAD = ImageWAMWorkload(
     num_views=3, image_h=256, image_w=256, text_max_len=128, action_horizon=32,
     action_dim=7, proprio_dim=8, num_steps=10, shift=5.0)

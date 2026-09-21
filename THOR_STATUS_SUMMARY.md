@@ -218,9 +218,9 @@ native C++ 本轮重建。`FLASHRT_THOR_FA4=0 IMAGEWAM_NATIVE_PRECISION=nvfp4 py
 | `profile=fast`（同 `stack` 开关） | 106.8 | — | 0.99936 |
 | `profile=default`（同 `default` 开关） | 225.2 | — | 0.99764 |
 
-FA4 两个位点都不回退（`FA4 fallback` 为 `None`）。按 C 节的判据，`stack` 相对 `vae_trim` 低 9.7 ms 且 vs official 不劣，达到「FA4 转默认」的工作门槛；原生 VAE 同理。默认值未改。
+FA4 两个位点都不回退（`FA4 fallback` 为 `None`）。按这张表的判据，`stack` 相对 `vae_trim` 低 9.7 ms 且 vs official 不劣，达到「FA4 转默认」的工作门槛；原生 VAE 同理。默认值未改。
 
-读这张表的两个口径问题（ISSUE-082）：`default` 行的记录基线 202–203 ms 来自只跑 frontend 的 gate，与带官方对照的 e2e 不是同一口径，`c20f3a0` 没有同口径的 gate 数；同一组开关在同一会话里出现两次，93.2 与 106.8 ms 相差 13.6 ms，比 C 节用的 2 ms 工作阈值大。`eccf14f` 轮回答了这两点：同轮 gate 202.2 ms 与 e2e `default` 202.0–202.4 ms 同口径且一致，同一会话内 `default` 三次重复的极差 0.4 ms、`stack` 0.5 ms；106.1 / 106.8 ms 属于 `c20f3a0` 那一轮偏高的会话状态。
+读这张表的两个口径问题（ISSUE-082）：`default` 行的记录基线 202–203 ms 来自只跑 frontend 的 gate，与带官方对照的 e2e 不是同一口径，`c20f3a0` 没有同口径的 gate 数；同一组开关在同一会话里出现两次，93.2 与 106.8 ms 相差 13.6 ms，比判据用的 2 ms 工作阈值大。`eccf14f` 轮回答了这两点：同轮 gate 202.2 ms 与 e2e `default` 202.0–202.4 ms 同口径且一致，同一会话内 `default` 三次重复的极差 0.4 ms、`stack` 0.5 ms；106.1 / 106.8 ms 属于 `c20f3a0` 那一轮偏高的会话状态。
 
 微基准（随机权重、不含 VAE）：融合项合计约 −9.7 ms；FA4 backbone −26.9 ms，backbone + mot −58.5 ms；VAE 编码 stage 19.4 → 8.3 ms（进图）；VAE 预处理 kernel 0.97 → 0.13 ms。
 

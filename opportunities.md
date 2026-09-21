@@ -4463,7 +4463,7 @@ which is the state the note above recorded as missing:
 | stack_no_vae (FA4 on, native VAE off) | 104.8 | — | — | None |
 
 The backbone site is 3.9 ms below the no-FA4 row and adding the `mot` site
-takes another 5.8 ms, so the section C criterion for making FA4 the default
+takes another 5.8 ms, so the ladder's criterion for making FA4 the default
 (at least 2 ms of P50 against the FA4-off row, and not worse against
 official) held in this pass, with no fallback on any row. `use_fa4` and
 `use_fa4_mot` therefore remain profile switches; the decision on the
@@ -4909,7 +4909,7 @@ The `vae` row (native NHWC encoder captured into the main graph, everything
 else at the default configuration) measured 190.1 ms against `default`
 225.5 ms, and removing the switch from the full stack costs +11.6 ms
 (`stack_no_vae` 104.8 against `stack` 93.2). Both readings are below the
-corresponding row without it, so the section C criterion for the native VAE
+corresponding row without it, so the ladder's criterion for the native VAE
 (lower P50 than `default`, not worse against official) holds; the served
 default stays `vae_encoder="torch"` with the VAE outside the graph, and the
 decision is the owner's (plan.md "Decisions pending"). ISSUE-082 applies to

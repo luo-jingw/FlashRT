@@ -286,7 +286,7 @@ from a Thor run is still pending.
 
 # ISSUE-020
 
-Status: resolved by the opt-in `text_trim=True`; the default stays untrimmed until Thor confirms it (ISSUE-080)
+Status: resolved by `text_trim=True`, which the served `default` profile sets (ISSUE-080)
 
 Area: text-token key padding in every attention call
 (`flash_rt/hardware/thor/attn_backend.py` `ImageWAMAttnBackend`, both
@@ -556,8 +556,10 @@ buffer bounds, and fallback are tested with stand-ins for the kernels.
 Both plans stay `approved`, with a `blocked` Thor phase:
 
 - `gemm_variant_autotune` stays default-off.
-- FA4 stays opt-in (`FLASHRT_THOR_FA4=1`, `use_fa4=True`,
-  `use_fa4_mot=True`).
+- FA4 at the `mot` site stays opt-in (`use_fa4_mot=True`). The backbone
+  site is the served default where the machine can run it (`use_fa4=None`
+  resolves to FA4 on a compute-capability-11.x device with an importable
+  FA4 runtime; `FLASHRT_THOR_FA4=0` forces the cuBLAS chain).
 
 ## Evidence
 
@@ -1083,7 +1085,11 @@ Resolved 2026-09-18: a race in the test harness, not in the Python graph.
 
 # ISSUE-080
 
-Status: open (owner decision after Thor: served default of `text_trim`)
+Status: open — the decision is made (`text_trim` serves by default,
+`plan.md` "Decisions pending", E1) and all six conditions below are
+satisfied in the code; the one row not yet confirmed on Thor is the native
+pipeline's own per-length capture, whose two causes were fixed at `43c49ce`
+and which `THOR_CHECKLIST.md`'s S4-pipeline row re-runs.
 
 Area: `ImageWAMTorchFrontendThor(text_trim=...)`
 (`flash_rt/frontends/torch/imagewam_thor.py`, opportunities.md OPT-030)
@@ -1103,7 +1109,7 @@ own seed 0 vs seed 1 cosine is 0.93157 (seed 0 on the same frame:
 
 ## Impact
 
-The served default (`nvfp4`, untrimmed) keeps attending to about 490
+The untrimmed configuration (`nvfp4`) keeps attending to about 490
 padded text keys: action cosine vs official down to 0.930 at fp16 on
 libero_goal, and about 30% more replay time than trimmed at fp16 on
 H100.
@@ -1290,8 +1296,9 @@ payload with it, and `_input_shapes`/the exported verb list declare
 LIBERO's (a different camera count, or a per-view size other than 224x224)
 therefore exports an ABI that decodes the wrong number of bytes per frame and
 declares the wrong input shape, while `infer()` itself would take the views it
-is handed. This is the deployment described by `THOR_CHECKLIST.md` section D,
-whose workload fields are still to be entered.
+is handed. This is the deployment `TARGET_WORKLOAD`
+(`benchmarks/_imagewam_workload_cli.py`) describes, whose open field is
+recorded in `plan.md`'s open list.
 
 ## Evidence
 
@@ -1317,7 +1324,7 @@ Carry the geometry from the workload: a frontend built through
 `from_config`/`load_imagewam` reports `workload.vae_graph_input()` as
 `view_shape` on both paths (equal to the VAE stage's spec when the stage
 exists), and a frontend built by the constructor with hand-passed dims keeps
-today's value. Then check, on a target workload (section D), that the exported
+today's value. Then check, on `TARGET_WORKLOAD`, that the exported
 runtime's `image_views` verb list and its declared frame shape follow the
 workload, and that a LIBERO export is unchanged.
 
@@ -1371,7 +1378,7 @@ Two questions cannot be answered from this round:
    the same session — is the outlier at 93.2 ms.
 2. How large the spread of one row is. The 13.6 ms between those two
    instances of the same configuration is larger than the 2 ms working
-   threshold `THOR_CHECKLIST.md` section C uses for the FA4-into-the-default
+   threshold the switch ladder's criterion uses for the FA4-into-the-default
    criterion, which was judged on `stack` - `vae_trim` = 9.7 ms in one
    ladder pass.
 
@@ -1384,8 +1391,9 @@ Two questions cannot be answered from this round:
   and 106.1 ms entries name their own measurement), and the 231.6 ms
   baseline that `latency_baselines.json`'s 243 ms nvfp4 threshold was
   derived from.
-- `THOR_CHECKLIST.md` section C's criteria ("阈值是工作值，按跑间波动调整")
-  and item E2.
+- The switch ladder's criteria ("阈值是工作值，按跑间波动调整",
+  `THOR_STATUS_SUMMARY.md`, "开关阶梯") and the latency baseline's scope
+  (ISSUE-082).
 
 ## Hypotheses
 
@@ -1404,7 +1412,7 @@ and in how many times the graph is replayed per measurement.
    default path is compared against itself.
 2. Repeat one configuration three times in a single session (and once in a
    second session) and record the spread next to the clock state; use it to
-   reset section C's threshold and the Thor entries of
+   reset the ladder's threshold and the Thor entries of
    `tests/fixtures/imagewam_gate/latency_baselines.json` (item E2).
 
 # ISSUE-083
@@ -1488,6 +1496,25 @@ with one prompt shorter than the chosen length: the first `n` rows of a
 a workload at that `text_max_len` against the official model given the same
 context rows. Record the cosine per row count.
 
+## Resolution
+
+The encoder's padded length is the caller's: `encode_prompts` takes
+`max_length` (default `_MAX_LENGTH = 512`) and the frontend passes its own
+context length (`dims["x0"] - 1` where a proprio row is set, so LIBERO
+encodes at 512). A workload therefore declares the padded token count its
+prompts are built at, as `text_max_len`, and `text_trim` is a separate
+mechanism that drops the padding rows a prompt does not use. The frontend
+accepts whatever a workload declares as long as the prompt builder pads to
+it and the truncation behaviour is the tokenizer's own.
+
+`TARGET_WORKLOAD.text_max_len = 128` (`benchmarks/_imagewam_workload_cli.py`)
+is a candidate, not a confirmed deployment value: the target workload serves
+on all three paths with that declaration (`0919e`: `infer()` 216.93 / ABI
+173.55 / native 173.27 ms), and a trimmed sweep at 16, 72 and 128 valid
+tokens measured `infer()` 197.00 / 207.06 / 217.50 ms, so a larger
+declaration costs the padding it adds. Confirming the instruction set
+settles it.
+
 # ISSUE-084
 
 Status: resolved
@@ -1520,11 +1547,12 @@ outside-the-graph path refuses three views outright.
 
 ## Impact
 
-The candidate target workload (3 views of 256x256, ISSUE-083 /
-`THOR_CHECKLIST.md` section D) cannot be driven through the served
-`infer()` with the real VAE encoder. Latency for its sequence layout can be
-measured today (placeholder image tokens), but the VAE stage — one of the
-switches under comparison (OPT-021) — cannot.
+The candidate target workload (`TARGET_WORKLOAD` in
+`benchmarks/_imagewam_workload_cli.py`, 3 views of 256x256, ISSUE-083)
+cannot be driven through the served `infer()` with the real VAE encoder.
+Latency for its sequence layout can be measured today (placeholder image
+tokens), but the VAE stage — one of the switches under comparison
+(OPT-021) — cannot.
 
 ## Evidence
 
@@ -1604,7 +1632,7 @@ the gate measures **202.2 ms** nvfp4 (pass) and the end-to-end `default` row
 recorded 203.3 ms gate / 202.3 ms e2e. The 225 ms and the 13.6 ms
 between-instances spread of the `c20f3a0` round were that session's state,
 not a measurement-scope difference: in the `eccf14f` session the same
-repeats spread **0.4 ms** (`default`) and **0.5 ms** (`stack`), so section C's
+repeats spread **0.4 ms** (`default`) and **0.5 ms** (`stack`), so the ladder's
 2 ms working threshold is meaningful after all.
 
 What the round also shows: the recorded `stack` / `fast` latency of 106.1 ms
@@ -1787,8 +1815,8 @@ numbers, with placeholder image tokens.
 `infer()` cannot serve a per-view size other than 224x224: the served path's
 image branch is tied to LIBERO's view size while the sequence layout, the
 RoPE grid and `img_raw` already follow the workload. The target
-configuration (`THOR_CHECKLIST.md` section D) therefore cannot be measured
-end to end, and the same mismatch would apply to any camera whose frames are
+configuration (`TARGET_WORKLOAD`) therefore cannot be measured end to end,
+and the same mismatch would apply to any camera whose frames are
 not resized to 224x224 before staging.
 
 ## Evidence

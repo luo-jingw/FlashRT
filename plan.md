@@ -1651,7 +1651,7 @@ Phase Status: completed
   (`tests/fixtures/imagewam_gate/latency_baselines.json`, 231.6 -> 202.2 ms),
   which closes item E2.
 - Goal: the recorded numbers reproduce through the new path, and the
-  target workload (THOR_CHECKLIST D) runs as a `Workload`.
+  target workload runs as a `Workload`.
 - Modified files: `scripts/imagewam_thor_matrix.sh`,
   `benchmarks/imagewam_e2e_official_compare.py`, `THOR_CHECKLIST.md`.
 - Observation: matrix rows `default` and `stack` within run-to-run noise
@@ -1682,14 +1682,18 @@ Phase Status: completed
     C's 2 ms working threshold and the gate baseline need the two
     measurements item E2 now spells out.
   - Still open in this phase: the like-for-like `default` baseline, and
-    running the target workload of `THOR_CHECKLIST.md` section D as an
-    `ImageWAMWorkload`.
+    running the target workload as an `ImageWAMWorkload`.
 
 ### Phase T1-T5: Thor line
 Phase Status: pending
-- Goal: T1-T3 are THOR_CHECKLIST sections A, B, C; T4 records the preset
-  contents in `plan.md` "Decisions"; T5 applies the FA4 and native-VAE
-  default criteria in THOR_CHECKLIST C.
+- Goal: the Thor-only rows. The lettered checklist sections A, B, C, D and E
+  have run and were removed as their conclusions were recorded (T1-T3 the
+  matrix, the switch ladder and the target-workload table; T4 the preset
+  contents in `plan.md` "Decisions pending"; T5 the FA4 and native-VAE
+  default criteria). What is left of the line is `THOR_CHECKLIST.md`'s three
+  pending rows: the native pipeline's own per-length capture re-run, the
+  `frt_model_runtime_v1` export gate at `nvfp4`, and the `e0m3_hadamard`
+  trim-safety row.
 - Modified files: `THOR_CHECKLIST.md` (finished items removed),
   `opportunities.md`, `issues.md`.
 - Observation: matrix CSV/MD per THOR_CHECKLIST.
@@ -1876,8 +1880,10 @@ Not done, and why:
 - T1-T5 and the rest of W12 are Thor runs; the Thor is a separate shared
   machine. `THOR_CHECKLIST.md` carries the commands, each item's 判据 and
   where its conclusion goes, so one pass covers what is still pending. The
-  `c20f3a0` round closed the new-entry checks and the nvfp4 `libero_spatial`
-  ladder; sections A and B, the remaining C rows, D and E2 are not run.
+  rounds after `c20f3a0` (`eccf14f`, the `0919e` round at `a84916a`, and the
+  `0920`, `0920s4` and `0920t` rounds) ran the rest of the line, and each
+  section left the checklist as its conclusions were recorded; the three rows
+  still there are the ones the T1-T5 goal names.
 - S1-S3 are untouched: S1 needs the fixture data regenerated on a GPU (the
   generator's own `fp16` reference), S2 and S3 change the runtime surface
   and the capture cache, whose only observation is a captured graph. Their
@@ -2012,9 +2018,14 @@ Open:
   collision the dims-derived identity has — two workloads with the same
   `ref_h`/`ref_w` (e.g. two 224x224 views and four 224x112 views) have the
   same dims but different VAE inputs.
-- The target-workload table in `THOR_CHECKLIST.md` section D: `num_views=3`,
-  `image_h=image_w=256`, `action_horizon=32`, `action_dim=7`,
-  `proprio_dim=8`, `num_steps=10`, `shift=5.0`; instruction tokens 16-128,
-  and the buffer length they imply (`text_max_len`) is the open field
-  (ISSUE-083). The checkpoint and calibration files and the graph memory
-  budget are still open.
+- The target-workload declaration (`TARGET_WORKLOAD` in
+  `benchmarks/_imagewam_workload_cli.py`: `num_views=3`, `image_h=image_w=256`,
+  `action_horizon=32`, `action_dim=7`, `proprio_dim=8`, `num_steps=10`,
+  `shift=5.0`, instruction tokens 16-128). The workload serves on all three
+  paths: `0919e` measured `infer()` 216.93 / ABI 173.55 / native 173.27 ms
+  with `default`, and a trimmed sweep at 16, 72 and 128 valid tokens measured
+  197.00 / 207.06 / 217.50 ms on `infer()` and 153.51 / 161.68 / 172.05 ms on
+  the ABI. Still open: whether 128 padded tokens is the deployment's own
+  count (ISSUE-083 resolves how it is encoded, not what it should be), and
+  the checkpoint, calibration file and graph memory budget that go with that
+  workload — the per-length memory figures recorded so far are LIBERO's.
