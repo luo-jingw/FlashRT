@@ -1778,8 +1778,18 @@ Phase Status: completed
   (two captured lengths, the shorter ticked first, `array_equal` to `infer()`
   in the actions and the action latent), the native manifest's length table,
   and CPU-only pins for the io config's table and the handle's key plumbing
-  over a stubbed library. On Thor this needs the rebuild the checklist item
-  names, then that test plus the native parity and schema gates.
+  over a stubbed library. On Thor at `0920s4` (native C++ rebuilt only, the
+  ctypes layout check silent) the suite is 38 passed: the two-length tick is
+  `array_equal` with `max_abs=0`, the manifest records
+  `text_lengths={'default_key': 14, 'keys': [6, 14], 'per_prompt_length': True}`,
+  `set_text_length` returns `-2` for a length with no graph, the untrimmed
+  one-key file is green as a whole, the schema gate's seven records are
+  line-identical to the golden file, and the native parity gate is green for
+  both graph producers with all six mutants detected at the same node counts
+  (native 5324 / Python 5348). The P50s sit about 22 ms above the earlier
+  `08_gate_native` round's ~182 ms, with the node counts unchanged and the
+  untrimmed values identical: recorded as a session difference, not a
+  measured regression.
 - **R5 is not lifted**, deliberately: the native *pipeline* (its own
   `capture()` from `pipeline_resources()`'s one resource table) still records
   one graph at one context length, so `consumer="native"` keeps refusing
