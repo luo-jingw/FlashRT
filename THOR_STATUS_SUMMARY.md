@@ -305,7 +305,7 @@ Thor（Blackwell 第五代 Tensor Core，`tcgen05.mma`）原生支持 TF32/FP16/
 | Hadamard 旋转 INT4（E0M3） | 有 | 已实现（`e0m3_hadamard`），可选 |
 | 门控残差 + 下一层 Norm 合并 | 一个 elementwise kernel | 已实现，含跨层 |
 | 图像归一化查找表 | 256 项 FP16 LUT | 已实现 |
-| 小 M CUTLASS tile | 有 | 已实现，可选（实测收益 ≤0.9%） |
+| 小 M CUTLASS tile | 有 | 已实现，可选（`gemm_variant_autotune` 仍是 opt-in；Thor 上的收益尚未测量，`issues.md` ISSUE-023） |
 | 精度/延迟回归门禁 | 有（时钟锁定检查、同批次 A/B、per-view baseline） | LIBERO gate + 每设备 baseline + 时钟状态记录 |
 | 多子图 stage 拆分 | RTC 前缀复用 / VJP 引导 | 不需要 |
 | 完整 attention 链路融合 | 已测试，慢 5–7 倍，放弃 | 改用 FA4 |
