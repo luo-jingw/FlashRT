@@ -89,10 +89,10 @@ which resolves at construction to FA4 at that site where
 (`FLASHRT_THOR_FA4=0` forces the chain), and `default` runs the native VAE inside
 the graph when an autoencoder path is given; `--use-fa4 on|off` is the explicit
 override. A static-FP8 precision needs a calibration
-file (rule R1) and this bench takes none, so `--precision fp8_static*` raises
-the resolver's `R1` before anything is allocated -- build one with
-`benchmarks/imagewam_build_calibration.py` and run the comparison through
-`benchmarks/imagewam_e2e_official_compare.py`'s `CALIBRATION`.
+file (rule R1): pass `--calibration <file>` (one built by
+`benchmarks/imagewam_build_calibration.py` for this workload, `--text-trim` when
+the profile trims); without it `--precision fp8_static*` raises the resolver's
+`R1` before anything is allocated.
 """
 from __future__ import annotations
 
@@ -408,6 +408,9 @@ def main() -> int:
                     help="overrides the profile's precision")
     ap.add_argument("--paths", default=",".join(PATHS),
                     help=f"comma-separated subset of {PATHS}")
+    ap.add_argument("--calibration", default=None,
+                    help="calibration file for a static-FP8 precision (or nvfp4 AWQ); its identity must match "
+                         "the workload and the profile's text_trim (rule R8)")
     ap.add_argument("--bench-iters", type=int, default=20)
     ap.add_argument("--warmup", type=int, default=5)
     ap.add_argument("--seed", type=int, default=0,
@@ -479,6 +482,7 @@ def main() -> int:
                        ae_model_path=ae_model_path, flux2_src=flux2_src,
                        qwen3_model_spec=os.environ.get("QWEN3_MODEL_SPEC"),
                        dataset_stats_path=dataset_stats_path, consumer="infer",
+                       calibration_path=args.calibration,
                        precapture_text_lengths=precapture,
                        **expert_overrides(args))
     if precapture is not None:

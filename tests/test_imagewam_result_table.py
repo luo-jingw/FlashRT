@@ -26,6 +26,11 @@ def measured(row, p50, *, fid=True, session="s1", scope=None):
                latency={"p10_ms": p50 - 1, "p50_ms": p50, "p90_ms": p50 + 1, "n": 100})
     if scope:
         row["scope"] = scope
+    if row["scope"] == "gemm_only":
+        steps = 10
+        row["latency"] = {"p50_ms": p50}
+        row["components"] = {"prefill_p50_ms": p50 - steps * 5.0, "denoise_step_p50_ms": 5.0,
+                             "num_steps": steps}
     if row["id"] != "official_torch":
         row["config"] = {"effective_config": "effective_config precision=x", "calibration": None}
     if fid and row["id"] != "official_torch" and row["scope"] == "full_infer":
@@ -158,3 +163,16 @@ def test_the_cli_round_trips(tmp_path, capsys):
     bad["schema_version"] = 2
     path.write_text(json.dumps(bad))
     assert rt.main(["x", "check", str(path)]) == 1
+
+
+def test_gemm_only_row_is_its_prefill_plus_steps_times_the_step():
+    doc, t = filled()
+    measured(t["rows"][4], 130.0, fid=False)
+    assert rt.validate(doc) == []
+    t["rows"][4]["components"]["denoise_step_p50_ms"] = 6.0          # no longer sums to 130
+    assert any("prefill + num_steps x step" in e for e in rt.validate(doc))
+    t["rows"][4]["components"]["denoise_step_p50_ms"] = 5.0
+    t["rows"][4]["components"]["num_steps"] = 30                     # not the workload's steps
+    assert any("num_steps" in e for e in rt.validate(doc))
+    del t["rows"][4]["components"]
+    assert any("needs latency.p50_ms and components" in e for e in rt.validate(doc))

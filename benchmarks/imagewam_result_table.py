@@ -40,7 +40,10 @@ Rules the checker enforces (one line each in its output):
   * every table has the six rows once, in order, and the workload's
     `num_steps` is the table's standard (libero 10, robotwin 30);
   * a `measured` row has a latency with p10 <= p50 <= p90 and n >= 1, and
-    the table's workload is complete;
+    the table's workload is complete (a `gemm_only` row has `latency.p50_ms`
+    and `components` {prefill_p50_ms, denoise_step_p50_ms, num_steps}, and
+    p50 equals prefill + num_steps x step: the benches print no percentiles
+    of the composed call);
   * a `gemm_only` row (the int8 / int4 rows: no frontend precision tier
     runs them, the benches time the GEMMs with random packed operands and no
     activation quantization) carries no fidelity, and its speedup is not
@@ -156,9 +159,23 @@ def validate(doc: dict) -> list[str]:
                 continue
             any_measured = True
             lat = row.get("latency") or {}
-            p10, p50, p90, n = (lat.get(k) for k in ("p10_ms", "p50_ms", "p90_ms", "n"))
-            if None in (p10, p50, p90, n) or not (p10 <= p50 <= p90) or n < 1:
-                errors.append(f"{here}: latency needs p10 <= p50 <= p90 and n >= 1, got {lat}")
+            if row.get("scope") == "gemm_only":
+                # The int benches time the prefill and one denoise step separately and
+                # print no percentiles of the composed call: the row is their sum.
+                comp = row.get("components") or {}
+                keys = ("prefill_p50_ms", "denoise_step_p50_ms", "num_steps")
+                if lat.get("p50_ms") is None or any(comp.get(k) is None for k in keys):
+                    errors.append(f"{here}: a gemm_only row needs latency.p50_ms and components {keys}")
+                elif abs(lat["p50_ms"] - (comp[keys[0]] + comp[keys[2]] * comp[keys[1]])) > 0.05:
+                    errors.append(f"{here}: p50_ms {lat['p50_ms']} != prefill + num_steps x step "
+                                  f"({comp[keys[0]]} + {comp[keys[2]]} x {comp[keys[1]]})")
+                elif comp[keys[2]] != wl.get("num_steps"):
+                    errors.append(f"{here}: components.num_steps {comp[keys[2]]} != the workload's "
+                                  f"{wl.get('num_steps')}")
+            else:
+                p10, p50, p90, n = (lat.get(k) for k in ("p10_ms", "p50_ms", "p90_ms", "n"))
+                if None in (p10, p50, p90, n) or not (p10 <= p50 <= p90) or n < 1:
+                    errors.append(f"{here}: latency needs p10 <= p50 <= p90 and n >= 1, got {lat}")
             if not (row.get("config") or {}).get("effective_config") and rid != "official_torch":
                 errors.append(f"{here}: a FlashRT row records its effective_config")
             if row.get("scope") == "gemm_only" and row.get("fidelity"):
@@ -242,8 +259,10 @@ def render(doc: dict) -> str:
                 speed = f"{official['latency']['p50_ms'] / lat['p50_ms']:.2f}x"
             cos = "—" if not fid else (f"{_fmt(fid.get('vs_official_cos_median'), '.5f')} / "
                                        f"{_fmt(fid.get('vs_official_cos_min'), '.5f')}")
+            spread = (f"{lat['p10_ms']:.1f}–{lat['p90_ms']:.1f}"
+                      if lat.get("p10_ms") is not None and lat.get("p90_ms") is not None else "—")
             out.append(f"| {label} | {row['scope']} | {lat['p50_ms']:.1f} | "
-                       f"{lat['p10_ms']:.1f}–{lat['p90_ms']:.1f} | {speed} | {cos} | "
+                       f"{spread} | {speed} | {cos} | "
                        f"{_fmt(fid.get('mae_vs_gt_median'), '.4f') if fid else '—'} | {note} |")
         out.append("")
     return "\n".join(out)

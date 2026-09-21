@@ -1832,8 +1832,9 @@ question left for the owner.
 
 # Plan: the final result tables (LIBERO and RoboTwin standard configurations)
 
-Plan Status: R1 completed (schema, checker, renderer, skeleton); R2-R6 pending
-the owner's RoboTwin declaration and a Thor session.
+Plan Status: R1 and R3 (code) completed; the LIBERO table's Thor session is
+the checklist's L0-L6; R2 (the RoboTwin declaration), R4 for RoboTwin and the
+RoboTwin session are pending the owner's declaration.
 
 ## Problem
 
@@ -1967,15 +1968,19 @@ Phase Status: pending (owner input)
   `workload` block of `docs/imagewam_results.json`.
 
 ### Phase R3: the official torch steady-state bench
-Phase Status: pending
+Phase Status: completed (code); its Thor run is THOR_CHECKLIST.md L1
 - Goal: a script times the official implementation at a workload and step
   count over exactly the timed call above (image encode + proprio + transformer
   with the text context passed in), with warmup, device sync and percentiles.
   It replaces the one-off 453.6 ms.
-- Modified files: `benchmarks/imagewam_official_torch_bench.py` (new).
+- Modified files: `benchmarks/imagewam_official_torch_bench.py` (new). It takes the
+  workload flags of `_imagewam_workload_cli.py`, so the step count and shape of
+  every table come from the named workload. `benchmarks/imagewam_thor_path_bench.py`
+  gained `--calibration` so the fp8 row can run through it.
 
 ### Phase R4: int8 and int4 at a workload
-Phase Status: pending
+Phase Status: pending for RoboTwin; the LIBERO row needs nothing (the benches
+are written for the LIBERO dims and run unchanged, THOR_CHECKLIST.md L4)
 - Goal: the two benches take `--workload` and the step count, and emit the
   same latency record; their rows stay `gemm_only`.
 - Open decision: whether a real full-pipeline INT8 tier (activation
@@ -1986,16 +1991,23 @@ Phase Status: pending
   `imagewam_thor_int4_bench.py`, `imagewam_thor_graph_bench.py`.
 
 ### Phase R5: the session driver and importer
-Phase Status: pending
-- Goal: one script runs every row of a table in one process family, writes the
-  raw logs, and an importer turns the logs into rows of the JSON (session id,
-  `effective_config`, percentiles, fidelity).
-- Modified files: `scripts/imagewam_thor_results.sh` (new),
-  `benchmarks/imagewam_result_table.py` (`import` command).
+Phase Status: decided against
+- Decision: no driver script and no log importer. The Thor has no push
+  credentials and its reports come back as text, so the checklist's L rows are
+  the driver (one session, fixed log names, the numbers to report) and the
+  credentialed side enters them into the JSON, where `check` and `render` guard
+  the format. A log parser over five scripts' different outputs would be
+  the part most likely to be wrong.
+- One schema consequence: the int8 and int4 benches print the prefill and one
+  denoise step, not percentiles of the composed call, so a `gemm_only` row
+  records `latency.p50_ms` and `components` (prefill, step, steps) with
+  p50 = prefill + steps x step, checked.
 
 ### Phase R6: the Thor session
 Phase Status: pending
-- The next `THOR_CHECKLIST.md` describes it. Points it must state: fp8 needs
+- `THOR_CHECKLIST.md` L0-L6 is the LIBERO session (with a bracketing repeat of
+  the official and fp4 rows to bound drift inside the session); the RoboTwin
+  session is written once R2 is answered. Points it must state: fp8 needs
   a calibration recorded on the workload's own data (the identity carries
   `num_denoise_steps`, `shift` and the camera geometry); 30 steps put about
   three times the ActionDiT kernels in one graph, so the capture time and the
