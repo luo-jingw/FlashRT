@@ -58,11 +58,11 @@
 | 选项 | 当前默认 | 作用 | 限制 |
 |---|---|---|---|
 | `workload` | `ImageWAMWorkload.libero()` | 服务的工作负载；序列布局与 `vae_graph_input` 由它派生并校验 | 字段必须与 checkpoint 的结构一致（规则 R7） |
-| `profile` | `default` | 开关的具名集合；`default` 含 `text_trim`，backbone 位点的 FA4 按机器自动解析；`fast` = 再加 FA4 的 mot 位点 + 原生 VAE 进图（93.2 ms 对 default 的约 115 ms，nvfp4，libero_spatial） |`native` = 同样裁文本 + FA4 两位点显式关（native pipeline 没有 FA4 注意力），其余与 `default` 相同；`fast` 的 FA4 首次调用编译、失败回退 |
+| `profile` | `default` | 开关的具名集合；`default` 含 `text_trim`，backbone 位点的 FA4 按机器自动解析；`fast` = 再加 FA4 的 mot 位点 + 原生 VAE 进图（`0920t`：同进程、LIBERO `valid_tokens=24` 时 `fast --precapture` 的 `infer()` 108.08 ms 对 `default` 139.47 ms；`c20f3a0` 一轮的对应两行是 93.2 对约 115 ms，nvfp4，libero_spatial） |`native` = 同样裁文本 + FA4 两位点显式关（native pipeline 没有 FA4 注意力），其余与 `default` 相同；`fast` 的 FA4 首次调用编译、失败回退 |
 | `precision` | `nvfp4` | 精度/速度档位 | `fp8_static*` 需要校准文件 |
-| `text_trim` | 关 | 按有效文本长度裁剪；开启后每个有效文本长度一张图，Python `infer()`、ABI 与 native 三条路径都能服务（native 侧由 `capture_pipeline_text_lengths` 逐长度安装并捕获） | — |
+| `text_trim` | 关（服务 `default` 档位为**开**） | 按有效文本长度裁剪；开启后每个有效文本长度一张图，Python `infer()`、ABI 与 native 三条路径都能服务（native 侧由 `capture_pipeline_text_lengths` 逐长度安装并捕获）；服务默认即裁剪，`0920t` 的 nvfp4 gate 125.86 ms、端到端 126.5 ms | native pipeline 自己的按长度捕获尚未验证：`0920t` 的 `test_pipeline_records_one_graph_per_text_length` 失败（长度表是 property、比较覆盖了当前长度以外的行，两个成因在修） |
 | `text_trim_cache_size` | 32 | `text_trim` 预捕获图的张数上限，超出按 LRU 淘汰 | 显存只在首次捕获付出：首图 +218.0 MiB reserved / +206.3 MiB allocated，其后每张 +0.0 / +0.1 MiB，默认上限 32 的总代价在 221 MiB 量级（`a84916a`，nvfp4，15 个 LIBERO 长度） |
-| FA4（`FLASHRT_THOR_FA4`、`use_fa4_mot`） | backbone 位点：机器能跑就开（`FLASHRT_THOR_FA4=0` 强制走 cuBLAS 链）；mot 位点：关 | 注意力 kernel | 首次调用编译，失败自动回退 |
+| FA4（`FLASHRT_THOR_FA4`、`use_fa4_mot`） | backbone 位点：机器能跑就开（`FLASHRT_THOR_FA4=0` 强制走 cuBLAS 链）；mot 位点：关 | 注意力 kernel；`0920t` 同一裁剪配置下开比关快约 5 ms（端到端 126.5 对 131.3 ms），`effective_config` 对服务默认打印 `use_fa4=True`、对 `FLASHRT_THOR_FA4=0` 打印 `use_fa4=False` | 首次调用编译，失败自动回退 |
 | `vae_encoder="native"` / `vae_graph_input` | 关（torch 编码器） | 原生 VAE / 进图 | — |
 | `nvfp4_awq` | 关 | NVFP4 精度补偿 | 需要校准文件；原生 runtime 不支持 |
 | `gemm_variant_autotune` | 关 | ActionDiT tile 逐形状选择 | 仅 NVFP4/FP8 CUTLASS 档位 |
@@ -74,11 +74,12 @@
 
 | 配置 | P50 | vs official cosine（median） |
 |---|---:|---:|
-| 当前默认 | 约 202–203 ms（gate 203.3） | 0.9976 |
+| 当前默认（裁文本 + FA4，`0920t` 的 gate / 端到端） | **125.86 / 126.5 ms** | 0.99934（min 0.99889） |
+| 旧默认（未裁剪 + FA4 关；`eccf14f` 一轮 `default` 202.0–202.4；gate 203.3 属更早的会话） | 约 202–203 ms | 0.9976 |
 | 只开 `text_trim` | 115.2 ms（libero_10 115.0，goal 129.9） | 0.99936 |
 | 只开原生 VAE 进图 | 190.9 ms | — |
 | 只开 FA4 backbone | 174.6 ms | 0.99751 |
-| `text_trim` + FA4 双位点 + 原生 VAE 进图 | **106.1 ms** | **0.99933**（min 0.99887） |
+| `text_trim` + FA4 双位点 + 原生 VAE 进图 | **106.1 ms**（`c20f3a0`） | **0.99933**（min 0.99887） |
 
 三项叠加明显小于各项单独收益之和（−96 ms 对 −125 ms），`text_trim` 已经去掉了大部分 padding 上的注意力开销。表中叠满一行的 106.1 ms 属于 `c20f3a0` 一轮，见下。
 
@@ -170,6 +171,37 @@ commit `a4852be`：Jetson AGX Thor、MAXN、GPC 1.575 GHz、`emc_locked=null`、
 
 该轮 native **pipeline** 自己的捕获还是单长度，所以这些长度上的 native 服务来自 model runtime 的采纳路径（当时 `consumer="native"` 的 `text_trim` 不被接受；native pipeline 现在自己按文本长度安装并捕获，见「Pipeline 架构」一节）。
 
+### `0920t` 轮：服务默认自身的数字与三条服务路径（nvfp4）
+
+commit `4cd06e5`：Jetson AGX Thor、MAXN、GPC 1.575 GHz / NVD 1.692 GHz、`emc_locked=null`、GPU 起始空闲；原始日志在 `/home/jingwu/thor_val/0920t/`。本轮测的是服务默认本身——裁剪加上机器能跑就跑的 FA4：`FLASHRT_THOR_FA4` 的默认值已是 `"1"`，所以 `use_fa4=None` 在这台机器上解析为 `True`；`effective_config` 对服务默认打印 `use_fa4=True`，对 `FLASHRT_THOR_FA4=0` 打印 `use_fa4=False`。延迟是 P50（ms）。
+
+三次 gate 全部通过（fixture v2 的 fp16 参考是裁剪的）：
+
+| gate 运行 | vs official（min / median） | P50 |
+|---|---:|---:|
+| nvfp4，fixture v2，服务默认（裁剪 + FA4） | 0.99889 / 0.99934 | 125.86 |
+| nvfp4，fixture v1，`--no-text-trim`（未裁剪 + FA4） | 0.99418 / 0.99758 | 191.79 |
+| fp16，fixture v2（不设门禁） | 0.99993 / 0.99997 | 284.38 |
+
+端到端 `default`：`served_vs_off` min 0.99432 / median 0.99750、P50 126.5 ms；同一裁剪配置加 `FLASHRT_THOR_FA4=0`：min 0.99441 / median 0.99743、P50 131.3 ms。也就是同一裁剪配置下 FA4 开比关快约 5 ms，两次的 `served_vs_off` 中位数相差不到 1e-4（0.99750 对 0.99743）。
+
+未裁剪配置在 FA4 开时是 191.79 ms；记录的 202.2 ms 基线是未裁剪**且** FA4 关，因此 202.2 只是这条配置的单侧界。`0919e` 一轮在同一 fixture（v2）上的裁剪 gate 是 FA4 关的 114.6 ms，本轮服务默认是 125.86 ms，相差约 11 ms：两轮是不同会话、没有做同一机器的跨会话 A/B，所以记作会话差异，不是实测回退。
+
+三条服务路径（同一进程，LIBERO，`valid_tokens=24`，即 `x0=25`）：
+
+| profile | `infer()` | ABI | native | 说明 |
+|---|---:|---:|---:|---|
+| `default` | 139.47 | 120.29 | 120.05 | 裁剪，`use_fa4=True`，`graph_producer=python` |
+| `fast --precapture` | 108.08 | 110.09 | 跳过（native VAE 进图） | 裁剪，FA4 两个位点，原生 VAE 进图；文本长度已预捕获 |
+| `native` | 145.93 | 126.58 | 126.38 | 裁剪，`use_fa4=False`；不再被任何规则跳过 |
+
+native C++ 本轮重建。`FLASHRT_THOR_FA4=0 IMAGEWAM_NATIVE_PRECISION=nvfp4 pytest tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q`：38 passed、1 failed；未裁剪的一 key 路径整文件绿（state `array_equal`、`graph_exec=0`、`graph_nodes=0`、`graph_producer=''`）。失败的是 `test_pipeline_records_one_graph_per_text_length`，两个成因正在修（长度表是 property、比较覆盖了当前长度以外的行），所以 native pipeline 自己的按长度捕获**还不是已验证的能力**。`tests/test_imagewam_text_trim_consumer_guards.py` 11 passed，其 GPU 行打印逐长度资源表（`x0=6` 维度 `(6,16,20)`、`x0=10` 维度 `(10,20,24)`，AdaLN 行与 backbone RoPE 表跟着当前长度，`buffers identical=True`）。
+
+| gate | 结果 |
+|---|---|
+| native parity（`nvfp4`） | PASS；节点数 native 5324 / Python 5348，六个 mutant 全检出，tick `array_equal` / `max_abs=0`，P50 native 205.27 对 Python 207.13 |
+| native schema parity | PASS；7 条记录与 golden 文件完全相同 |
+
 ### 新入口下的同一会话阶梯（`c20f3a0`，libero_spatial，nvfp4，`infer()` P50）
 
 一次矩阵运行，`N_TASKS=10 FRAMES=0,60 SEEDS=0,1`，真实 checkpoint；`profile_*` 两行经 `load_imagewam` 构建，开关行经同一入口加对应 expert 覆盖。`fast` 与 `stack` 是同一组开关。
@@ -219,7 +251,7 @@ FA4 两个位点都不回退（`FA4 fallback` 为 `None`）。按 C 节的判据
 | 路径 | P50 | 相对 FlashRT nvfp4 默认 |
 |---|---:|---:|
 | 官方 bf16 eager，端到端 | 453.6 ms | 2.2× |
-| FlashRT nvfp4 默认 | 203.3 ms | 1.00× |
+| FlashRT nvfp4 默认（该行未裁剪 + FA4 关） | 203.3 ms | 1.00× |
 | FlashRT nvfp4 叠满 | 106.1 ms（`c20f3a0`） | 0.52×（快 1.9×；相对官方约 4.3×） |
 
 官方侧 `torch.compile`：`inductor` 在 Thor 上无法编译；`cudagraphs` 比 eager 更慢（514.4 ms）。

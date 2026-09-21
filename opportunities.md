@@ -4332,10 +4332,10 @@ On Thor, FA4 at the backbone site already measured 3.75x per call and
   `use_fa4=False` forces the chain regardless of the environment. The
   resolved value is `frontend.use_fa4`, and the regression gate records it
   in its result. `FLASHRT_THOR_FA4=0` also stops `fa4_backend`
-  from importing FA4 at all, for every model. The served default's own
-  Thor numbers are not measured yet: the rows recorded for `default` were
-  taken with FA4 off, so a Thor round that re-measures the served
-  configuration is outstanding.
+  from importing FA4 at all, for every model. The rows recorded for
+  `default` in the `c20f3a0`, `eccf14f` and `0919e` sections were taken
+  with FA4 off; the served default's own Thor numbers are in the `0920t`
+  section below.
 - `ImageWAMAttnBackend(use_fa4_mot=True)` and
   `ImageWAMTorchFrontendThor(use_fa4_mot=True)` run the `mot` site
   through FA4. Q is the action rows at row offset `a0`, K/V are the
@@ -4433,8 +4433,9 @@ and the numbers are the chain's. Report it with the reason.
 
 1. Backbone: FA4 is the Thor default (`_FA4_OPT_IN_DEFAULT = "1"`), so
    `use_fa4=None` is FA4 where the machine can run it and the cuBLAS chain
-   where it cannot. The Thor round that measures the served default's own
-   numbers is the one outstanding item.
+   where it cannot. The `0920t` section below measures the served default
+   itself: FA4 on is about 5 ms of P50 below FA4 off on the same trimmed
+   configuration.
 2. `mot`: FA4 is the strongest remaining attention lever. It computes
    the same math as FlashRT's current unmasked chain (not official's
    padded-key-masked rule; Finding 1), and on H100 an sm_90 fused
@@ -4490,6 +4491,47 @@ backbone site, 5.8 ms from `mot`); the same isolation of FA4 at both sites is
 worth 26.1 ms on libero_goal and 9.5 ms on libero_10. `vs official` is not
 worse with FA4 on in either suite, and no row anywhere in the round reported
 an FA4 fallback.
+
+
+## Thor, the served default (`0920t`, LIBERO, nvfp4)
+
+`0920t`, commit `4cd06e5`, Jetson AGX Thor, MAXN, GPC 1.575 GHz / NVD
+1.692 GHz, `emc_locked=null`, GPU idle at the start of the round; raw logs under
+`/home/jingwu/thor_val/0920t/`. The round measures the served default, trimming
+plus FA4 wherever the machine can run it: `FLASHRT_THOR_FA4`'s own default is
+`"1"` now, so `use_fa4=None` resolves to `True` on this machine.
+`effective_config` prints `use_fa4=True` for the served default and
+`use_fa4=False` with `FLASHRT_THOR_FA4=0`. All three gate runs pass.
+
+| run | vs official min / median | P50 |
+|---|---:|---:|
+| gate nvfp4, fixture v2 (served default: trim + FA4) | 0.99889 / 0.99934 | 125.86 ms |
+| gate fp16, fixture v2 (ungated) | 0.99993 / 0.99997 | 284.38 ms |
+| gate nvfp4, fixture v1 with `--no-text-trim` (untrimmed + FA4) | 0.99418 / 0.99758 | 191.79 ms |
+
+End to end, `nvfp4`, `default`:
+
+| run | `served_vs_off` min / median | P50 |
+|---|---:|---:|
+| `default` (trim + FA4) | 0.99432 / 0.99750 | 126.5 ms |
+| `default` with `FLASHRT_THOR_FA4=0` (trim, cuBLAS chain) | 0.99441 / 0.99743 | 131.3 ms |
+
+So on the same trimmed configuration FA4 on is about 5 ms faster than FA4 off,
+and the two runs' `served_vs_off` medians differ by under 1e-4 (0.99750 against
+0.99743).
+
+The untrimmed configuration with FA4 measures 191.79 ms. The recorded 202.2 ms
+baseline was untrimmed **and** FA4 off, so it remains a one-sided bound for that
+row: nothing in this round isolates FA4 at the untrimmed length.
+
+The `0919e` section's gate on fixture v2 is trimmed with FA4 off and measures
+114.6 ms; this session's served-default gate on the same fixture is 125.86 ms,
+about 11 ms apart. No same-machine A/B across the two sessions was measured, so
+that difference is recorded as a session difference rather than a regression.
+
+The three service paths at `valid_tokens=24` are tabulated in OPT-028's `0920t`
+section: the served `default` runs trim with FA4 through all three faces, and
+the `native` profile runs the trim with `use_fa4=False` (OPT-029).
 
 
 # OPT-016: single-stream `linear2` merge (roadmap item 4)
@@ -5539,6 +5581,28 @@ selected by the replay key, so every swept length produced a number. The native
 face refused them then; its own per-length capture serves them now.
 
 
+## Thor, LIBERO (`0920t`, nvfp4)
+
+`0920t`, commit `4cd06e5`, Jetson AGX Thor, MAXN, GPC 1.575 GHz / NVD
+1.692 GHz, `emc_locked=null`, GPU idle at the start of the round; raw logs under
+`/home/jingwu/thor_val/0920t/`. Latency is P50 in ms on one wall-clock timer per
+path, every path in the same process, real checkpoint. LIBERO at
+`valid_tokens=24` (`x0 = 25`), the three service paths:
+
+| profile | `infer()` | ABI tick (`io="python"`) | native tick (`io="native"`) | configuration |
+|---|---:|---:|---:|---|
+| `default` | 139.47 | 120.29 | 120.05 | trim, `use_fa4=True`, `graph_producer=python` |
+| `fast --precapture` | 108.08 | 110.09 | skipped | trim, FA4 at both sites, native VAE in the graph |
+| `native` | 145.93 | 126.58 | 126.38 | trim, `use_fa4=False`; no longer skipped by any rule |
+
+`default` is the served configuration, and its gates are in OPT-019's and
+OPT-030's `0920t` sections. `fast` had every text length precaptured, so its row
+carries no first-capture cost; it has no native row in this round, the note
+against that cell being the native VAE in the graph. The `native` profile
+differs from `default` in FA4 alone (both sites off, the native C++ pipeline
+having no FA4 attention), serves the trim, and is no longer refused by any rule.
+
+
 # OPT-029: ImageWAM native C++ overlay (`io="native"`)
 
 Status: implemented and verified bit-exact on H100 (fp16, small dims and
@@ -5738,6 +5802,37 @@ refused `text_trim` and the `native` profile was the only resolved native set.
 The adopted per-length execs above come from the frontend's captures, which the
 native model runtime takes by key; the pipeline's own per-length capture now
 serves the trim there too.
+
+
+## Thor, native model runtime and pipeline (`0920t`, nvfp4)
+
+`0920t`, commit `4cd06e5`, Jetson AGX Thor, MAXN, GPC 1.575 GHz / NVD
+1.692 GHz, `emc_locked=null`, GPU idle at the start of the round; raw logs under
+`/home/jingwu/thor_val/0920t/`. The native C++ was rebuilt for this round.
+
+`FLASHRT_THOR_FA4=0 IMAGEWAM_NATIVE_PRECISION=nvfp4 pytest
+tests/test_imagewam_native_pipeline.py tests/test_imagewam_native_runtime.py -q`:
+38 passed, 1 failed. The untrimmed one-key path is fully green in that run: its
+state rows are `array_equal` with `graph_exec=0`, `graph_nodes=0` and
+`graph_producer=''`. The failing test is
+`test_pipeline_records_one_graph_per_text_length`, and its two causes are being
+fixed: the length table is a property, and the comparison covered rows beyond
+the active length. The native pipeline's own per-length capture is therefore not
+a verified capability yet.
+
+| gate | result |
+|---|---|
+| native parity, `nvfp4` | PASS; native 5324 nodes against Python 5348, all six mutants detected, tick `array_equal` / `max_abs=0`, P50 native 205.27 ms against Python 207.13 ms |
+| native schema parity | PASS; its seven records identical to the golden file |
+
+`tests/test_imagewam_text_trim_consumer_guards.py`: 11 passed, its GPU row
+printing the per-length resource table — `x0=6` dims `(6,16,20)`, `x0=10` dims
+`(10,20,24)`, the AdaLN rows and the backbone RoPE table following the active
+length, `buffers identical=True`.
+
+Service paths at `valid_tokens=24` are tabulated in OPT-028's `0920t` section;
+for this face the `native` profile ticks 126.38 ms against 126.58 ms through the
+ABI, and the served `default` ticks 120.05 ms against 120.29 ms.
 
 
 # OPT-030: text context trimmed to the prompt's valid length (issues.md ISSUE-020)
@@ -6069,6 +6164,38 @@ Thor, MAXN, GPC 1.575 GHz, `emc_locked=null`, GPU exclusive). The capture-path
 defect behind the earlier failure — the cuBLAS fallback reusing the capture
 pool an invalidated capture had left recording — is fixed in the frontend
 (issues.md ISSUE-085).
+
+
+## Thor, LIBERO (`0920t`, nvfp4)
+
+`0920t`, commit `4cd06e5`, Jetson AGX Thor, MAXN, GPC 1.575 GHz / NVD
+1.692 GHz, `emc_locked=null`, GPU idle at the start of the round; raw logs under
+`/home/jingwu/thor_val/0920t/`. All three gate runs pass, and fixture v2's `fp16`
+reference is trimmed, so the `nvfp4` row against it is the served default:
+trimming plus FA4.
+
+| gate run | vs official min / median | P50 |
+|---|---:|---:|
+| nvfp4, fixture v2 (served default: trim + FA4) | 0.99889 / 0.99934 | 125.86 ms |
+| nvfp4, fixture v1 with `--no-text-trim` (untrimmed + FA4) | 0.99418 / 0.99758 | 191.79 ms |
+| fp16, fixture v2 (ungated) | 0.99993 / 0.99997 | 284.38 ms |
+
+Fixture v2 therefore gates the served configuration. The same fixture's trimmed
+row in the `0919e` section (FA4 off) is 0.99898 min / 0.99931 median at 114.6 ms;
+this session's trimmed row is 0.99889 / 0.99934 at 125.86 ms. The two sessions
+are different, so the 11 ms between them is a session difference, not a
+regression. The untrimmed leg runs with FA4 on and measures 191.79 ms, while the
+202.2 ms baseline was untrimmed **and** FA4 off, so that baseline bounds the
+untrimmed configuration from one side only.
+
+End to end at `nvfp4` the trimmed configuration measures 126.5 ms with FA4 and
+131.3 ms with `FLASHRT_THOR_FA4=0` (both runs' `served_vs_off` rows are in
+OPT-019's `0920t` section).
+
+The trimmed consumer contract was re-checked in the same round:
+`tests/test_imagewam_text_trim_consumer_guards.py` 11 passed, its GPU row
+printing the per-length resource table, recorded under OPT-029's `0920t`
+section.
 
 
 # OPT-031: derive the remaining per-benchmark shape tables from the workload
