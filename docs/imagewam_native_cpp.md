@@ -244,7 +244,10 @@ parity row is re-run against mutants that must make it fail.
   Python declaration, the C++ records and the golden file are identical.
 - `tests/gate_imagewam_native_parity.py --graph native`: real checkpoint,
   served layer structure. The native graph has 4974 nodes (the Python
-  graph 4998). With proprio staged by the frontend or by the native verb,
+  graph 4998) at `fp16` here; the same gate at `nvfp4` on Thor measures
+  5324 against 5348 (`0920s4`, `0920t`), so the counts belong to the
+  precision and the binary they were measured with. With proprio staged by
+  the frontend or by the native verb,
   the poisoned `io="native"` tick's actions, `actions_raw`, native
   proprio token, backbone residual and K/V caches are `array_equal` to
   `infer()`, and a poisoned native-graph replay equals a Python-graph

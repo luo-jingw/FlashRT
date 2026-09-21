@@ -15,6 +15,11 @@ and `step` replays the length the prompt set; `text_trim=True` is the case
 with more than one, checked here by `test_abi_tick_matches_infer_at_every_captured_length`
 (a second GPU-side check of the same table, at the surface and the export
 level, is tests/test_imagewam_text_trim_consumer_guards.py).
+
+Every frontend here states `use_fa4=False`, as the export gate's own
+`--use-fa4` does: the rows below are bit-exactness checks of the ABI face,
+and `FLASHRT_THOR_FA4`, whose default now resolves to the machine's own
+answer, must not decide which attention chain they compare.
 """
 import json
 
@@ -55,7 +60,8 @@ def frontend(tmp_path_factory):
     }
     path = tmp_path_factory.mktemp("imagewam_stats") / "dataset_stats.json"
     path.write_text(json.dumps(stats))
-    fe = ImageWAMTorchFrontendThor(precision="fp16", dims_override={"proprio_dim": PROPRIO_DIM},
+    fe = ImageWAMTorchFrontendThor(precision="fp16", use_fa4=False,
+                                   dims_override={"proprio_dim": PROPRIO_DIM},
                                    dataset_stats_path=str(path))
     fe.set_prompt("pick up the red cup")
     return fe
@@ -232,8 +238,8 @@ def trimmed(tmp_path_factory):
     }
     path = tmp_path_factory.mktemp("imagewam_trim_stats") / "dataset_stats.json"
     path.write_text(json.dumps(stats))
-    fe = ImageWAMTorchFrontendThor(precision="fp16", dims_override=dict(TRIM_DIMS), text_trim=True,
-                                   dataset_stats_path=str(path))
+    fe = ImageWAMTorchFrontendThor(precision="fp16", use_fa4=False, dims_override=dict(TRIM_DIMS),
+                                   text_trim=True, dataset_stats_path=str(path))
     for valid in TRIM_LENGTHS:
         _set_trimmed_prompt(fe, valid)
     return fe

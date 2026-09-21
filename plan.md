@@ -138,7 +138,7 @@ details. "Default" says whether the served configuration changed.
 | 11 | CPU-only precision-routing contract test. Eight precision columns. | n/a | OPT-026 |
 | 12 | `frt_model_runtime_v1` export (`io="python"`). Bit-exact to `infer()`; parity gates carry mutation tests. | n/a | OPT-028 |
 | 13 | LIBERO fidelity and latency gate: fixture v1, runner, per-device baselines. fp16 passes on H100. | n/a | OPT-027 |
-| 14 | Native C++ overlay (`io="native"`). Bit-exact; runs a tick without Python. Latency is equal to `io="python"` (4974 vs 4998 graph nodes). | n/a | OPT-029 |
+| 14 | Native C++ overlay (`io="native"`). Bit-exact; runs a tick without Python. Latency is equal to `io="python"` (4974 against 4998 graph nodes at fp16 on H100; the Thor `nvfp4` runs measure 5324 against 5348, `0920t`). | n/a | OPT-029 |
 | ISSUE-020 | `text_trim`: each prompt runs at its valid text length, which reproduces official's masked attention. On libero_goal (fp16), vs official, median/min goes from 0.99680/0.92997 to 0.99998/0.99963. H100 `infer()` is about 30% faster. | off (`text_trim=True`) | OPT-030, ISSUE-080 |
 
 The fp16 served default matches the baseline end to end:
