@@ -156,8 +156,14 @@ def test_static_fp8_set_activation_scale_equals_calibrate():
     x = torch.randn(m, k, device=DEV).to(FP16)
     a = StaticFp8Linear(w.data_ptr(), n, k)
     a.calibrate(x.data_ptr(), m, 0)
+    # `calibrate()` takes its scale from `compute_scale_kernel` (amax / 448 on the device, built with
+    # --use_fast_math, which is not the IEEE divide numpy does: 1 ULP apart on Thor,
+    # 0.0093122218 vs 0.0093122208). The calibration file's scale is the numpy value, so the two agree
+    # to one float32 ULP, and `set_activation_scale` itself is pinned with the device's own scale below.
+    host_scale = float(np.float32(x.float().abs().max().item()) / np.float32(448.0))
+    assert host_scale == pytest.approx(a.act_scale.item(), rel=2.5e-7)
     b = StaticFp8Linear(w.data_ptr(), n, k)
-    b.set_activation_scale(float(np.float32(x.float().abs().max().item()) / np.float32(448.0)))
+    b.set_activation_scale(a.act_scale.item())
     oa = torch.zeros(m, n, dtype=FP16, device=DEV)
     ob = torch.zeros(m, n, dtype=FP16, device=DEV)
     a(x.data_ptr(), oa.data_ptr(), m, 0)

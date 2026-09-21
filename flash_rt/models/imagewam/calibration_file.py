@@ -86,8 +86,11 @@ class SiteCalibration:
     rows: int
 
     def fp8_act_scale(self) -> float:
-        """Static FP8 E4M3 activation scale, `amax / 448` in float32,
-        floored at 1e-12 (`compute_scale_kernel`, `csrc/kernels/quantize.cu`)."""
+        """Static FP8 E4M3 activation scale, `amax / 448` in float32 (IEEE
+        divide), floored at 1e-12 as `compute_scale_kernel`
+        (`csrc/kernels/quantize.cu`) does. The kernel is built with
+        `--use_fast_math`, so its device result can differ from this one by one
+        float32 ULP (seen on Thor: 0.0093122218 against 0.0093122208)."""
         s = np.float32(self.amax) / np.float32(FP8_E4M3_MAX)
         return float(max(s, np.float32(1e-12)))
 
