@@ -15,21 +15,27 @@ served tick three ways, for any `ImageWAMWorkload`:
           noise, calls `step()` and reads `actions`
           (`tests/gate_imagewam_model_runtime_export.py`).
   native  `fe.runtime_surface()` -> `ImageWAMNativeRuntime.create(surface)` ->
-          `native.use_graph(surface.graph_variants.active_key,
-          surface.graph_exec)` (the graph the Python frontend captured for the surface's
-          active text length, replayed from the native handle:
+          `native.use_graph(key, graph_exec)` for every entry of
+          `surface.graph_variants` (the graphs the Python frontend captured,
+          one per text length, replayed from the native handle:
           `tests/gate_imagewam_native_parity.py --graph python`) ->
           `fe.export_model_runtime(io="native", native=native)`. The graph
-          producer the native handle reports is printed.
+          producer the native handle reports and the number of adopted lengths
+          are printed.
 
 Each path is measured the way the gates measure (warmup, then
 `torch.cuda.synchronize()` on both sides of a wall-clock timer) and reported
 as P10/P50/P90 and n. A path that cannot be built in this process is reported
 as skipped with the reason and does not stop the run: `exec/build` (Python
 ABI) and `runtime/build` + the `flashrt_imagewam_native` target (native face)
-are separate builds (docs/imagewam_model_runtime.md), and the native
-face refuses configurations the Python path accepts (rule R6: FA4 and the
-in-graph native VAE, so `--profile fast` measures `infer` only).
+are separate builds (docs/imagewam_model_runtime.md). One refusal costs one row:
+the `io="native"` face takes the VAE tokens through `image_tokens` and so
+refuses the in-graph VAE (`views_u8`, `runtime_export.py:312-314`), so
+`--profile fast` measures `infer` and `abi` and skips the native row. FA4 is not
+such a refusal: the native face replays the graph the Python frontend captured,
+an FA4 graph included; the FA4 refusal is the native pipeline's
+(`ImageWAMTorchFrontendThor.pipeline_resources()`, rule R6), which this bench
+never calls.
 
 The numbers are LATENCY ONLY. With no `CKPT_PATH` the weights are random (the
 model structure is then `ImageWAMStructure.libero()`, the real 4B release
@@ -303,17 +309,23 @@ def bench_abi(fe: ImageWAMTorchFrontendThor, inputs_factory: Callable[[], TickIn
 def bench_native(fe: ImageWAMTorchFrontendThor, inputs_factory: Callable[[], TickInputs],
                  *, warmup: int, iters: int) -> Percentiles:
     """The native face: `frt_imagewam_native` over the runtime surface, with
-    the graph the Python frontend captured installed by `use_graph` for the
-    surface's active text length and the C verbs installed on the
-    `io="native"` declaration."""
+    the graphs the Python frontend captured installed by `use_graph` for every
+    captured text length -- the same deployment the `infer` and `abi` rows
+    measure -- and the C verbs installed on the `io="native"` declaration."""
     from flash_rt.models.imagewam.native_runtime import ImageWAMNativeRuntime
 
     surface = fe.runtime_surface()
+    variants = surface.graph_variants.entries
     native = ImageWAMNativeRuntime.create(surface)
     try:
-        native.use_graph(surface.graph_variants.active_key, surface.graph_exec)
+        # `use_graph` fills the handle's table for one length and does not
+        # change the active one, so every entry is adopted before the export,
+        # which refuses a handle missing any captured length.
+        for variant in variants:
+            native.use_graph(variant.key, variant.graph_exec)
         print(f"  native: graph_producer={native.graph_producer} nodes={native.graph_nodes} "
-              f"view_shape={surface.view_shape}")
+              f"view_shape={surface.view_shape} adopted={len(variants)} "
+              f"x0={[variant.key for variant in variants]} active_x0={surface.graph_variants.active_key}")
         mr = fe.export_model_runtime(io="native", native=native,
                                      identity={"bench": "imagewam_thor_path_bench"})
         consumer: ModelRuntimeConsumer | None = None
@@ -510,6 +522,7 @@ def main() -> int:
     for valid_tokens, x0, result in results:
         fields = [f"path={result.path}", f"status={'ok' if result.measured else 'skipped'}",
                   f"profile={args.profile}", f"precision={resolved.options.precision.value}",
+                  f"use_fa4={fe.use_fa4}",
                   f"workload={args.workload}", format_workload(workload), format_layout(layout),
                   f"valid_tokens={valid_tokens}", f"x0={x0}"]
         if result.percentile is None:
