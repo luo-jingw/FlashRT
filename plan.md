@@ -2160,9 +2160,27 @@ Phase Status: pending
 - Goal: `imagewam_prefill`'s loop calls a new, narrower function for
   `site_layer_idx == num_layers_single - 1` instead of the full
   `_single_stream_layer`, per `docs/imagewam_last_block_kv_only.md`'s
-  design (already bit-exact tested at real dims on this dev machine).
-- Modified files: `pipeline_thor.py` (`imagewam_prefill`, a new function),
-  `tests/test_imagewam_thor_real_wiring.py` or a dedicated test file.
+  design (already bit-exact/ULP-bounded tested at real dims on this dev
+  machine, against the read-only, unmodified `_single_stream_layer`).
+- Modified files, three, not one (wider than Phase 1's): `checkpoint_loader.py`
+  (`_extract_single_block`: a one-time column slice of the real, RAW
+  `linear1.weight` tensor down to its K,V columns `[hidden, 3*hidden)`,
+  the same slice K3's prototype does, but here on the (out,in) tensor
+  before transpose -- a new dict key, e.g. `linear1_kv.weight`, added
+  once at checkpoint-load time, not per capture); `imagewam_thor.py`
+  (wrap that new key into a linear op the same way `"linear1.weight"`
+  itself is wrapped, `_wrap_linear`, for BOTH the real-checkpoint path
+  and the random-weight dev path, `_rnd_linear`); `pipeline_thor.py`
+  (`imagewam_prefill`'s loop, a new function reading the precomputed
+  weight, never slicing inline -- slicing inside `imagewam_prefill`
+  itself would run every graph capture, which this function's own
+  docstring already warns is not safe for `GemmRunner()`-style
+  allocation and is wasteful even where it is safe).
+- Not attempted this round: touches a different module
+  (checkpoint/weight construction) than Phase 1, needs both the real
+  and the random-weight paths handled, and none of it is testable on
+  this machine beyond static review. Left pending rather than wired
+  blind.
 
 ### Phase 4: candidate 3, fused AdaLN + NVFP4 direct quantize
 Phase Status: pending
