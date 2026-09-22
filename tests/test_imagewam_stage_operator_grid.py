@@ -25,6 +25,9 @@ def trace():
 
 
 def test_classify_by_name():
+    # 0921x: kernel_quantize_fp4_sfa_vec's full symbol embeds the `flash_rt::fp4` namespace, so
+    # a bare "flash" needle misclassified it as attention -- quantize is checked first now.
+    assert g.classify("void flash_rt::fp4::kernel_quantize_fp4_sfa_vec<...>(...)") == "quantize"
     assert g.classify("cutlass_nvfp4_gemm") == "gemm"
     assert g.classify("nvjet_hsh_448x64") == "gemm"
     assert g.classify("quantize_fp4_kernel") == "quantize"

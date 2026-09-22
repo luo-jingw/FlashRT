@@ -43,8 +43,13 @@ from _imagewam_workload_cli import (  # noqa: E402
 )
 
 CATEGORIES = (
+    # quantize checked before attention/gemm: this project's own kernels live in a
+    # `flash_rt::fp4` namespace, so a bare "flash" needle would misclassify them as attention
+    # (0921x found kernel_quantize_fp4_sfa_vec counted under "attention" for exactly this reason).
+    ("quantize", ("quant",)),
     ("gemm", ("gemm", "cutlass", "cublas", "xmma", "nvjet", "sm80_", "sm90_", "sm100_", "sm110_", "wgmma")),
-    ("attention", ("flash", "fmha", "softmax", "attn", "attention", "mot_joint", "perhead")),
+    ("attention", ("flash_attn", "flashattention", "fmha", "softmax", "attn", "attention", "mot_joint",
+                   "perhead")),
 )
 
 

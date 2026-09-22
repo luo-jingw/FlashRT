@@ -46,8 +46,12 @@ STAGE_PREFIX = "stage:"
 CLASSES = ("gemm", "quantize", "norm", "rope", "attention", "glu", "residual", "copy", "other")
 # (class, name needles) in match order: the first class with a needle in the kernel name wins.
 NEEDLES = (
-    ("attention", ("fmha", "flash", "attn", "attention", "softmax", "mot_joint", "perhead")),
+    # quantize checked before attention: this project's own kernels live in a `flash_rt::fp4`
+    # namespace, so "flash" alone would misclassify them as attention (0921x found
+    # kernel_quantize_fp4_sfa_vec counted under "attention" for exactly this reason).
     ("quantize", ("quant",)),
+    ("attention", ("fmha", "flash_attn", "flashattention", "attn", "attention", "softmax",
+                   "mot_joint", "perhead")),
     ("gemm", ("gemm", "cutlass", "cublas", "nvjet", "xmma", "wgmma", "sm80_", "sm90_", "sm100_", "sm110_")),
     ("norm", ("adaln", "layernorm", "layer_norm", "rmsnorm", "rms_norm", "norm")),
     ("rope", ("rope",)),
@@ -241,6 +245,13 @@ def main() -> int:
     for _ in range(2):
         fe.run_eager()
     torch.cuda.synchronize()
+    # A throwaway profiler session first: the first `torch.profiler` session of a process
+    # initializes CUPTI and can record zero kernels (0921x: all four attempts here came back
+    # "the trace holds no GPU kernels", the same failure imagewam_graph_kernel_profile.py's own
+    # X4 fixed the same way -- this script's version of the fix was missing until now).
+    with profile(activities=[ProfilerActivity.CUDA]):
+        fe.run_eager()
+        torch.cuda.synchronize()
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof, stage_ranges():
         fe.run_eager()
         torch.cuda.synchronize()
