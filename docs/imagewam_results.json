@@ -156,7 +156,11 @@
           "fidelity": null,
           "note": ""
         }
-      ]
+      ],
+      "official_reference": {
+        "mae_vs_gt_median": 0.1855,
+        "source": "the official implementation's own MAE vs GT, median over the same 20 libero_spatial samples (seed 0); recorded in the c20f3a0 round (THOR_STATUS_SUMMARY.md), not re-measured in session 0921d_final"
+      }
     },
     "robotwin": {
       "workload": {

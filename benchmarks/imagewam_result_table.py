@@ -24,6 +24,9 @@ Schema (`schema_version` 1). Top level: `schema_version`, `tables`. Each
                the table's standard step count (`STANDARD_STEPS`).
   checkpoint   {name, sha256_16}: the checkpoint every row ran.
   boundary     what one timed call covers (the same for every row).
+  official_reference  optional {mae_vs_gt_median, source}: the official
+               implementation's own MAE vs GT on the same samples, shown in the
+               MAE column's header ("ImageWAM official <value>").
   session      default session id of the rows (see below).
   measurement  {device, commit, date, gpu_exclusive, clock: {nvpmodel,
                gpu_locked, emc_locked}, warmup, iters}.
@@ -68,14 +71,16 @@ TABLES = ("libero", "robotwin")
 STANDARD_STEPS = {"libero": 10, "robotwin": 30}
 
 # id, engine, label, the frontend precision the row runs (None: no tier),
-# default scope.
+# default scope. The row ids keep the framework's name; the labels of the
+# tables are "Ours" (fp8 = fp8_static_cutlass, fp4 = nvfp4, int8/int4 = the
+# SM80 CUTLASS benches) and the official implementation.
 ROWS: tuple[tuple[str, str, str, str | None, str], ...] = (
-    ("official_torch", "official", "official torch (bf16 eager)", None, "full_infer"),
-    ("flashrt_fp16", "flashrt", "FlashRT fp16", "fp16", "full_infer"),
-    ("flashrt_fp8", "flashrt", "FlashRT fp8 (static, CUTLASS)", "fp8_static_cutlass", "full_infer"),
-    ("flashrt_fp4", "flashrt", "FlashRT fp4 (nvfp4)", "nvfp4", "full_infer"),
-    ("flashrt_int8", "flashrt", "FlashRT int8 (SM80 CUTLASS)", None, "gemm_only"),
-    ("flashrt_int4", "flashrt", "FlashRT int4 (SM80 CUTLASS)", None, "gemm_only"),
+    ("official_torch", "official", "ImageWAM official (torch, bf16)", None, "full_infer"),
+    ("flashrt_fp16", "flashrt", "Ours fp16", "fp16", "full_infer"),
+    ("flashrt_fp8", "flashrt", "Ours fp8", "fp8_static_cutlass", "full_infer"),
+    ("flashrt_fp4", "flashrt", "Ours fp4", "nvfp4", "full_infer"),
+    ("flashrt_int8", "flashrt", "Ours int8", None, "gemm_only"),
+    ("flashrt_int4", "flashrt", "Ours int4", None, "gemm_only"),
 )
 ROW_IDS = tuple(r[0] for r in ROWS)
 STATUSES = ("measured", "not_measured", "not_supported")
@@ -247,8 +252,10 @@ def render(doc: dict) -> str:
         out.append(f"Checkpoint: {t['checkpoint'].get('name')} ({t['checkpoint'].get('sha256_16')}). "
                    f"Timed call: {t['boundary']}.")
         out.append("")
+        ref = (t.get("official_reference") or {}).get("mae_vs_gt_median")
+        mae_head = "MAE vs GT" + (f" (ImageWAM official {ref})" if ref is not None else "")
         out.append("| Row | Scope | P50 ms | P10–P90 ms | vs official | cos vs official (median / min) "
-                   "| MAE vs GT | Note |")
+                   f"| {mae_head} | Note |")
         out.append("|---|---|---:|---:|---:|---:|---:|---|")
         official = next(r for r in t["rows"] if r["id"] == "official_torch")
         for row in t["rows"]:

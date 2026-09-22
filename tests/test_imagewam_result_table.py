@@ -192,7 +192,17 @@ def test_repeat_gives_a_drift_and_an_unbracketed_official_marks_every_ratio():
     text = rt.render(doc)
     fp4 = next(l for l in text.splitlines() if "fp4" in l)
     assert "4.50x §" in fp4 and "not bracketed" in fp4
-    official = next(l for l in text.splitlines() if "official torch" in l)
+    official = next(l for l in text.splitlines() if "ImageWAM official" in l and l.startswith("|"))
     assert "-17.3%" in official
     t["rows"][3]["repeat"] = {"p50_ms": 0}
     assert any("repeat needs a positive p50_ms" in e for e in rt.validate(doc))
+
+
+def test_labels_are_ours_and_the_official_mae_sits_in_the_column_header():
+    labels = {r[0]: r[2] for r in rt.ROWS}
+    assert labels["official_torch"] == "ImageWAM official (torch, bf16)"
+    assert [labels[i] for i in rt.ROW_IDS[1:]] == ["Ours fp16", "Ours fp8", "Ours fp4", "Ours int8", "Ours int4"]
+    doc, t = filled()
+    assert "| MAE vs GT |" in rt.render(doc)
+    t["official_reference"] = {"mae_vs_gt_median": 0.1855, "source": "c20f3a0"}
+    assert "MAE vs GT (ImageWAM official 0.1855)" in rt.render(doc)
