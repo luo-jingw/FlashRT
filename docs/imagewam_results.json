@@ -74,11 +74,11 @@
             "n": 100
           },
           "fidelity": {
-            "source": "libero_spatial, 10 tasks x frames 0,60 x seeds 0,1 (40 samples), official center-crop resize, real data; scripts/imagewam_thor_matrix.sh profile row",
+            "source": "libero_spatial, 10 tasks x frames 0,60 = 20 samples, seed 0, same initial noise for both sides, official center-crop resize, real data; cosine on the normalized 64x7 action chunk, MAE on the de-normalized chunk against the dataset's next 64 actions; scripts/imagewam_thor_matrix.sh profile row",
             "vs_official_cos_median": 0.99998,
             "vs_official_cos_min": 0.99994,
             "mae_vs_gt_median": 0.18561,
-            "n": 40
+            "n": 20
           },
           "note": "cuBLASLt fp16 GEMM path: the same trimmed graph measured 172-295 ms in other harnesses and runs (ISSUE-088, under diagnosis); this is one session's value. Instruction: 24 valid tokens (LIBERO range 16-31), trimmed. Latency from imagewam_thor_path_bench.py infer, random observation; fidelity from the matrix run of the same profile and precision.",
           "session": "0921d_final"
@@ -99,11 +99,11 @@
             "n": 100
           },
           "fidelity": {
-            "source": "libero_spatial, 10 tasks x frames 0,60 x seeds 0,1 (40 samples), official center-crop resize, real data; scripts/imagewam_thor_matrix.sh profile row",
+            "source": "libero_spatial, 10 tasks x frames 0,60 = 20 samples, seed 0, same initial noise for both sides, official center-crop resize, real data; cosine on the normalized 64x7 action chunk, MAE on the de-normalized chunk against the dataset's next 64 actions; scripts/imagewam_thor_matrix.sh profile row",
             "vs_official_cos_median": 0.99994,
             "vs_official_cos_min": 0.99989,
             "mae_vs_gt_median": 0.18593,
-            "n": 40
+            "n": 20
           },
           "note": "Instruction: 24 valid tokens (LIBERO range 16-31), trimmed. Latency from imagewam_thor_path_bench.py infer, random observation; fidelity from the matrix run of the same profile and precision.",
           "session": "0921d_final"
@@ -124,11 +124,11 @@
             "n": 100
           },
           "fidelity": {
-            "source": "libero_spatial, 10 tasks x frames 0,60 x seeds 0,1 (40 samples), official center-crop resize, real data; scripts/imagewam_thor_matrix.sh profile row",
+            "source": "libero_spatial, 10 tasks x frames 0,60 = 20 samples, seed 0, same initial noise for both sides, official center-crop resize, real data; cosine on the normalized 64x7 action chunk, MAE on the de-normalized chunk against the dataset's next 64 actions; scripts/imagewam_thor_matrix.sh profile row",
             "vs_official_cos_median": 0.99936,
             "vs_official_cos_min": 0.99885,
             "mae_vs_gt_median": 0.18613,
-            "n": 40
+            "n": 20
           },
           "note": "Instruction: 24 valid tokens (LIBERO range 16-31), trimmed. Latency from imagewam_thor_path_bench.py infer, random observation; fidelity from the matrix run of the same profile and precision.",
           "session": "0921d_final",

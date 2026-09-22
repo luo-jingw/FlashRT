@@ -328,7 +328,7 @@ MAXN，GPC 1.575 / NVD 1.692 GHz，`emc_locked=null`，GPU 独占，未改频、
 | FlashRT nvfp4 | 108.03（107.96–108.16） | 4.23× | 0.99936 / 0.99885 | 0.1861 |
 | int8 / int4 | 留空（决定） | | | |
 
-三个口径问题：官方一行在 session 末尾复测是 377.04 ms（−17.4%），超过 2% 的界，所以三个倍数都标 §（分母没夹住；官方三个 session 的首次测量都是 453.6 / 456.97 / 456.66 ms，末尾这次才偏低，怀疑 EMC 没锁，清单 X2）；nvfp4 的两端一致（107.62 ms，−0.4%）；fp16 一行只是这个 session 的值（见下）。延迟来自 `imagewam_thor_path_bench.py`（随机观测），精度来自同一 profile 与精度的矩阵行（真实 LIBERO 数据，libero_spatial，40 个样本）。
+三个口径问题：官方一行在 session 末尾复测是 377.04 ms（−17.4%），超过 2% 的界，所以三个倍数都标 §（分母没夹住；官方三个 session 的首次测量都是 453.6 / 456.97 / 456.66 ms，末尾这次才偏低，怀疑 EMC 没锁，清单 X2）；nvfp4 的两端一致（107.62 ms，−0.4%）；fp16 一行只是这个 session 的值（见下）。延迟来自 `imagewam_thor_path_bench.py`（随机观测），精度来自同一 profile 与精度的矩阵行（真实 LIBERO 数据，libero_spatial，10 个任务 × 帧 0、60 = 20 个样本，seed 0）。
 
 **ISSUE-088（fp16 不随裁剪变快）的新证据**：同一个命令 `0921_final` 是 274.70 ms、这一轮是 226.71 ms；D1 里 fp16 首张图（24 token）replay 294.95 ms、512 token 288.48 ms，D2 同进程 x0=21 是 172.36 ms（x0=513 是 270.93）。nvfp4 在各处都稳定并随行数缩小（D1 206.49 → 124.95；D2 181.80 → 109.81 ms），`fp16_cutlass` 也缩小（275.59 → 187.05）。fp16 的 512 token 图里 GEMM 占 218.28 / 288.48 ms，`nvjet_hsh_512x64` 平均 4.47 ms/次，图里 kernel 占比约 100%（没有空隙）。所以只有 cuBLASLt 的 fp16 GEMM 路径既不稳定又慢，指向它的算法选择（清单 X1 的探针定位）。`torch.profiler` 对每个精度第一张图抓到 0 个 kernel，与 nsys 抢 CUPTI（`MULTIPLE_SUBSCRIBERS_NOT_SUPPORTED`），所以 24 token 的 kernel 表没有。
 
