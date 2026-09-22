@@ -2130,7 +2130,7 @@ Thor rebuild (ENABLE_SM100_CUTLASS) -> the new test -> the existing
 ## Implementation Phases
 
 ### Phase 1: candidate 1, single-stream (backbone + ActionDiT)
-Phase Status: active
+Phase Status: completed (Thor confirmation of the corrected test still pending, THOR_CHECKLIST.md X8)
 - Goal: `fuse_qkv_norm_rope` wired into `_single_stream_layer` and
   `_action_single_layer`, both the `merge_qkv_mlp` and split `qkv.weight`
   branches; the shared post-branch RMSNorm+RoPE block is skipped when the
@@ -2163,6 +2163,20 @@ Phase Status: active
   share (25-35% under 25us) -- consistent with candidate 1 (targets the
   small per-row kernels, not the GEMMs) mattering more on the ActionDiT
   side.
+- Thor (`0922b`): with the seed bug fixed, the test crashed differently --
+  `_action_single_layer(fuse_qkv_norm_rope=True)` hit an illegal memory
+  access. Reproduced locally (Ada) and diagnosed precisely (issues.md
+  ISSUE-090): NOT a bug in the kernel or the wiring -- a pre-existing
+  `GemmRunner` fragility, reproduced identically with the flag OFF on both
+  compared calls, triggered by the test's own pattern of rebuilding fresh
+  `Fp16Linear` weights for each of the two compared calls against one
+  shared `GemmRunner`. Fixed by building weights/attention/input ONCE and
+  replaying both `fuse_qkv_norm_rope` values against them (matching
+  `test_single_stream_linear2_merged_vs_split_real_shapes`'s own established
+  pattern). Verified locally, 3 stable runs: bit-exact for backbone (both
+  `merge_qkv_mlp` values) and ActionDiT. No known production code path hits
+  ISSUE-090's trigger (weights are built once at frontend construction,
+  never rebuilt during `infer()`), so it is not a blocker, only noted.
 
 ### Phase 2: candidate 1, double-stream
 Phase Status: pending

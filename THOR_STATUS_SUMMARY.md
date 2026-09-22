@@ -380,6 +380,17 @@ GEMM 效率：backbone 接近算力（bb.single 164.9 TFLOPs、bb.double 82.3 TF
 
 **X7（ISSUE-089 确认）**：cache 存活的问题已经修好（Thor 上打印 `cached=(6,)`）；同一测试后面新暴露一个断言（恢复后的图 vs 全新 frontend，`cos=1.0000000 max_abs=6.104e-05`）；`test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists` 的 FA4 回退 vs cuBLAS 链路比较也是类似量级的不一致（约 1e-4）。两处都改成了容差判据（`cos > 0.9999` 且 `max_abs < 1e-2`），参照的是这个项目自己已有的先例（`docs/imagewam_last_block_kv_only.md` 里同类的 GEMM 算法选择非结合性），不是新确认的根因。
 
+### `0922b` 轮：candidate 1 崩溃排查——不是 kernel 或接线的问题（commit 待推送）
+
+`0922` 的种子 bug 修好之后，Thor 上 `_action_single_layer(fuse_qkv_norm_rope=True)` 这次真的抛了 `illegal memory access`（backbone 两种 `merge_qkv_mlp` 都过了 bit-exact）。本机独立复现（不需要 Thor）并定位：
+
+- 用 `CUDA_LAUNCH_BLOCKING=1` 精确定位：崩溃发生在 `attn_out_proj.weight` 的 `gemm.fp16_nn` 调用（`cuBLAS error ... code=13`），不在新 kernel 自己的 launch 里。
+- 关键实验：把 `_action_single_layer` 用**全新权重**连续调用两次（共享同一个 `GemmRunner`），**`fuse_qkv_norm_rope=False` 两次都用**——同样崩溃，第二次。说明和这次的新 kernel 完全无关，是一个已经存在的问题：`GemmRunner` 在同一形状上被不同的权重指针重复调用会出问题。
+- 只调用一次（不管 `fused_qkv` 是 True 还是 False）不崩；两次调用、只要第二次用了新分配的权重张量就会崩。
+- 把权重、注意力后端、输入只建一次，两次调用只切换 `fuse_qkv_norm_rope`（复用同一份权重）——不崩，backbone 和 ActionDiT 都是 `torch.equal`，连续跑 3 次稳定。
+
+结论：**candidate 1 的 kernel 和接线代码本身是对的**，被测试自己的构造方式（每次比较都重建全新随机权重）意外踩中了一个和这次工作无关的 `GemmRunner` 潜在问题（issues.md ISSUE-090，已记录、未深挖——真实生产代码从不会对同一个 `GemmRunner` 用不同指针重复调用同一形状，权重只在 frontend 构造时建一次）。测试已经改成"建一次、复用"，本机验证通过，Thor 待重跑确认。`plan.md` 的 Phase 1 标记为 completed（Thor 对修好的测试的确认还没做）。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

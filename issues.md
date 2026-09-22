@@ -747,7 +747,45 @@ The `mot` fixture error is a test that has no checkpoint fixture on the Thor (an
 
 (a)'s cache-survival half: fixed and Thor-confirmed. Both remaining small numeric mismatches (the length-9 recovery-vs-fresh comparison, and (b)'s FA4-fallback-vs-cuBLAS comparison): tests relaxed to a tight tolerance in `tests/test_imagewam_text_trim.py`, matching this project's own precedent for GEMM algorithm-pick non-associativity; needs a Thor rerun to confirm both now pass, and remains open as "not a confirmed root cause" rather than "proven non-associativity" for either.
 
+# ISSUE-090
+
+Status: resolved (in the test; the underlying GemmRunner/cuBLASLt behavior is noted but not fixed, since no production code path is known to hit it)
+
+Area: test-construction pattern for `_single_stream_layer`/`_action_single_layer` (`tests/test_imagewam_thor_real_wiring.py`); `GemmRunner`/`Fp16Linear` (`csrc/gemm/gemm_runner.cu`, `flash_rt/models/imagewam/quant_linear.py`)
+
+## Observation
+
+`0922b` (Thor): the new `fuse_qkv_norm_rope` wiring test (opportunities.md OPT-032 candidate 1) crashed with `an illegal memory access was encountered` at `torch.cuda.synchronize()` after `_action_single_layer(fused_qkv=True)`, following a `cos=1.0000001 max_abs=0.0 bit_exact=True` PASS for backbone. Reproduced locally (Ada, independent of Thor) and narrowed down precisely: the crash requires calling `_action_single_layer` (or, by a separate check, `_single_stream_layer`) a SECOND time against a SHARED `GemmRunner`, with FRESH weight tensors (new `Fp16Linear` wrapping new pointers) at the SAME `(M, N, K)` GEMM shape as the first call -- **`fuse_qkv_norm_rope` is not required to trigger it**: two calls with `fused_qkv=False` on both crash identically. `CUDA_LAUNCH_BLOCKING=1` places the synchronous fault inside `attn_out_proj.weight`'s `gemm.fp16_nn` call (`cuBLAS error ... code=13`), on the SECOND call, reading from the buffer the (first) attention output was written into.
+
+## Impact
+
+None found in production: the real frontend constructs every `Fp16Linear` ONCE at load time and never rebuilds a weight wrapper for an already-used shape during `infer()`, so this specific trigger (repeated fresh-weight construction against one persistent `GemmRunner`) is a TEST-authoring pattern, not a served code path. It did block confirming OPT-032 candidate 1's wiring correctness until diagnosed.
+
+## Evidence
+
+Local repro scripts (Ada, RTX 4060, `CUDA_LAUNCH_BLOCKING=1` and `compute-sanitizer --tool memcheck`/`--tool racecheck`, none of which reproduced or explained it beyond confirming it is not a simple out-of-bounds write memcheck catches):
+
+- Two `run_action_single(fused_qkv=True)` calls back to back (fresh weights each call, shared `gemm`): crashes on the second, same traceback as Thor.
+- Two `run_action_single(fused_qkv=False)` calls back to back: **also crashes**, identical traceback -- rules out the new kernel entirely.
+- One `run_action_single(fused_qkv=True)` call alone (no preceding call): does not crash.
+- Building the weights, modulation, attention backend and input ONCE, then replaying `_action_single_layer` twice against them with only `dims["fuse_qkv_norm_rope"]` flipped: does not crash, and the two outputs are bit-exact (`torch.equal`), confirmed 3 runs.
+- The same restructuring applied to `_single_stream_layer`'s own comparison (which had not crashed, built fresh weights per call, and shares the same risk): also bit-exact after the change.
+
+## Hypotheses
+
+`GemmRunner`'s per-`(op_type, M, N, K)` cuBLASLt algorithm cache (`csrc/gemm/gemm_runner.cu`) is keyed by shape, not by data pointer; calling `fp16_nn` again at a cached shape with a NEW weight pointer reuses the cached algorithm/descriptor. Something about that reuse -- possibly interacting with the 256 MB workspace `GemmRunner()` allocates once at construction, possibly a stale device-pointer reference kept in the cached `cublasLtMatmulAlgo_t`/descriptor -- becomes invalid on the second distinct pointer at ActionDiT's specific shapes, surfacing as `CUBLAS_STATUS_EXECUTION_FAILED` in a LATER call, not the one that actually corrupted something. Unconfirmed: why backbone's shapes did not exhibit this in the (also fresh-weights-per-call) `run_single_stream` sequence before the fix -- either backbone's exact shapes happen not to trigger it, or it needed the additional accumulated state from also running the action shape at least once.
+
+## Next Experiment
+
+Not pursued further here (out of this work's scope, and no known production trigger): reproduce with a minimal repro isolated to `GemmRunner.fp16_nn` alone (no attention backend, no pipeline_thor.py), at ActionDiT's exact `(M,N,K)` shapes, two calls with fresh device pointers each, to determine whether this is a `GemmRunner`/cuBLASLt caching bug worth fixing at that layer, or specific to how `attn_out_proj`'s input aliases the attention backend's in-place `Q`/`O` buffer.
+
+## Resolution
+
+Worked around in `tests/test_imagewam_thor_real_wiring.py`: `_single_stream_layer`'s and `_action_single_layer`'s fused_qkv comparison tests build weights/attention/input ONCE and replay against them, rather than rebuilding fresh weights per compared call. OPT-032 candidate 1's wiring is confirmed bit-exact for both backbone and ActionDiT once this trap is avoided. The underlying `GemmRunner` behavior is not fixed or further diagnosed; flagged here in case it surfaces again.
+
 ## Index: resolved entries and where their conclusions are recorded
+
+
 
 This file carries the open problems only. Each entry below states a problem
 that is no longer open; the pointer names where its conclusion is recorded.

@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922` 两轮把 X0/X6/X1/X4/X2/X3/X5 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。`0922` 还发现并修了一个测试自身的种子 bug（candidate 1 接入代码是否正确还没confirm）和 ISSUE-089 的容差修复（还没在 Thor 上确认）。本节次只剩 X8（重跑修好的接入测试）和 X7b（确认容差修复）。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b` 三轮把 X0/X6/X1/X4/X2/X3/X5/X7b 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。candidate 1 的接入代码本身已经在本机确认没问题（两次 Thor 失败都是测试自己的 bug，issues.md ISSUE-089/090）；测试已修好，本节次只剩 X8 做最后一次确认性重跑。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,20 +52,13 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-### X8 candidate 1（QKV拆分+QK-RMSNorm+RoPE 融合）接入后的 Thor 位一致（重跑：上一版测试有 bug）
-`0922`：接入代码已重编成功，但测试本身的种子重置太晚，两次对比调用没有用同一份输入，报的 `cos=0.9993` 不代表接入代码有问题。已修（种子挪到函数最前面）并把测试名从 `fused_qkv_norm_rope` 改成 `fuse_qkv_norm_rope`（和 flag 同名，`-k` 才能匹配上）。
+### X8 candidate 1（QKV拆分+QK-RMSNorm+RoPE 融合）接入后的 Thor 位一致（第三次；前两次都是测试自己的问题，不是接入代码）
+`0922`：种子重置太晚，已修。`0922b`：修好种子后 `_action_single_layer(fused_qkv=True)` 真崩了（illegal memory access），本机独立复现并定位：**不是这次的 kernel 或接线的问题**——是测试自己"每次比较都重建全新随机权重、共享同一个 GemmRunner"这个构造方式踩中了一个更早就存在的 `GemmRunner` 问题（issues.md ISSUE-090：同一个 GemmRunner 在同一 GEMM 形状上被不同权重指针连续调用两次会出问题，`fuse_qkv_norm_rope=False` 两次调用也一样崩，和这次的新 kernel 完全无关）。测试已经改成"权重只建一次、两次调用复用"，本机验证 backbone 与 ActionDiT 都 `torch.equal`，连续 3 次稳定。
 ```
 python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -q -s 2>&1 | tee $OUT/X8_wiring.log
 ```
-判据：`torch.equal`（不是余弦）。这次如果还不过，才是接入代码真的有问题，把打印的 `_fmt` 差异统计和是哪一句断言（`merge_qkv_mlp=True`/`False`、还是 action single）带回。过了的话，`plan.md` 这个 Plan 的 Phase 1 状态改成 completed，再考虑要不要跑 `imagewam_fusion_ab.py`（它目前的 `FLAGS` 还没有这一个，加不加是下一步的事，不强求这一轮做）。
-去向：opportunities.md OPT-032、plan.md Phase 1。
-
-### X7b ISSUE-089 容差修复确认
-```
-python -m pytest tests/test_imagewam_text_trim.py -k "failed_capture or fa4_fallback_keeps" -q -s 2>&1 | tee $OUT/X7b_text_trim.log
-```
-判据：两个测试都应该过了（`cos > 0.9999` 且 `max_abs < 1e-2` 的容差，不再是 `torch.equal`）。如果还不过，把新的 `cos`/`max_abs` 数字带回——说明容差给的还不够宽，或者确实是别的问题。
-去向：issues.md ISSUE-089。
+判据：`torch.equal`（不是余弦）。本机已经反复验证过，这一轮预期是确认性的通过；如果 Thor 上还是不过，说明 Thor 和 Ada 之间有真实差异，把完整报错（尤其是不是同一处 `cuBLAS error`）带回，不要重复本机已经做过的种子/权重排查。过了的话，`plan.md` 这个 Plan 的 Phase 1 就是完全确认了；再考虑要不要跑 `imagewam_fusion_ab.py`（它目前的 `FLAGS` 还没有这一个，加不加是下一步的事，不强求这一轮做）。
+去向：opportunities.md OPT-032、plan.md Phase 1、issues.md ISSUE-090（如果 Thor 这次也过，ISSUE-090 维持"测试已绕开，未深挖"）。
 
 ## 已完成的轮次（不再重跑）
 
