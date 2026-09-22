@@ -20,15 +20,33 @@ Flags (`AB=`, one or a comma list toggled together):
   plan.md "single-stream `linear2` merge").
 - `fuse_res_norm`: gated residual fused with the next AdaLN (roadmap
   item 3, plan.md "gated-residual + next-AdaLN fusion").
+- `fuse_qkv_norm_rope` (OPT-032 candidate 1, plan.md Phase 1/2): one
+  kernel for the Q/K/V split + QK-RMSNorm + RoPE sequence, in place of
+  3 copies + 2 rms_norm + 2 rope, wired into every layer type (backbone
+  single/double-stream, ActionDiT single/double). Thor-confirmed
+  bit-exact; safe to A/B end-to-end with any `CKPT_PATH` state (real or
+  random weights -- this flag only changes HOW the same weight's Q/K/V
+  columns are split and normed, not which weight values exist).
+- `last_layer_kv_only` (OPT-032 candidate 8, plan.md Phase 3): the last
+  backbone single-stream layer computes only the K/V it exports,
+  skipping Q/self-attention/MLP/its own residual write. Thor-confirmed
+  bit-exact against the full block. **Needs `CKPT_PATH` for a
+  meaningful correctness comparison**, same caveat as `merge_linear2`
+  below: `checkpoint_loader.py`'s `linear1_kv.weight` is a real column
+  slice of the checkpoint's own `linear1.weight`, but this frontend's
+  random-weight path draws it independently, so under random weights
+  the two sides hold UNRELATED K/V weight values for that one layer
+  and only the speed/kernel-count numbers are comparable.
 
 Env:
 - `AB` (required): the flag(s) to toggle.
 - `PRECISIONS` (default `nvfp4,fp16`): comma list from `_PRECISIONS`.
 - `CKPT_PATH` (optional): real `model.pt`. Unset -> random weights drawn
-  from the same seed for both sides. The merged `linear2` weight is drawn
-  as one tensor, so with random weights the `merge_linear2` sides hold
+  from the same seed for both sides. The merged `linear2` weight (and,
+  separately, `last_layer_kv_only`'s `linear1_kv.weight`) is drawn as
+  its own independent tensor, so with random weights those sides hold
   different weight values and only the speed numbers are comparable;
-  its correctness comparison needs `CKPT_PATH`.
+  their correctness comparison needs `CKPT_PATH`.
 - `ITERS` (default 50), `WARMUP` (default 10), `COUNT_KERNELS` (default 0).
 - `USE_FA4` (default 0): `use_fa4=True` for the "backbone" attention site
   (Thor only; match the production configuration being compared).
@@ -57,7 +75,7 @@ from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagew
 # The served dims minus `proprio_dim`: this A/B never enables proprio
 # conditioning.
 REAL_DIMS = {key: value for key, value in LIBERO_REAL_DIMS.items() if key != "proprio_dim"}
-FLAGS = ("merge_linear2", "fuse_res_norm")
+FLAGS = ("merge_linear2", "fuse_res_norm", "fuse_qkv_norm_rope", "last_layer_kv_only")
 BF16 = torch.bfloat16
 DEV = "cuda"
 
@@ -124,7 +142,9 @@ def run(precision: str, flags: list[str], ckpt: str | None, iters: int, warmup: 
 
     act_a, hid_a = _replay_with(a, img, noise)
     act_b, hid_b = _replay_with(b, img, noise)
-    note = "" if (ckpt or "merge_linear2" not in flags) else "  (different random weights per side, see docstring)"
+    _independent_weight_flags = ("merge_linear2", "last_layer_kv_only")
+    note = ("" if (ckpt or not any(f in flags for f in _independent_weight_flags))
+            else "  (different random weights per side, see docstring)")
     print(f"actions         B vs A: {_stats(act_b, act_a)}{note}")
     print(f"backbone_hidden B vs A: {_stats(hid_b, hid_a)}{note}")
 
