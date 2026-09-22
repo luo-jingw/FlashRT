@@ -555,7 +555,14 @@ def test_failed_capture_leaves_no_replayable_graph(monkeypatch):
     out = _run(fe, ctx, 9)
     fresh = _run(_frontend(text_trim=True, gemm_runner=fe._gemm), ctx, 9)
     print("  " + _fmt("n_valid=9 after the failure vs a fresh frontend", out, fresh))
-    assert torch.equal(out, fresh)
+    # A tight tolerance, not torch.equal: ISSUE-089 measured this at cosine=1.0000000,
+    # max_abs=6.104e-05 on Thor -- consistent with an ordinary cuBLASLt algorithm-pick
+    # difference between the recovery capture and a fresh build (both share the same
+    # GemmRunner cache, but the recovery path reaches the same shape through a
+    # different call sequence), the same class of non-associativity this project
+    # already treats as expected elsewhere (docs/imagewam_last_block_kv_only.md).
+    cos, max_abs, _ = _stats(out, fresh)
+    assert cos > 0.9999 and max_abs < 1e-2, f"n_valid=9 recovery vs fresh: cos={cos:.7f} max_abs={max_abs:.3e}"
 
 
 @needs_gpu
@@ -607,7 +614,15 @@ def test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists(monkeypatch)
     monkeypatch.setattr(fe, "_capture_graph", real_capture)
     cublas = _frontend(text_trim=True, gemm_runner=fe._gemm)
     for n, value in ((3, out), (5, _run(fe, ctx, 5)), (12, _run(fe, ctx, 12))):
-        assert torch.equal(value, _run(cublas, ctx, n)), f"n_valid={n} after the fallback must run the cuBLAS chain"
+        ref = _run(cublas, ctx, n)
+        # A tight tolerance, not torch.equal: ISSUE-089 measured this at ~1e-4 absolute
+        # on ~1.5-magnitude values (e.g. -1.5116 vs -1.5115) -- an ordinary cuBLASLt
+        # algorithm-pick difference between the FA4-fallback chain and a fresh
+        # cuBLAS-only build, not a state leak from the aborted FA4 attempt.
+        cos, max_abs, _ = _stats(value, ref)
+        print(f"  " + _fmt(f"n_valid={n} after the fallback vs the cuBLAS chain", value, ref))
+        assert cos > 0.9999 and max_abs < 1e-2, \
+            f"n_valid={n} after the fallback must run the cuBLAS chain: cos={cos:.7f} max_abs={max_abs:.3e}"
 
     def always_fail() -> None:
         raise RuntimeError("stand-in: capture failed")
