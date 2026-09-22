@@ -2227,8 +2227,8 @@ Phase Status: completed, Thor-confirmed (`0922e`: `2 passed`, all five compariso
   idle, no rebuild needed. Phase 2 is fully confirmed.
 
 ### Phase 3: candidate 8, last backbone block K/V-only
-Phase Status: completed, verified locally bit-exact (Thor confirmation
-pending, THOR_CHECKLIST.md X12)
+Phase Status: completed, Thor-confirmed (`0922h`: `torch.equal`/
+`bit_exact=True`, `max_abs=0` for both K and V)
 - Goal: `imagewam_prefill`'s loop calls a new, narrower function for
   the LAST single-stream layer instead of the full
   `_single_stream_layer`, per `docs/imagewam_last_block_kv_only.md`'s
@@ -2288,6 +2288,9 @@ pending, THOR_CHECKLIST.md X12)
   path would pick whatever `self._precision` says, same as any other
   weight, but this specific weight's behavior under a quantized
   precision has not been separately checked).
+- Thor (`0922h`, HEAD `11e8869`, no rebuild needed): `torch.equal`/
+  `bit_exact=True`, `max_abs=0` for both K and V. MAXN,
+  `emc_locked=null`, GPU idle. Phase 3 is fully confirmed.
 
 ### Phase 4: candidate 3, fused AdaLN + NVFP4 direct quantize
 Phase Status: completed for Round 1's scope, Thor-confirmed (`0922g`:
@@ -2392,7 +2395,10 @@ Phase Status: completed for Round 1's scope, Thor-confirmed (`0922g`:
   New test: `test_action_single_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes`,
   same construction as the backbone one, `pytest.importorskip`'d here
   (same reason). Local CPU dispatch tests unaffected (9/9); Thor
-  confirmation of this new test is pending (THOR_CHECKLIST.md X11).
+  confirmation: Thor (`0922h`, HEAD `11e8869`, no rebuild needed):
+  `3 passed, 8 deselected, 1.46s`, all `torch.equal`/`bit_exact=True`,
+  `max_abs=0` (X10's backbone chain re-confirmed, plus this new
+  ActionDiT chain). Round 2 is fully confirmed.
 - Round 3 (closing the double->single boundary, same round): attempted
   and REVERTED after finding a genuine kernel limitation, not a
   wiring mistake. `fused_norm_fp4.cu`'s `launch()` computes its CUTLASS

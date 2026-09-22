@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1 的单流+双流、candidate 3 第一轮接线都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 4（第一轮）都已关闭。这一轮本机一次做了三件事，一起交出来（不再一件一件分批）：(1) candidate 3 第二轮——同样的模式接到 `_action_single_layer`（ActionDiT 自己的单流链），待测 X11；(2) candidate 3 第三轮——想把双流/ActionDiT-double 的边界层也接上，但发现 kernel 本身的一个真实限制（SFA 是 CUTLASS tile-interleaved 布局，每次调用按 `seq_len` 重新算，没有行偏移参数，不能像 candidate 1 那样拆两次调用去拼一个更大的目标缓冲区），本机验证前就发现问题并撤回了改动，没有推到 Thor 上；这个口子记在 opportunities.md/plan.md 里，留给以后（Round 4，需要动 kernel 或改消费端设计）；(3) Phase 3（candidate 8，最后一层 backbone block 只算 K/V）——直接做完并本机验证通过，待测 X12。`fuse_res_norm_fp4` 目前仍然只能在测试这种"手搭链"的场景里打开，不能在完整模型上打开，见 X11 的说明。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认（`0922h`：`3 passed`，全部 `torch.equal`/`bit_exact=True`），`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。本清单当前没有待测项。剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计，`fuse_res_norm_fp4` 目前仍只能在"手搭链"场景里打开）——这是真正的设计工作，还没开始。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,25 +52,11 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-### X11 candidate 3 第二轮接线（ActionDiT 自己的单流链）的 Thor 数值确认
-把 Round 1 同样的 `merge_qkv_mlp=True`→`linear1.weight` 模式接到了 `_action_single_layer`（ActionDiT 自己的单流链），跟 backbone 那条链完全对称。**注意一个两轮都没关的口子**：这次只覆盖同一个函数内部 `i>=1` 的链（layer i 的尾部写 layer i+1 自己消费的 scratch，都在一次函数调用里）；不覆盖 double→single 的边界层（`weight_layer_idx=0`，只要 `num_layers_double`/`action_num_layers_double`>0——LIBERO 真实结构就是这样——`input_normed=True` 也会在这一层触发，但生产者是 `_double_stream_layer`/`_action_double_layer` 自己的尾部调用，这两个函数这两轮都没接 `fp4_direct`）。**所以 `dims["fuse_res_norm_fp4"]` 现在只能在这种"手搭两层链"的测试场景里打开，不能在完整模型跑通打开**——打开了会读到没被真正写过的 `linear1` scratch。这一点已经在两个函数自己的代码注释里写清楚了，不是隐藏的坑。
-```
-python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_res_norm_fp4 -q -s 2>&1 | tee $OUT/X11_wiring.log
-```
-判据：`torch.equal`（不是余弦）。不需要重编。这条 `-k` 会把 X10（backbone 那条链）也一起收集，两个都该过；新增关心的是 `test_action_single_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes`。
-去向：opportunities.md OPT-032、plan.md Phase 4。
-
-### X12 candidate 8（最后一层 backbone block 只算 K/V）接线的 Thor 位一致
-Phase 3 这次直接做完了，不需要重编（三个改动文件都是 Python：`checkpoint_loader.py`、`imagewam_thor.py`、`pipeline_thor.py`）。`checkpoint_loader.py` 的 `_extract_single_block` 新增 `kv_only` 参数，为最后一层 backbone 单流层额外产出 `linear1_kv.weight`（真实 `linear1.weight` 的一次性列切片，K/V 两列，`linear1.weight` 本身仍然保留，不是替换）；`imagewam_thor.py` 加了对应的随机权重路径和一个新缓冲区，真实权重加载路径不用改（那边的包装循环本来就是泛化的）；`pipeline_thor.py` 新增 `_single_stream_layer_kv_only`，`imagewam_prefill` 的循环在 `dims["last_layer_kv_only"]` 打开时对最后一层单流层改调它。本机验证过程中抓到一个真实 bug（第一版漏了 K 的 `rope_apply_fp16_perhead` 调用，被新测试直接抓出来，`cos=0.7366`），已修好。本机跑了真实的 `torch.equal` 测试（不需要 NVFP4，只用 `Fp16Linear`），连续 3 次稳定通过。
-```
-python -m pytest tests/test_imagewam_thor_real_wiring.py -k kv_only -q -s 2>&1 | tee $OUT/X12_wiring.log
-```
-判据：`torch.equal`（不是余弦）。不需要重编，本机已经跑通；这一项主要是确认 Thor 上环境一致。如果不过，把完整报错带回来。
-去向：opportunities.md OPT-032、plan.md Phase 3。
+（当前没有待测项。X11、X12 已在 `0922h` 确认通过，见下方"已完成的轮次"。）
 
 ## 已完成的轮次（不再重跑）
 
-逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
+逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
 
 ---
 

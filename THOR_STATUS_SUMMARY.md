@@ -455,6 +455,12 @@ HEAD `3056b03`，未重编。`python -m pytest tests/test_imagewam_thor_real_wir
 
 **Phase 3（candidate 8）**：直接做完了。`checkpoint_loader.py`/`imagewam_thor.py`/`pipeline_thor.py` 三个文件都改了，新增 `_single_stream_layer_kv_only`，`dims["last_layer_kv_only"]` 开关。本机验证时抓到一个真实 bug——第一版漏了 K 的 `rope_apply_fp16_perhead` 调用（design doc 里明确写了要做这一步，我第一遍写代码时读设计文档截断处漏看了），新测试直接测出 `cos=0.7366`（不是 O(1e3) 那种爆炸，是"大部分对、少数不对"的那种漏步骤特征），修好后连续 3 次 `torch.equal` 稳定通过。这个测试本机就能跑（不需要 NVFP4，只用 `Fp16Linear`）。待测 X12（主要是确认 Thor 环境一致，本机已经是真实的 `torch.equal` 而不是猜测）。
 
+### `0922h` 轮：X11+X12 一起确认通过——candidate 3 第二轮与 Phase 3（candidate 8）都在 Thor 上完全确认（commit `11e8869`）
+
+HEAD `11e8869`，未重编。`python -m pytest tests/test_imagewam_thor_real_wiring.py -k "fuse_res_norm_fp4 or kv_only" -q -s` → `3 passed, 8 deselected, 1.46s`。三处全部 `torch.equal`/`bit_exact=True`、`max_abs=0`：X10 回归（backbone single `fuse_res_norm_fp4`）、X11（action single `fuse_res_norm_fp4`）、X12（`kv_only` vs full block，K 和 V 都过）。MAXN，`emc_locked=null`，GPU 空闲。
+
+结论：OPT-032 candidate 3 第二轮（ActionDiT 单流链）和 Phase 3（candidate 8，最后一层 backbone block 只算 K/V）在 Thor 上都完全确认。`plan.md` Phase 3、Phase 4（第一、二轮范围）都关闭；`THOR_CHECKLIST.md` 的 X11、X12 已删除。剩下的是 candidate 3 Round 4：关闭双流/ActionDiT-double 的边界层，需要要么改 kernel（给 `fused_norm_fp4.cu` 加一个行偏移参数）要么改消费端设计（拆成两次独立 GEMM）——这是设计工作，本地已经记录了两个方向的取舍，还没有开始实现。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |
