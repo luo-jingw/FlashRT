@@ -520,9 +520,20 @@ def test_failed_capture_leaves_no_replayable_graph(monkeypatch):
     """A capture that raises after `set_prompt` wrote the new context must
     not leave the previous length's graph active: `infer()` refuses, the
     old prompt's key no longer short-circuits `set_prompt`, and the cached
-    captures (with their RoPE tables) keep working."""
+    captures (with their RoPE tables) keep working.
+
+    `use_fa4=False`: this simulates a PLAIN capture failure unrelated to FA4
+    (`test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists` below
+    covers the FA4 case, where a second failure intentionally drops every
+    cached length -- see `_capture_graph_or_fall_back`'s docstring). Without
+    pinning it, `_frontend`'s default (`use_fa4=None`) auto-resolves to True
+    wherever FA4 is available (real Thor hardware), and this test's injected
+    failure is then read as an FA4 failure that cascades into the same
+    full-cache-clear the other test exercises on purpose, not the isolated
+    single-length failure this test means to check (issues.md ISSUE-089).
+    """
     ctx = _context()
-    fe = _frontend(text_trim=True)
+    fe = _frontend(text_trim=True, use_fa4=False)
     first = _run(fe, ctx, 5)
     cached_rope = fe._captures[6].rope_table
     real_capture = fe._capture_graph

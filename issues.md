@@ -693,13 +693,15 @@ The frontend's autotune (`GemmRunner::autotune_cached`) times the heuristic's to
 
 ## Hypotheses
 
-The chosen cuBLASLt algorithm per shape differs between runs and is sometimes very slow: the heuristic's top-16 for these shapes on sm_110 contains poor candidates, and the timing on zero tensors (or its noise) picks one of them or the cache holds a poor default at shapes it did not tune. Untested: which shapes are slow, and whether the pick is stable within a process and between processes.
+Confirmed by `0921x` (Thor, `benchmarks/imagewam_fp16_gemm_probe.py --x0 25,513`, full log `thor_val/0921x/X1_fp16_gemm_probe.log`): the trimmed shapes' cuBLASLt GEMMs achieve 4-6 TFLOPs (`txt_qkv` 6.1, `txt_mlp0` 4.6-5.9 at `x0=25`) against 96-110 TFLOPs for the same GEMMs at `x0=513`. This is not a row-count effect on a fixed-efficiency kernel; the achieved rate itself collapses at small M. The heuristic's own top-1 pick is frequently far behind what autotune finds at the SAME shape (`single_mlp_in`: heuristic 31 TFLOPs vs autotuned-on-zeros 84; `img_mlp0`: 47 vs 80), so the autotune step matters and is not fully closing the gap either -- `zeros` and `random` autotune data picked the same algorithm every time (ruling out zero-fill as the cause), and `txt_proj` at `M=25` still spans `0.019..0.065 ms` across three fresh runners (algorithm choice is unstable at this shape even after autotuning). Root cause: small-M cuBLASLt efficiency at sm_110, not a scheduling or fusion gap elsewhere in the pipeline.
 
 ## Next Experiment
 
-`benchmarks/imagewam_fp16_gemm_probe.py --x0 25,513`: per weight-GEMM shape, the heuristic's top-1, the algorithm autotuned on zeros (what the frontend does) and on random data, each re-timed on random operands with CUDA events, over three fresh runners, with the achieved TFLOPs. It shows which shapes are slow, whether the autotune's pick varies between runners, and whether zero-fill versus random changes the pick. If it confirms, the fix is in the autotune (tune on random data, time several repetitions, refuse a pick slower than a floor rate) or the `fp16` tier uses the CUTLASS GEMM.
+Done (`0921x`, see Hypotheses). Remaining: (a) whether raising `autotune_cached`'s `num_algos`/`bench_iters` at these small-M shapes finds a better pick than the current top-16/10-iteration search, or whether cuBLASLt has no fast candidate at all for M=25-ish rows at these N/K and the fix has to be a different GEMM path (CUTLASS, which `fp16_cutlass` already uses and which does scale with `text_trim`, OPT-032); (b) whether the per-runner instability at `txt_proj` M=25 (`0.019..0.065 ms` spread) means the autotuned cache entry itself is not deterministic between processes, which would need fixing independently of which GEMM path is chosen.
 
 ## Resolution
+
+Root cause confirmed (small-M cuBLASLt inefficiency at sm_110); the fix (switch `fp16`'s weight GEMMs to CUTLASS, or improve the autotune search) is not implemented.
 
 # ISSUE-089
 
@@ -717,17 +719,33 @@ Not measured. The fallback comparison being close but unequal is the FA4-fallbac
 
 ## Evidence
 
-Reported by the Thor agent for `0921d`; the tests' full output is in `thor_val/0921d`.
+`0921x` (Thor, `thor_val/0921x/X3_text_trim.log`), both tests run alone with `-x -q -s`:
+
+- `test_failed_capture_leaves_no_replayable_graph`: printed `after the failed set_prompt: graph=None current_prompt=None cached=()`, then
+  ```
+  assert fe.captured_text_lengths == (6,) and fe._captures[6].rope_table is cached_rope
+  E   assert (() == (6,)
+  ```
+  The frontend clears `graph`/`current_prompt` correctly, but the per-length capture cache is also empty (`cached=()`) where the test expects the length-6 capture to survive a later unrelated failure.
+- `test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists`: `seen == [(6, 13), (6, 13)]` and `captured_text_lengths == (4,)` both pass; it fails at
+  ```
+  assert torch.equal(value, _run(cublas, ctx, n)), n_valid=3 after the fallback must run the cuBLAS chain
+  ```
+  with the two sides numerically close but not equal (e.g. -1.5116 vs -1.5115, -0.9865 vs -0.9866) -- not a large discrepancy, but not bit-exact either.
 
 ## Hypotheses
 
-The `mot` fixture error is a test that has no checkpoint fixture on the Thor (an untracked local test file, `tests/test_imagewam_real_checkpoint.py`, was noted in the gate's `worktree not clean`). The other two are unexplained.
+The `mot` fixture error is a test that has no checkpoint fixture on the Thor (an untracked local test file, `tests/test_imagewam_real_checkpoint.py`, was noted in the gate's `worktree not clean`). For the two real failures: (a) the cache-survival test's own expectation may be stale -- if the frontend's cache-clearing behavior changed since the test was written to clear the WHOLE cache on any capture failure (not just the failing length's entry), the test needs updating, not the frontend; (b) the FA4-fallback numeric mismatch could be a genuinely different-but-valid cuBLASLt algorithm pick between "the fallback's cuBLAS chain" and "a fresh cuBLAS-chain-only build" (ordinary GEMM non-associativity, like the ULP-level fp8 scale mismatch in ISSUE elsewhere), or could be a real state leak from the aborted FA4 attempt. Neither is confirmed.
 
 ## Next Experiment
 
-Run the two `text_trim` tests alone with `-x -q -s` and read the assertion.
+(a) is resolved: `test_failed_capture_leaves_no_replayable_graph`'s `_frontend(text_trim=True)` call did not pin `use_fa4`, so it took the constructor's own default (`None`, auto-resolved) instead of an explicit `False`. On real Thor hardware `_resolve_use_fa4(None)` resolves to `True` (FA4 available), so the test's injected failure went through `_capture_graph_or_fall_back`'s FA4-fallback branch (which then fails a second time, since the monkeypatch is unconditional) -- and a second failure intentionally drops every cached length, per that function's own documented contract, which the OTHER test in this file (`test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists`) checks on purpose with an explicit `use_fa4=True`. The two tests were meant to isolate a plain failure from an FA4-cascade failure, and only did so on a machine where FA4 was unavailable. Fixed by pinning `use_fa4=False` on the plain-failure test (`tests/test_imagewam_text_trim.py`); needs a Thor rerun to confirm it now passes.
+
+(b) is still open: compare the fallback run's resolved cuBLASLt algorithm (per-shape cache entry) against a fresh cuBLAS-only frontend's algorithm for the same shapes; if they differ, this is non-associativity, not a bug, and the test's `torch.equal` should relax to a cosine/ULP bound; if they're the same algorithm, the mismatch is unexplained and needs more digging.
 
 ## Resolution
+
+(a) fixed in `tests/test_imagewam_text_trim.py` (pin `use_fa4=False`); Thor confirmation pending. (b) open.
 
 ## Index: resolved entries and where their conclusions are recorded
 
