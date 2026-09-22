@@ -328,13 +328,38 @@ MAXN，GPC 1.575 / NVD 1.692 GHz，`emc_locked=null`，GPU 独占，未改频、
 | FlashRT nvfp4 | 108.03（107.96–108.16） | 4.23× | 0.99936 / 0.99885 | 0.1861 |
 | int8 / int4 | 留空（决定） | | | |
 
-三个口径问题：官方一行在 session 末尾复测是 377.04 ms（−17.4%），超过 2% 的界，所以三个倍数都标 §（分母没夹住；官方三个 session 的首次测量都是 453.6 / 456.97 / 456.66 ms，末尾这次才偏低，怀疑 EMC 没锁，清单 X2）；nvfp4 的两端一致（107.62 ms，−0.4%）；fp16 一行只是这个 session 的值（见下）。延迟来自 `imagewam_thor_path_bench.py`（随机观测），精度来自同一 profile 与精度的矩阵行（真实 LIBERO 数据，libero_spatial，10 个任务 × 帧 0、60 = 20 个样本，seed 0）。
+三个口径问题：官方一行在 session 末尾复测是 377.04 ms（−17.4%），超过 2% 的界，所以三个倍数都标 §（分母没夹住；官方三个 session 的首次测量都是 453.6 / 456.97 / 456.66 ms，末尾这次才偏低）；nvfp4 的两端一致（107.62 ms，−0.4%）；fp16 一行只是这个 session 的值（见下）。延迟来自 `imagewam_thor_path_bench.py`（随机观测），精度来自同一 profile 与精度的矩阵行（真实 LIBERO 数据，libero_spatial，10 个任务 × 帧 0、60 = 20 个样本，seed 0）。当时怀疑是 EMC 频率没锁，`0921x` 一轮排除了这个原因：见下。
 
 **ISSUE-088（fp16 不随裁剪变快）的新证据**：同一个命令 `0921_final` 是 274.70 ms、这一轮是 226.71 ms；D1 里 fp16 首张图（24 token）replay 294.95 ms、512 token 288.48 ms，D2 同进程 x0=21 是 172.36 ms（x0=513 是 270.93）。nvfp4 在各处都稳定并随行数缩小（D1 206.49 → 124.95；D2 181.80 → 109.81 ms），`fp16_cutlass` 也缩小（275.59 → 187.05）。fp16 的 512 token 图里 GEMM 占 218.28 / 288.48 ms，`nvjet_hsh_512x64` 平均 4.47 ms/次，图里 kernel 占比约 100%（没有空隙）。所以只有 cuBLASLt 的 fp16 GEMM 路径既不稳定又慢，指向它的算法选择（清单 X1 的探针定位）。`torch.profiler` 对每个精度第一张图抓到 0 个 kernel，与 nsys 抢 CUPTI（`MULTIPLE_SUBSCRIBERS_NOT_SUPPORTED`），所以 24 token 的 kernel 表没有。
 
 **ISSUE-087**：哨兵点名一个测试 `test_cuda_graph_timer_on_real_launches`；复位之后全量是 2 failed / 781 passed / 1 skipped / 5 errors（无哨兵是 86 / 631 / 55）。
 
 **L4（int8 / int4）**：扩展里没有 `cutlass_int8_rowwise_fp16out` / `cutlass_int4_rowwise_fp16out`（只有 bf16out），没有重编；这两行按决定留空。
+
+### `0921x` 轮：ISSUE-088 定位、OPT-032 kernel 在 Thor 上的逐位确认、EMC 假设排除（commit `939dc20`）
+
+MAXN，GPC 1.575 / NVD 1.692 GHz，`emc_locked=null`，GPU 独占，未改频、未重编生产扩展；日志在 Thor 的 `thor_val/0921x`。
+
+**X0 向量化激活量化**：`quant_act_nvfp4` 确认走上了 `quantize_fp4_dynamic_sfa_fp16_vec`，不是每次退化到标量（5 次 infer 里 3400 次 vec、0 次标量）；`default` nvfp4 P50 107.36 ms，与之前同量级。
+
+**X6 新 AdaLN+FP4 融合 kernel 对照当前真正接入的融合 kernel**：本机只测过对照旧的未融合对（`gate_res_bf16res`+`ada_layer_norm_*`），Thor 上直接对照当前接入的 `gate_res_ada_layer_norm_bf16res`/`_fp16`（`fusion.cu`），**16/16 `packed`/`sfa`/`residual` 全部 `torch.equal`**。OPT-032 里"很可能但未直接验证"的说法可以去掉，K2 的融合 kernel 与当前生产路径逐位一致，Thor 已确认。
+
+**X1（ISSUE-088 定位）**：裁剪后 `x0=25` 的 fp16 文本 GEMM 只有 4–6 TFLOPs（`txt_qkv` 6.1、`txt_mlp0` 4.6–5.9），未裁剪 `x0=513` 同类是 96–110 TFLOPs——不是行数效应，是小 M 本身在 cuBLASLt 上效率崩溃。启发式第一名经常明显慢于 autotune（`single_mlp_in` 31 对 84 TFLOPs、`img_mlp0` 47 对 80 TFLOPs），但 autotune 也没完全补上（`txt_proj` M=25 在三个 runner 之间还是 `0.019..0.065 ms` 分叉，零填充与随机填充选出同一个算法，排除了填充方式的影响）。根因：sm_110 上小 M 的 cuBLASLt 效率问题，不是别处的调度或融合缺口。
+
+**X4（kernel 级 profile，24 token，FA4 关）**：
+
+| 精度 | replay | kernel 内占比 | GEMM | other | attn | 平均 kernel | &lt;10µs 占比 | &lt;100µs 占比 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| nvfp4 | 123.51 ms | 103% | 77.24 ms | 38.47 ms | 11.46 ms | 23.8 µs | 13% | 90% |
+| fp16_cutlass | 186.76 ms | 101% | 149.98 ms | 32.73 ms | 6.74 ms | 37.1 µs | 6% | — |
+
+nvfp4 头名 kernel：`rms_norm` 23.0 ms × 560 次，CUTLASS GEMM 21.9 ms × 230 次、17.7 ms × 420 次。短 kernel 不是主因（&lt;10µs 只占 13%）；GEMM 和 rms_norm 占大头，GEMM 平均远低于 110 TFLOPs 的可达速率——与 OPT-032 的分析一致：既不是纯 launch 数量瓶颈，也不是纯算力瓶颈，GEMM 效率和 rms_norm 这类小 kernel 的数量都是真实成本。（`kernel_quantize_fp4_sfa_vec` 曾被误分进 attention 类，因为它的完整符号带 `flash_rt` 命名空间、命中了旧的 "flash" 关键字；已修，下一轮的分类会更准。）
+
+**X5**：脚本缺了 X4 已有的 CUPTI 预热，四次都返回 0 个 kernel；本地已修，连同上面的分类 bug 一起，需要重新跑一轮才有网格数据。
+
+**X2（官方漂移、tegrastats）**：跑完 X5 之后 455.46 ms，空闲 5 分钟后 459.37 ms，两次都在 456 那一档，**没有复现** `0921d_final` 那次的 377.04 ms（−17.4%）。Thor 的 `tegrastats` 没有 `EMC_FREQ` 字段，`/sys/class/devfreq` 下也没有 emc 节点。**EMC 频率假设排除**：那次偏低是那一轮 L3/L4 之后的某种 session 状态，不是空闲能复现的，成因仍不明。
+
+**X3（两个真实测试失败，issues.md ISSUE-089）**：`test_failed_capture_leaves_no_replayable_graph` 打印 `cached=()`，与预期的 `(6,)` 不符——根因已定位并修：该测试没有显式传 `use_fa4=False`，在 FA4 可用的机器上会走到"FA4 失败级联清空整个缓存"的分支（这是另一个测试故意测的行为）。`test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists` 死在 FA4 回退后与新建 frontend 的 cuBLAS 链路输出 `torch.equal` 比较，两侧数值接近但不是逐位相同（如 −1.5116 对 −1.5115）——原因未定，可能是 cuBLASLt 算法选择的非结合性，不是 bug；也可能是真实差异，还没确认。
 
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 

@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921d`（D 组）与 `0921d_final`（L 组，LIBERO 一张最终表）已做完并落库：表在 `docs/imagewam_results.md`（int8 / int4 两行按决定留空），数字与口径在 `THOR_STATUS_SUMMARY.md` 的 `0921d` 小节。本节次剩下的都是"让表更可信"的小项，不阻塞表；RoboTwin 那张等它的 workload 声明（收集指令已给 Thor 上的 agent），不在本清单。
+`0921x` 一轮把 X0/X6/X1/X4/X2/X3 全部做完并落库（`THOR_STATUS_SUMMARY.md` 的 `0921x` 小节；ISSUE-088 的根因已确认，ISSUE-089 的一半已修）。本节次只剩 X5 重跑（本地已修两个 bug）和 X7（确认 ISSUE-089 的修复）。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,44 +52,8 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-### X0 向量化激活量化 kernel 切换（`quant_act_nvfp4` 现在先试 vec 再退化到标量）
-```
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python -m pytest tests/test_fp4_utils_quant_act.py -q 2>&1 | tee $OUT/X0_pytest.log
-python benchmarks/imagewam_thor_path_bench.py --profile default --precision nvfp4 --paths infer --bench-iters 100 2>&1 | tee $OUT/X0_path.log
-```
-本机没有编好的扩展，只测了 CPU 上的调用顺序（vec 先试、失败才退化到标量）。判据：Thor 上 `quantize_fp4_dynamic_sfa_fp16_vec` 真实跑通（不是每次都退化到标量——如果日志/profiler 显示大量标量 kernel，说明对齐条件没满足，带回原因）；`--profile default` 的 `infer` P50 与不换之前的 108 ms 同量级或更低。
-去向：OPT-032。
-
-### X6 新 kernel 对照当前真正接入的融合 kernel（不是本机测过的旧未融合对）
-四个新 kernel（`csrc/kernels/fused_qkv_norm_rope/`、`fused_norm_fp4/`、`fused_step_boundary/`、last-block 设计）是四个 subagent 用 `isolation: "worktree"` 写的，worktree 分支自 `origin/main`（当时落后 roadmap/integration 很多），本机已核对 `norm.cu`/`rope.cu`/`common.cuh` 与当前 HEAD 逐字节相同、`decoder_fused.cu`/`fusion.cu` 只有新增没有删改，所以这些 kernel 本身的数值验证有效；只有一处没在本机核实：`fused_norm_fp4` 是对照未融合的 `gate_res_bf16res/gate_res_fp16` + `ada_layer_norm_*` 测的逐位一致，当前真正接入的是融合过的 `gate_res_ada_layer_norm_bf16res/_fp16`（`fusion.cu`，`_fused_gate_res` 用的就是它，其文档自称"Bit-identical to gate_res_* + ada_layer_norm_*"，本机确认了两者用同一种 `__shfl_xor_sync` 归约，但没有直接对比）。Thor 上有完整编译好的扩展，加两行就能直接测：
-```
-python - <<'PYEOF'
-import torch
-import flash_rt.flash_rt_kernels as fvk
-# 用 fvk.gate_res_ada_layer_norm_bf16res / _fp16 替代 tests/test_fused_norm_fp4_kernel.py 里
-# fvk.gate_res_bf16res+ada_layer_norm_bf16in_fp16out 那两行，其余不变，跑一遍 16 组形状。
-PYEOF
-```
-判据：`packed`/`sfa`/`residual` 三者 `torch.equal`。不一致就说明融合 kernel 与未融合对不是逐位一致（会是 `fusion.cu` 自己文档写错，不是新 kernel 的问题），带回具体哪个形状、哪个字节。
-去向：OPT-032。
-
-### X1 fp16 的 cuBLASLt GEMM 探针（ISSUE-088；表里 fp16 一行的数字目前不稳）
-```
-python benchmarks/imagewam_fp16_gemm_probe.py --x0 25,513 2>&1 | tee $OUT/X1_fp16_gemm_probe.log
-```
-每个 GEMM 形状（`x0=25` 的裁剪长度与 `x0=513` 的未裁剪长度）各测三种算法：启发式第一名、frontend 用的"零填充上自动调优"、"随机数据上自动调优"，都在随机操作数上用 CUDA event 重测，三个新 runner 取 min..max，并给出实测 TFLOPs。要带回：整份日志。读法：哪些形状的 TFLOPs 远低于 CUTLASS 的水平（几十 TFLOPs 以上）；同一形状三个 runner 的 min..max 是否分叉（说明调优结果不稳定）；"零填充"与"随机"两列是否不同（说明数据填充影响选择）。判据不是过 / 不过，是给 ISSUE-088 定位。
-
-### X4 nvfp4 的 24 token 图：计算、访存还是 kernel 延迟（回答"瓶颈在哪"）
-D1 里每个精度的第一张图抓到 0 个 kernel（profiler 第一次会话要初始化 CUPTI）；脚本已加一次空会话预热，并新增"平均 kernel 时长与短 kernel 的占比"两行。**不要再开 nsys**（会和 torch.profiler 抢 CUPTI）。
-```
-for P in nvfp4 fp16_cutlass; do
-  python benchmarks/imagewam_graph_kernel_profile.py --precision $P --valid-tokens 24 --use-fa4 off 2>&1 | tee $OUT/X4_$P.log
-done
-```
-要带回：每个日志里 `graph replay ... ; kernels inside ...`、`average kernel ... us; kernels < 10 us: ...`、分类耗时、top 12。读法：短 kernel（< 25 us）占 GPU 时间的比例很大，说明是 kernel 数量 / 延迟受限；GEMM 类占大头而平均 TFLOPs 远低于 110，说明 GEMM 效率问题；top kernel 是逐元素类，说明访存受限。
-
-### X5 计算图 × 算子网格（fp4 为什么只快 4 倍：瓶颈在哪一格）
-`benchmarks/imagewam_stage_operator_grid.py`：一次 eager 前向（与图里同样的 kernel、同样的顺序）套 `torch.profiler`，每个阶段（encode、backbone 的 double / single 层、prefill 余项、ActionDiT 的 double / single 层、每步余项）打命名区间，把每个 kernel 归到发射它的最内层阶段和按名字分的算子类（gemm / quantize / norm / rope / attention / glu / residual / copy / other），输出：阶段 × 算子类的 GPU 毫秒网格、每格 kernel 数与平均时长、每个阶段里短于 10 / 25 µs 的 kernel 的时间占比、每个层阶段 GEMM 的实测 TFLOPs 与权重字节流速（GB/s，由模型维度解析推出）。
+### X5 计算图 × 算子网格（`0921x` 全部四次都返回 "trace holds no GPU kernels"；本地已修，需要重跑确认）
+`imagewam_stage_operator_grid.py` 缺了 `imagewam_graph_kernel_profile.py`（X4）已有的 CUPTI 预热：第一次 `torch.profiler` 会话会初始化 CUPTI、可能抓到 0 个 kernel，脚本已加一次空跑的预热会话。另外修了一个分类错误：`kernel_quantize_fp4_sfa_vec` 的完整符号里带 `flash_rt` 命名空间，之前的 "flash" 关键字把它错分进了 attention 类（已把 quantize 检查挪到 attention 之前）。
 ```
 for P in nvfp4 fp16_cutlass; do
   python benchmarks/imagewam_stage_operator_grid.py --precision $P --valid-tokens 24 --use-fa4 off 2>&1 | tee $OUT/X5_$P.log
@@ -97,23 +61,14 @@ done
 python benchmarks/imagewam_stage_operator_grid.py --precision fp8_static_cutlass --calibration $CAL_TRIM --valid-tokens 24 --use-fa4 off 2>&1 | tee $OUT/X5_fp8.log
 python benchmarks/imagewam_stage_operator_grid.py --precision nvfp4 --valid-tokens 24 --use-fa4 on 2>&1 | tee $OUT/X5_nvfp4_fa4.log
 ```
-要带回：四份日志全文（网格、短 kernel 占比、TFLOPs 与 GB/s、"no class matched" 列出的 kernel 名字——这些名字用来补分类）。读法：GEMM 的 TFLOPs 与 GB/s 都远低于硬件（fp16 约 110 TFLOPs、fp8 约 270 TFLOPs 可达；带宽约 250 GB/s）→ 是效率或延迟受限，不是算力或带宽受限；某个阶段的短 kernel 占比高 → 该阶段是 launch / 尾部延迟受限；某一列（quantize / norm / glu / residual）在网格里占大头 → 那一类就是融合的目标。若 profiler 报 "trace holds no GPU kernels"，把报错带回。
+要带回：这次应该有网格了；判据同上一版——GEMM 的 TFLOPs/GB/s 远低于硬件、某阶段短 kernel 占比高、某一类（quantize/norm/glu/residual）占大头，三者分别指向效率/延迟受限、launch 延迟受限、融合目标。若还是 0 个 kernel，把完整报错带回，不要再猜。
 
-### X2 官方那一行的漂移（表里官方 L1 = 456.66 ms，末尾复测 L5 = 377.04 ms，−17.4%）
-`emc_locked=null`，官方 eager 更偏访存，FlashRT 的 nvfp4 两端只差 −0.4%，所以怀疑是 EMC 频率没锁。记录 EMC 频率，不改频：
+### X7 `test_failed_capture_leaves_no_replayable_graph` 的修复确认（issues.md ISSUE-089）
+本机已定位并修：这个测试原来没有显式传 `use_fa4=False`，在 FA4 可用的 Thor 上会走到"FA4 失败级联清空整个缓存"的分支（这是另一个测试 `test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists` 故意测的行为，不是这个测试想测的"单次失败不清空其他长度"）。已加上 `use_fa4=False` 固定住。
 ```
-tegrastats --interval 500 --logfile $OUT/X2_tegrastats_a.log &   # 后台
-python benchmarks/imagewam_official_torch_bench.py --workload libero --warmup 5 --iters 30 2>&1 | tee $OUT/X2_official_a.log
-kill %1
-# 空闲 5 分钟后再来一遍，日志名 _b
+python -m pytest tests/test_imagewam_text_trim.py -x -q -s 2>&1 | tee $OUT/X7_text_trim.log
 ```
-要带回：两次官方的 P50，以及两份 tegrastats 日志里 `EMC_FREQ` 的取值范围。两次官方都是 456 左右而 EMC 一样 → 漂移来自别处，把 L5 当时之前跑了什么带回。
-
-### X3 剩下的两个真实测试失败（ISSUE-089）
-```
-python -m pytest tests/test_imagewam_text_trim.py -x -q -s 2>&1 | tee $OUT/X3_text_trim.log
-```
-要带回：失败的两个测试的断言原文与两侧数值。
+判据：`test_failed_capture_leaves_no_replayable_graph` 应该过了；`test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists` 的 `torch.equal` 断言（FA4 回退后与新建 frontend 的 cuBLAS 链路输出比较）预计仍然失败（ISSUE-089 的第二个问题，还没修，只是待确认还在），把它的具体数值差异带回。
 
 ---
 
