@@ -567,6 +567,22 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     # row-independent/elementwise, so splitting it by row range does
     # not change the result).
     fused_qkv = bool(dims.get("fuse_qkv_norm_rope"))
+    # OPT-032 candidate 3: NOT wired in this function. `_fused_gate_res`'s
+    # `fp4_direct` kernel computes a CUTLASS tile-interleaved SFA layout
+    # fresh from `seq_len` every call (`fused_norm_fp4.cu`'s `launch()`:
+    # `layout = tile_atom_to_shape_SFA(make_shape(seq_len, ...))`, no
+    # row-offset parameter) -- unlike candidate 1's kernel, it cannot
+    # be called twice (once for txt's x0 rows, once for img's img_len
+    # rows) to jointly populate one combined a0-row destination scratch
+    # the way `_single_stream_layer`'s consumer (`linear1.weight`, ONE
+    # GEMM over all a0 rows) needs: the two calls would each compute
+    # their own small tile layout at the SAME base pointer, not two
+    # slices of one a0-row tiled layout. Closing the double-stream
+    # boundary needs either a kernel change (an explicit row-offset/
+    # total-seq-len parameter) or a consumer-side change (two separate
+    # GEMMs instead of Round 1's single combined one) -- real design
+    # work, not attempted here (plan.md Phase 4 Round 3, not started;
+    # tried and reverted in this same round after finding this).
 
     (txt_shift1, txt_scale1, txt_gate1), (txt_shift2, txt_scale2, txt_gate2) = mod_txt
     (img_shift1, img_scale1, img_gate1), (img_shift2, img_scale2, img_gate2) = mod_img
@@ -877,6 +893,61 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         fvk.gate_res_bf16res(from_attn, gate_t.data_ptr(), combined, a0 * hidden, stream)
 
 
+def _single_stream_layer_kv_only(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
+                                  site_layer_idx, stream, attn, mod_single, rope_table, *,
+                                  input_normed: bool = False):
+    """OPT-032 candidate 8 (`docs/imagewam_last_block_kv_only.md`): the
+    LAST backbone single-stream layer computes ONLY the K/V it exports
+    to the layer-matched ActionDiT "mot" layer -- everything else (Q,
+    this layer's own self-attention, the MLP, the residual write into
+    `bufs["backbone_hidden"]`) is dead specifically for this layer,
+    because nothing downstream of `imagewam_prefill` ever reads
+    `bufs["backbone_hidden"]` again (the design doc's own confirmed
+    trace; `imagewam_denoise_step`/`imagewam_denoise_loop` read the
+    backbone exclusively through the per-layer K/V cache).
+
+    Caller contract: only valid for `weight_layer_idx == num_layers_single - 1`
+    (checkpoint_loader.py's `last_layer_kv_only` only produces
+    `"linear1_kv.weight"` for that one layer); `imagewam_prefill`
+    enforces this by construction (only ever calls this function for
+    the last loop iteration). No `next_norm`/emitted next-AdaLN: this
+    is always the last layer of the loop, so there is no next
+    single-stream block to chain to.
+
+    Confirmed bit-exact against the full, unmodified `_single_stream_layer`'s
+    own K/V output at real production shape (`torch.equal`,
+    `tests/test_imagewam_last_block_kv_only.py`'s standalone prototype;
+    `tests/test_imagewam_thor_real_wiring.py`'s
+    `test_single_stream_kv_only_matches_full_block_at_real_shape` checks
+    this exact wired function against it)."""
+    hidden = dims["hidden"]
+    HD = dims["HD"]
+    NH = dims["NH"]
+    a0 = dims["a0"]
+    eps = 1e-6
+    key = lambda slot: weights[("backbone", "single", weight_layer_idx, slot)]
+    shift, scale, _gate = mod_single
+
+    combined = bufs["backbone_hidden"]
+    modded = bufs["modded_scratch"]
+
+    ptrs = attn.get_slot_ptrs("backbone", site_layer_idx)
+    _, K_cache, V_cache = ptrs["Q"], ptrs["K"], ptrs["V"]
+
+    if not input_normed:
+        shift_t, scale_t = _fuse_mod_pair(shift, scale)
+        shift_t, scale_t = _awq_folded(key("linear1_kv.weight"), shift, scale, shift_t, scale_t)
+        fvk.ada_layer_norm_bf16in_fp16out(combined, scale_t.data_ptr(), shift_t.data_ptr(), modded, a0, hidden,
+                                          eps, stream)
+
+    kv_merged = bufs["single_kv_merged"]  # (a0, 2*hidden)
+    key("linear1_kv.weight")(modded, kv_merged, a0, stream)
+    _copy_slice(K_cache, kv_merged, a0, hidden, src_row_stride=2 * hidden)
+    _copy_slice(V_cache, _col_ptr(kv_merged, hidden), a0, hidden, src_row_stride=2 * hidden)
+    fvk.rms_norm_fp16(K_cache, key("key_norm"), K_cache, a0 * NH, HD, eps, stream)
+    fvk.rope_apply_fp16_perhead(K_cache, rope_table, a0, NH, HD, stream)
+
+
 def imagewam_encode_once(ctx, fvk, gemm, bufs, weights, dims, stream=0):
     """Target-image encode step -- explicit no-op in this scope.
 
@@ -969,7 +1040,18 @@ def imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None
     # AWQ fold A (awq.py): each emitted AdaLN is folded for the GEMM that
     # consumes it -- the next double layer's qkv, or single layer 0's /
     # the next single layer's linear1.
-    single_linear1 = lambda i: weights.get(("backbone", "single", i, "linear1.weight"))
+    # OPT-032 candidate 8: the real consumer for the LAST single-stream
+    # layer is `linear1_kv.weight`, not `linear1.weight`, once
+    # `dims["last_layer_kv_only"]` is set (checkpoint_loader.py's
+    # `build_real_weights` still returns BOTH keys for that one layer;
+    # AWQ fold A must target whichever one the consuming layer actually
+    # calls, or the folded AdaLN would be correct for a GEMM that never
+    # runs).
+    kv_only_last = bool(dims.get("last_layer_kv_only"))
+
+    def single_linear1(i):
+        slot = "linear1_kv.weight" if (kv_only_last and i == num_single - 1) else "linear1.weight"
+        return weights.get(("backbone", "single", i, slot))
     for layer_idx in range(num_double):
         next_txt = next_img = None
         if fuse and layer_idx + 1 < num_double:
@@ -988,6 +1070,14 @@ def imagewam_prefill(ctx, fvk, gemm, bufs, weights, dims, stream=0, *, attn=None
     # restarting at 0, which would otherwise alias double-stream layer
     # 0..4's own K/V cache slots.
     for i in range(num_single):
+        if kv_only_last and i == num_single - 1:
+            # OPT-032 candidate 8: no next_norm -- this is always the
+            # last layer of this loop, nothing after it chains from
+            # `modded`.
+            _single_stream_layer_kv_only(ctx, fvk, gemm, bufs, weights, dims, i, num_double + i, stream,
+                                         attn, mod_single, rope_table,
+                                         input_normed=fuse and (num_double > 0 or i > 0))
+            continue
         next_norm = (_awq_target(single_linear1(i + 1), AdaLNTarget(single_shift, single_scale, modded))
                      if fuse and i + 1 < num_single else None)
         _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, i, num_double + i, stream, attn,

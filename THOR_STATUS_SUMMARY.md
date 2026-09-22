@@ -443,7 +443,17 @@ HEAD `c5898a2`。`python -m pytest tests/test_imagewam_thor_real_wiring.py -k fu
 
 HEAD `3056b03`，未重编。`python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_res_norm_fp4 -q -s` → `1 passed, 8 deselected, 1.40s`。`cos=1.0000001 max_abs=0.000e+00 rel_l2=0.000e+00 bit_exact=True`，`torch.equal` 成立。MAXN，`emc_locked=null`，GPU 空闲。
 
-结论：OPT-032 candidate 3 第一轮接线（`_single_stream_layer` 的 `merge_qkv_mlp=True`→`linear1.weight` 消费点，`dims["fuse_res_norm_fp4"]`）在 Thor 上完全确认。`plan.md` Phase 4（第一轮范围）关闭；`THOR_CHECKLIST.md` 的 X10 已删除。剩下：Phase 3（candidate 8，最后一层 backbone block 只算导出的 K/V）和 Phase 4 第二轮（双流/ActionDiT/head 的消费点，以及 `_single_stream_layer` 自己非合并的 `qkv.weight`/`mlp_in.weight` 分支）都还没开始。
+结论：OPT-032 candidate 3 第一轮接线（`_single_stream_layer` 的 `merge_qkv_mlp=True`→`linear1.weight` 消费点，`dims["fuse_res_norm_fp4"]`）在 Thor 上完全确认。`plan.md` Phase 4（第一轮范围）关闭；`THOR_CHECKLIST.md` 的 X10 已删除。
+
+### 本机一轮做三件事：candidate 3 第二轮（ActionDiT 链）+ 第三轮尝试（撤回）+ Phase 3（candidate 8）（commit 待推送）
+
+按"别一点一点推进，一次多给点"的要求，这一轮本机把能做完的都做完，一次交出去，不再拆成好几个小 round 分别等 Thor。
+
+**candidate 3 第二轮**：把 Round 1 同样的 `merge_qkv_mlp=True`→`linear1.weight` 模式接到 `_action_single_layer`（ActionDiT 自己的单流链）。跟 Round 1 一样只覆盖同一个函数内部 `i>=1` 的链，不覆盖 double→single 边界层。待测 X11。
+
+**candidate 3 第三轮（尝试后撤回）**：想顺手把双流/ActionDiT-double 的边界层也接上（这样 Round 1/2 留的口子就能关掉），但动手之后发现 `fused_norm_fp4.cu` 的 kernel 本身有个真实限制：它的 SFA 输出是 CUTLASS tile-interleaved 布局，`launch()` 里每次调用都按这次的 `seq_len` 重新算一遍布局，没有行偏移/总长度参数。candidate 1 的 kernel（Q/K/V，普通行主序）可以拆两次调用（txt 一次、img 一次）去拼一个更大的目标缓冲区，因为下游读的时候按行偏移读没问题；这个 kernel不行——两次调用会在同一个基地址上各算一份自己的小 tile 布局，互相覆盖，不是两段拼成一个大布局。所以要关这个口子，得要么改 kernel（加一个行偏移参数），要么改消费端设计（拆成两次独立 GEMM，而不是 Round 1 那种一次合并 GEMM）——这是真正的设计工作，不是接线，这一轮没有做，写好的 `_double_stream_layer` 改动在本机验证之前就撤回了，没有推到任何地方。已经记进 opportunities.md/plan.md，留给以后（Round 4）。
+
+**Phase 3（candidate 8）**：直接做完了。`checkpoint_loader.py`/`imagewam_thor.py`/`pipeline_thor.py` 三个文件都改了，新增 `_single_stream_layer_kv_only`，`dims["last_layer_kv_only"]` 开关。本机验证时抓到一个真实 bug——第一版漏了 K 的 `rope_apply_fp16_perhead` 调用（design doc 里明确写了要做这一步，我第一遍写代码时读设计文档截断处漏看了），新测试直接测出 `cos=0.7366`（不是 O(1e3) 那种爆炸，是"大部分对、少数不对"的那种漏步骤特征），修好后连续 3 次 `torch.equal` 稳定通过。这个测试本机就能跑（不需要 NVFP4，只用 `Fp16Linear`）。待测 X12（主要是确认 Thor 环境一致，本机已经是真实的 `torch.equal` 而不是猜测）。
 
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 

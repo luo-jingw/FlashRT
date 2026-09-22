@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1 的单流+双流、candidate 3 第一轮接线（`_single_stream_layer` 的 `merge_qkv_mlp=True`→`linear1.weight` 这一个消费点，`dims["fuse_res_norm_fp4"]` 开关）都在 Thor 上完全确认（`0922g`：`1 passed`，`torch.equal`/`bit_exact=True`，`max_abs=0`；过程中 `0922f` 抓到一个真实的 fp32/fp16 指针类型不匹配的接线 bug，已修，issues.md ISSUE-091），`plan.md` Phase 1、Phase 2、Phase 4（第一轮）都已关闭。接着做了 candidate 3 第二轮：同样的模式接到 `_action_single_layer`（ActionDiT 自己的单流链），本节次待测项是 X11。**两轮都还没接双流/ActionDiT-double 的边界层**，`fuse_res_norm_fp4` 目前只能在测试这种"手搭链"的场景里打开，见 X11 的说明。Phase 3（candidate 8）还没开始。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1 的单流+双流、candidate 3 第一轮接线都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 4（第一轮）都已关闭。这一轮本机一次做了三件事，一起交出来（不再一件一件分批）：(1) candidate 3 第二轮——同样的模式接到 `_action_single_layer`（ActionDiT 自己的单流链），待测 X11；(2) candidate 3 第三轮——想把双流/ActionDiT-double 的边界层也接上，但发现 kernel 本身的一个真实限制（SFA 是 CUTLASS tile-interleaved 布局，每次调用按 `seq_len` 重新算，没有行偏移参数，不能像 candidate 1 那样拆两次调用去拼一个更大的目标缓冲区），本机验证前就发现问题并撤回了改动，没有推到 Thor 上；这个口子记在 opportunities.md/plan.md 里，留给以后（Round 4，需要动 kernel 或改消费端设计）；(3) Phase 3（candidate 8，最后一层 backbone block 只算 K/V）——直接做完并本机验证通过，待测 X12。`fuse_res_norm_fp4` 目前仍然只能在测试这种"手搭链"的场景里打开，不能在完整模型上打开，见 X11 的说明。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -59,6 +59,14 @@ python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_res_norm_fp4 -q
 ```
 判据：`torch.equal`（不是余弦）。不需要重编。这条 `-k` 会把 X10（backbone 那条链）也一起收集，两个都该过；新增关心的是 `test_action_single_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes`。
 去向：opportunities.md OPT-032、plan.md Phase 4。
+
+### X12 candidate 8（最后一层 backbone block 只算 K/V）接线的 Thor 位一致
+Phase 3 这次直接做完了，不需要重编（三个改动文件都是 Python：`checkpoint_loader.py`、`imagewam_thor.py`、`pipeline_thor.py`）。`checkpoint_loader.py` 的 `_extract_single_block` 新增 `kv_only` 参数，为最后一层 backbone 单流层额外产出 `linear1_kv.weight`（真实 `linear1.weight` 的一次性列切片，K/V 两列，`linear1.weight` 本身仍然保留，不是替换）；`imagewam_thor.py` 加了对应的随机权重路径和一个新缓冲区，真实权重加载路径不用改（那边的包装循环本来就是泛化的）；`pipeline_thor.py` 新增 `_single_stream_layer_kv_only`，`imagewam_prefill` 的循环在 `dims["last_layer_kv_only"]` 打开时对最后一层单流层改调它。本机验证过程中抓到一个真实 bug（第一版漏了 K 的 `rope_apply_fp16_perhead` 调用，被新测试直接抓出来，`cos=0.7366`），已修好。本机跑了真实的 `torch.equal` 测试（不需要 NVFP4，只用 `Fp16Linear`），连续 3 次稳定通过。
+```
+python -m pytest tests/test_imagewam_thor_real_wiring.py -k kv_only -q -s 2>&1 | tee $OUT/X12_wiring.log
+```
+判据：`torch.equal`（不是余弦）。不需要重编，本机已经跑通；这一项主要是确认 Thor 上环境一致。如果不过，把完整报错带回来。
+去向：opportunities.md OPT-032、plan.md Phase 3。
 
 ## 已完成的轮次（不再重跑）
 

@@ -112,12 +112,25 @@ def _extract_double_block(sd: dict, prefix: str, *, sides: tuple[str, ...], pref
 
 
 def _extract_single_block(sd: dict, prefix: str, *, attn_dim: int,
-                           merge_qkv_mlp: bool = False, merge_linear2: bool = False) -> dict:
+                           merge_qkv_mlp: bool = False, merge_linear2: bool = False,
+                           kv_only: bool = False) -> dict:
     """One single-stream block: splits the real fused `linear1`/`linear2`
     into the separate GEMMs `pipeline_thor.py` expects -- mathematically
     identical column-range split, see `real_single_stream_block.py`'s
     own docstring for why. `linear1`: `(3*attn_dim + 2*mlp_hidden, hidden)`
     real `(out,in)`; `linear2`: `(hidden, attn_dim + mlp_hidden)`.
+
+    `kv_only=True` (OPT-032 candidate 8, `docs/imagewam_last_block_kv_only.md`):
+    ALSO returns `"linear1_kv.weight"`, a one-time column slice of the
+    same raw `linear1` tensor down to its K,V output columns
+    `[attn_dim, 3*attn_dim)` (Q is `[0,attn_dim)`, MLP gate/up is
+    `[3*attn_dim, end)` -- the caller's job to decide which layer this
+    applies to (only the LAST backbone single-stream layer's own
+    self-attention/MLP work is dead; every earlier layer's full
+    `linear1.weight` is still needed and still returned regardless of
+    this flag). Bit-exact against the full block's own K/V output at
+    real production shape, confirmed in
+    `tests/test_imagewam_last_block_kv_only.py`.
 
     `merge_qkv_mlp=True` (opportunities.md op-fusion audit finding 1):
     returns the real, UNSPLIT `linear1.weight` (covers qkv+mlp-gate/up
@@ -151,6 +164,9 @@ def _extract_single_block(sd: dict, prefix: str, *, attn_dim: int,
         mlp_in_w = l1[3 * attn_dim:, :]
         out["qkv.weight"] = qkv_w.t().contiguous().to(FP16)
         out["mlp_in.weight"] = mlp_in_w.t().contiguous().to(FP16)
+    if kv_only:
+        kv_w = l1[attn_dim:3 * attn_dim, :]
+        out["linear1_kv.weight"] = kv_w.t().contiguous().to(FP16)
     return out
 
 
@@ -182,13 +198,19 @@ def load_real_imagewam_state_dict(ckpt_path: str) -> dict:
 def build_real_weights(sd: dict, *, num_double: int, num_single: int,
                         action_num_double: int, action_num_single: int,
                         action_attn_width: int, merge_qkv_mlp: bool = False,
-                        merge_linear2: bool = False) -> dict:
+                        merge_linear2: bool = False, last_layer_kv_only: bool = False) -> dict:
     """Returns a flat dict keyed EXACTLY like `imagewam_thor.py`'s own
     `self._weights` (same 4-tuples `pipeline_thor.py` already expects)
     -- values are raw fp16 `torch.Tensor` (CPU; NOT yet wrapped in
     `Fp16Linear`/etc, and NOT yet moved to CUDA -- same division of
     labor as `_rnd_linear`: this function only produces the real
     tensor, the frontend decides precision/device).
+
+    `last_layer_kv_only=True` (OPT-032 candidate 8): the LAST backbone
+    single-stream layer's block ALSO gets `"linear1_kv.weight"`
+    (`_extract_single_block`'s own `kv_only`) -- ActionDiT's blocks are
+    unaffected, this candidate is backbone-only
+    (`docs/imagewam_last_block_kv_only.md`'s own scope).
     """
     weights = {}
 
@@ -212,7 +234,8 @@ def build_real_weights(sd: dict, *, num_double: int, num_single: int,
     for L in range(num_single):
         block = _extract_single_block(
             sd, f"mixtures.video.transformer.single_blocks.{L}", attn_dim=hidden,
-            merge_qkv_mlp=merge_qkv_mlp, merge_linear2=merge_linear2)
+            merge_qkv_mlp=merge_qkv_mlp, merge_linear2=merge_linear2,
+            kv_only=last_layer_kv_only and L == num_single - 1)
         for slot, tensor in block.items():
             weights[("backbone", "single", L, slot)] = tensor
 

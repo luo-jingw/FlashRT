@@ -23,12 +23,12 @@ import pytest
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
-from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
+from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, _fp16_tensor_from_ptr, make_imagewam_attention_spec
 from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 from flash_rt.models.imagewam.pipeline_real import compute_action_modulation, compute_shared_modulation
 from flash_rt.models.imagewam.pipeline_thor import (
     AdaLNTarget, _action_double_layer, _action_single_layer, _awq_target,
-    _double_stream_layer, _single_stream_layer)
+    _double_stream_layer, _single_stream_layer, _single_stream_layer_kv_only)
 from flash_rt.models.imagewam.quant_linear import Fp16Linear, Nvfp4Linear
 from flash_rt.models.imagewam.real_action_expert import real_action_double_block_forward_fp16, real_action_single_block_forward_fp16
 from flash_rt.models.imagewam.real_double_stream_block import real_double_stream_block_forward_fp16
@@ -1225,6 +1225,92 @@ def test_action_single_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes():
     assert torch.equal(fused, unfused), f"not bit-exact, {_fmt(st)}"
 
 
+def test_single_stream_kv_only_matches_full_block_at_real_shape():
+    """OPT-032 candidate 8 (`docs/imagewam_last_block_kv_only.md`):
+    `_single_stream_layer_kv_only` (the LAST backbone single-stream
+    layer's reduced K/V-only computation) must produce the EXACT same
+    `K_cache`/`V_cache` as the full, unmodified `_single_stream_layer`
+    at real production shape -- `torch.equal`, not cosine (the design
+    doc's own correctness section: bit-exact at `a0=905`, the real
+    value; smaller synthetic shapes only agree to a few ULP, ordinary
+    `cuBLASLt` reduction-order non-associativity at a different N, not
+    a bug -- not exercised here, only the real shape matters for
+    deployment). `linear1_kv.weight` is built as the SAME column slice
+    of the SAME `linear1.weight` tensor `checkpoint_loader.py`'s
+    `_extract_single_block(kv_only=True)` takes, so both paths are
+    mathematically tied to one real weight, not two independently
+    drawn ones. Only `merge_qkv_mlp=True` is tested (the real
+    deployment default, and the only path `checkpoint_loader.py`'s
+    `kv_only` slice supports -- it slices the raw, unsplit `linear1`).
+    """
+    R = _REAL
+    NH, HD, hidden, mlp_hidden, a0 = R["NH"], R["HD"], R["hidden"], R["mlp_hidden"], R["a0"]
+    torch.manual_seed(41)
+    gemm = fvk.GemmRunner()
+    ctx = fvk.FvkContext()
+
+    l1_w = _own((torch.randn(hidden, 3 * hidden + 2 * mlp_hidden, device=DEV) * 0.02).to(FP16))
+    kv_w = _own(l1_w[:, hidden:3 * hidden].contiguous())  # SAME slice checkpoint_loader.py takes
+    attn_out = _own((torch.randn(hidden, hidden, device=DEV) * 0.02).to(FP16))
+    mlp_down = _own((torch.randn(mlp_hidden, hidden, device=DEV) * 0.02).to(FP16))
+    q_norm, k_norm = _norm_scale(HD, DEV), _norm_scale(HD, DEV)
+    w = {
+        ("backbone", "single", 0, "linear1.weight"): Fp16Linear(gemm, l1_w.data_ptr(), 3 * hidden + 2 * mlp_hidden, hidden),
+        ("backbone", "single", 0, "linear1_kv.weight"): Fp16Linear(gemm, kv_w.data_ptr(), 2 * hidden, hidden),
+        ("backbone", "single", 0, "attn_out_proj.weight"): Fp16Linear(gemm, attn_out.data_ptr(), hidden, hidden),
+        ("backbone", "single", 0, "mlp_down.weight"): Fp16Linear(gemm, mlp_down.data_ptr(), hidden, mlp_hidden),
+        ("backbone", "single", 0, "query_norm"): q_norm.data_ptr(),
+        ("backbone", "single", 0, "key_norm"): k_norm.data_ptr(),
+    }
+
+    mod_w = {
+        "time_in_w1": torch.randn(hidden, 256, dtype=F32, device=DEV) * 0.02,
+        "time_in_w2": torch.randn(hidden, hidden, dtype=F32, device=DEV) * 0.02,
+        "mod_double_txt": torch.randn(6 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
+        "mod_double_img": torch.randn(6 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
+        "mod_single": torch.randn(3 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
+    }
+    _, _, mod_single = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, hidden)
+    table = build_backbone_rope_table(R["x0"], 14, 28, axes_dim=AXES_DIM, theta=THETA, device=DEV)
+    x_in = _own((torch.randn(a0, hidden, device=DEV) * 4.0).to(BF16))
+
+    def run(fn_is_kv_only: bool):
+        combined = _own(x_in.clone())
+        bufs = {
+            "backbone_hidden": combined.data_ptr(),
+            "modded_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "single_linear1_merged": _own(torch.zeros(a0, 3 * hidden + 2 * mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "single_kv_merged": _own(torch.zeros(a0, 2 * hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "single_mlp_gated": _own(torch.zeros(a0, mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "proj_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "proj_scratch2": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
+        }
+        dims = dict(hidden=hidden, HD=HD, NH=NH, mlp_hidden=mlp_hidden, a0=a0, merge_qkv_mlp=True,
+                    merge_linear2=False)
+        attn = _real_attn(a0, a0, 1, ctx, prefill_kv=False)
+        if fn_is_kv_only:
+            _single_stream_layer_kv_only(ctx, fvk, gemm, bufs, w, dims, 0, 0, 0, attn, mod_single,
+                                         table.data_ptr(), input_normed=False)
+        else:
+            _single_stream_layer(ctx, fvk, gemm, bufs, w, dims, 0, 0, 0, attn, mod_single, table.data_ptr(),
+                                 input_normed=False, next_norm=None)
+        torch.cuda.synchronize()
+        ptrs = attn.get_slot_ptrs("backbone", 0)
+        K = _own(torch.empty(a0, hidden, dtype=FP16, device=DEV))
+        V = _own(torch.empty(a0, hidden, dtype=FP16, device=DEV))
+        K.copy_(_fp16_tensor_from_ptr(ptrs["K"], (a0, hidden)))
+        V.copy_(_fp16_tensor_from_ptr(ptrs["V"], (a0, hidden)))
+        return K, V
+
+    K_full, V_full = run(fn_is_kv_only=False)
+    K_kv, V_kv = run(fn_is_kv_only=True)
+    K_st, V_st = _diff_stats(K_kv, K_full), _diff_stats(V_kv, V_full)
+    print(f"kv_only vs full block: K {_fmt(K_st)}")
+    print(f"kv_only vs full block: V {_fmt(V_st)}")
+    assert torch.equal(K_kv, K_full), f"K mismatch, {_fmt(K_st)}"
+    assert torch.equal(V_kv, V_full), f"V mismatch, {_fmt(V_st)}"
+
+
 if __name__ == "__main__":
     test_double_stream_layer_matches_real_reference()
     test_single_stream_layer_matches_real_reference()
@@ -1236,4 +1322,5 @@ if __name__ == "__main__":
     test_double_stream_and_action_double_fuse_qkv_norm_rope_bit_exact_at_real_shapes()
     test_single_stream_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes()
     test_action_single_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes()
+    test_single_stream_kv_only_matches_full_block_at_real_shape()
     print("PASS")

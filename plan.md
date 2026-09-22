@@ -2227,31 +2227,67 @@ Phase Status: completed, Thor-confirmed (`0922e`: `2 passed`, all five compariso
   idle, no rebuild needed. Phase 2 is fully confirmed.
 
 ### Phase 3: candidate 8, last backbone block K/V-only
-Phase Status: pending
+Phase Status: completed, verified locally bit-exact (Thor confirmation
+pending, THOR_CHECKLIST.md X12)
 - Goal: `imagewam_prefill`'s loop calls a new, narrower function for
-  `site_layer_idx == num_layers_single - 1` instead of the full
+  the LAST single-stream layer instead of the full
   `_single_stream_layer`, per `docs/imagewam_last_block_kv_only.md`'s
   design (already bit-exact/ULP-bounded tested at real dims on this dev
   machine, against the read-only, unmodified `_single_stream_layer`).
-- Modified files, three, not one (wider than Phase 1's): `checkpoint_loader.py`
-  (`_extract_single_block`: a one-time column slice of the real, RAW
-  `linear1.weight` tensor down to its K,V columns `[hidden, 3*hidden)`,
-  the same slice K3's prototype does, but here on the (out,in) tensor
-  before transpose -- a new dict key, e.g. `linear1_kv.weight`, added
-  once at checkpoint-load time, not per capture); `imagewam_thor.py`
-  (wrap that new key into a linear op the same way `"linear1.weight"`
-  itself is wrapped, `_wrap_linear`, for BOTH the real-checkpoint path
-  and the random-weight dev path, `_rnd_linear`); `pipeline_thor.py`
-  (`imagewam_prefill`'s loop, a new function reading the precomputed
-  weight, never slicing inline -- slicing inside `imagewam_prefill`
-  itself would run every graph capture, which this function's own
-  docstring already warns is not safe for `GemmRunner()`-style
-  allocation and is wasteful even where it is safe).
-- Not attempted this round: touches a different module
-  (checkpoint/weight construction) than Phase 1, needs both the real
-  and the random-weight paths handled, and none of it is testable on
-  this machine beyond static review. Left pending rather than wired
-  blind.
+- Modified files, three: `checkpoint_loader.py` (`_extract_single_block`
+  gets a `kv_only: bool` param; when set, ALSO returns
+  `"linear1_kv.weight"`, a one-time column slice of the real, RAW
+  `linear1.weight` tensor down to its K,V columns
+  `[attn_dim, 3*attn_dim)`, on the (out,in) tensor before transpose --
+  `"linear1.weight"` itself is still ALSO returned unconditionally, so
+  the AWQ-fold / dev-path bookkeeping below has both keys to choose
+  from; `build_real_weights` gets a `last_layer_kv_only` param, passing
+  `kv_only=True` only for `L == num_single - 1`, backbone only --
+  ActionDiT's blocks are unaffected, this candidate is backbone-only
+  per the design doc's own scope); `imagewam_thor.py` (`_alloc_buffers`:
+  new `"single_kv_merged"` buffer, `(a0, 2*hidden)`, always allocated;
+  `_alloc_random_weights`: the dev-path counterpart, adding
+  `"linear1_kv.weight"` for the last backbone single layer when
+  `dims["last_layer_kv_only"]`; `_load_real_weights` needed NO change --
+  its wrap loop is already generic over `raw.items()`, so the new key
+  flows through `_wrap_linear` automatically); `pipeline_thor.py` (new
+  function `_single_stream_layer_kv_only`; `imagewam_prefill`'s loop
+  dispatches to it for the last single-stream layer when
+  `dims["last_layer_kv_only"]`, and its own `single_linear1(i)` helper
+  -- used for AWQ-fold A on the CROSS-LAYER `next_norm` target feeding
+  the last layer -- now targets `"linear1_kv.weight"` instead of
+  `"linear1.weight"` for that one layer, since that is the real
+  consumer once this flag is on; getting this wrong would fold the
+  AdaLN for a GEMM that never runs).
+- Real bug found and fixed while verifying locally: the first draft of
+  `_single_stream_layer_kv_only` dropped the `rope_apply_fp16_perhead`
+  call on K (kept `rms_norm_fp16` but not the RoPE step that follows
+  it in the design doc's own prototype) -- caught immediately by the
+  new wiring test (`cos=0.7366`, partial mismatch, not the O(1e3)/NaN
+  shape of a pointer-dtype bug like ISSUE-091, but still definitively
+  wrong), fixed by adding the missing call and threading `rope_table`
+  through the function's own signature and both call sites.
+- New test: `tests/test_imagewam_thor_real_wiring.py::test_single_stream_kv_only_matches_full_block_at_real_shape`,
+  comparing `_single_stream_layer_kv_only`'s K/V output against the
+  full, unmodified `_single_stream_layer`'s own K/V, at real production
+  shape (`a0=905`), `linear1_kv.weight` built as the SAME column slice
+  of the SAME `linear1.weight` tensor (mirroring
+  `checkpoint_loader.py`'s own slice exactly, not two independently
+  drawn tensors). Runs for real on this Ada machine (only `Fp16Linear`,
+  no NVFP4 needed) -- `torch.equal` for both K and V, stable over 3
+  runs. Also a standalone CPU-only sanity check of
+  `_extract_single_block(kv_only=True)`'s column-slice math against a
+  synthetic state_dict (not added as a committed test, ad hoc during
+  verification), confirming the K/V columns it extracts match the
+  corresponding columns of the full `linear1.weight` exactly.
+- Not attempted: AWQ interaction beyond the one fold-target fix above
+  is unverified end-to-end (no test exercises `last_layer_kv_only`
+  together with an active AWQ plan); the design doc's own correctness
+  section only validates the plain FP16 path. NVFP4/FP8 precision for
+  `linear1_kv.weight` itself also untested (the generic `_wrap_linear`
+  path would pick whatever `self._precision` says, same as any other
+  weight, but this specific weight's behavior under a quantized
+  precision has not been separately checked).
 
 ### Phase 4: candidate 3, fused AdaLN + NVFP4 direct quantize
 Phase Status: completed for Round 1's scope, Thor-confirmed (`0922g`:
@@ -2352,11 +2388,32 @@ Phase Status: completed for Round 1's scope, Thor-confirmed (`0922g`:
   risk, not just an unoptimized path, so this is called out explicitly
   in both functions' own code comments, not left implicit. This flag
   must stay off in any full-model configuration until that boundary is
-  closed (a Round 3, not attempted).
+  closed.
   New test: `test_action_single_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes`,
   same construction as the backbone one, `pytest.importorskip`'d here
   (same reason). Local CPU dispatch tests unaffected (9/9); Thor
   confirmation of this new test is pending (THOR_CHECKLIST.md X11).
+- Round 3 (closing the double->single boundary, same round): attempted
+  and REVERTED after finding a genuine kernel limitation, not a
+  wiring mistake. `fused_norm_fp4.cu`'s `launch()` computes its CUTLASS
+  tile-interleaved SFA layout fresh from `seq_len` every call
+  (`tile_atom_to_shape_SFA(make_shape(seq_len, ...))`), with no
+  row-offset/total-seq-len parameter. Candidate 1's kernel could be
+  called twice (once for txt's x0 rows, once for img's img_len rows)
+  to jointly populate one combined a0-row destination because its
+  outputs (Q/K/V, plain row-major) tolerate an external row offset;
+  this kernel's SFA output cannot -- two calls at the same base
+  pointer would each compute their own small tile layout, not two
+  slices of one larger tiled layout, corrupting `_single_stream_layer`'s
+  single combined `linear1.weight` consumer. Closing this needs either
+  a kernel change (an explicit row-offset parameter) or a
+  consumer-side redesign (two separate GEMMs instead of Round 1's
+  single combined one) -- real design work, not attempted (a Round 4).
+  The attempted `_double_stream_layer` edits (consumption dispatch for
+  `txt_qkv.weight`/`img_qkv.weight`, `fp4_direct` on the txt_gate2/
+  img_gate2 tail calls) were written, found unsound before being run
+  anywhere, and reverted in the same local pass -- nothing unsound was
+  pushed or handed to Thor.
 
 ### Phase 5: candidate 6, step-boundary Euler+cast
 Phase Status: pending, low priority

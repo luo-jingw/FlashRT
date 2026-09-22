@@ -1254,6 +1254,13 @@ class ImageWAMTorchFrontendThor:
                 weights[("backbone", "single", L, "mlp_down.weight")] = self._rnd_linear(hidden, mlp_hidden)
             weights[("backbone", "single", L, "query_norm")] = self._rnd_norm_scale(HD)
             weights[("backbone", "single", L, "key_norm")] = self._rnd_norm_scale(HD)
+            # OPT-032 candidate 8: the LAST backbone single-stream layer's
+            # dev-path counterpart to checkpoint_loader.py's own
+            # `last_layer_kv_only` -- symmetric with the real-checkpoint
+            # path so the random-weight dry run can also exercise
+            # `_single_stream_layer_kv_only`.
+            if self.dims.get("last_layer_kv_only") and L == d["num_layers_single"] - 1:
+                weights[("backbone", "single", L, "linear1_kv.weight")] = self._rnd_linear(2 * hidden, hidden)
 
         ahd, aaw, amh = d["action_hidden_dim"], d["action_attn_width"], d["action_mlp_hidden"]
         action_dim = d["action_dim"]
@@ -1306,7 +1313,8 @@ class ImageWAMTorchFrontendThor:
             sd, num_double=d["num_layers_double"], num_single=d["num_layers_single"],
             action_num_double=d["action_num_layers_double"], action_num_single=d["action_num_layers_single"],
             action_attn_width=d["action_attn_width"], merge_qkv_mlp=d.get("merge_qkv_mlp", False),
-            merge_linear2=d.get("merge_linear2", False))
+            merge_linear2=d.get("merge_linear2", False),
+            last_layer_kv_only=d.get("last_layer_kv_only", False))
 
         awq_plans = self._plan_awq(d, raw) if self._nvfp4_awq else {}
 
@@ -1416,6 +1424,11 @@ class ImageWAMTorchFrontendThor:
             # unmerged path keeps working unchanged.
             "single_linear1_merged": z(a0, 3 * hidden + 2 * mlp_hidden).data_ptr(),
             "action_linear1_merged": z(num_action, 3 * aaw + 2 * amh).data_ptr(),
+            # OPT-032 candidate 8: the LAST backbone single-stream
+            # layer's K,V-only GEMM output (`_single_stream_layer_kv_only`),
+            # N=2*hidden -- always allocated (small, ~11MB at real dims),
+            # same convention as the linear1/linear2 buffers above.
+            "single_kv_merged": z(a0, 2 * hidden).data_ptr(),
             # Roadmap item 4: merged single-stream linear2 GEMM input,
             # `[attn_out | mlp_act]` side by side (used when
             # merge_linear2 is set; always allocated, like the linear1
