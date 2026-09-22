@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。本清单当前没有待测项。剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。本节次待测项 X14：之前每一轮测的都是"开关打开跟关闭是不是位一致"，从来没测过"打开之后实际快多少"——把 candidate 1/8 加进了 `benchmarks/imagewam_fusion_ab.py` 的 `FLAGS`，这次真正 A/B 一次。剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,7 +52,28 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-（当前没有待测项。X13 已在 `0922i` 确认——未发现回归，见下方"已完成的轮次"。）
+### X14 candidate 1（`fuse_qkv_norm_rope`）+ candidate 8（`last_layer_kv_only`）的真实收益 A/B——这是目前唯一真正能测出"这几轮做的东西有没有用"的一项
+之前 X8/X9/X12 测的都是"这个开关打开跟关闭数值是不是位一致"，从来没有测过"打开之后到底快多少、kernel 数少了多少"。`opportunities.md` OPT-032 表里这两个候选的收益栏至今都写着 "(inf)"——inferred，估的，不是量的。这次用 `benchmarks/imagewam_fusion_ab.py`（已经把这两个开关加进了 `FLAGS`）真正测一次。
+
+`fuse_qkv_norm_rope` 在所有层类型都接好了（backbone 单流+双流、ActionDiT 单流+双流），随便什么权重都能测正确性；`last_layer_kv_only` 只改最后一层 backbone block，但**正确性对比需要 `CKPT_PATH`**（不给的话两边的 `linear1_kv.weight`/`linear1.weight` 是独立抽的随机数，对不上，只有速度/kernel 数能比，脚本 docstring 已经写清楚）。
+
+`fuse_res_norm_fp4`（candidate 3）**不要**加进这次的 A/B——它只在"手搭两层链"的测试场景里验证过，双流/ActionDiT-double 的边界还没接，在完整模型上打开会读到没写过的 scratch，见之前几轮的说明。
+
+```
+export CKPT_PATH=... # 复用已有环境变量
+export PRECISIONS=nvfp4
+export USE_FA4=1
+export COUNT_KERNELS=1
+export ITERS=50
+
+AB=fuse_qkv_norm_rope python benchmarks/imagewam_fusion_ab.py 2>&1 | tee $OUT/X14_ab_qkv_norm_rope.log
+AB=last_layer_kv_only python benchmarks/imagewam_fusion_ab.py 2>&1 | tee $OUT/X14_ab_kv_only.log
+AB=fuse_qkv_norm_rope,last_layer_kv_only python benchmarks/imagewam_fusion_ab.py 2>&1 | tee $OUT/X14_ab_both.log
+```
+不需要重编（这次脚本改动是纯 Python）。本机（Ada）试跑时卡在一个已知的、跟这次改动无关的问题：这台机器编译的 `flash_rt.flash_rt_kernels` 缺 `gate_res_ada_layer_norm_bf16res`（`fuse_res_norm` 默认就是 `True`，走到这个 kernel 本来就该有，跟这次加的两个新 flag 无关，本机 build 本来就是旧的）——脚本本身在报这个错之前已经正常走完了两边 frontend 的构造和 flag 合并，Thor 上的 build 是新的，不应该卡在这。如果 Thor 上也报同样的 `AttributeError`，说明需要重编 `flash_rt_kernels`；如果是别的报错，把完整报错带回来。
+
+判据：不是位一致（这个已经测过了），看三样——(1) 正确性那两行（`actions B vs A`/`backbone_hidden B vs A`）cos 应该接近 1；(2) `infer() P50 A - B` 这一行的正负号和数值，正代表开了更快；(3) `COUNT_KERNELS=1` 那行 `A=... B=...` 的 kernel 数量差。
+去向：opportunities.md OPT-032（把两个候选的"(inf)"收益栏换成实测数字）、THOR_STATUS_SUMMARY.md。
 
 ## 已完成的轮次（不再重跑）
 
