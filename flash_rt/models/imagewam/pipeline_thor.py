@@ -225,7 +225,7 @@ from dataclasses import dataclass
 import torch
 
 from flash_rt.models.imagewam.awq import AwqScaledLinear
-from flash_rt.models.imagewam.quant_linear import CutlassFp16SwiGluMlp, Nvfp4SwiGluMlp
+from flash_rt.models.imagewam.quant_linear import CutlassFp16SwiGluMlp, Nvfp4Linear, Nvfp4SwiGluMlp
 
 
 def _mlp_gate_up(fvk, key, gate_slot: str, modded_ptr: int, merged_ptr: int, gated_ptr: int,
@@ -401,10 +401,22 @@ class AdaLNTarget:
     sub-block's `LN_no_affine(residual) * (1 + scale) + shift`, written
     as FP16 to `out_ptr`. `shift`/`scale` are `(1, 1, dim)` FP32 chunks
     straight from `compute_*_modulation`; `out_ptr` is row-aligned with
-    the residual rows being updated."""
+    the residual rows being updated.
+
+    `lin` (OPT-032 candidate 3, roadmap item 3's own follow-on): the
+    GEMM object that consumes this AdaLN's output, attached by
+    `_awq_target` (which already receives it). When `lin` is an
+    `Nvfp4Linear` and the caller opts in via `dims["fuse_res_norm_fp4"]`,
+    `_fused_gate_res` writes NVFP4+SFA directly into `lin`'s own
+    activation scratch instead of `out_ptr` (which then holds no valid
+    data), and the consumer must read it via `lin.gemm_prequantized(...)`
+    instead of `lin(out_ptr, ...)`. `None` when this AdaLN's own layer
+    doesn't fold AWQ or opt into candidate 3 (`out_ptr` is the sole
+    contract in that case, as before this field existed)."""
     shift: torch.Tensor
     scale: torch.Tensor
     out_ptr: int
+    lin: object = None
 
 
 def _fuse_res_norm(dims: dict, input_normed: bool, *targets: AdaLNTarget | None) -> bool:
@@ -428,12 +440,39 @@ def _mod_vec_ptr(t: torch.Tensor, dim: int) -> int:
 
 
 def _fused_gate_res(fvk, proj_ptr: int, gate: torch.Tensor, residual_ptr: int, rows: int, dim: int,
-                     target: AdaLNTarget | None, stream: int, *, bf16_residual: bool, eps: float) -> None:
+                     target: AdaLNTarget | None, stream: int, *, bf16_residual: bool, eps: float,
+                     fp4_direct: bool = False) -> None:
     """`residual += gate * proj`, then (if `target`) the next AdaLN into
     `target.out_ptr`, in ONE kernel (roadmap item 3). Bit-identical to
     `gate_res_*` + `ada_layer_norm_*` on the FP16 modulation copies
     `_fuse_mod_group` builds; reads the FP32 modulation directly, so no
-    per-layer cast/broadcast kernels are needed."""
+    per-layer cast/broadcast kernels are needed.
+
+    `fp4_direct` (OPT-032 candidate 3, opt-in, default off): when True
+    AND `target.lin` is an `Nvfp4Linear`, writes NVFP4-packed bytes +
+    CUTLASS SFA scale factors directly into `target.lin`'s own
+    activation scratch via `csrc/kernels/fused_norm_fp4/`, instead of
+    the plain FP16 AdaLN this function otherwise writes to
+    `target.out_ptr` -- no intermediate FP16 buffer is ever
+    materialized for that consumer. The caller must be `dims`-consistent
+    (pass the same `fp4_direct` value used to skip the corresponding
+    `Nvfp4Linear.__call__`'s own quantize step at the consuming layer,
+    replacing it with `.gemm_prequantized`); `target.out_ptr` holds no
+    valid data in this branch. Bit-exact against the unfused
+    `gate_res_*` + `quantize_fp4_dynamic_sfa_fp16` pair, confirmed on
+    Thor (THOR_CHECKLIST.md X6)."""
+    if fp4_direct and target is not None and isinstance(target.lin, Nvfp4Linear):
+        lin = target.lin
+        lin._ensure_scratch(rows)
+        fvk_fp4 = lin._fvk_fp4
+        fp4_kernel = (fvk_fp4.gate_res_ada_layer_norm_fp4_sfa_bf16res if bf16_residual
+                      else fvk_fp4.gate_res_ada_layer_norm_fp4_sfa_fp16res)
+        inv_s_ptr = lin.awq_inv_s.data_ptr() if lin.awq_inv_s is not None else 0
+        fp4_kernel(residual_ptr, proj_ptr, _mod_vec_ptr(gate, dim), _mod_vec_ptr(target.scale, dim),
+                   _mod_vec_ptr(target.shift, dim), inv_s_ptr,
+                   lin.scratch.packed.data_ptr(), lin.scratch.sfa.data_ptr(),
+                   rows, dim, eps, stream)
+        return
     kernel = fvk.gate_res_ada_layer_norm_bf16res if bf16_residual else fvk.gate_res_ada_layer_norm_fp16
     if target is None:
         kernel(proj_ptr, _mod_vec_ptr(gate, dim), residual_ptr, 0, 0, 0, rows, dim, eps, stream)
@@ -464,11 +503,17 @@ def _awq_target(lin, target: AdaLNTarget | None) -> AdaLNTarget | None:
     (`dims["fuse_res_norm"]`): the target's FP32 modulation pair replaced
     by the folded one when `lin` (the GEMM consuming `target.out_ptr`)
     carries an AWQ input scale. The fused kernel rounds it to FP16 like
-    the standalone path, so both give the same AdaLN output."""
-    if target is None or not _awq_input_scaled(lin):
-        return target
+    the standalone path, so both give the same AdaLN output.
+
+    Always attaches `lin` to the returned target (`AdaLNTarget.lin`),
+    AWQ-scaled or not -- OPT-032 candidate 3 needs to know the consuming
+    GEMM object regardless of AWQ, to detect an `Nvfp4Linear` consumer."""
+    if target is None:
+        return None
+    if not _awq_input_scaled(lin):
+        return AdaLNTarget(target.shift, target.scale, target.out_ptr, lin=lin)
     shift_f, scale_f = lin.folded_modulation_fp32(target.shift, target.scale)
-    return AdaLNTarget(shift_f, scale_f, target.out_ptr)
+    return AdaLNTarget(shift_f, scale_f, target.out_ptr, lin=lin)
 
 
 def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream, attn,
@@ -720,6 +765,13 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     # bit-exact against the unfused sequence on Ada and on Thor
     # (csrc/kernels/fused_qkv_norm_rope/, opportunities.md OPT-032).
     fused_qkv = bool(dims.get("fuse_qkv_norm_rope"))
+    # OPT-032 candidate 3, opt-in, Round 1 scope: only this layer's own
+    # `merge_qkv_mlp=True` -> `linear1.weight` consumer (the real
+    # deployment default and the single biggest/widest GEMM in this
+    # function). See `_fused_gate_res`'s own docstring for the contract;
+    # other consumers (double-stream targets, the ActionDiT chain, the
+    # head target) are not wired yet -- plan.md Phase 4.
+    fp4_direct = bool(dims.get("fuse_res_norm_fp4"))
 
     if not input_normed:
         fvk.ada_layer_norm_bf16in_fp16out(combined, scale_t.data_ptr(), shift_t.data_ptr(), modded, a0, hidden, eps, stream)
@@ -731,7 +783,15 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         # views -- no separate `mlp_in` GEMM.
         linear1_width = 3 * hidden + 2 * mlp_hidden
         linear1_out = bufs["single_linear1_merged"]  # (a0, linear1_width)
-        key("linear1.weight")(modded, linear1_out, a0, stream)
+        linear1 = key("linear1.weight")
+        if fp4_direct and input_normed and isinstance(linear1, Nvfp4Linear):
+            # OPT-032 candidate 3: the previous layer's `_fused_gate_res`
+            # already wrote NVFP4+SFA straight into `linear1`'s own
+            # scratch (see that function's `fp4_direct` branch) -- `modded`
+            # holds no valid data for this call, read nothing from it.
+            linear1.gemm_prequantized(linear1_out, a0, stream)
+        else:
+            linear1(modded, linear1_out, a0, stream)
         if fused_qkv:
             fvk.qkv_split_norm_rope_fp16(
                 linear1_out, key("query_norm"), key("key_norm"), rope_table,
@@ -786,7 +846,8 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         key("mlp_down.weight")(mlp_gated, from_mlp, a0, stream)
         _add_inplace(from_attn, from_mlp, a0, hidden)
     if fuse:
-        _fused_gate_res(fvk, from_attn, gate, combined, a0, hidden, next_norm, stream, bf16_residual=True, eps=eps)
+        _fused_gate_res(fvk, from_attn, gate, combined, a0, hidden, next_norm, stream, bf16_residual=True,
+                        eps=eps, fp4_direct=fp4_direct)
     else:
         fvk.gate_res_bf16res(from_attn, gate_t.data_ptr(), combined, a0 * hidden, stream)
 

@@ -417,7 +417,17 @@ python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -
 
 HEAD `c5898a2`。`python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -q -s` → `2 passed, 6 deselected, 1.47s`。五处比较全部 `torch.equal`/`bit_exact=True`、`max_abs=0`：backbone single `merge_qkv_mlp=True`/`False`、ActionDiT single（这三处是 X8 的复核）、**backbone double-stream**、**ActionDiT double**（这两处是 X9 新增的覆盖）。MAXN，`emc_locked=null`，GPU 空闲，未重编。
 
-结论：OPT-032 candidate 1 的单流（Phase 1）和双流（Phase 2）接入在 Thor 上都完全确认。`plan.md` Phase 1、Phase 2 都关闭；`THOR_CHECKLIST.md` 的 X9 已删除。下一步是 Phase 3（candidate 8，最后一层 backbone block 只算导出的 K/V，涉及 `checkpoint_loader.py`/`imagewam_thor.py`/`pipeline_thor.py` 三个文件，范围比 Phase 1/2 宽，之前判断"本机无法完全验证，留着不接"）或 Phase 4（candidate 3，融合 AdaLN+NVFP4 直接量化，kernel 本身已经 Thor 确认位一致（`0921x` X6），只差接线设计和 `Nvfp4Linear` 的预量化输入方法）。
+结论：OPT-032 candidate 1 的单流（Phase 1）和双流（Phase 2）接入在 Thor 上都完全确认。`plan.md` Phase 1、Phase 2 都关闭；`THOR_CHECKLIST.md` 的 X9 已删除。
+
+### Phase 4 第一轮本机完成：candidate 3（融合 AdaLN+NVFP4 直接量化）接线，Thor 数值确认待做（commit 待推送）
+
+设计并接线了 `Nvfp4Linear` 的预量化输入方法：`gemm_prequantized(out_ptr, m, stream)`，跳过 `_quant_act`，假设调用者已经把有效的 NVFP4+SFA 写进了 `self.scratch`（前提是调用者自己先做过一次匹配的 `_ensure_scratch(m)`）。`AdaLNTarget`（`pipeline_thor.py`）新增一个可选字段 `lin`：消费这个 AdaLN 输出的那个 GEMM 对象；`_awq_target`（本来就拿着这个对象做 AWQ 折叠）现在无条件把它挂上去，不管有没有 AWQ。`_fused_gate_res` 新增一个默认关闭的 `fp4_direct` 参数：打开且 `target.lin` 是 `Nvfp4Linear` 时，直接调用它自己的 `gate_res_ada_layer_norm_fp4_sfa_bf16res`/`_fp16res`（`csrc/kernels/fused_norm_fp4/`），把 NVFP4+SFA 直接写进 `target.lin.scratch`，不再经过一份中间的 fp16 `modded`；默认关闭，所以在这轮之前的所有调用点（都没传这个参数）完全不受影响，就算 `target.lin` 恰好是 `Nvfp4Linear` 也一样——门是这个 flag，不是对象类型。
+
+第一轮接线范围只做了 `_single_stream_layer` 自己的 `merge_qkv_mlp=True`→`linear1.weight` 这一个消费点（真实部署默认路径，这个函数里最宽的一个 GEMM），开关是 `dims["fuse_res_norm_fp4"]`。同时把这个 kernel 从"JIT-only、没进正式构建"接进了正式构建：`CMakeLists.txt` 的 `fp4_kernels_obj`（`ENABLE_SM100_CUTLASS` 那个 if 块）加了 `csrc/kernels/fused_norm_fp4/fused_norm_fp4.cu`，`csrc/fp4_bindings.cpp` 加了两个绑定，参数顺序跟 JIT 版本的绑定完全对齐。
+
+本机（Ada，sm_89）完全没有 Blackwell/Thor 的 NVFP4 编译产物，`Nvfp4Linear` 本身的真实构造都做不到，所以只做了本机能做的两件事：(1) 新增 CPU-only 调用契约测试 `tests/test_imagewam_fuse_res_norm_fp4_dispatch.py`——用 `object.__new__(Nvfp4Linear)` 跳过真实 `__init__`（那个 `__init__` 需要导入 Blackwell-only 的 `flash_rt.flash_rt_fp4`）构造一个"isinstance 成立但没跑真实初始化"的假对象，验证 `_fused_gate_res`/`_awq_target` 的调用顺序、参数、默认关闭时的向后兼容，8/8 过；(2) 新增真正的位一致接线测试 `tests/test_imagewam_thor_real_wiring.py::test_single_stream_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes`（两层 single-stream 链，`fuse_res_norm_fp4=False`/`True` 对比 `torch.equal`），但因为需要真实 `Nvfp4Linear`，本机用 `pytest.importorskip("flash_rt.flash_rt_fp4")` 跳过，从来没在任何机器上跑过。
+
+结论：`plan.md` Phase 4 标记 "completed for Round 1's scope (Thor confirmation pending)"。真正的数值确认是 `THOR_CHECKLIST.md` X10，需要用 `ENABLE_SM100_CUTLASS` 重编。融合 kernel 本身的数值已经在 `0921x`（X6）确认过位一致，这次的测试跟 Phase 1/2 的测试一样，目的是抓接线/指针错误，不是抓数值错误。
 
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 

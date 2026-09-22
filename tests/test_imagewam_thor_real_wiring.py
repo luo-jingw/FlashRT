@@ -19,14 +19,17 @@ is split by COLUMN range into separate q/k/v matrices -- mathematically
 identical, see `_imagewam_thor_spec.py`'s own docstring) and comparing
 outputs by cosine similarity.
 """
+import pytest
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
 from flash_rt.models.imagewam.libero_dims import LIBERO_REAL_DIMS
 from flash_rt.models.imagewam.pipeline_real import compute_action_modulation, compute_shared_modulation
-from flash_rt.models.imagewam.pipeline_thor import _action_double_layer, _action_single_layer, _double_stream_layer, _single_stream_layer
-from flash_rt.models.imagewam.quant_linear import Fp16Linear
+from flash_rt.models.imagewam.pipeline_thor import (
+    AdaLNTarget, _action_double_layer, _action_single_layer, _awq_target,
+    _double_stream_layer, _single_stream_layer)
+from flash_rt.models.imagewam.quant_linear import Fp16Linear, Nvfp4Linear
 from flash_rt.models.imagewam.real_action_expert import real_action_double_block_forward_fp16, real_action_single_block_forward_fp16
 from flash_rt.models.imagewam.real_double_stream_block import real_double_stream_block_forward_fp16
 from flash_rt.models.imagewam.real_single_stream_block import real_single_stream_block_forward_fp16
@@ -1048,6 +1051,99 @@ def test_double_stream_and_action_double_fuse_qkv_norm_rope_bit_exact_at_real_sh
     assert torch.equal(a_fused, a_unfused), f"not bit-exact, {_fmt(a_st)}"
 
 
+def test_single_stream_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes():
+    """OPT-032 candidate 3, Phase 4 Round 1 (`dims["fuse_res_norm_fp4"]`):
+    a two-layer single-stream chain (layer 0 -> layer 1, `fuse_res_norm`
+    already on) where layer 1's `linear1.weight` is a real `Nvfp4Linear`.
+    `fuse_res_norm_fp4=False` is today's already-wired path: layer 0's
+    `_fused_gate_res` writes a plain FP16 AdaLN into `modded`, layer 1's
+    `linear1(modded, ...)` (`Nvfp4Linear.__call__`) quantizes it then
+    runs the GEMM. `fuse_res_norm_fp4=True` skips the FP16 intermediate:
+    layer 0 writes NVFP4+SFA straight into layer 1's own `linear1`
+    activation scratch (`csrc/kernels/fused_norm_fp4/`, already
+    Thor-confirmed bit-exact against the unfused pair, THOR_CHECKLIST.md
+    X6), and layer 1 reads it via `linear1.gemm_prequantized(...)`
+    instead of `__call__`. `torch.equal`, not cosine: holds every input
+    identical and only flips `fuse_res_norm_fp4`, so anything short of
+    bit-exact is a wiring bug, not a numerics difference.
+
+    Needs a Blackwell/Thor NVFP4 build (`flash_rt.flash_rt_fp4`,
+    `-DGPU_ARCH=110`/`ENABLE_SM100_CUTLASS`) -- skipped on any machine
+    without one, including this dev machine (Ada, sm_89): `Nvfp4Linear`
+    itself cannot be constructed there. See `_fused_gate_res`'s and
+    `Nvfp4Linear.gemm_prequantized`'s own docstrings for the contract
+    this checks; those and the wiring in `_single_stream_layer` were
+    reviewed against the already-Thor-confirmed fused kernel and the
+    existing bit-exact call-order dispatch test
+    (`tests/test_imagewam_fuse_res_norm_fp4_dispatch.py`, CPU-only), but
+    this specific two-layer chain has not been run anywhere before this
+    Thor round."""
+    pytest.importorskip("flash_rt.flash_rt_fp4")
+    R = _REAL
+    NH, HD, hidden, mlp_hidden, a0 = R["NH"], R["HD"], R["hidden"], R["mlp_hidden"], R["a0"]
+    gemm = fvk.GemmRunner()
+    ctx = fvk.FvkContext()
+
+    def build_chain():
+        torch.manual_seed(31)
+        w = {}
+        for i, linear1_lin in enumerate(("fp16", "nvfp4")):
+            l1_w = _own((torch.randn(hidden, 3 * hidden + 2 * mlp_hidden, device=DEV) * 0.02).to(FP16))
+            w[("backbone", "single", i, "linear1.weight")] = (
+                Fp16Linear(gemm, l1_w.data_ptr(), 3 * hidden + 2 * mlp_hidden, hidden) if linear1_lin == "fp16"
+                else Nvfp4Linear(l1_w.data_ptr(), 3 * hidden + 2 * mlp_hidden, hidden))
+            attn_out = _own((torch.randn(hidden, hidden, device=DEV) * 0.02).to(FP16))
+            mlp_down = _own((torch.randn(mlp_hidden, hidden, device=DEV) * 0.02).to(FP16))
+            w[("backbone", "single", i, "attn_out_proj.weight")] = Fp16Linear(gemm, attn_out.data_ptr(), hidden, hidden)
+            w[("backbone", "single", i, "mlp_down.weight")] = Fp16Linear(gemm, mlp_down.data_ptr(), hidden, mlp_hidden)
+            w[("backbone", "single", i, "query_norm")] = _norm_scale(HD, DEV).data_ptr()
+            w[("backbone", "single", i, "key_norm")] = _norm_scale(HD, DEV).data_ptr()
+
+        mod_w = {
+            "time_in_w1": torch.randn(hidden, 256, dtype=F32, device=DEV) * 0.02,
+            "time_in_w2": torch.randn(hidden, hidden, dtype=F32, device=DEV) * 0.02,
+            "mod_double_txt": torch.randn(6 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
+            "mod_double_img": torch.randn(6 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
+            "mod_single": torch.randn(3 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
+        }
+        _, _, mod_single = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, hidden)
+        table = build_backbone_rope_table(R["x0"], 14, 28, axes_dim=AXES_DIM, theta=THETA, device=DEV)
+        attn = _real_attn(a0, a0, 2, ctx, prefill_kv=False)  # two site layers now, 0 and 1
+        x_in = _own((torch.randn(a0, hidden, device=DEV) * 4.0).to(BF16))
+        return w, mod_single, table, attn, x_in
+
+    def run_chain(built, *, fuse_res_norm_fp4: bool) -> torch.Tensor:
+        w, mod_single, table, attn, x_in = built
+        combined = _own(x_in.clone())
+        bufs = {
+            "backbone_hidden": combined.data_ptr(),
+            "modded_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "single_linear1_merged": _own(torch.zeros(a0, 3 * hidden + 2 * mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "single_mlp_gated": _own(torch.zeros(a0, mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "proj_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "proj_scratch2": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
+        }
+        dims = dict(hidden=hidden, HD=HD, NH=NH, mlp_hidden=mlp_hidden, a0=a0,
+                    merge_qkv_mlp=True, merge_linear2=False, fuse_res_norm=True,
+                    fuse_res_norm_fp4=fuse_res_norm_fp4)
+        shift, scale, _gate = mod_single
+        next_norm = _awq_target(w[("backbone", "single", 1, "linear1.weight")],
+                                AdaLNTarget(shift, scale, bufs["modded_scratch"]))
+        _single_stream_layer(ctx, fvk, gemm, bufs, w, dims, 0, 0, 0, attn, mod_single, table.data_ptr(),
+                              input_normed=False, next_norm=next_norm)
+        _single_stream_layer(ctx, fvk, gemm, bufs, w, dims, 1, 1, 0, attn, mod_single, table.data_ptr(),
+                              input_normed=True, next_norm=None)
+        torch.cuda.synchronize()
+        return combined.clone()
+
+    built = build_chain()
+    unfused = run_chain(built, fuse_res_norm_fp4=False)
+    fused = run_chain(built, fuse_res_norm_fp4=True)
+    st = _diff_stats(fused, unfused)
+    print(f"single-stream chain fuse_res_norm_fp4 direct vs quantize-after: {_fmt(st)}")
+    assert torch.equal(fused, unfused), f"not bit-exact, {_fmt(st)}"
+
+
 if __name__ == "__main__":
     test_double_stream_layer_matches_real_reference()
     test_single_stream_layer_matches_real_reference()
@@ -1057,4 +1153,5 @@ if __name__ == "__main__":
     test_single_stream_linear2_merged_vs_split_real_shapes()
     test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_shapes()
     test_double_stream_and_action_double_fuse_qkv_norm_rope_bit_exact_at_real_shapes()
+    test_single_stream_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes()
     print("PASS")

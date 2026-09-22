@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1 的单流（backbone + ActionDiT）和双流（`_double_stream_layer`/`_action_double_layer`）接入都在 Thor 上完全确认（`0922e`：`2 passed`，五处 `torch.equal`/`bit_exact=True`，`max_abs=0`），`plan.md` Phase 1、Phase 2 都已关闭。本清单当前没有待测项；下一步是 Phase 3（candidate 8，最后一层 backbone block 只算导出的 K/V，需要改 `checkpoint_loader.py`+`imagewam_thor.py`+`pipeline_thor.py` 三个文件，范围比 Phase 1/2 宽）或 Phase 4（candidate 3，融合 AdaLN+NVFP4 直接量化，kernel 本身已经在 Thor 上确认位一致，只差接线），具体做哪个、写完后本清单会加对应测试项。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1 的单流（backbone + ActionDiT）和双流（`_double_stream_layer`/`_action_double_layer`）接入都在 Thor 上完全确认（`0922e`：`2 passed`，五处 `torch.equal`/`bit_exact=True`，`max_abs=0`），`plan.md` Phase 1、Phase 2 都已关闭。接着做了 Phase 4（candidate 3，融合 AdaLN+NVFP4 直接量化）第一轮接线：`_single_stream_layer` 的 `merge_qkv_mlp=True`→`linear1.weight` 这一个消费点，`dims["fuse_res_norm_fp4"]` 开关，本机 CPU 侧调用顺序测试 8/8 过（`Nvfp4Linear` 本身需要 Blackwell/Thor 编译，这台 Ada 机器完全跑不了，连构造都做不到，只能测调用契约）。本节次待测项是 X10：真正的 NVFP4 数值确认。Phase 3（candidate 8）还没开始。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,7 +52,16 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-（当前没有待测项。X9 已在 `0922e` 确认通过，见下方"已完成的轮次"。）
+### X10 candidate 3（融合 AdaLN+NVFP4 直接量化）第一轮接线的 Thor 数值确认
+这一项需要**重新编译**：`fused_norm_fp4.cu` 这次才加进 `CMakeLists.txt` 的 `fp4_kernels_obj`（`ENABLE_SM100_CUTLASS` 那个 if 块），`csrc/fp4_bindings.cpp` 也新增了两个绑定（`gate_res_ada_layer_norm_fp4_sfa_bf16res`/`_fp16res`），本节前置里"不需要为了新代码重编"不适用于这一项——先确认 `flash_rt/flash_rt_fp4*.so` 用带 `ENABLE_SM100_CUTLASS`（Thor 是 sm_110，`-DGPU_ARCH=110`）的 cmake 配置重新编过。
+
+这个 kernel 本身已经在 Thor 上确认过位一致（`0921x` X6，融合 kernel 的 `packed`/`sfa`/`residual` 输出对着"未融合的 `gate_res_ada_layer_norm_bf16res`/`_fp16` + `quantize_fp4_dynamic_sfa_fp16`"逐位一致）。这次新加的是接线：`_single_stream_layer` 里 `merge_qkv_mlp=True` 时 `linear1.weight` 这一个消费点，`dims["fuse_res_norm_fp4"]` 开关打开时，上一层的 `_fused_gate_res` 直接把 NVFP4+SFA 写进这一层 `linear1`（一个真正的 `Nvfp4Linear`）自己的 activation scratch，这一层再用新加的 `Nvfp4Linear.gemm_prequantized` 跳过量化直接跑 GEMM——而不是像现在这样先写一份 fp16 `modded`、再让 `Nvfp4Linear.__call__` 自己量化。本机（Ada）做不了任何验证，`Nvfp4Linear` 的真实构造需要 Blackwell/Thor 才能跑，只做了两件本机能做的事：(1) CPU 侧调用契约测试 `tests/test_imagewam_fuse_res_norm_fp4_dispatch.py`，用假的（跳过真实 `__init__`）`Nvfp4Linear` 实例验证调用顺序/参数，8/8 过；(2) 静态审查接线代码。
+
+```
+python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_res_norm_fp4 -q -s 2>&1 | tee $OUT/X10_wiring.log
+```
+判据：`torch.equal`（不是余弦）。这个测试之前在任何机器上都没跑过，是第一次真正验证。如果 `pytest.importorskip("flash_rt.flash_rt_fp4")` 触发 skip，说明 NVFP4 模块没编译进去，先确认 cmake 配置和重编；如果收集到测试但不过，把完整报错带回来（尤其关注是不是 `gemm_prequantized` 里的 `RuntimeError`，那说明 scratch 没有被正确写入/sizing，是接线的 bug）。
+去向：opportunities.md OPT-032、plan.md Phase 4。
 
 ## 已完成的轮次（不再重跑）
 

@@ -44,6 +44,7 @@
 #include "fused_fp4/silu_mul_fp4_sfa_bf16.cuh"
 #include "fused_fp4/layer_norm_fp4_sfa.cuh"
 #include "gemm/fp4/cutlass_fp4_gemm_siglip_ffn_sm100.cuh"
+#include "kernels/fused_norm_fp4/fused_norm_fp4.cuh"
 
 extern "C" int flash_rt_per_channel_mul_fp16(
     uintptr_t x, uintptr_t inv_s, int S, int D, uintptr_t stream);
@@ -331,6 +332,62 @@ reshape_linear_scales_to_sfa, in a single kernel launch.
 Vectorized bit-exact variant of quantize_fp4_dynamic_sfa_fp16 (16B loads,
 8B packed stores). Returns nonzero without launching on unaligned buffers;
 callers fall back to the scalar kernel.
+)pbdoc");
+
+  m.def("gate_res_ada_layer_norm_fp4_sfa_bf16res",
+        [](uintptr_t residual, uintptr_t gemm_out, uintptr_t gate,
+           uintptr_t scale, uintptr_t shift, uintptr_t inv_s,
+           uintptr_t packed, uintptr_t sfa,
+           int seq_len, int dim, float eps, uintptr_t stream) -> int {
+          return flash_rt::fused_norm_fp4::gate_res_ada_layer_norm_fp4_sfa_bf16res(
+              reinterpret_cast<void*>(residual),
+              reinterpret_cast<const void*>(gemm_out),
+              reinterpret_cast<const void*>(gate),
+              reinterpret_cast<const void*>(scale),
+              reinterpret_cast<const void*>(shift),
+              inv_s ? reinterpret_cast<const void*>(inv_s) : nullptr,
+              reinterpret_cast<void*>(packed),
+              reinterpret_cast<void*>(sfa),
+              seq_len, dim, eps,
+              reinterpret_cast<cudaStream_t>(stream));
+        },
+        py::arg("residual"), py::arg("gemm_out"), py::arg("gate"),
+        py::arg("scale"), py::arg("shift"), py::arg("inv_s") = 0,
+        py::arg("packed"), py::arg("sfa"),
+        py::arg("seq_len"), py::arg("dim"), py::arg("eps"), py::arg("stream") = 0,
+        R"pbdoc(
+OPT-032 candidate 3: fused gate*residual(BF16) + AdaLayerNorm(no affine) +
+NVFP4 quantize + CUTLASS SFA write, in one kernel launch -- replaces
+gate_res_ada_layer_norm_bf16res + quantize_fp4_dynamic_sfa_fp16 (no
+intermediate FP16 buffer). Bit-exact against that pair, confirmed on
+Thor (THOR_CHECKLIST.md X6). `inv_s`: optional per-channel AWQ fold, 0
+for the plain path.
+)pbdoc");
+
+  m.def("gate_res_ada_layer_norm_fp4_sfa_fp16res",
+        [](uintptr_t residual, uintptr_t gemm_out, uintptr_t gate,
+           uintptr_t scale, uintptr_t shift, uintptr_t inv_s,
+           uintptr_t packed, uintptr_t sfa,
+           int seq_len, int dim, float eps, uintptr_t stream) -> int {
+          return flash_rt::fused_norm_fp4::gate_res_ada_layer_norm_fp4_sfa_fp16res(
+              reinterpret_cast<void*>(residual),
+              reinterpret_cast<const void*>(gemm_out),
+              reinterpret_cast<const void*>(gate),
+              reinterpret_cast<const void*>(scale),
+              reinterpret_cast<const void*>(shift),
+              inv_s ? reinterpret_cast<const void*>(inv_s) : nullptr,
+              reinterpret_cast<void*>(packed),
+              reinterpret_cast<void*>(sfa),
+              seq_len, dim, eps,
+              reinterpret_cast<cudaStream_t>(stream));
+        },
+        py::arg("residual"), py::arg("gemm_out"), py::arg("gate"),
+        py::arg("scale"), py::arg("shift"), py::arg("inv_s") = 0,
+        py::arg("packed"), py::arg("sfa"),
+        py::arg("seq_len"), py::arg("dim"), py::arg("eps"), py::arg("stream") = 0,
+        R"pbdoc(
+Same as gate_res_ada_layer_norm_fp4_sfa_bf16res, FP16-residual variant
+(ImageWAM's ActionDiT layers).
 )pbdoc");
 
   m.def("reshape_linear_scales_to_sfa",

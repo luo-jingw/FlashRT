@@ -2254,10 +2254,64 @@ Phase Status: pending
   blind.
 
 ### Phase 4: candidate 3, fused AdaLN + NVFP4 direct quantize
-Phase Status: pending
-- Goal: design the `Nvfp4Linear` pre-quantized-input method first (not
-  yet designed), then wire `_fused_gate_res`'s NVFP4 callers.
-- Modified files: `quant_linear.py`, `pipeline_thor.py`.
+Phase Status: completed for Round 1's scope (Thor confirmation pending,
+THOR_CHECKLIST.md X10); Round 2 (remaining call sites) pending
+- Goal: design the `Nvfp4Linear` pre-quantized-input method, then wire
+  `_fused_gate_res`'s NVFP4 callers.
+- Interface designed and implemented:
+  - `Nvfp4Linear.gemm_prequantized(out_ptr, m, stream)` (`quant_linear.py`):
+    runs the GEMM directly against `self.scratch`, skipping `_quant_act`.
+    The caller must have already written valid `scratch.packed`/`.sfa`
+    for `m` (a matching `_ensure_scratch(m)` plus an external write).
+  - `AdaLNTarget` (`pipeline_thor.py`) gains an optional `lin` field:
+    the GEMM object consuming this AdaLN's output. `_awq_target`
+    (which already receives that object as its first argument) now
+    always attaches it, AWQ-scaled or not.
+  - `_fused_gate_res` gains an opt-in `fp4_direct: bool = False` kwarg.
+    When `fp4_direct` and `isinstance(target.lin, Nvfp4Linear)`, it
+    calls `target.lin`'s own `_fvk_fp4.gate_res_ada_layer_norm_fp4_sfa_bf16res`/
+    `_fp16res` (`csrc/kernels/fused_norm_fp4/`), writing NVFP4+SFA
+    straight into `target.lin.scratch`, instead of the plain FP16 AdaLN
+    it otherwise writes to `target.out_ptr` -- no intermediate FP16
+    buffer materialized for that consumer. `target.out_ptr` holds no
+    valid data in this branch. Default off, so every existing caller
+    (none of which pass `fp4_direct`) is unaffected even if `target.lin`
+    happens to be an `Nvfp4Linear` -- the flag, not the object's type,
+    gates the new behavior.
+- Wiring, Round 1 scope: `_single_stream_layer`'s own `merge_qkv_mlp=True`
+  `linear1.weight` consumer only (the real deployment default, the
+  single biggest/widest GEMM in that function) -- `dims["fuse_res_norm_fp4"]`
+  (opt-in, default off). When set and `input_normed` and the layer's
+  own `linear1.weight` is an `Nvfp4Linear`, calls `.gemm_prequantized(...)`
+  instead of `linear1(modded, ...)`; the tail `_fused_gate_res` call
+  passes `fp4_direct=fp4_direct`. NOT yet wired: `_double_stream_layer`'s
+  four targets, `_action_double_layer`/`_action_single_layer`'s targets,
+  `imagewam_denoise_step`'s head target, and `_single_stream_layer`'s
+  non-merged (`qkv.weight`/`mlp_in.weight`) branch -- Round 2, deferred,
+  same incremental-expansion pattern Phase 1 (single-stream only) used
+  before Phase 2 (double-stream).
+- Modified files: `quant_linear.py`, `pipeline_thor.py`, `CMakeLists.txt`
+  (added `csrc/kernels/fused_norm_fp4/fused_norm_fp4.cu` to the
+  `ENABLE_SM100_CUTLASS`-gated `fp4_kernels_obj` sources -- this kernel
+  was standalone/JIT-only before this phase), `csrc/fp4_bindings.cpp`
+  (added the production `flash_rt_fp4` module bindings for
+  `gate_res_ada_layer_norm_fp4_sfa_bf16res`/`_fp16res`, matching the
+  JIT binding's own established arg order exactly).
+- Validation: `tests/test_imagewam_fuse_res_norm_fp4_dispatch.py` (new,
+  CPU-only, 8/8 passed locally): the dispatch/call-order contract in
+  `_fused_gate_res` and `_awq_target`, using a real `Nvfp4Linear`
+  instance built via `object.__new__` (so `isinstance` holds without
+  running its Blackwell-only `__init__`, which this machine cannot).
+  `tests/test_imagewam_thor_real_wiring.py::test_single_stream_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes`
+  (new): a real two-layer single-stream chain, `torch.equal` between
+  `fuse_res_norm_fp4=False`/`True`, at real production shape -- cannot
+  run on this dev machine (Ada, sm_89; `Nvfp4Linear` itself needs a
+  Blackwell/Thor NVFP4 build, `pytest.importorskip("flash_rt.flash_rt_fp4")`),
+  not yet run anywhere. This is the real confirmation still needed
+  (THOR_CHECKLIST.md X10): the fused kernel's own numerics are already
+  Thor-confirmed against the unfused pair (X6), so this test's job,
+  like Phase 1/2's own wiring tests, is to catch a pointer/argument
+  wiring bug, not a numerics one.
 
 ### Phase 5: candidate 6, step-boundary Euler+cast
 Phase Status: pending, low priority

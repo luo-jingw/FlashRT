@@ -662,6 +662,26 @@ class Nvfp4Linear(AwqScaledLinear):
         self._fp4_gemm(self.scratch, self.w_quant, out, m, self.n, self.k,
                        variant_idx=_nvfp4_variant_index(self.variant), stream=stream)
 
+    def gemm_prequantized(self, out_ptr: int, m: int, stream: int = 0) -> None:
+        """OPT-032 candidate 3: run the GEMM directly against `self.scratch`,
+        skipping `_quant_act` entirely. The caller must have already
+        written valid `self.scratch.packed`/`self.scratch.sfa` for this
+        `m` (after its own `_ensure_scratch(m)` call) -- typically the
+        producing layer's gated-residual+AdaLN kernel wrote NVFP4+SFA
+        directly there (`csrc/kernels/fused_norm_fp4/`), instead of this
+        class's own `__call__` quantizing an intermediate FP16 buffer.
+        `pipeline_thor.py`'s `_fused_gate_res` is the only caller that
+        writes `self.scratch` from outside this class; it does so only
+        when `dims["fuse_res_norm_fp4"]` is set."""
+        if self.scratch is None or m > self.scratch.max_M:
+            raise RuntimeError(
+                "gemm_prequantized() before a matching _ensure_scratch(m) / "
+                "fused_norm_fp4 write -- scratch is unsized or too small "
+                f"for m={m}")
+        out = _wrap_fp16(out_ptr, m, self.n)
+        self._fp4_gemm(self.scratch, self.w_quant, out, m, self.n, self.k,
+                       variant_idx=_nvfp4_variant_index(self.variant), stream=stream)
+
     def candidate_variants(self) -> tuple[str, ...]:
         return NVFP4_VARIANTS
 
