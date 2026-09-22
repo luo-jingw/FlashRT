@@ -401,7 +401,17 @@ python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -
 
 结果：`1 passed, 6 deselected, 1.40s`。三处比较全部 `torch.equal`/`bit_exact=True`、`max_abs=0`：backbone `merge_qkv_mlp=True`、backbone `merge_qkv_mlp=False`、ActionDiT single。MAXN，`emc_locked=null`，GPU 空闲，未重编。
 
-结论：OPT-032 candidate 1 的单流接入（`_single_stream_layer`、`_action_single_layer`）在 Thor 上完全确认，两轮假失败（`0922` 的种子 bug、`0922b` 的 GemmRunner 脆弱性）都已排除且与这次的新 kernel 无关。`plan.md` Phase 1 关闭；`THOR_CHECKLIST.md` 的 X8 已删除。下一步是 Phase 2（candidate 1 接入 `_double_stream_layer`/`_action_double_layer`，设计已定，两次调用各自带行偏移的 RoPE 指针，未写代码）。
+结论：OPT-032 candidate 1 的单流接入（`_single_stream_layer`、`_action_single_layer`）在 Thor 上完全确认，两轮假失败（`0922` 的种子 bug、`0922b` 的 GemmRunner 脆弱性）都已排除且与这次的新 kernel 无关。`plan.md` Phase 1 关闭；`THOR_CHECKLIST.md` 的 X8 已删除。
+
+### Phase 2 本机完成：candidate 1 双流接入（`_double_stream_layer`/`_action_double_layer`），Thor 确认待做（commit 待推送）
+
+`_double_stream_layer`：RMSNorm 本来就按流分别做（txt 一次、img 一次，各自的源 qkv 缓冲区和权重），所以融合 kernel 调用两次，各自带自己的行偏移 RoPE 指针（`_ptr_offset(rope_table, x0, HD)` 给 img 流），取代原来两次各 3-copy+2-rms 再跟着一次跨整段的联合 `rope_apply_fp16_perhead`；开关打开时联合 RoPE 那两行整段跳过。`_action_double_layer` 是单次调用点，接线方式和 `_action_single_layer` 的非合并分支一样。
+
+新增测试 `test_double_stream_and_action_double_fuse_qkv_norm_rope_bit_exact_at_real_shapes`，跟 Phase 1 那个测试同样的"权重只建一次、两次调用复用"结构（issues.md ISSUE-090）。本机（Ada）用 JIT 把真实 kernel 绑到 `flash_rt.flash_rt_kernels` 上跑了实际提交的测试函数，backbone 与 ActionDiT 都 `torch.equal`，连续 3 次稳定。
+
+过程中抓到一个真实 bug，但确认是测试自己的构造问题，不是接入代码：ActionDiT 双流层的 `proj.weight` 那个 `Fp16Linear(gemm, proj_w.data_ptr(), n, k)` 构造时 `n`/`k` 传反了（应该是 `(ahd, aaw)` 结果写成了 `(aaw, ahd)`），导致 `key("proj.weight")` 跑出来的 GEMM 输出宽度比 `action_proj_scratch` 缓冲区实际分配的宽,写越界。越界部分恰好落在 PyTorch 分配器同一个大段内，`compute-sanitizer --tool memcheck` 因此报 0 错误（和 ISSUE-090 当时的现象一样：redzone 没能盖住这种"段内越界"）；但 fused/unfused 两条路径各自的其他中间缓冲区分配顺序不同，越界覆盖到的相邻内存也不同，所以两边最终结果不一致（cos=0.9997，不是崩溃，是那种"看起来接近但不是"的错）。定位方法：给 `GemmRunner.fp16_nn` 打点，记录每次调用的 `(M,N,K)` 和输出缓冲区的零拷贝快照，fused/unfused 逐个 GEMM 对比，只有 `proj.weight` 那一个不一致。修好（`n`/`k` 换回来）后重新验证 3 次稳定。
+
+结论：`plan.md` Phase 2 标记 completed（Thor 确认待做，`THOR_CHECKLIST.md` X9）。
 
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 

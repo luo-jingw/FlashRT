@@ -2184,11 +2184,41 @@ Phase Status: completed, Thor-confirmed (`0922d`: `1 passed`, all three comparis
   Phase 1 is fully confirmed; candidate 1's single-stream wiring is closed.
 
 ### Phase 2: candidate 1, double-stream
-Phase Status: pending
+Phase Status: completed (Thor confirmation pending, THOR_CHECKLIST.md X9)
 - Goal: the same flag in `_double_stream_layer`/`_action_double_layer`,
   two calls per block (txt, img), each with its own row-offset RoPE
   table pointer and destination row range.
 - Modified files: `pipeline_thor.py`, `tests/test_imagewam_thor_real_wiring.py`.
+- `_double_stream_layer`: `fused_qkv` calls `fvk.qkv_split_norm_rope_fp16`
+  TWICE, once for the txt rows (rope_table at its base pointer) and once
+  for the img rows (rope_table offset by `x0` rows via `_ptr_offset`),
+  replacing each stream's own 3-copy+2-rms_norm and skipping the shared
+  joint `rope_apply_fp16_perhead` pair that used to follow both streams.
+  `_action_double_layer` is a single-call site, same pattern as
+  `_action_single_layer`'s non-merged branch.
+- New test: `test_double_stream_and_action_double_fuse_qkv_norm_rope_bit_exact_at_real_shapes`,
+  same build-once/replay-both-values structure as Phase 1's test
+  (issues.md ISSUE-090). Verified locally (Ada, JIT-bound kernel onto
+  `flash_rt.flash_rt_kernels`), stable over 3 runs: `torch.equal`,
+  `max_abs=0`, for both the backbone double-stream layer and the
+  ActionDiT double layer.
+- A real bug surfaced and was fixed during this verification, but it
+  was in the NEW TEST's own weight construction, not the wiring: the
+  ActionDiT double layer's `proj.weight` `Fp16Linear` was built with
+  its `n`/`k` arguments swapped (`Fp16Linear(gemm, proj_w.data_ptr(),
+  aaw, ahd)` instead of `(..., ahd, aaw)`), so `key("proj.weight")`
+  ran a GEMM with the wrong output width, overrunning the
+  `action_proj_scratch` buffer by (aaw-ahd) columns. `compute-sanitizer
+  --tool memcheck` found 0 errors (the overrun stayed inside the same
+  cudaMalloc'd allocator segment, so nothing looked illegal to it,
+  matching ISSUE-090's own note about redzone padding not catching a
+  marginal overrun) while a bit-exact fused-vs-unfused comparison
+  still caught it, because the corruption differed between the two
+  code paths depending on what else was allocated nearby.  Root-caused
+  by tracing every `GemmRunner.fp16_nn` call's own (M,N,K) and a
+  zero-copy snapshot of its output buffer for both compared runs
+  side by side, which isolated the divergence to this one GEMM.
+  Fixed by swapping the two arguments back; re-verified bit-exact 3x.
 
 ### Phase 3: candidate 8, last backbone block K/V-only
 Phase Status: pending

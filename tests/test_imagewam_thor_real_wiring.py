@@ -917,6 +917,137 @@ def test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_sh
     assert torch.equal(a_fused, a_unfused), f"not bit-exact, {_fmt(a_st)}"
 
 
+def test_double_stream_and_action_double_fuse_qkv_norm_rope_bit_exact_at_real_shapes():
+    """OPT-032 candidate 1, Phase 2 (`dims["fuse_qkv_norm_rope"]`), wired
+    into `_double_stream_layer` and `_action_double_layer`: same
+    bit-exact contract as Phase 1's single-stream test above, at real
+    production shapes (backbone x0=513/img_len=392/a0=905,
+    hidden=3072/mlp=9216; ActionDiT num_action=64,
+    action_hidden_dim/action_attn_width/action_mlp_hidden from `_REAL`).
+    `_double_stream_layer` runs RMSNorm separately per stream (txt then
+    img) so it calls the fused kernel TWICE, once per stream, each with
+    its own row-offset rope_table pointer, instead of ONE joint
+    whole-sequence RoPE call -- proven row-independent-equal to that
+    joint call by tests/test_fused_qkv_norm_rope_kernel.py::
+    test_double_stream_split_call_matches_joint_rope; this test checks
+    the actual PRODUCTION wiring at real shapes, not a standalone
+    repro. `_action_double_layer` is a single-call site, same pattern
+    as `_action_single_layer`. Builds weights/attn/input ONCE and
+    replays both `fuse_qkv_norm_rope` values against them (issues.md
+    ISSUE-090, same reason as Phase 1's test above)."""
+    R = _REAL
+    NH, HD, hidden, mlp_hidden = R["NH"], R["HD"], R["hidden"], R["mlp_hidden"]
+    x0, a0 = R["x0"], R["a0"]
+    img_len = a0 - x0
+    gemm = fvk.GemmRunner()
+    ctx = fvk.FvkContext()
+
+    def build_double_stream():
+        torch.manual_seed(17)
+        w = {}
+        for side in ("txt", "img"):
+            qkv_w = _own((torch.randn(hidden, 3 * hidden, device=DEV) * 0.02).to(FP16))
+            w[("backbone", "double", 0, f"{side}_qkv.weight")] = Fp16Linear(gemm, qkv_w.data_ptr(), 3 * hidden, hidden)
+            proj_w = _own((torch.randn(hidden, hidden, device=DEV) * 0.02).to(FP16))
+            w[("backbone", "double", 0, f"{side}_proj.weight")] = Fp16Linear(gemm, proj_w.data_ptr(), hidden, hidden)
+            mlp0_w = _own((torch.randn(hidden, 2 * mlp_hidden, device=DEV) * 0.02).to(FP16))
+            w[("backbone", "double", 0, f"{side}_mlp0.weight")] = Fp16Linear(gemm, mlp0_w.data_ptr(), 2 * mlp_hidden, hidden)
+            mlp2_w = _own((torch.randn(mlp_hidden, hidden, device=DEV) * 0.02).to(FP16))
+            w[("backbone", "double", 0, f"{side}_mlp2.weight")] = Fp16Linear(gemm, mlp2_w.data_ptr(), hidden, mlp_hidden)
+            w[("backbone", "double", 0, f"{side}_query_norm")] = _norm_scale(HD, DEV).data_ptr()
+            w[("backbone", "double", 0, f"{side}_key_norm")] = _norm_scale(HD, DEV).data_ptr()
+
+        mod_w = {
+            "time_in_w1": torch.randn(hidden, 256, dtype=F32, device=DEV) * 0.02,
+            "time_in_w2": torch.randn(hidden, hidden, dtype=F32, device=DEV) * 0.02,
+            "mod_double_txt": torch.randn(6 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
+            "mod_double_img": torch.randn(6 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
+            "mod_single": torch.randn(3 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
+        }
+        mod_txt, mod_img, _ = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, hidden)
+        table = build_backbone_rope_table(x0, 14, 28, axes_dim=AXES_DIM, theta=THETA, device=DEV)
+        attn = _real_attn(a0, a0, 1, ctx, prefill_kv=False)
+        x_in = _own((torch.randn(a0, hidden, device=DEV) * 4.0).to(BF16))
+        return w, mod_txt, mod_img, table, attn, x_in
+
+    def run_double_stream(built, *, fused_qkv: bool) -> torch.Tensor:
+        w, mod_txt, mod_img, table, attn, x_in = built
+        combined = _own(x_in.clone())
+        bufs = {
+            "backbone_hidden": combined.data_ptr(),
+            "modded_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "txt_qkv_merged": _own(torch.zeros(x0, 3 * hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "img_qkv_merged": _own(torch.zeros(img_len, 3 * hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "txt_mlp_merged": _own(torch.zeros(x0, mlp_hidden * 2, dtype=FP16, device=DEV)).data_ptr(),
+            "txt_mlp_gated": _own(torch.zeros(x0, mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "img_mlp_merged": _own(torch.zeros(img_len, mlp_hidden * 2, dtype=FP16, device=DEV)).data_ptr(),
+            "img_mlp_gated": _own(torch.zeros(img_len, mlp_hidden, dtype=FP16, device=DEV)).data_ptr(),
+            "proj_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
+        }
+        dims = dict(hidden=hidden, HD=HD, NH=NH, mlp_hidden=mlp_hidden, x0=x0, a0=a0,
+                    fuse_qkv_norm_rope=fused_qkv)
+        _double_stream_layer(ctx, fvk, gemm, bufs, w, dims, 0, 0, attn, mod_txt, mod_img, table.data_ptr())
+        torch.cuda.synchronize()
+        return combined.clone()
+
+    built = build_double_stream()
+    unfused = run_double_stream(built, fused_qkv=False)
+    fused = run_double_stream(built, fused_qkv=True)
+    st = _diff_stats(fused, unfused)
+    print(f"backbone double-stream fused vs unfused qkv_norm_rope: {_fmt(st)}")
+    assert torch.equal(fused, unfused), f"not bit-exact, {_fmt(st)}"
+
+    # --- ActionDiT double block (img-only, single fused-kernel call per layer) ---
+    ahd, aaw, amh, num_action = R["action_hidden_dim"], R["action_attn_width"], R["action_mlp_hidden"], R["num_action"]
+    total = a0 + num_action
+    torch.manual_seed(19)
+    q_norm, k_norm = _norm_scale(HD, DEV), _norm_scale(HD, DEV)
+    qkv_w = _own((torch.randn(ahd, 3 * aaw, device=DEV) * 0.02).to(FP16))
+    proj_w = _own((torch.randn(aaw, ahd, device=DEV) * 0.02).to(FP16))
+    mlp0_w = _own((torch.randn(ahd, 2 * amh, device=DEV) * 0.02).to(FP16))
+    mlp2_w = _own((torch.randn(amh, ahd, device=DEV) * 0.02).to(FP16))
+    aw = {
+        ("action_dit", "double", 0, "qkv.weight"): Fp16Linear(gemm, qkv_w.data_ptr(), 3 * aaw, ahd),
+        ("action_dit", "double", 0, "proj.weight"): Fp16Linear(gemm, proj_w.data_ptr(), ahd, aaw),
+        ("action_dit", "double", 0, "mlp0.weight"): Fp16Linear(gemm, mlp0_w.data_ptr(), 2 * amh, ahd),
+        ("action_dit", "double", 0, "mlp2.weight"): Fp16Linear(gemm, mlp2_w.data_ptr(), ahd, amh),
+        ("action_dit", "double", 0, "query_norm"): q_norm.data_ptr(),
+        ("action_dit", "double", 0, "key_norm"): k_norm.data_ptr(),
+    }
+    amod_w = {
+        "time_in_w1": torch.randn(ahd, 256, dtype=F32, device=DEV) * 0.02,
+        "time_in_w2": torch.randn(ahd, ahd, dtype=F32, device=DEV) * 0.02,
+        "mod_double": torch.randn(6 * ahd, ahd, dtype=F32, device=DEV) * 0.02,
+        "mod_single": torch.randn(3 * ahd, ahd, dtype=F32, device=DEV) * 0.02,
+    }
+    amod_double, _ = compute_action_modulation(torch.full((1,), 0.5, device=DEV), amod_w, ahd)
+    atable = build_action_rope_table(num_action, axes_dim=AXES_DIM, theta=THETA, device=DEV)
+    aattn = _real_attn(num_action, total, 1, ctx, prefill_kv=True)
+    a_in = _own(torch.randn(num_action, ahd, dtype=FP16, device=DEV))
+
+    def run_action_double(*, fused_qkv: bool) -> torch.Tensor:
+        action_x = _own(a_in.clone())
+        bufs = {
+            "action_hidden": action_x.data_ptr(),
+            "action_modded": _own(torch.zeros(num_action, ahd, dtype=FP16, device=DEV)).data_ptr(),
+            "action_qkv_merged": _own(torch.zeros(num_action, 3 * aaw, dtype=FP16, device=DEV)).data_ptr(),
+            "action_proj_scratch": _own(torch.zeros(num_action, ahd, dtype=FP16, device=DEV)).data_ptr(),
+            "action_mlp_merged": _own(torch.zeros(num_action, amh * 2, dtype=FP16, device=DEV)).data_ptr(),
+            "action_mlp_gated": _own(torch.zeros(num_action, amh, dtype=FP16, device=DEV)).data_ptr(),
+        }
+        dims = dict(action_hidden_dim=ahd, action_attn_width=aaw, HD=HD, NH=NH, action_mlp_hidden=amh,
+                    x0=x0, a0=a0, total=total, num_action=num_action, fuse_qkv_norm_rope=fused_qkv)
+        _action_double_layer(ctx, fvk, gemm, bufs, aw, dims, 0, 0, 0, aattn, amod_double, atable.data_ptr())
+        torch.cuda.synchronize()
+        return action_x.clone()
+
+    a_unfused = run_action_double(fused_qkv=False)
+    a_fused = run_action_double(fused_qkv=True)
+    a_st = _diff_stats(a_fused, a_unfused)
+    print(f"action double fused vs unfused qkv_norm_rope: {_fmt(a_st)}")
+    assert torch.equal(a_fused, a_unfused), f"not bit-exact, {_fmt(a_st)}"
+
+
 if __name__ == "__main__":
     test_double_stream_layer_matches_real_reference()
     test_single_stream_layer_matches_real_reference()
@@ -925,4 +1056,5 @@ if __name__ == "__main__":
     test_action_double_and_single_layers_match_real_reference()
     test_single_stream_linear2_merged_vs_split_real_shapes()
     test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_shapes()
+    test_double_stream_and_action_double_fuse_qkv_norm_rope_bit_exact_at_real_shapes()
     print("PASS")

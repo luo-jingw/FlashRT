@@ -493,6 +493,17 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     img_len = a0 - x0
     eps = 1e-6
     key = lambda slot: weights[("backbone", "double", layer_idx, slot)]
+    # OPT-032 candidate 1, same flag as _single_stream_layer above. Here
+    # RMSNorm is per-stream (txt then img, separate source qkv buffers,
+    # separate query_norm/key_norm weights) so the fused kernel is
+    # called TWICE, once per stream, each with its own row-offset
+    # rope_table pointer into the shared [txt|img] table -- proven
+    # equivalent to the reference's separate-norm-then-joint-RoPE
+    # sequence by tests/test_fused_qkv_norm_rope_kernel.py::
+    # test_double_stream_split_call_matches_joint_rope (RoPE is
+    # row-independent/elementwise, so splitting it by row range does
+    # not change the result).
+    fused_qkv = bool(dims.get("fuse_qkv_norm_rope"))
 
     (txt_shift1, txt_scale1, txt_gate1), (txt_shift2, txt_scale2, txt_gate2) = mod_txt
     (img_shift1, img_scale1, img_gate1), (img_shift2, img_scale2, img_gate2) = mod_img
@@ -566,11 +577,17 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
         fvk.ada_layer_norm_bf16in_fp16out(txt_x, txt_scale1_t.data_ptr(), txt_shift1_t.data_ptr(), modded, x0, hidden, eps, stream)
     txt_qkv_merged = bufs["txt_qkv_merged"]  # (x0, 3*hidden)
     key("txt_qkv.weight")(modded, txt_qkv_merged, x0, stream)
-    _copy_slice(Q_O, txt_qkv_merged, x0, hidden, src_row_stride=3 * hidden)
-    _copy_slice(K_cache, _col_ptr(txt_qkv_merged, hidden), x0, hidden, src_row_stride=3 * hidden)
-    _copy_slice(V_cache, _col_ptr(txt_qkv_merged, 2 * hidden), x0, hidden, src_row_stride=3 * hidden)
-    fvk.rms_norm_fp16(Q_O, key("txt_query_norm"), Q_O, x0 * NH, HD, eps, stream)
-    fvk.rms_norm_fp16(K_cache, key("txt_key_norm"), K_cache, x0 * NH, HD, eps, stream)
+    if fused_qkv:
+        fvk.qkv_split_norm_rope_fp16(
+            txt_qkv_merged, key("txt_query_norm"), key("txt_key_norm"), rope_table,
+            Q_O, K_cache, V_cache, x0, NH, HD, hidden, 3 * hidden,
+            0, hidden, 2 * hidden, hidden, eps, stream)
+    else:
+        _copy_slice(Q_O, txt_qkv_merged, x0, hidden, src_row_stride=3 * hidden)
+        _copy_slice(K_cache, _col_ptr(txt_qkv_merged, hidden), x0, hidden, src_row_stride=3 * hidden)
+        _copy_slice(V_cache, _col_ptr(txt_qkv_merged, 2 * hidden), x0, hidden, src_row_stride=3 * hidden)
+        fvk.rms_norm_fp16(Q_O, key("txt_query_norm"), Q_O, x0 * NH, HD, eps, stream)
+        fvk.rms_norm_fp16(K_cache, key("txt_key_norm"), K_cache, x0 * NH, HD, eps, stream)
 
     # --- image stream: PERSISTENT residual, rows [x0,a0) of combined.
     # `img_in` is projected ONCE, by `imagewam_prefill`, before this
@@ -588,16 +605,25 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
                                  img_modded_ptr, img_len, hidden, eps, stream)
     img_qkv_merged = bufs["img_qkv_merged"]  # (img_len, 3*hidden)
     key("img_qkv.weight")(img_modded_ptr, img_qkv_merged, img_len, stream)
-    _copy_slice(img_Q_ptr, img_qkv_merged, img_len, hidden, src_row_stride=3 * hidden)
-    _copy_slice(img_K_ptr, _col_ptr(img_qkv_merged, hidden), img_len, hidden, src_row_stride=3 * hidden)
-    _copy_slice(img_V_ptr, _col_ptr(img_qkv_merged, 2 * hidden), img_len, hidden, src_row_stride=3 * hidden)
-    fvk.rms_norm_fp16(img_Q_ptr, key("img_query_norm"), img_Q_ptr, img_len * NH, HD, eps, stream)
-    fvk.rms_norm_fp16(img_K_ptr, key("img_key_norm"), img_K_ptr, img_len * NH, HD, eps, stream)
+    if fused_qkv:
+        img_rope_ptr = _ptr_offset(rope_table, x0, HD)  # row-offset into the shared [txt|img] table
+        fvk.qkv_split_norm_rope_fp16(
+            img_qkv_merged, key("img_query_norm"), key("img_key_norm"), img_rope_ptr,
+            img_Q_ptr, img_K_ptr, img_V_ptr, img_len, NH, HD, hidden, 3 * hidden,
+            0, hidden, 2 * hidden, hidden, eps, stream)
+    else:
+        _copy_slice(img_Q_ptr, img_qkv_merged, img_len, hidden, src_row_stride=3 * hidden)
+        _copy_slice(img_K_ptr, _col_ptr(img_qkv_merged, hidden), img_len, hidden, src_row_stride=3 * hidden)
+        _copy_slice(img_V_ptr, _col_ptr(img_qkv_merged, 2 * hidden), img_len, hidden, src_row_stride=3 * hidden)
+        fvk.rms_norm_fp16(img_Q_ptr, key("img_query_norm"), img_Q_ptr, img_len * NH, HD, eps, stream)
+        fvk.rms_norm_fp16(img_K_ptr, key("img_key_norm"), img_K_ptr, img_len * NH, HD, eps, stream)
 
-    # --- RoPE over the FULL combined [txt|img] sequence, once each
-    # for Q and K (matches real_double_stream_block_forward_fp16) ---
-    fvk.rope_apply_fp16_perhead(Q_O, rope_table, a0, NH, HD, stream)
-    fvk.rope_apply_fp16_perhead(K_cache, rope_table, a0, NH, HD, stream)
+    if not fused_qkv:
+        # RoPE over the FULL combined [txt|img] sequence, once each for Q
+        # and K (matches real_double_stream_block_forward_fp16). When
+        # fused_qkv is on, RoPE was already applied per-stream above.
+        fvk.rope_apply_fp16_perhead(Q_O, rope_table, a0, NH, HD, stream)
+        fvk.rope_apply_fp16_perhead(K_cache, rope_table, a0, NH, HD, stream)
 
     # --- joint self-attention over the whole [text | image] sequence,
     # real per-head, no mask (opportunities.md OPT-002's correction) ---
@@ -955,21 +981,29 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
     action_Q_ptr = _ptr_offset(Q_O, a0, action_attn_width)
     action_K_ptr = _ptr_offset(K_cache, a0, action_attn_width)
     action_V_ptr = _ptr_offset(V_cache, a0, action_attn_width)
+    # OPT-032 candidate 1, same as _single_stream_layer/_action_single_layer.
+    fused_qkv = bool(dims.get("fuse_qkv_norm_rope"))
 
     if not input_normed:
         fvk.ada_layer_norm_fp16(action_x, scale1_t.data_ptr(), shift1_t.data_ptr(),
                                  modded, num_action, action_hidden_dim, eps, stream)
     qkv_merged = bufs["action_qkv_merged"]  # (num_action, 3*action_attn_width)
     key("qkv.weight")(modded, qkv_merged, num_action, stream)
-    _copy_slice(action_Q_ptr, qkv_merged, num_action, action_attn_width, src_row_stride=3 * action_attn_width)
-    _copy_slice(action_K_ptr, _col_ptr(qkv_merged, action_attn_width), num_action, action_attn_width,
-                src_row_stride=3 * action_attn_width)
-    _copy_slice(action_V_ptr, _col_ptr(qkv_merged, 2 * action_attn_width), num_action, action_attn_width,
-                src_row_stride=3 * action_attn_width)
-    fvk.rms_norm_fp16(action_Q_ptr, key("query_norm"), action_Q_ptr, num_action * NH, HD, eps, stream)
-    fvk.rms_norm_fp16(action_K_ptr, key("key_norm"), action_K_ptr, num_action * NH, HD, eps, stream)
-    fvk.rope_apply_fp16_perhead(action_Q_ptr, action_rope_table, num_action, NH, HD, stream)
-    fvk.rope_apply_fp16_perhead(action_K_ptr, action_rope_table, num_action, NH, HD, stream)
+    if fused_qkv:
+        fvk.qkv_split_norm_rope_fp16(
+            qkv_merged, key("query_norm"), key("key_norm"), action_rope_table,
+            action_Q_ptr, action_K_ptr, action_V_ptr, num_action, NH, HD, action_attn_width,
+            3 * action_attn_width, 0, action_attn_width, 2 * action_attn_width, action_attn_width, eps, stream)
+    else:
+        _copy_slice(action_Q_ptr, qkv_merged, num_action, action_attn_width, src_row_stride=3 * action_attn_width)
+        _copy_slice(action_K_ptr, _col_ptr(qkv_merged, action_attn_width), num_action, action_attn_width,
+                    src_row_stride=3 * action_attn_width)
+        _copy_slice(action_V_ptr, _col_ptr(qkv_merged, 2 * action_attn_width), num_action, action_attn_width,
+                    src_row_stride=3 * action_attn_width)
+        fvk.rms_norm_fp16(action_Q_ptr, key("query_norm"), action_Q_ptr, num_action * NH, HD, eps, stream)
+        fvk.rms_norm_fp16(action_K_ptr, key("key_norm"), action_K_ptr, num_action * NH, HD, eps, stream)
+        fvk.rope_apply_fp16_perhead(action_Q_ptr, action_rope_table, num_action, NH, HD, stream)
+        fvk.rope_apply_fp16_perhead(action_K_ptr, action_rope_table, num_action, NH, HD, stream)
 
     attn.run("mot", site_layer_idx, q_seq=num_action, kv_seq=dims["total"], stream=stream, x0=x0, a0=a0)
 

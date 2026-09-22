@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。candidate 1 单流（backbone + ActionDiT）的接入代码在 Thor 上完全确认（`0922d`：`1 passed`，三处 `torch.equal`/`bit_exact=True`，`max_abs=0`），`plan.md` Phase 1 已关闭。本清单当前没有待测项；下一步是 Phase 2（candidate 1 接入双流 `_double_stream_layer`/`_action_double_layer`），设计已定但还没写代码，写完后本清单会加对应测试项。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。candidate 1 单流（backbone + ActionDiT）的接入代码在 Thor 上完全确认（`0922d`：`1 passed`，三处 `torch.equal`/`bit_exact=True`，`max_abs=0`），`plan.md` Phase 1 已关闭。candidate 1 双流（`_double_stream_layer`/`_action_double_layer`）已经写完并本机验证（backbone 与 ActionDiT 均 `torch.equal`，连续 3 次稳定），`plan.md` Phase 2 标记 completed，本节次只剩 X9 做 Thor 端确认。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,7 +52,13 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-（当前没有待测项。X8 已在 `0922d` 确认通过，见下方"已完成的轮次"。）
+### X9 candidate 1（QKV拆分+QK-RMSNorm+RoPE 融合）双流接入（`_double_stream_layer`/`_action_double_layer`）的 Thor 位一致
+本机（Ada）已经用 JIT 把真实 kernel 绑到 `flash_rt.flash_rt_kernels` 上，跑了实际提交的测试函数，backbone 双流层与 ActionDiT 双流层都 `torch.equal`，连续 3 次稳定。过程中抓到一个真实 bug，但是**测试自己构造权重时的 bug，不是接入代码的问题**：ActionDiT 双流层的 `proj.weight` 那个 `Fp16Linear` 的 `n`/`k` 两个参数传反了，导致 `key("proj.weight")` 跑出来的 GEMM 输出宽度不对，把 `action_proj_scratch` 缓冲区写越界（越界部分正好落在同一个 allocator 段里，`compute-sanitizer --tool memcheck` 因此报 0 错误，但 fused/unfused 各自越界覆盖的相邻内存不同，导致两次结果不一致）；靠对每个 `GemmRunner.fp16_nn` 调用逐个抓 `(M,N,K)` 和输出缓冲区做零拷贝快照、两边对比，才定位到这一个 GEMM。已修好并重新验证 3 次稳定。
+```
+python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -q -s 2>&1 | tee $OUT/X9_wiring.log
+```
+判据：`torch.equal`（不是余弦）。这次 `-k fuse_qkv_norm_rope` 会连 X8 那个单流测试一起收集（两个测试都用这个关键字），预期都是通过；只关心新加的 `test_double_stream_and_action_double_fuse_qkv_norm_rope_bit_exact_at_real_shapes`。如果 Thor 上不过，把完整报错带回（尤其是不是同一处 `cuBLAS`/`illegal memory access`），不要重复本机已经做过的排查（种子、GemmRunner 重建、GEMM 形状逐个快照都已经做过）。
+去向：opportunities.md OPT-032、plan.md Phase 2。
 
 ## 已完成的轮次（不再重跑）
 
