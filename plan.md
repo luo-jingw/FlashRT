@@ -2130,7 +2130,7 @@ Thor rebuild (ENABLE_SM100_CUTLASS) -> the new test -> the existing
 ## Implementation Phases
 
 ### Phase 1: candidate 1, single-stream (backbone + ActionDiT)
-Phase Status: completed
+Phase Status: active
 - Goal: `fuse_qkv_norm_rope` wired into `_single_stream_layer` and
   `_action_single_layer`, both the `merge_qkv_mlp` and split `qkv.weight`
   branches; the shared post-branch RMSNorm+RoPE block is skipped when the
@@ -2141,12 +2141,28 @@ Phase Status: completed
   dims, both `merge_qkv_mlp` values).
 - Observation: local CPU regression suite unaffected (`py_compile`,
   `tests/test_imagewam_thor_precision_routing.py` and the config-resolver/
-  workload/structure/precision-table tests, 205 passed); the new Thor-only
-  test is the real check, not yet run (needs a rebuild).
-- Next: Thor rebuild + `python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -q -s`,
-  then the whole-graph `imagewam_fusion_ab.py`-style A/B with the flag on,
-  then THOR_CHECKLIST.md X4/X5 re-run to measure the kernel-count and
-  latency change.
+  workload/structure/precision-table tests, 205 passed).
+- Thor (`0922`, `thor_val/0922`): rebuild succeeded (`qkv_split_norm_rope_fp16`
+  symbol present), but the new wiring test FAILED the bit-exact check
+  (`cos=0.9993150 max_abs=1.625`) -- traced to a bug in the TEST itself, not
+  (as far as this trace shows) the wiring: `torch.manual_seed` was reset too
+  late in `run_single_stream`/`run_action_single`, after some weights/inputs
+  were already drawn, so the two compared runs did not share identical
+  inputs. Fixed (seed reset moved to the top of each helper, before any
+  draw); also renamed the test so `pytest -k fuse_qkv_norm_rope` actually
+  collects it (it did not, `0922`: the name had "fused", not "fuse").
+- Next: Thor rerun of the fixed test (`python -m pytest
+  tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -q -s`) is
+  the real bit-exact confirmation, still pending; then the whole-graph
+  `imagewam_fusion_ab.py`-style A/B (its own `FLAGS` do not yet include this
+  one, `0922`) and THOR_CHECKLIST.md X4/X5 re-run for the measured
+  kernel-count and latency change. X5 ran ahead of the wiring confirmation
+  (`0922`, without the flag): backbone GEMM is near compute-bound
+  (bb.single 164.9 TFLOPs, bb.double 82.3), ActionDiT GEMM is not
+  (act.single 32.6 TFLOPs, act.double 24.1) and carries a high short-kernel
+  share (25-35% under 25us) -- consistent with candidate 1 (targets the
+  small per-row kernels, not the GEMMs) mattering more on the ActionDiT
+  side.
 
 ### Phase 2: candidate 1, double-stream
 Phase Status: pending

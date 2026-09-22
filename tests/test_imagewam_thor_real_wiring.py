@@ -762,7 +762,7 @@ def test_single_stream_linear2_merged_vs_split_real_shapes():
     assert aproj_st["cos"] > 0.9999 and aout_st["cos"] > 0.9999
 
 
-def test_single_stream_and_action_single_fused_qkv_norm_rope_bit_exact_at_real_shapes():
+def test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_shapes():
     """OPT-032 candidate 1 (`dims["fuse_qkv_norm_rope"]`), wired into
     `_single_stream_layer` and `_action_single_layer`: `fvk.qkv_split_norm_rope_fp16`
     (`csrc/kernels/fused_qkv_norm_rope/`) must give the EXACT same
@@ -783,6 +783,16 @@ def test_single_stream_and_action_single_fused_qkv_norm_rope_bit_exact_at_real_s
     ctx = fvk.FvkContext()
 
     def run_single_stream(*, merge_qkv_mlp: bool, fused_qkv: bool) -> torch.Tensor:
+        # Reset BEFORE any draw: every weight, the modulation and x_in must be
+        # bit-identical between the fused_qkv=False/True calls at the same
+        # merge_qkv_mlp, so only the kernel path differs. A reset placed later
+        # (this test's own earlier bug) leaves the weights/modulation drawn
+        # from wherever the global RNG had drifted to, so a "mismatch" then
+        # conflates "the compared runs had different inputs" with "the fused
+        # kernel disagrees with the unfused sequence" -- 0921/0922's Thor run
+        # hit exactly this, reporting cos=0.9993 for what was actually a test
+        # bug, not (as far as this fix can show) a kernel or wiring bug.
+        torch.manual_seed(11)
         q_norm, k_norm = _norm_scale(HD, DEV), _norm_scale(HD, DEV)
         w = {
             ("backbone", "single", 0, "query_norm"): q_norm.data_ptr(),
@@ -809,7 +819,6 @@ def test_single_stream_and_action_single_fused_qkv_norm_rope_bit_exact_at_real_s
             "mod_double_img": torch.randn(6 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
             "mod_single": torch.randn(3 * hidden, hidden, dtype=F32, device=DEV) * 0.02,
         }
-        torch.manual_seed(11)  # same modulation/input every call, only fused_qkv/merge_qkv_mlp differ
         _, _, mod_single = compute_shared_modulation(torch.zeros(1, device=DEV), mod_w, hidden)
         table = build_backbone_rope_table(R["x0"], 14, 28, axes_dim=AXES_DIM, theta=THETA, device=DEV)
         attn = _real_attn(a0, a0, 1, ctx, prefill_kv=False)
@@ -842,6 +851,7 @@ def test_single_stream_and_action_single_fused_qkv_norm_rope_bit_exact_at_real_s
     total = a0 + num_action
 
     def run_action_single(*, fused_qkv: bool) -> torch.Tensor:
+        torch.manual_seed(13)  # reset before any draw -- see run_single_stream's own comment above
         q_norm, k_norm = _norm_scale(HD, DEV), _norm_scale(HD, DEV)
         al1_w = _own((torch.randn(ahd, 3 * aaw + 2 * amh, device=DEV) * 0.02).to(FP16))
         a_attn_out = _own((torch.randn(aaw, ahd, device=DEV) * 0.02).to(FP16))
@@ -859,7 +869,6 @@ def test_single_stream_and_action_single_fused_qkv_norm_rope_bit_exact_at_real_s
             "mod_double": torch.randn(6 * ahd, ahd, dtype=F32, device=DEV) * 0.02,
             "mod_single": torch.randn(3 * ahd, ahd, dtype=F32, device=DEV) * 0.02,
         }
-        torch.manual_seed(13)
         _, amod_single = compute_action_modulation(torch.full((1,), 0.5, device=DEV), amod_w, ahd)
         atable = build_action_rope_table(num_action, axes_dim=AXES_DIM, theta=THETA, device=DEV)
         aattn = _real_attn(num_action, total, 1, ctx, prefill_kv=True)
@@ -895,5 +904,5 @@ if __name__ == "__main__":
     test_single_stream_layer_merged_linear2_matches_real_reference()
     test_action_double_and_single_layers_match_real_reference()
     test_single_stream_linear2_merged_vs_split_real_shapes()
-    test_single_stream_and_action_single_fused_qkv_norm_rope_bit_exact_at_real_shapes()
+    test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_shapes()
     print("PASS")
