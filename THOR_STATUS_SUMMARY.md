@@ -413,6 +413,12 @@ python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -
 
 结论：`plan.md` Phase 2 标记 completed（Thor 确认待做，`THOR_CHECKLIST.md` X9）。
 
+### `0922e` 轮：X9 确认通过——candidate 1 双流接入 Thor 位一致完全确认（commit `c5898a2`）
+
+HEAD `c5898a2`。`python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -q -s` → `2 passed, 6 deselected, 1.47s`。五处比较全部 `torch.equal`/`bit_exact=True`、`max_abs=0`：backbone single `merge_qkv_mlp=True`/`False`、ActionDiT single（这三处是 X8 的复核）、**backbone double-stream**、**ActionDiT double**（这两处是 X9 新增的覆盖）。MAXN，`emc_locked=null`，GPU 空闲，未重编。
+
+结论：OPT-032 candidate 1 的单流（Phase 1）和双流（Phase 2）接入在 Thor 上都完全确认。`plan.md` Phase 1、Phase 2 都关闭；`THOR_CHECKLIST.md` 的 X9 已删除。下一步是 Phase 3（candidate 8，最后一层 backbone block 只算导出的 K/V，涉及 `checkpoint_loader.py`/`imagewam_thor.py`/`pipeline_thor.py` 三个文件，范围比 Phase 1/2 宽，之前判断"本机无法完全验证，留着不接"）或 Phase 4（candidate 3，融合 AdaLN+NVFP4 直接量化，kernel 本身已经 Thor 确认位一致（`0921x` X6），只差接线设计和 `Nvfp4Linear` 的预量化输入方法）。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

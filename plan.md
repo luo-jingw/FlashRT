@@ -2184,7 +2184,7 @@ Phase Status: completed, Thor-confirmed (`0922d`: `1 passed`, all three comparis
   Phase 1 is fully confirmed; candidate 1's single-stream wiring is closed.
 
 ### Phase 2: candidate 1, double-stream
-Phase Status: completed (Thor confirmation pending, THOR_CHECKLIST.md X9)
+Phase Status: completed, Thor-confirmed (`0922e`: `2 passed`, all five comparisons `torch.equal`/`bit_exact=True`, `max_abs=0`, including backbone double-stream and ActionDiT double)
 - Goal: the same flag in `_double_stream_layer`/`_action_double_layer`,
   two calls per block (txt, img), each with its own row-offset RoPE
   table pointer and destination row range.
@@ -2219,6 +2219,12 @@ Phase Status: completed (Thor confirmation pending, THOR_CHECKLIST.md X9)
   zero-copy snapshot of its output buffer for both compared runs
   side by side, which isolated the divergence to this one GEMM.
   Fixed by swapping the two arguments back; re-verified bit-exact 3x.
+- Thor (`0922e`, HEAD `c5898a2`): `2 passed, 6 deselected, 1.47s`. All
+  five comparisons `torch.equal`/`bit_exact=True`, `max_abs=0`:
+  backbone single `merge_qkv_mlp=True`/`False`, ActionDiT single (all
+  three re-confirming Phase 1), backbone double-stream, ActionDiT
+  double (Phase 2's own new coverage). MAXN, `emc_locked=null`, GPU
+  idle, no rebuild needed. Phase 2 is fully confirmed.
 
 ### Phase 3: candidate 8, last backbone block K/V-only
 Phase Status: pending
