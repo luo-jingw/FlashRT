@@ -2254,8 +2254,9 @@ Phase Status: pending
   blind.
 
 ### Phase 4: candidate 3, fused AdaLN + NVFP4 direct quantize
-Phase Status: completed for Round 1's scope (Thor confirmation pending,
-THOR_CHECKLIST.md X10); Round 2 (remaining call sites) pending
+Phase Status: completed for Round 1's scope, Thor-confirmed (`0922g`:
+`1 passed`, `torch.equal`/`bit_exact=True`, `max_abs=0`); Round 2
+(remaining call sites) pending
 - Goal: design the `Nvfp4Linear` pre-quantized-input method, then wire
   `_fused_gate_res`'s NVFP4 callers.
 - Interface designed and implemented:
@@ -2327,8 +2328,12 @@ THOR_CHECKLIST.md X10); Round 2 (remaining call sites) pending
   their pointers (issues.md ISSUE-091 has the full account, including
   a regression test that decodes the actual bytes reaching the kernel
   call). Local CPU dispatch suite re-verified 9/9 passing after the
-  fix; Thor re-run of the real bit-exact wiring test is the remaining
-  confirmation, same THOR_CHECKLIST.md X10 item.
+  fix.
+- Thor (`0922g`, HEAD `3056b03`, no rebuild needed -- the kernel itself
+  was unchanged, only the Python call site): `1 passed, 8 deselected,
+  1.40s`. `torch.equal`/`bit_exact=True`, `max_abs=0` for the two-layer
+  single-stream chain. MAXN, `emc_locked=null`, GPU idle. Phase 4
+  Round 1 is fully confirmed.
 
 ### Phase 5: candidate 6, step-boundary Euler+cast
 Phase Status: pending, low priority

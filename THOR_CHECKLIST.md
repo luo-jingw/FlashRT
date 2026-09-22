@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1 的单流（backbone + ActionDiT）和双流（`_double_stream_layer`/`_action_double_layer`）接入都在 Thor 上完全确认（`0922e`：`2 passed`，五处 `torch.equal`/`bit_exact=True`，`max_abs=0`），`plan.md` Phase 1、Phase 2 都已关闭。接着做了 Phase 4（candidate 3，融合 AdaLN+NVFP4 直接量化）第一轮接线：`_single_stream_layer` 的 `merge_qkv_mlp=True`→`linear1.weight` 这一个消费点，`dims["fuse_res_norm_fp4"]` 开关，本机 CPU 侧调用顺序测试 8/8 过（`Nvfp4Linear` 本身需要 Blackwell/Thor 编译，这台 Ada 机器完全跑不了，连构造都做不到，只能测调用契约）。本节次待测项是 X10：真正的 NVFP4 数值确认。Phase 3（candidate 8）还没开始。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1 的单流+双流、candidate 3 第一轮接线（`_single_stream_layer` 的 `merge_qkv_mlp=True`→`linear1.weight` 这一个消费点，`dims["fuse_res_norm_fp4"]` 开关）都在 Thor 上完全确认（`0922g`：`1 passed`，`torch.equal`/`bit_exact=True`，`max_abs=0`；过程中 `0922f` 抓到一个真实的 fp32/fp16 指针类型不匹配的接线 bug，已修，issues.md ISSUE-091），`plan.md` Phase 1、Phase 2、Phase 4（第一轮）都已关闭。本清单当前没有待测项。Phase 3（candidate 8）、Phase 4 第二轮（双流/ActionDiT/head 消费点）还没开始。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,17 +52,11 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-### X10 candidate 3（融合 AdaLN+NVFP4 直接量化）第一轮接线的 Thor 数值确认（第二次；第一次抓到真实 bug 已修）
-`0922f`：`fuse_res_norm_fp4=True` 时 bf16 残差炸到 O(1e3)/NaN（`-7392`、`3008`），`fuse_res_norm_fp4=False` 的对照组保持 O(1)（`-0.79`、`5.16`、`-3.92`）。定位：直接看 `fused_norm_fp4.cu` 里 kernel 的真实 C++ 签名，`gate`/`scale`/`shift`/`inv_s` 是 `const __half*`（fp16），跟旧的 `gate_res_ada_layer_norm_bf16res`（`const float*`，kernel 内部自己转 fp16）不是一个约定——接线那边错用了 `_mod_vec_ptr`（那是给 fp32 约定用的），把一段 fp32 数据的指针喂给了期待 fp16 的 kernel，等于按一半的 stride 读出乱码。已修：`_fused_gate_res` 的 `fp4_direct` 分支现在自己把 `gate`/`scale`/`shift`/`awq_inv_s` 转成新的 fp16 tensor 再传指针（跟 `_fuse_mod_pair` 已有的转换方式一样）。本机加了一个专门的回归测试（在 mock kernel 的 `side_effect` 里同步把实际写进指针的字节读回来解码，不是等函数返回后再读——那样读到的是已经被回收/复用的内存，第一版这个测试本身就踩过这个坑），CPU 侧调用契约测试 9/9 过。
-```
-python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_res_norm_fp4 -q -s 2>&1 | tee $OUT/X10_wiring.log
-```
-判据：`torch.equal`（不是余弦）。不需要重编（`fused_norm_fp4.cu` 本身没改，只改了 Python 侧调用方式）。如果这次还是不过，把完整报错和具体数值带回来，不要重复本机已经做过的排查（kernel 签名已经逐字核对过）。
-去向：opportunities.md OPT-032、plan.md Phase 4、issues.md ISSUE-091。
+（当前没有待测项。X10 已在 `0922g` 确认通过，见下方"已完成的轮次"。）
 
 ## 已完成的轮次（不再重跑）
 
-逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
+逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
 
 ---
 

@@ -439,6 +439,12 @@ HEAD `c5898a2`。`python -m pytest tests/test_imagewam_thor_real_wiring.py -k fu
 
 结论：issues.md ISSUE-091 记录了完整过程。这不是"重编就行"的问题，不需要重编（kernel 本身没改，只改了 Python 侧传参），Thor 直接重跑同一条 pytest 命令即可。
 
+### `0922g` 轮：X10 确认通过——candidate 3 第一轮接线 Thor 位一致完全确认（commit `3056b03`）
+
+HEAD `3056b03`，未重编。`python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_res_norm_fp4 -q -s` → `1 passed, 8 deselected, 1.40s`。`cos=1.0000001 max_abs=0.000e+00 rel_l2=0.000e+00 bit_exact=True`，`torch.equal` 成立。MAXN，`emc_locked=null`，GPU 空闲。
+
+结论：OPT-032 candidate 3 第一轮接线（`_single_stream_layer` 的 `merge_qkv_mlp=True`→`linear1.weight` 消费点，`dims["fuse_res_norm_fp4"]`）在 Thor 上完全确认。`plan.md` Phase 4（第一轮范围）关闭；`THOR_CHECKLIST.md` 的 X10 已删除。剩下：Phase 3（candidate 8，最后一层 backbone block 只算导出的 K/V）和 Phase 4 第二轮（双流/ActionDiT/head 的消费点，以及 `_single_stream_layer` 自己非合并的 `qkv.weight`/`mlp_in.weight` 分支）都还没开始。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |
