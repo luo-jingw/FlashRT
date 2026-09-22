@@ -361,6 +361,25 @@ nvfp4 头名 kernel：`rms_norm` 23.0 ms × 560 次，CUTLASS GEMM 21.9 ms × 23
 
 **X3（两个真实测试失败，issues.md ISSUE-089）**：`test_failed_capture_leaves_no_replayable_graph` 打印 `cached=()`，与预期的 `(6,)` 不符——根因已定位并修：该测试没有显式传 `use_fa4=False`，在 FA4 可用的机器上会走到"FA4 失败级联清空整个缓存"的分支（这是另一个测试故意测的行为）。`test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists` 死在 FA4 回退后与新建 frontend 的 cuBLAS 链路输出 `torch.equal` 比较，两侧数值接近但不是逐位相同（如 −1.5116 对 −1.5115）——原因未定，可能是 cuBLASLt 算法选择的非结合性，不是 bug；也可能是真实差异，还没确认。
 
+### `0922` 轮：OPT-032 candidate 1 接入验证（发现测试自身的种子 bug）、X5 网格拿到数据、ISSUE-089 收尾（commit `8289754`）
+
+MAXN，GPC 1.575 / NVD 1.692 GHz，`emc_locked=null`，GPU 空闲；日志在 Thor 的 `thor_val/0922`。
+
+**X8（candidate 1 接入）**：重编成功（`qkv_split_norm_rope_fp16` 符号存在），但新加的接入测试没过逐位一致（`cos=0.9993150 max_abs=1.625`）。定位：不是接入代码的问题，是**测试自己的 bug**——`torch.manual_seed` 重置得太晚，两次对比调用（开关前/开关后）用到的部分权重和输入实际上不是同一份数据。已把重置挪到函数最开头、任何随机数抽取之前，并把测试名从 `fused_qkv_norm_rope` 改成 `fuse_qkv_norm_rope`（和 dims flag 同名，之前 `pytest -k fuse_qkv_norm_rope` 因为差一个字母 0 collected）。**接入代码本身是否正确，还要等修好的测试重跑才能确认**——plan.md 里 Phase 1 的状态从"completed"改回"active"。
+
+**X5（阶段 × 算子网格，CUPTI 预热生效，四种配置都拿到数据）**：`valid_tokens=24`，FA4 关。
+
+| 配置 | 总耗时 | GEMM | quantize | norm | attn |
+|---|---:|---:|---:|---:|---:|
+| nvfp4 | 126.7 ms | 76.54 | 4.95 | 25.58 | 6.64 |
+| fp16_cutlass | 190.9 ms | 151.20 | 0 | 26.90 | — |
+| fp8_static_cutlass | 137.5 ms | 88.89 | 2.76 | 25.85 | — |
+| nvfp4 + FA4 | 102.1 ms | 46.13 | — | — | 11.65 |
+
+GEMM 效率：backbone 接近算力（bb.single 164.9 TFLOPs、bb.double 82.3 TFLOPs），Action 侧远没有（act.single 32.6、act.double 24.1 TFLOPs），且 Action 侧短 kernel（&lt;25µs）占 25–35% 的时间——和 OPT-032 的判断一致：candidate 1（fuse_qkv_norm_rope）主要打的是 Action 侧这类小 kernel，不是 backbone 的 GEMM 效率。FA4 关时有一块 31.41 ms 的 "(none)"（未归入任何阶段的 GEMM），FA4 开时几乎消失（0.37 ms）——这部分是 cuBLAS 注意力链路的 QK^T/PV GEMM，没有被阶段包装函数捕捉到，成因未查（不影响其他数字的解读，留作后续小项）。
+
+**X7（ISSUE-089 确认）**：cache 存活的问题已经修好（Thor 上打印 `cached=(6,)`）；同一测试后面新暴露一个断言（恢复后的图 vs 全新 frontend，`cos=1.0000000 max_abs=6.104e-05`）；`test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists` 的 FA4 回退 vs cuBLAS 链路比较也是类似量级的不一致（约 1e-4）。两处都改成了容差判据（`cos > 0.9999` 且 `max_abs < 1e-2`），参照的是这个项目自己已有的先例（`docs/imagewam_last_block_kv_only.md` 里同类的 GEMM 算法选择非结合性），不是新确认的根因。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

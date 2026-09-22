@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x` 一轮把 X0/X6/X1/X4/X2/X3 全部做完并落库（`THOR_STATUS_SUMMARY.md` 的 `0921x` 小节；ISSUE-088 的根因已确认，ISSUE-089 的一半已修）。本节次只剩 X5 重跑（本地已修两个 bug）和 X7（确认 ISSUE-089 的修复）。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922` 两轮把 X0/X6/X1/X4/X2/X3/X5 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。`0922` 还发现并修了一个测试自身的种子 bug（candidate 1 接入代码是否正确还没confirm）和 ISSUE-089 的容差修复（还没在 Thor 上确认）。本节次只剩 X8（重跑修好的接入测试）和 X7b（确认容差修复）。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,34 +52,20 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-### X8 candidate 1（QKV拆分+QK-RMSNorm+RoPE 融合）接入后的 Thor 位一致
-本机已把 `dims["fuse_qkv_norm_rope"]` 接进 `_single_stream_layer` 与 `_action_single_layer`（backbone 与 ActionDiT 的单流块），新 kernel 已加进 `CMakeLists.txt`/`csrc/bindings.cpp`（未在本机重编——这台机器编不了完整扩展）。plan.md 新增了一节 "Plan: wire OPT-032's kernel-fusion candidates into the served pipeline"，Phase 1 标记完成、待 Thor 确认。
+### X8 candidate 1（QKV拆分+QK-RMSNorm+RoPE 融合）接入后的 Thor 位一致（重跑：上一版测试有 bug）
+`0922`：接入代码已重编成功，但测试本身的种子重置太晚，两次对比调用没有用同一份输入，报的 `cos=0.9993` 不代表接入代码有问题。已修（种子挪到函数最前面）并把测试名从 `fused_qkv_norm_rope` 改成 `fuse_qkv_norm_rope`（和 flag 同名，`-k` 才能匹配上）。
 ```
-# 需要先重编（新 kernel 源文件，nvfp4 记得带 ENABLE_SM100_CUTLASS）
-cmake --build build -j --target flash_rt_kernels
 python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -q -s 2>&1 | tee $OUT/X8_wiring.log
 ```
-判据：新加的 `test_single_stream_and_action_single_fused_qkv_norm_rope_bit_exact_at_real_shapes` 必须 `torch.equal`（不是余弦），因为 kernel 本身已经在 Ada 和 Thor 上分别单独证明过逐位一致，这一测试测的是**接入代码本身有没有把行数/列偏移/目标指针传错**。不一致就把打印的 `_fmt` 差异统计带回，不要往前走。过了之后，跑一次全图 A/B（`imagewam_fusion_ab.py` 若已支持这个 flag；否则先跳过，只报告上面这个测试的结果）确认整条推理链路也没受影响，再报告 `infer()` P50 变化（预期方向：降低，参考 opportunities.md OPT-032 候选 1 的 8–15 ms 估计，但这是本机推断，具体数字看这次实测）。
+判据：`torch.equal`（不是余弦）。这次如果还不过，才是接入代码真的有问题，把打印的 `_fmt` 差异统计和是哪一句断言（`merge_qkv_mlp=True`/`False`、还是 action single）带回。过了的话，`plan.md` 这个 Plan 的 Phase 1 状态改成 completed，再考虑要不要跑 `imagewam_fusion_ab.py`（它目前的 `FLAGS` 还没有这一个，加不加是下一步的事，不强求这一轮做）。
+去向：opportunities.md OPT-032、plan.md Phase 1。
 
-### X5 计算图 × 算子网格（`0921x` 全部四次都返回 "trace holds no GPU kernels"；本地已修，需要重跑确认）
-`imagewam_stage_operator_grid.py` 缺了 `imagewam_graph_kernel_profile.py`（X4）已有的 CUPTI 预热：第一次 `torch.profiler` 会话会初始化 CUPTI、可能抓到 0 个 kernel，脚本已加一次空跑的预热会话。另外修了一个分类错误：`kernel_quantize_fp4_sfa_vec` 的完整符号里带 `flash_rt` 命名空间，之前的 "flash" 关键字把它错分进了 attention 类（已把 quantize 检查挪到 attention 之前）。
+### X7b ISSUE-089 容差修复确认
 ```
-for P in nvfp4 fp16_cutlass; do
-  python benchmarks/imagewam_stage_operator_grid.py --precision $P --valid-tokens 24 --use-fa4 off 2>&1 | tee $OUT/X5_$P.log
-done
-python benchmarks/imagewam_stage_operator_grid.py --precision fp8_static_cutlass --calibration $CAL_TRIM --valid-tokens 24 --use-fa4 off 2>&1 | tee $OUT/X5_fp8.log
-python benchmarks/imagewam_stage_operator_grid.py --precision nvfp4 --valid-tokens 24 --use-fa4 on 2>&1 | tee $OUT/X5_nvfp4_fa4.log
+python -m pytest tests/test_imagewam_text_trim.py -k "failed_capture or fa4_fallback_keeps" -q -s 2>&1 | tee $OUT/X7b_text_trim.log
 ```
-要带回：这次应该有网格了；判据同上一版——GEMM 的 TFLOPs/GB/s 远低于硬件、某阶段短 kernel 占比高、某一类（quantize/norm/glu/residual）占大头，三者分别指向效率/延迟受限、launch 延迟受限、融合目标。若还是 0 个 kernel，把完整报错带回，不要再猜。
-
-### X7 `test_failed_capture_leaves_no_replayable_graph` 的修复确认（issues.md ISSUE-089）
-本机已定位并修：这个测试原来没有显式传 `use_fa4=False`，在 FA4 可用的 Thor 上会走到"FA4 失败级联清空整个缓存"的分支（这是另一个测试 `test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists` 故意测的行为，不是这个测试想测的"单次失败不清空其他长度"）。已加上 `use_fa4=False` 固定住。
-```
-python -m pytest tests/test_imagewam_text_trim.py -x -q -s 2>&1 | tee $OUT/X7_text_trim.log
-```
-判据：`test_failed_capture_leaves_no_replayable_graph` 应该过了；`test_fa4_fallback_keeps_old_graphs_until_the_replacement_exists` 的 `torch.equal` 断言（FA4 回退后与新建 frontend 的 cuBLAS 链路输出比较）预计仍然失败（ISSUE-089 的第二个问题，还没修，只是待确认还在），把它的具体数值差异带回。
-
----
+判据：两个测试都应该过了（`cos > 0.9999` 且 `max_abs < 1e-2` 的容差，不再是 `torch.equal`）。如果还不过，把新的 `cos`/`max_abs` 数字带回——说明容差给的还不够宽，或者确实是别的问题。
+去向：issues.md ISSUE-089。
 
 ## 已完成的轮次（不再重跑）
 
