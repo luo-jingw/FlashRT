@@ -11,6 +11,7 @@
 #include "quantize.cuh"
 #include "elementwise.cuh"
 #include "fusion.cuh"
+#include "fused_qkv_norm_rope/qkv_split_norm_rope_fp16.cuh"
 #include "patch_embed.cuh"
 #include "softmax.cuh"
 #include "attention_cublas.cuh"

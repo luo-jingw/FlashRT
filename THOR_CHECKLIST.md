@@ -52,6 +52,15 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
+### X8 candidate 1（QKV拆分+QK-RMSNorm+RoPE 融合）接入后的 Thor 位一致
+本机已把 `dims["fuse_qkv_norm_rope"]` 接进 `_single_stream_layer` 与 `_action_single_layer`（backbone 与 ActionDiT 的单流块），新 kernel 已加进 `CMakeLists.txt`/`csrc/bindings.cpp`（未在本机重编——这台机器编不了完整扩展）。plan.md 新增了一节 "Plan: wire OPT-032's kernel-fusion candidates into the served pipeline"，Phase 1 标记完成、待 Thor 确认。
+```
+# 需要先重编（新 kernel 源文件，nvfp4 记得带 ENABLE_SM100_CUTLASS）
+cmake --build build -j --target flash_rt_kernels
+python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -q -s 2>&1 | tee $OUT/X8_wiring.log
+```
+判据：新加的 `test_single_stream_and_action_single_fused_qkv_norm_rope_bit_exact_at_real_shapes` 必须 `torch.equal`（不是余弦），因为 kernel 本身已经在 Ada 和 Thor 上分别单独证明过逐位一致，这一测试测的是**接入代码本身有没有把行数/列偏移/目标指针传错**。不一致就把打印的 `_fmt` 差异统计带回，不要往前走。过了之后，跑一次全图 A/B（`imagewam_fusion_ab.py` 若已支持这个 flag；否则先跳过，只报告上面这个测试的结果）确认整条推理链路也没受影响，再报告 `infer()` P50 变化（预期方向：降低，参考 opportunities.md OPT-032 候选 1 的 8–15 ms 估计，但这是本机推断，具体数字看这次实测）。
+
 ### X5 计算图 × 算子网格（`0921x` 全部四次都返回 "trace holds no GPU kernels"；本地已修，需要重跑确认）
 `imagewam_stage_operator_grid.py` 缺了 `imagewam_graph_kernel_profile.py`（X4）已有的 CUPTI 预热：第一次 `torch.profiler` 会话会初始化 CUPTI、可能抓到 0 个 kernel，脚本已加一次空跑的预热会话。另外修了一个分类错误：`kernel_quantize_fp4_sfa_vec` 的完整符号里带 `flash_rt` 命名空间，之前的 "flash" 关键字把它错分进了 attention 类（已把 quantize 检查挪到 attention 之前）。
 ```

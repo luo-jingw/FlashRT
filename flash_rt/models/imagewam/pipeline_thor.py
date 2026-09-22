@@ -688,6 +688,12 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
 
     merge_linear2 = _merge_linear2(dims)
     linear2_width = hidden + mlp_hidden
+    # OPT-032 candidate 1: one kernel for the Q/K/V split + QK-RMSNorm + RoPE
+    # sequence below, in place of 3 strided copies + 2 rms_norm_fp16 + 2
+    # rope_apply_fp16_perhead. Opt-in, not yet a default (Thor A/B pending);
+    # bit-exact against the unfused sequence on Ada and on Thor
+    # (csrc/kernels/fused_qkv_norm_rope/, opportunities.md OPT-032).
+    fused_qkv = bool(dims.get("fuse_qkv_norm_rope"))
 
     if not input_normed:
         fvk.ada_layer_norm_bf16in_fp16out(combined, scale_t.data_ptr(), shift_t.data_ptr(), modded, a0, hidden, eps, stream)
@@ -700,9 +706,15 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         linear1_width = 3 * hidden + 2 * mlp_hidden
         linear1_out = bufs["single_linear1_merged"]  # (a0, linear1_width)
         key("linear1.weight")(modded, linear1_out, a0, stream)
-        _copy_slice(Q_O, linear1_out, a0, hidden, src_row_stride=linear1_width)
-        _copy_slice(K_cache, _col_ptr(linear1_out, hidden), a0, hidden, src_row_stride=linear1_width)
-        _copy_slice(V_cache, _col_ptr(linear1_out, 2 * hidden), a0, hidden, src_row_stride=linear1_width)
+        if fused_qkv:
+            fvk.qkv_split_norm_rope_fp16(
+                linear1_out, key("query_norm"), key("key_norm"), rope_table,
+                Q_O, K_cache, V_cache, a0, NH, HD, hidden, linear1_width,
+                0, hidden, 2 * hidden, hidden, eps, stream)
+        else:
+            _copy_slice(Q_O, linear1_out, a0, hidden, src_row_stride=linear1_width)
+            _copy_slice(K_cache, _col_ptr(linear1_out, hidden), a0, hidden, src_row_stride=linear1_width)
+            _copy_slice(V_cache, _col_ptr(linear1_out, 2 * hidden), a0, hidden, src_row_stride=linear1_width)
         if merge_linear2:
             # Roadmap item 4: the SiLU-GLU output lands in the MLP
             # columns of the merged `linear2` input `[attn_out | mlp_act]`.
@@ -716,16 +728,23 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     else:
         qkv_merged = bufs["single_qkv_merged"]  # (a0, 3*hidden)
         key("qkv.weight")(modded, qkv_merged, a0, stream)
-        _copy_slice(Q_O, qkv_merged, a0, hidden, src_row_stride=3 * hidden)
-        _copy_slice(K_cache, _col_ptr(qkv_merged, hidden), a0, hidden, src_row_stride=3 * hidden)
-        _copy_slice(V_cache, _col_ptr(qkv_merged, 2 * hidden), a0, hidden, src_row_stride=3 * hidden)
+        if fused_qkv:
+            fvk.qkv_split_norm_rope_fp16(
+                qkv_merged, key("query_norm"), key("key_norm"), rope_table,
+                Q_O, K_cache, V_cache, a0, NH, HD, hidden, 3 * hidden,
+                0, hidden, 2 * hidden, hidden, eps, stream)
+        else:
+            _copy_slice(Q_O, qkv_merged, a0, hidden, src_row_stride=3 * hidden)
+            _copy_slice(K_cache, _col_ptr(qkv_merged, hidden), a0, hidden, src_row_stride=3 * hidden)
+            _copy_slice(V_cache, _col_ptr(qkv_merged, 2 * hidden), a0, hidden, src_row_stride=3 * hidden)
         mlp_merged, mlp_gated = bufs["single_mlp_merged"], bufs["single_mlp_gated"]
         _mlp_gate_up(fvk, key, "mlp_in.weight", modded, mlp_merged, mlp_gated, a0, mlp_hidden, stream)
 
-    fvk.rms_norm_fp16(Q_O, key("query_norm"), Q_O, a0 * NH, HD, eps, stream)
-    fvk.rms_norm_fp16(K_cache, key("key_norm"), K_cache, a0 * NH, HD, eps, stream)
-    fvk.rope_apply_fp16_perhead(Q_O, rope_table, a0, NH, HD, stream)
-    fvk.rope_apply_fp16_perhead(K_cache, rope_table, a0, NH, HD, stream)
+    if not fused_qkv:
+        fvk.rms_norm_fp16(Q_O, key("query_norm"), Q_O, a0 * NH, HD, eps, stream)
+        fvk.rms_norm_fp16(K_cache, key("key_norm"), K_cache, a0 * NH, HD, eps, stream)
+        fvk.rope_apply_fp16_perhead(Q_O, rope_table, a0, NH, HD, stream)
+        fvk.rope_apply_fp16_perhead(K_cache, rope_table, a0, NH, HD, stream)
 
     attn.run("backbone", site_layer_idx, q_seq=a0, stream=stream)
 
@@ -1011,6 +1030,8 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
 
     merge_linear2 = _merge_linear2(dims)
     linear2_width = action_attn_width + action_mlp_hidden
+    # OPT-032 candidate 1, same as _single_stream_layer above.
+    fused_qkv = bool(dims.get("fuse_qkv_norm_rope"))
 
     if not input_normed:
         fvk.ada_layer_norm_fp16(action_x, scale_t.data_ptr(), shift_t.data_ptr(),
@@ -1022,11 +1043,17 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         linear1_width = 3 * action_attn_width + 2 * action_mlp_hidden
         linear1_out = bufs["action_linear1_merged"]  # (num_action, linear1_width)
         key("linear1.weight")(modded, linear1_out, num_action, stream)
-        _copy_slice(action_Q_ptr, linear1_out, num_action, action_attn_width, src_row_stride=linear1_width)
-        _copy_slice(action_K_ptr, _col_ptr(linear1_out, action_attn_width), num_action, action_attn_width,
-                    src_row_stride=linear1_width)
-        _copy_slice(action_V_ptr, _col_ptr(linear1_out, 2 * action_attn_width), num_action, action_attn_width,
-                    src_row_stride=linear1_width)
+        if fused_qkv:
+            fvk.qkv_split_norm_rope_fp16(
+                linear1_out, key("query_norm"), key("key_norm"), action_rope_table,
+                action_Q_ptr, action_K_ptr, action_V_ptr, num_action, NH, HD, action_attn_width,
+                linear1_width, 0, action_attn_width, 2 * action_attn_width, action_attn_width, eps, stream)
+        else:
+            _copy_slice(action_Q_ptr, linear1_out, num_action, action_attn_width, src_row_stride=linear1_width)
+            _copy_slice(action_K_ptr, _col_ptr(linear1_out, action_attn_width), num_action, action_attn_width,
+                        src_row_stride=linear1_width)
+            _copy_slice(action_V_ptr, _col_ptr(linear1_out, 2 * action_attn_width), num_action, action_attn_width,
+                        src_row_stride=linear1_width)
         if merge_linear2:
             # Roadmap item 4: same merged `linear2` input as
             # `_single_stream_layer` above.
@@ -1041,17 +1068,24 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     else:
         qkv_merged = bufs["action_qkv_merged"]  # (num_action, 3*action_attn_width)
         key("qkv.weight")(modded, qkv_merged, num_action, stream)
-        _copy_slice(action_Q_ptr, qkv_merged, num_action, action_attn_width, src_row_stride=3 * action_attn_width)
-        _copy_slice(action_K_ptr, _col_ptr(qkv_merged, action_attn_width), num_action, action_attn_width,
-                    src_row_stride=3 * action_attn_width)
-        _copy_slice(action_V_ptr, _col_ptr(qkv_merged, 2 * action_attn_width), num_action, action_attn_width,
-                    src_row_stride=3 * action_attn_width)
+        if fused_qkv:
+            fvk.qkv_split_norm_rope_fp16(
+                qkv_merged, key("query_norm"), key("key_norm"), action_rope_table,
+                action_Q_ptr, action_K_ptr, action_V_ptr, num_action, NH, HD, action_attn_width,
+                3 * action_attn_width, 0, action_attn_width, 2 * action_attn_width, action_attn_width, eps, stream)
+        else:
+            _copy_slice(action_Q_ptr, qkv_merged, num_action, action_attn_width, src_row_stride=3 * action_attn_width)
+            _copy_slice(action_K_ptr, _col_ptr(qkv_merged, action_attn_width), num_action, action_attn_width,
+                        src_row_stride=3 * action_attn_width)
+            _copy_slice(action_V_ptr, _col_ptr(qkv_merged, 2 * action_attn_width), num_action, action_attn_width,
+                        src_row_stride=3 * action_attn_width)
         mlp_merged, mlp_gated = bufs["action_mlp_merged"], bufs["action_mlp_gated"]
         _mlp_gate_up(fvk, key, "mlp_in.weight", modded, mlp_merged, mlp_gated, num_action, action_mlp_hidden, stream)
-    fvk.rms_norm_fp16(action_Q_ptr, key("query_norm"), action_Q_ptr, num_action * NH, HD, eps, stream)
-    fvk.rms_norm_fp16(action_K_ptr, key("key_norm"), action_K_ptr, num_action * NH, HD, eps, stream)
-    fvk.rope_apply_fp16_perhead(action_Q_ptr, action_rope_table, num_action, NH, HD, stream)
-    fvk.rope_apply_fp16_perhead(action_K_ptr, action_rope_table, num_action, NH, HD, stream)
+    if not fused_qkv:
+        fvk.rms_norm_fp16(action_Q_ptr, key("query_norm"), action_Q_ptr, num_action * NH, HD, eps, stream)
+        fvk.rms_norm_fp16(action_K_ptr, key("key_norm"), action_K_ptr, num_action * NH, HD, eps, stream)
+        fvk.rope_apply_fp16_perhead(action_Q_ptr, action_rope_table, num_action, NH, HD, stream)
+        fvk.rope_apply_fp16_perhead(action_K_ptr, action_rope_table, num_action, NH, HD, stream)
 
     attn.run("mot", site_layer_idx, q_seq=num_action, kv_seq=dims["total"], stream=stream, x0=x0, a0=a0)
 

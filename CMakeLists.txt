@@ -1540,6 +1540,7 @@ pybind11_add_module(flash_rt_kernels
   csrc/kernels/quantize.cu
   csrc/kernels/elementwise.cu
   csrc/kernels/fusion.cu
+  csrc/kernels/fused_qkv_norm_rope/qkv_split_norm_rope_fp16.cu
   csrc/kernels/patch_embed.cu
   csrc/kernels/imagewam_vae_preprocess.cu
   csrc/kernels/imagewam_vae_groupnorm.cu

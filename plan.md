@@ -2014,3 +2014,167 @@ Phase Status: pending
   three times the ActionDiT kernels in one graph, so the capture time and the
   graph memory are observed on the RoboTwin rows; the official row runs at 30
   steps too.
+
+
+# Plan: wire OPT-032's kernel-fusion candidates into the served pipeline
+
+Plan Status: proposed
+
+## Problem
+
+### Current
+
+opportunities.md OPT-032 has four kernel-fusion candidates authored and
+bit-exact tested (candidate 1: fused QKV split + QK-RMSNorm + RoPE;
+candidate 3: fused gated-residual + AdaLN emitting NVFP4 + SFA directly;
+candidate 6: fused Euler-step + next-step cast; candidate 8: last
+backbone block computing only its exported K/V), none wired into
+`pipeline_thor.py`, `csrc/bindings.cpp` or `CMakeLists.txt`. Candidate 4
+(the vectorized activation quantizer) is wired
+(`flash_rt/executors/fp4_utils.py`).
+
+### Problem
+
+Candidates 1, 3, 8 all touch the same four per-layer functions in
+`pipeline_thor.py` (`_double_stream_layer`, `_single_stream_layer`,
+`_action_double_layer`, `_action_single_layer`), so wiring them is
+inherently serial, one owner, one fusion at a time -- the OPT-015/016/017
+precedent this project already follows for exactly this reason. This
+machine cannot compile or run the production `flash_rt_kernels`
+extension (no working local build), so every wired change here is
+validated by a CPU-only structural/compile check plus a NEW Thor-only
+bit-exact test added alongside it; the actual pass/fail is a Thor A/B,
+not a local one.
+
+### Measurable goal
+
+Each candidate lands behind its own `dims` flag, default off (opt-in
+until Thor confirms it, matching `text_trim`/`gemm_variant_autotune`/
+`nvfp4_awq`'s own rollout), with the flag off producing byte-identical
+code to before (regression-proof) and the flag on producing a
+`torch.equal` match against the unfused path at real production shapes
+(not cosine -- the kernels are already proven bit-exact in isolation, so
+anything short of bit-exact in the WIRED path is an argument/offset bug,
+not a numerics difference).
+
+## Structure
+
+| Module | Responsibility |
+|---|---|
+| `csrc/kernels/fused_qkv_norm_rope/`, `fused_norm_fp4/`, `fused_step_boundary/` | the fused kernels (opportunities.md OPT-032), unowned by this plan -- already authored and tested |
+| `CMakeLists.txt`, `csrc/bindings.cpp`, `csrc/kernels/kernels.h` | production build/binding surface: one entry per fused kernel, additive only |
+| `flash_rt/models/imagewam/pipeline_thor.py` | the four per-layer functions; each fusion flag is read once per function and both branches (fused/unfused) call the SAME downstream code |
+| `tests/test_imagewam_thor_real_wiring.py` | the Thor-only bit-exact A/B per fusion, at real dims, added alongside the wiring |
+
+## Interface
+
+`dims` flags (read via `dims.get(...)`, default `False`, not yet exposed
+as a constructor kwarg or `config_resolver.py` expert key -- only
+`dims_override` until Thor confirms a candidate is worth promoting):
+
+- `fuse_qkv_norm_rope` (candidate 1): read in `_double_stream_layer`,
+  `_single_stream_layer`, `_action_double_layer`, `_action_single_layer`.
+  Calls `fvk.qkv_split_norm_rope_fp16(qkv, q_norm, k_norm, rope_table,
+  Q_out, K_out, V_out, rows, NH, HD, hidden, src_row_stride,
+  q_col_offset, k_col_offset, v_col_offset, dst_row_stride, eps, stream)`
+  in place of the 3 `_copy_slice` + 2 `rms_norm_fp16` + 2
+  `rope_apply_fp16_perhead` calls it replaces. Double-stream calls it
+  TWICE (once per txt/img stream, each with its own row-offset
+  `rope_table` pointer into the shared table and its own row range of
+  the shared `Q_O`/`K_cache`/`V_cache` destination) -- proven equivalent
+  to the reference's single joint-RoPE call by the kernel's own authoring
+  test (`test_double_stream_split_call_matches_joint_rope`).
+- `fuse_ada_norm_fp4` (candidate 3, not yet wired): will replace
+  `_fused_gate_res` + the following `Nvfp4Linear.__call__`'s internal
+  quantize with one call; needs a new `Nvfp4Linear` method that accepts
+  pre-quantized (packed, sfa) scratch instead of an fp16 input, since the
+  fusion kernel now produces the GEMM's activand quantized operand
+  directly (`quant_linear.py`, not yet designed).
+- `fuse_step_boundary` (candidate 6, low priority): will replace the
+  per-step trailing `gpu_euler_step` + the next step's leading
+  `gpu_cast_fp32_to_fp16` with one call, in `imagewam_denoise_step`/
+  `imagewam_denoise_loop`; measured gain is small (0.03-0.09 ms total,
+  opportunities.md OPT-032), deprioritized.
+- candidate 8 (last-block K/V-only) is not a per-layer flag: it is a
+  new function called from `imagewam_prefill`'s loop for exactly
+  `site_layer_idx == num_layers_single - 1` (the bijection
+  `attn_backend.py:get_slot_ptrs` established, `docs/imagewam_last_block_kv_only.md`),
+  a different, non-overlapping integration point from 1/3's per-layer flags.
+
+## Flow
+
+```
+pipeline_thor.py's per-layer functions (unchanged call sites, dims-gated):
+  dims.get("fuse_qkv_norm_rope") -> fvk.qkv_split_norm_rope_fp16(...)
+                                     or the 7-call unfused sequence
+  (candidate 3, 6, 8: same pattern, not yet wired)
+        |
+tests/test_imagewam_thor_real_wiring.py (Thor only): flag off vs on,
+  same inputs, torch.equal on the layer's output
+        |
+Thor rebuild (ENABLE_SM100_CUTLASS) -> the new test -> the existing
+  imagewam_fusion_ab.py-style whole-graph A/B -> THOR_CHECKLIST.md X4/X5
+  for the measured kernel-count and latency win
+```
+
+## Code Mapping
+
+| Task | Files |
+|---|---|
+| Candidate 1 wiring (single-stream, backbone + ActionDiT) | `flash_rt/models/imagewam/pipeline_thor.py` (`_single_stream_layer`, `_action_single_layer`), `csrc/bindings.cpp`, `CMakeLists.txt`, `csrc/kernels/kernels.h`, `tests/test_imagewam_thor_real_wiring.py` |
+| Candidate 1 wiring (double-stream) | `pipeline_thor.py` (`_double_stream_layer`, `_action_double_layer`) |
+| Candidate 3 wiring | `pipeline_thor.py` (`_fused_gate_res` and its call sites), `quant_linear.py` (`Nvfp4Linear` pre-quantized-input method) |
+| Candidate 8 wiring | `pipeline_thor.py` (`imagewam_prefill`'s loop, a new last-layer function per `docs/imagewam_last_block_kv_only.md`) |
+| Candidate 6 wiring | `pipeline_thor.py` (`imagewam_denoise_step`, `imagewam_denoise_loop`); low priority |
+
+## Implementation Phases
+
+### Phase 1: candidate 1, single-stream (backbone + ActionDiT)
+Phase Status: completed
+- Goal: `fuse_qkv_norm_rope` wired into `_single_stream_layer` and
+  `_action_single_layer`, both the `merge_qkv_mlp` and split `qkv.weight`
+  branches; the shared post-branch RMSNorm+RoPE block is skipped when the
+  flag is on.
+- Modified files: `CMakeLists.txt` (new kernel source), `csrc/kernels/kernels.h`
+  (new header), `csrc/bindings.cpp` (new binding, additive), `pipeline_thor.py`,
+  `tests/test_imagewam_thor_real_wiring.py` (new bit-exact A/B test at real
+  dims, both `merge_qkv_mlp` values).
+- Observation: local CPU regression suite unaffected (`py_compile`,
+  `tests/test_imagewam_thor_precision_routing.py` and the config-resolver/
+  workload/structure/precision-table tests, 205 passed); the new Thor-only
+  test is the real check, not yet run (needs a rebuild).
+- Next: Thor rebuild + `python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -q -s`,
+  then the whole-graph `imagewam_fusion_ab.py`-style A/B with the flag on,
+  then THOR_CHECKLIST.md X4/X5 re-run to measure the kernel-count and
+  latency change.
+
+### Phase 2: candidate 1, double-stream
+Phase Status: pending
+- Goal: the same flag in `_double_stream_layer`/`_action_double_layer`,
+  two calls per block (txt, img), each with its own row-offset RoPE
+  table pointer and destination row range.
+- Modified files: `pipeline_thor.py`, `tests/test_imagewam_thor_real_wiring.py`.
+
+### Phase 3: candidate 8, last backbone block K/V-only
+Phase Status: pending
+- Goal: `imagewam_prefill`'s loop calls a new, narrower function for
+  `site_layer_idx == num_layers_single - 1` instead of the full
+  `_single_stream_layer`, per `docs/imagewam_last_block_kv_only.md`'s
+  design (already bit-exact tested at real dims on this dev machine).
+- Modified files: `pipeline_thor.py` (`imagewam_prefill`, a new function),
+  `tests/test_imagewam_thor_real_wiring.py` or a dedicated test file.
+
+### Phase 4: candidate 3, fused AdaLN + NVFP4 direct quantize
+Phase Status: pending
+- Goal: design the `Nvfp4Linear` pre-quantized-input method first (not
+  yet designed), then wire `_fused_gate_res`'s NVFP4 callers.
+- Modified files: `quant_linear.py`, `pipeline_thor.py`.
+
+### Phase 5: candidate 6, step-boundary Euler+cast
+Phase Status: pending, low priority
+- Goal: fuse the trailing Euler step with the next step's leading cast
+  (9 of 10 pairs; the last step has no following cast).
+- Modified files: `pipeline_thor.py` (`imagewam_denoise_step`,
+  `imagewam_denoise_loop`).
+- Note: measured gain is small (0.03-0.09 ms total, OPT-032); do this
+  only if Phases 1-4 leave capacity.
