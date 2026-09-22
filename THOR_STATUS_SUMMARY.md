@@ -461,6 +461,27 @@ HEAD `11e8869`，未重编。`python -m pytest tests/test_imagewam_thor_real_wir
 
 结论：OPT-032 candidate 3 第二轮（ActionDiT 单流链）和 Phase 3（candidate 8，最后一层 backbone block 只算 K/V）在 Thor 上都完全确认。`plan.md` Phase 3、Phase 4（第一、二轮范围）都关闭；`THOR_CHECKLIST.md` 的 X11、X12 已删除。剩下的是 candidate 3 Round 4：关闭双流/ActionDiT-double 的边界层，需要要么改 kernel（给 `fused_norm_fp4.cu` 加一个行偏移参数）要么改消费端设计（拆成两次独立 GEMM）——这是设计工作，本地已经记录了两个方向的取舍，还没有开始实现。
 
+### `0922i` 轮：X13——本轮大量改动 `pipeline_thor.py` 后默认路径回归确认，**未发现回归**（commit `6526118`）
+
+HEAD `6526118`，未重编。`STEPS="0 3 4"` 全部 `rc=0`。MAXN，`emc_locked=null`，GPU 空闲。e2e 实际配置是 served default：`vae_encoder=native vae_graph=True use_fa4=True use_fa4_mot=True`；本轮三个新开关（`fuse_qkv_norm_rope`/`fuse_res_norm_fp4`/`last_layer_kv_only`）都没有打开——这版测的是默认路径没被这轮改动带偏，不是新优化的收益。
+
+**叠满（trim + FA4 双位点 + 原生 VAE 进图）**：
+
+| 精度/口径 | P50 | fr_vs_off med (min) | 历史对照 |
+|---|---:|---|---|
+| nvfp4, libero_spatial | 106.3 ms | 0.99934 (0.99894) | 历史 106.1ms / 0.99933 (0.99887)，**对齐** |
+| nvfp4, libero_goal | 105.1 ms | 0.99932 (0.99823) | 无同口径历史值，新增数据点 |
+| nvfp4, libero_10 | 106.4 ms | 0.99926 (0.99486) | 同上 |
+| fp8_static_cutlass + trim_v2 校准, **libero_goal** | 104.5 ms | 0.99995 (0.99861) | 历史 115.3ms 是 **libero_spatial**，口径不同，不能直接比较 |
+
+**各精度（gate，untrimmed，FA4/VAE 关闭，跟"各精度"历史表同一口径）**：`04_gate_fp8_static` verdict **pass**，P50 **223.30ms**（历史 228.0ms，更快，噪声内）；vs official med **0.99830**（历史 0.99829）；MAE **0.18369**（历史 0.18366）。**没有回归，数字基本重合。**
+
+**其余，均正常**：trim0（FA4+VAE 开、不裁文本）P50 spatial 147.3/goal 145.7/libero_10 146.2ms，跟历史"未叠 FA4/VAE 的 202.3ms"是不同口径,不直接可比；trim safety 三组（nvfp4/real/e0m3）各 `4 passed`；trim bench（`--use-fa4 off`）trimmed x0=21 120.95ms vs full x0=513 200.83ms，符合 ISSUE-088 已记录的"trim 不按比例提速"模式；bundle SHA256 全部 OK。
+
+**一个小的新数据点，不是回归**：`04_fp8_layout` 里 `action_linear2` 的 `tn/nn` 比较 `bitexact=False maxabs=0.0020`（其余 GEMM 多数 `bitexact=True`）——普通的 cuBLASLt TN/NN 不同 reduction order 的浮点非结合性，跟这个项目已经记录过的其它"不同 GEMM 调用非位一致"先例（ISSUE-089 的说明）同一性质，不是新 bug，未深挖。
+
+**结论：本轮对 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 的大量修改（Phase 1-4 各阶段接线 + Phase 3）没有影响默认路径的数字。** `THOR_CHECKLIST.md` X13 已删除。candidate 3 Round 4 怎么走（改 kernel vs 改消费端设计）等用户决定。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

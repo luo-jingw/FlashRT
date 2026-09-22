@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认（`0922h`：`3 passed`，全部 `torch.equal`/`bit_exact=True`），`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。本节次待测项 X13：在决定 candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计，还没开始）怎么做之前，先重新测一版"各精度"/"叠满配置"表，确认这轮大量改动 `pipeline_thor.py` 之后默认路径没有回归。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。本清单当前没有待测项。剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,23 +52,11 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-### X13 重新测一版"各精度"+"叠满配置"表——本轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后的默认路径回归确认
-本轮（`fuse_qkv_norm_rope`/`fuse_res_norm_fp4`/`last_layer_kv_only` 三个新开关）全部是 opt-in、默认关闭，而且这三个开关目前都不在 `config_resolver.py` 的 `EXPERT_KEYS` 里，`imagewam_e2e_official_compare.py` 这条表**测不到它们**——这一项纯粹是"改了这么多 `pipeline_thor.py`，默认路径（`fuse_qkv_norm_rope=False` 等）的数字有没有被意外带偏"的回归确认，不是测新优化的收益。真要测新开关的收益，需要先把它们加进 `benchmarks/imagewam_fusion_ab.py` 的 `FLAGS`（这个我可以另外做，这次没做）。
-
-直接跑 `scripts/imagewam_thor_validation.sh` 的第 3、4 步（跟"各精度"/"叠满配置"两张表当时的口径完全一样，`03_e2e_*_trim*`/`04_fid_*`/`04_e2e_goal_fp8_static_trim` 用的都是 `$FULL="N_TASKS=10 FRAMES=0,60 SEEDS=0,1"`）：
-```
-export STEPS="0 3 4"
-export OUT=$HOME/thor_val/$(date +%m%d)
-mkdir -p $OUT
-bash scripts/imagewam_thor_validation.sh
-```
-不需要重编（这轮所有改动都是 Python）。前置的 `CKPT_PATH`/`FLUX2_SRC`/`BUNDLE` 等环境变量沿用已有设置（脚本文件头有完整清单，跟之前每一轮一样）。
-判据：跟 `THOR_STATUS_SUMMARY.md` 里"各精度"（fp16 275.2ms/fp8_static 228.0ms/nvfp4 202.3ms 等）和"叠满配置"（nvfp4 106.1ms、fp8_static_cutlass 115.3ms）两张表的历史数字比——P50 应该在噪声范围内一致，`vs official`/`MAE vs GT` 应该跟历史值一致（cos 差异到小数点后 3-4 位算正常噪声，明显偏离才是回归）。把完整输出（尤其 `$OUT` 下 `03_e2e_*`、`04_fid_*`、`04_e2e_goal_fp8_static_trim` 各文件的关键行）带回来即可，不需要额外分析。
-去向：THOR_STATUS_SUMMARY.md（更新"各精度"/"叠满配置"两张表）；如果发现真实回归，落 issues.md。
+（当前没有待测项。X13 已在 `0922i` 确认——未发现回归，见下方"已完成的轮次"。）
 
 ## 已完成的轮次（不再重跑）
 
-逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
+逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
 
 ---
 
