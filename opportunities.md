@@ -629,6 +629,45 @@ The ladder's criterion for making FA4 the default (at least 2 ms of P50 against 
 - The Thor kernel sweep's `num_splits` 2 and 4 rows for the `mot` shape (`fa4_splits1/2/4`) are unrecorded: no round has reported them, and if a split wins the constant in the `mot` branch changes.
 - ISSUE-020 (padded text keys) is answered by `text_trim` (OPT-030, the served default), not by a key mask in this kernel, so no attention-kernel change is needed for it; and no custom fused attention kernel is needed at either site.
 
+# OPT-032: kernel count and quantize traffic (why fp4 is 4x, not more)
+
+Status: identified, not started. Two read-only surveys (other models' methods; ImageWAM-specific structure) plus the `0921d` per-precision profile; the Thor stage x operator grid (`benchmarks/imagewam_stage_operator_grid.py`, THOR_CHECKLIST.md X5) is the measurement that confirms or moves the numbers below. Sizes marked (inf) are inferences from node counts, not measurements.
+
+Area: `flash_rt/models/imagewam/pipeline_thor.py` (per-layer op sequence), `quant_linear.py`, `csrc/kernels/`, `csrc/fused_fp4/`.
+
+## Observation
+
+fp4 is 108 ms against fp8's 116.6 ms although it halves weight bytes and doubles tensor-core rate; the fixed 55 ms part does not shrink with rows and the row-scaling part costs about the same per row at fp4 and fp16 (`0921d`). From the code (nvfp4, FA4, merged linear2, fused residual-norm; a quantized linear = quantize + GEMM): an ActionDiT single block is 16 nodes per step, a double block 20, a step 428, of which about 87 are real-work kernels (62 GEMM, 25 FA4) and 341 are small (60 quantize, 120 copy, 50 rms, 50 rope, 25 silu, 30 gate-res); the 10 steps are about 4280 of the ~5350 graph nodes. The fixed 55 ms over 4280 nodes is about 13 us per node, so the denoise loop is bound by kernel count and per-kernel latency, and none of those small kernels change with the GEMM precision. The counts from code sum to 4940-5080 against 5348 measured; the 270-410 residual needs a node dump on Thor. Bytes alone would be about 5 GB per call (354 MB fp4 weights + 148 MB mot K/V per step), about 20 ms at 250 GB/s (inf).
+
+## Candidates (largest first; nodes removed from ~5350)
+
+| # | change | nodes / bytes | size (inf) | precedent, risk |
+|---|---|---|---|---|
+| 1 | one kernel for Q/K/V split + QK-RMSNorm + RoPE + write to Q_O / K_cache / V_cache (replaces 3 copies + 2 rms + 2 rope) | -1670 (1500 denoise, 170 prefill) | 8-15 ms | HyVLA -11.5 ms (`hyvla_fused_thor.cu`), Cosmos `cosmos3_edge_misc.cu` (bf16); must stay bit-exact with `rms_norm_fp16` + `rope_apply_fp16_perhead` (fp16 rounding between them), native pipeline mirrors the sequence (`native_pipeline.cpp`) |
+| 2 | FA4 writes straight into its consumer (linear2 input / proj input), dropping the copy-back and the concat copy | -495 | 2-4 ms | FA4 strided output, 16 B alignment |
+| 3 | gated-residual + AdaLN kernel emits FP4 + scale factors directly (no quantize before qkv / mlp0 / linear1, no fp16 `modded` round trip) | -340 | 2-4 ms | GR00T DiT 36.6 -> 15.7 ms in a bundle (`dit_norm_fp4_sfa.cu`, `pi05_gate_res_adarms_fp4_sfa`); D=3072 needs a new kernel, AWQ fold and the BF16 residual must be kept |
+| 4 | use the existing bit-exact vectorized activation quantizer (`quantize_fp4_sfa_vec.cu`, used by Pi0.5) instead of the scalar one | 0 | 2-4 ms | none numerically (falls back on unaligned pointers) |
+| 5 | warp-per-row QK RMSNorm (`vec_fp16_backbone.cu`) as the stopgap for 1 (the current launch is 256 threads per 128-wide row) | 0 | 3-8 ms | reduction order differs, not bit-exact |
+| 6 | step-boundary kernel: head + Euler + action_encoder + AdaLN | -70 | 0.5-1 ms | fp16 rounding sequence |
+| 7 | denoise step 0 concurrent with the prefill (ActionDiT layer l needs only backbone K/V of layer l), fork/join streams in the capture | 0 | 3-5 ms | shared scratch, SM contention |
+| 8 | last backbone single block computes only the K/V it exports | -12 nodes, -52 MB weights | 2-3 ms | needs an N-offset GEMM or a sliced weight copy |
+| 9 | promote the per-M backbone tile tuning (OPT-018 tuner, never measured on Thor) | 0 | 0-10 ms unknown | numerics unchanged |
+| 10 | programmatic dependent launch across the dependent small kernels | 0 | 5-15 ms, unmeasured | none in any ImageWAM kernel; CUTLASS `use_pdl`, FA4 and graph capture support on Thor unverified |
+| 11 | SiLU-GLU -> FP4 GEMM epilogue with interleaved gate/up (Pi0.5 -2.05 ms encoder) | -25/step | small | heavy CUTLASS work; the 2-GEMM variant was tried and reverted (OPT-015) |
+| 12 | step caching (Motus -25.3 ms for 3 skipped steps) | fewer steps | large | changes numerics; GR00T saw closed-loop degradation cosine gates missed; needs a rollout gate |
+
+If 1, 2, 3 and 6 land, a step goes from 428 to about 197 nodes. Caveat from the HyVLA record (inf): pure launch-count cuts gave about 0 at M=41 because in-graph launch cost is near 0; ImageWAM's 13-20 us kernels are latency and DRAM-pass bound, so the fusions that also remove DRAM passes (1, 3, 4) are the better bets than launch counts alone.
+
+## Already done or rejected (do not redo)
+
+Modulation / RoPE / delta precompute for all steps, NVFP4 weight prepack, AWQ fold, QKV / linear1 / linear2 merges, cross-layer gated-residual + next AdaLN, whole-pipeline graph, per-shape cuBLASLt autotune, text_trim, FA4 both sites, native VAE in graph (OPT-004, 015-017, 019, 021, 023, 030); megakernel FFN (measured negative at small M on Thor); static activation scale for nvfp4 (block scales are dynamic, ISSUE-051/052); no loop-invariant K/V exists in the ActionDiT (the mot reads the prefill's cache).
+
+## Open
+
+- The Thor stage x operator grid and the kernel profile (THOR_CHECKLIST.md X4, X5) give the measured split by stage and operator class; the candidates above are ranked from node counts until then.
+- No plan is written for any candidate; 1-4 and 6 are one mechanism (fewer, fatter small kernels) and would be one plan.
+
+
 # OPT-016: single-stream `linear2` merge (roadmap item 4)
 
 Status: implemented and locally verified (H100, `fp16`); default on for every precision except `fp16_cutlass`. Thor `AB=merge_linear2` (this item's own merged-vs-split A/B) was never recorded; the only Thor speed number is the round's microbenchmark of items 3 and 4 together, about -9.7 ms (`THOR_STATUS_SUMMARY.md`, the `c20f3a0` ladder section, random weights and no VAE).
