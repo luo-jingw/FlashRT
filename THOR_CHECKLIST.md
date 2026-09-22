@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1 的单流+双流、candidate 3 第一轮接线（`_single_stream_layer` 的 `merge_qkv_mlp=True`→`linear1.weight` 这一个消费点，`dims["fuse_res_norm_fp4"]` 开关）都在 Thor 上完全确认（`0922g`：`1 passed`，`torch.equal`/`bit_exact=True`，`max_abs=0`；过程中 `0922f` 抓到一个真实的 fp32/fp16 指针类型不匹配的接线 bug，已修，issues.md ISSUE-091），`plan.md` Phase 1、Phase 2、Phase 4（第一轮）都已关闭。本清单当前没有待测项。Phase 3（candidate 8）、Phase 4 第二轮（双流/ActionDiT/head 消费点）还没开始。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1 的单流+双流、candidate 3 第一轮接线（`_single_stream_layer` 的 `merge_qkv_mlp=True`→`linear1.weight` 这一个消费点，`dims["fuse_res_norm_fp4"]` 开关）都在 Thor 上完全确认（`0922g`：`1 passed`，`torch.equal`/`bit_exact=True`，`max_abs=0`；过程中 `0922f` 抓到一个真实的 fp32/fp16 指针类型不匹配的接线 bug，已修，issues.md ISSUE-091），`plan.md` Phase 1、Phase 2、Phase 4（第一轮）都已关闭。接着做了 candidate 3 第二轮：同样的模式接到 `_action_single_layer`（ActionDiT 自己的单流链），本节次待测项是 X11。**两轮都还没接双流/ActionDiT-double 的边界层**，`fuse_res_norm_fp4` 目前只能在测试这种"手搭链"的场景里打开，见 X11 的说明。Phase 3（candidate 8）还没开始。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,7 +52,13 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-（当前没有待测项。X10 已在 `0922g` 确认通过，见下方"已完成的轮次"。）
+### X11 candidate 3 第二轮接线（ActionDiT 自己的单流链）的 Thor 数值确认
+把 Round 1 同样的 `merge_qkv_mlp=True`→`linear1.weight` 模式接到了 `_action_single_layer`（ActionDiT 自己的单流链），跟 backbone 那条链完全对称。**注意一个两轮都没关的口子**：这次只覆盖同一个函数内部 `i>=1` 的链（layer i 的尾部写 layer i+1 自己消费的 scratch，都在一次函数调用里）；不覆盖 double→single 的边界层（`weight_layer_idx=0`，只要 `num_layers_double`/`action_num_layers_double`>0——LIBERO 真实结构就是这样——`input_normed=True` 也会在这一层触发，但生产者是 `_double_stream_layer`/`_action_double_layer` 自己的尾部调用，这两个函数这两轮都没接 `fp4_direct`）。**所以 `dims["fuse_res_norm_fp4"]` 现在只能在这种"手搭两层链"的测试场景里打开，不能在完整模型跑通打开**——打开了会读到没被真正写过的 `linear1` scratch。这一点已经在两个函数自己的代码注释里写清楚了，不是隐藏的坑。
+```
+python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_res_norm_fp4 -q -s 2>&1 | tee $OUT/X11_wiring.log
+```
+判据：`torch.equal`（不是余弦）。不需要重编。这条 `-k` 会把 X10（backbone 那条链）也一起收集，两个都该过；新增关心的是 `test_action_single_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes`。
+去向：opportunities.md OPT-032、plan.md Phase 4。
 
 ## 已完成的轮次（不再重跑）
 

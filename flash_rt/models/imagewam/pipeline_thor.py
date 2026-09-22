@@ -788,7 +788,14 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     # deployment default and the single biggest/widest GEMM in this
     # function). See `_fused_gate_res`'s own docstring for the contract;
     # other consumers (double-stream targets, the ActionDiT chain, the
-    # head target) are not wired yet -- plan.md Phase 4.
+    # head target) are not wired yet -- plan.md Phase 4. Covers the
+    # i>=1 single-stream-to-single-stream chain; NOT the double->single
+    # boundary (weight_layer_idx=0, `input_normed=True` when
+    # `num_layers_double>0` -- true for the real LIBERO structure --
+    # fed by `_double_stream_layer`'s own tail, not wired for
+    # `fp4_direct` this round). Turning this flag on for a real
+    # full-model run before `_double_stream_layer` is also wired would
+    # read `linear1`'s scratch before anything populates it.
     fp4_direct = bool(dims.get("fuse_res_norm_fp4"))
 
     if not input_normed:
@@ -1145,6 +1152,21 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     linear2_width = action_attn_width + action_mlp_hidden
     # OPT-032 candidate 1, same as _single_stream_layer above.
     fused_qkv = bool(dims.get("fuse_qkv_norm_rope"))
+    # OPT-032 candidate 3, Round 2: same pattern as _single_stream_layer's
+    # own merge_qkv_mlp=True -> linear1.weight consumer (plan.md Phase 4).
+    # Covers the i>=1 same-function chain (weight_layer_idx i's tail
+    # `_fused_gate_res` writes weight_layer_idx i+1's `linear1.weight`
+    # scratch, both inside THIS function). Does NOT cover the
+    # double(action)->single(action) boundary (weight_layer_idx=0, when
+    # `action_num_layers_double>0` -- true for the real LIBERO structure
+    # -- `input_normed=True` there too, fed by `_action_double_layer`'s
+    # own tail, which is not wired for `fp4_direct` this round): turning
+    # `fuse_res_norm_fp4` on for a real full-model run before
+    # `_action_double_layer` is also wired would read that layer's
+    # `linear1` scratch before anything populates it. Same documented
+    # gap as `_single_stream_layer`'s own Round 1 scope has for
+    # backbone's double->single boundary -- not closed by either round.
+    fp4_direct = bool(dims.get("fuse_res_norm_fp4"))
 
     if not input_normed:
         fvk.ada_layer_norm_fp16(action_x, scale_t.data_ptr(), shift_t.data_ptr(),
@@ -1155,7 +1177,11 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         # stream blocks.
         linear1_width = 3 * action_attn_width + 2 * action_mlp_hidden
         linear1_out = bufs["action_linear1_merged"]  # (num_action, linear1_width)
-        key("linear1.weight")(modded, linear1_out, num_action, stream)
+        linear1 = key("linear1.weight")
+        if fp4_direct and input_normed and isinstance(linear1, Nvfp4Linear):
+            linear1.gemm_prequantized(linear1_out, num_action, stream)
+        else:
+            linear1(modded, linear1_out, num_action, stream)
         if fused_qkv:
             fvk.qkv_split_norm_rope_fp16(
                 linear1_out, key("query_norm"), key("key_norm"), action_rope_table,
@@ -1213,7 +1239,7 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         _add_inplace(from_attn, from_mlp, num_action, action_hidden_dim)
     if fuse:
         _fused_gate_res(fvk, from_attn, gate, action_x, num_action, action_hidden_dim, next_norm, stream,
-                        bf16_residual=False, eps=eps)
+                        bf16_residual=False, eps=eps, fp4_direct=fp4_direct)
     else:
         fvk.gate_res_fp16(from_attn, gate_t.data_ptr(), action_x, num_action * action_hidden_dim, stream)
 

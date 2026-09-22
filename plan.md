@@ -2334,6 +2334,29 @@ Phase Status: completed for Round 1's scope, Thor-confirmed (`0922g`:
   1.40s`. `torch.equal`/`bit_exact=True`, `max_abs=0` for the two-layer
   single-stream chain. MAXN, `emc_locked=null`, GPU idle. Phase 4
   Round 1 is fully confirmed.
+- Round 2 (this same round, after X10): extended the identical
+  `merge_qkv_mlp=True` -> `linear1.weight` pattern to
+  `_action_single_layer` (ActionDiT's own single-stream chain).
+  **Important documented gap, in BOTH Round 1 and Round 2**: the
+  dispatch only covers the i>=1 same-function chain (weight_layer_idx
+  i's tail write feeding i+1's own consumption, both inside ONE call
+  to `_single_stream_layer`/`_action_single_layer`). Neither round
+  covers the double->single BOUNDARY (weight_layer_idx=0,
+  `input_normed=True` there too whenever `num_layers_double>0` /
+  `action_num_layers_double>0` -- true for the real LIBERO structure --
+  fed by `_double_stream_layer`'s/`_action_double_layer`'s own tail,
+  neither of which is wired for `fp4_direct` yet). Turning
+  `dims["fuse_res_norm_fp4"]` on for a real full-model run before
+  those two functions are ALSO wired would read `linear1`'s scratch
+  before anything populates it -- a real, silent-corruption-shaped
+  risk, not just an unoptimized path, so this is called out explicitly
+  in both functions' own code comments, not left implicit. This flag
+  must stay off in any full-model configuration until that boundary is
+  closed (a Round 3, not attempted).
+  New test: `test_action_single_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes`,
+  same construction as the backbone one, `pytest.importorskip`'d here
+  (same reason). Local CPU dispatch tests unaffected (9/9); Thor
+  confirmation of this new test is pending (THOR_CHECKLIST.md X11).
 
 ### Phase 5: candidate 6, step-boundary Euler+cast
 Phase Status: pending, low priority

@@ -1144,6 +1144,87 @@ def test_single_stream_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes():
     assert torch.equal(fused, unfused), f"not bit-exact, {_fmt(st)}"
 
 
+def test_action_single_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes():
+    """OPT-032 candidate 3, Phase 4 Round 2 (`dims["fuse_res_norm_fp4"]`),
+    ActionDiT's own single-stream chain: same contract and construction
+    as `test_single_stream_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes`
+    above, for `_action_single_layer`'s `merge_qkv_mlp=True` ->
+    `linear1.weight` consumer instead of the backbone's. Covers only the
+    i>=1 same-function chain (weight_layer_idx 0 -> 1, both calls to
+    `_action_single_layer`) -- NOT the action_double->action_single
+    boundary (weight_layer_idx=0's own `input_normed=True` case when
+    `action_num_layers_double>0`, real for LIBERO), which needs
+    `_action_double_layer` wired for `fp4_direct` too and is not
+    attempted this round (see `_action_single_layer`'s own docstring
+    comment on this gap)."""
+    pytest.importorskip("flash_rt.flash_rt_fp4")
+    R = _REAL
+    NH, HD = R["NH"], R["HD"]
+    x0, a0 = R["x0"], R["a0"]
+    ahd, aaw, amh, num_action = R["action_hidden_dim"], R["action_attn_width"], R["action_mlp_hidden"], R["num_action"]
+    total = a0 + num_action
+    gemm = fvk.GemmRunner()
+    ctx = fvk.FvkContext()
+
+    def build_chain():
+        torch.manual_seed(37)
+        w = {}
+        for i, linear1_lin in enumerate(("fp16", "nvfp4")):
+            l1_w = _own((torch.randn(ahd, 3 * aaw + 2 * amh, device=DEV) * 0.02).to(FP16))
+            w[("action_dit", "single", i, "linear1.weight")] = (
+                Fp16Linear(gemm, l1_w.data_ptr(), 3 * aaw + 2 * amh, ahd) if linear1_lin == "fp16"
+                else Nvfp4Linear(l1_w.data_ptr(), 3 * aaw + 2 * amh, ahd))
+            attn_out = _own((torch.randn(ahd, aaw, device=DEV) * 0.02).to(FP16))
+            mlp_down = _own((torch.randn(amh, ahd, device=DEV) * 0.02).to(FP16))
+            w[("action_dit", "single", i, "attn_out_proj.weight")] = Fp16Linear(gemm, attn_out.data_ptr(), aaw, ahd)
+            w[("action_dit", "single", i, "mlp_down.weight")] = Fp16Linear(gemm, mlp_down.data_ptr(), ahd, amh)
+            w[("action_dit", "single", i, "query_norm")] = _norm_scale(HD, DEV).data_ptr()
+            w[("action_dit", "single", i, "key_norm")] = _norm_scale(HD, DEV).data_ptr()
+
+        amod_w = {
+            "time_in_w1": torch.randn(ahd, 256, dtype=F32, device=DEV) * 0.02,
+            "time_in_w2": torch.randn(ahd, ahd, dtype=F32, device=DEV) * 0.02,
+            "mod_double": torch.randn(6 * ahd, ahd, dtype=F32, device=DEV) * 0.02,
+            "mod_single": torch.randn(3 * ahd, ahd, dtype=F32, device=DEV) * 0.02,
+        }
+        _, amod_single = compute_action_modulation(torch.full((1,), 0.5, device=DEV), amod_w, ahd)
+        atable = build_action_rope_table(num_action, axes_dim=AXES_DIM, theta=THETA, device=DEV)
+        aattn = _real_attn(num_action, total, 2, ctx, prefill_kv=True)  # two site layers now, 0 and 1
+        a_in = _own(torch.randn(num_action, ahd, dtype=FP16, device=DEV))
+        return w, amod_single, atable, aattn, a_in
+
+    def run_chain(built, *, fuse_res_norm_fp4: bool) -> torch.Tensor:
+        w, amod_single, atable, aattn, a_in = built
+        action_x = _own(a_in.clone())
+        bufs = {
+            "action_hidden": action_x.data_ptr(),
+            "action_modded": _own(torch.zeros(num_action, ahd, dtype=FP16, device=DEV)).data_ptr(),
+            "action_linear1_merged": _own(torch.zeros(num_action, 3 * aaw + 2 * amh, dtype=FP16, device=DEV)).data_ptr(),
+            "action_mlp_gated": _own(torch.zeros(num_action, amh, dtype=FP16, device=DEV)).data_ptr(),
+            "action_proj_scratch": _own(torch.zeros(num_action, ahd, dtype=FP16, device=DEV)).data_ptr(),
+            "action_proj_scratch2": _own(torch.zeros(num_action, ahd, dtype=FP16, device=DEV)).data_ptr(),
+        }
+        dims = dict(action_hidden_dim=ahd, action_attn_width=aaw, HD=HD, NH=NH, action_mlp_hidden=amh,
+                    x0=x0, a0=a0, total=total, num_action=num_action, merge_qkv_mlp=True,
+                    merge_linear2=False, fuse_res_norm=True, fuse_res_norm_fp4=fuse_res_norm_fp4)
+        shift, scale, _gate = amod_single
+        next_norm = _awq_target(w[("action_dit", "single", 1, "linear1.weight")],
+                                AdaLNTarget(shift, scale, bufs["action_modded"]))
+        _action_single_layer(ctx, fvk, gemm, bufs, w, dims, 0, 0, 0, aattn, amod_single, atable.data_ptr(),
+                             input_normed=False, next_norm=next_norm)
+        _action_single_layer(ctx, fvk, gemm, bufs, w, dims, 1, 1, 0, aattn, amod_single, atable.data_ptr(),
+                             input_normed=True, next_norm=None)
+        torch.cuda.synchronize()
+        return action_x.clone()
+
+    built = build_chain()
+    unfused = run_chain(built, fuse_res_norm_fp4=False)
+    fused = run_chain(built, fuse_res_norm_fp4=True)
+    st = _diff_stats(fused, unfused)
+    print(f"action single chain fuse_res_norm_fp4 direct vs quantize-after: {_fmt(st)}")
+    assert torch.equal(fused, unfused), f"not bit-exact, {_fmt(st)}"
+
+
 if __name__ == "__main__":
     test_double_stream_layer_matches_real_reference()
     test_single_stream_layer_matches_real_reference()
@@ -1154,4 +1235,5 @@ if __name__ == "__main__":
     test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_shapes()
     test_double_stream_and_action_double_fuse_qkv_norm_rope_bit_exact_at_real_shapes()
     test_single_stream_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes()
+    test_action_single_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes()
     print("PASS")
