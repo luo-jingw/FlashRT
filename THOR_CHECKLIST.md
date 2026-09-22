@@ -67,6 +67,17 @@ done
 ```
 要带回：每个日志里 `graph replay ... ; kernels inside ...`、`average kernel ... us; kernels < 10 us: ...`、分类耗时、top 12。读法：短 kernel（< 25 us）占 GPU 时间的比例很大，说明是 kernel 数量 / 延迟受限；GEMM 类占大头而平均 TFLOPs 远低于 110，说明 GEMM 效率问题；top kernel 是逐元素类，说明访存受限。
 
+### X5 计算图 × 算子网格（fp4 为什么只快 4 倍：瓶颈在哪一格）
+`benchmarks/imagewam_stage_operator_grid.py`：一次 eager 前向（与图里同样的 kernel、同样的顺序）套 `torch.profiler`，每个阶段（encode、backbone 的 double / single 层、prefill 余项、ActionDiT 的 double / single 层、每步余项）打命名区间，把每个 kernel 归到发射它的最内层阶段和按名字分的算子类（gemm / quantize / norm / rope / attention / glu / residual / copy / other），输出：阶段 × 算子类的 GPU 毫秒网格、每格 kernel 数与平均时长、每个阶段里短于 10 / 25 µs 的 kernel 的时间占比、每个层阶段 GEMM 的实测 TFLOPs 与权重字节流速（GB/s，由模型维度解析推出）。
+```
+for P in nvfp4 fp16_cutlass; do
+  python benchmarks/imagewam_stage_operator_grid.py --precision $P --valid-tokens 24 --use-fa4 off 2>&1 | tee $OUT/X5_$P.log
+done
+python benchmarks/imagewam_stage_operator_grid.py --precision fp8_static_cutlass --calibration $CAL_TRIM --valid-tokens 24 --use-fa4 off 2>&1 | tee $OUT/X5_fp8.log
+python benchmarks/imagewam_stage_operator_grid.py --precision nvfp4 --valid-tokens 24 --use-fa4 on 2>&1 | tee $OUT/X5_nvfp4_fa4.log
+```
+要带回：四份日志全文（网格、短 kernel 占比、TFLOPs 与 GB/s、"no class matched" 列出的 kernel 名字——这些名字用来补分类）。读法：GEMM 的 TFLOPs 与 GB/s 都远低于硬件（fp16 约 110 TFLOPs、fp8 约 270 TFLOPs 可达；带宽约 250 GB/s）→ 是效率或延迟受限，不是算力或带宽受限；某个阶段的短 kernel 占比高 → 该阶段是 launch / 尾部延迟受限；某一列（quantize / norm / glu / residual）在网格里占大头 → 那一类就是融合的目标。若 profiler 报 "trace holds no GPU kernels"，把报错带回。
+
 ### X2 官方那一行的漂移（表里官方 L1 = 456.66 ms，末尾复测 L5 = 377.04 ms，−17.4%）
 `emc_locked=null`，官方 eager 更偏访存，FlashRT 的 nvfp4 两端只差 −0.4%，所以怀疑是 EMC 频率没锁。记录 EMC 频率，不改频：
 ```
