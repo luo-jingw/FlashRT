@@ -52,6 +52,14 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
+### X0 向量化激活量化 kernel 切换（`quant_act_nvfp4` 现在先试 vec 再退化到标量）
+```
+CUDA_VISIBLE_DEVICES=0 .venv/bin/python -m pytest tests/test_fp4_utils_quant_act.py -q 2>&1 | tee $OUT/X0_pytest.log
+python benchmarks/imagewam_thor_path_bench.py --profile default --precision nvfp4 --paths infer --bench-iters 100 2>&1 | tee $OUT/X0_path.log
+```
+本机没有编好的扩展，只测了 CPU 上的调用顺序（vec 先试、失败才退化到标量）。判据：Thor 上 `quantize_fp4_dynamic_sfa_fp16_vec` 真实跑通（不是每次都退化到标量——如果日志/profiler 显示大量标量 kernel，说明对齐条件没满足，带回原因）；`--profile default` 的 `infer` P50 与不换之前的 108 ms 同量级或更低。
+去向：OPT-032。
+
 ### X1 fp16 的 cuBLASLt GEMM 探针（ISSUE-088；表里 fp16 一行的数字目前不稳）
 ```
 python benchmarks/imagewam_fp16_gemm_probe.py --x0 25,513 2>&1 | tee $OUT/X1_fp16_gemm_probe.log

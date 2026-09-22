@@ -149,18 +149,34 @@ def quant_act_nvfp4(x: torch.Tensor, scratch: FP4ActScratch,
     """Quantize fp16 activation [M, K] → scratch.packed + scratch.sfa.
 
     Single-kernel fused path (F1). K is implicit (scratch.K).
+
+    Tries the vectorized kernel (`quantize_fp4_dynamic_sfa_fp16_vec`,
+    bit-exact with the scalar one, `csrc/quantize/quantize_fp4_sfa_vec.cu`:
+    16 B loads instead of 16 scalar 2 B loads) first; it refuses (rc -1)
+    on a source row that is not 16-byte aligned or an odd K (< 16 or not a
+    multiple of it), which `Nvfp4Linear.__call__`'s `x` can be when it
+    reads a column-offset slice of a wider buffer (`_col_ptr` in
+    `pipeline_thor.py`), so this falls back to the scalar kernel then.
+    Every real ImageWAM `x` this project constructs from a fresh
+    `torch.empty`/`torch.zeros` row-0 buffer is 16-byte aligned; the
+    fallback exists for the column-offset case, not as the common path.
     """
     assert x.dtype == torch.float16
     assert x.device.type == 'cuda'
     K = scratch.K
     assert M <= scratch.max_M, f"M={M} exceeds scratch.max_M={scratch.max_M}"
 
-    rc = fvk_fp4.quantize_fp4_dynamic_sfa_fp16(
+    rc = fvk_fp4.quantize_fp4_dynamic_sfa_fp16_vec(
         x.data_ptr(), scratch.packed.data_ptr(), scratch.sfa.data_ptr(),
         M, K, False, stream
     )
     if rc != 0:
-        raise RuntimeError(f"quantize_fp4_dynamic_sfa_fp16 (act) failed rc={rc}")
+        rc = fvk_fp4.quantize_fp4_dynamic_sfa_fp16(
+            x.data_ptr(), scratch.packed.data_ptr(), scratch.sfa.data_ptr(),
+            M, K, False, stream
+        )
+    if rc != 0:
+        raise RuntimeError(f"quantize_fp4_dynamic_sfa_fp16{{,_vec}} (act) failed rc={rc}")
 
 
 # ────────────────────────────────────────────────────────────────────
