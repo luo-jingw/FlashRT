@@ -2130,7 +2130,7 @@ Thor rebuild (ENABLE_SM100_CUTLASS) -> the new test -> the existing
 ## Implementation Phases
 
 ### Phase 1: candidate 1, single-stream (backbone + ActionDiT)
-Phase Status: completed (Thor confirmation of the corrected test still pending, THOR_CHECKLIST.md X8)
+Phase Status: completed, Thor-confirmed (`0922d`: `1 passed`, all three comparisons `torch.equal`/`bit_exact=True`, `max_abs=0`)
 - Goal: `fuse_qkv_norm_rope` wired into `_single_stream_layer` and
   `_action_single_layer`, both the `merge_qkv_mlp` and split `qkv.weight`
   branches; the shared post-branch RMSNorm+RoPE block is skipped when the
@@ -2177,6 +2177,11 @@ Phase Status: completed (Thor confirmation of the corrected test still pending, 
   `merge_qkv_mlp` values) and ActionDiT. No known production code path hits
   ISSUE-090's trigger (weights are built once at frontend construction,
   never rebuilt during `infer()`), so it is not a blocker, only noted.
+- Thor (`0922d`, HEAD `e727f91`): rerun of the corrected test, `1 passed,
+  6 deselected, 1.40s`. All three comparisons `torch.equal`/`bit_exact=True`,
+  `max_abs=0`: backbone `merge_qkv_mlp=True`, backbone `merge_qkv_mlp=False`,
+  ActionDiT single. MAXN, `emc_locked=null`, GPU idle, no rebuild needed.
+  Phase 1 is fully confirmed; candidate 1's single-stream wiring is closed.
 
 ### Phase 2: candidate 1, double-stream
 Phase Status: pending

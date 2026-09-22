@@ -391,6 +391,18 @@ GEMM 效率：backbone 接近算力（bb.single 164.9 TFLOPs、bb.double 82.3 TF
 
 结论：**candidate 1 的 kernel 和接线代码本身是对的**，被测试自己的构造方式（每次比较都重建全新随机权重）意外踩中了一个和这次工作无关的 `GemmRunner` 潜在问题（issues.md ISSUE-090，已记录、未深挖——真实生产代码从不会对同一个 `GemmRunner` 用不同指针重复调用同一形状，权重只在 frontend 构造时建一次）。测试已经改成"建一次、复用"，本机验证通过，Thor 待重跑确认。`plan.md` 的 Phase 1 标记为 completed（Thor 对修好的测试的确认还没做）。
 
+### `0922d` 轮：X8 确认性重跑，通过——candidate 1 单流接入 Thor 位一致完全确认（commit `e727f91`）
+
+HEAD `e727f91`（`0922b` 修复已经在这个 commit 里，之前 `0922c` 那次是 Thor 在推送落地前就 `git fetch` 了，看到的是旧 commit `cb638cd`，跑的是修复前的测试代码，属于时间差，不是新问题）。拉到 `e727f91` 后重跑：
+
+```
+python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -q -s
+```
+
+结果：`1 passed, 6 deselected, 1.40s`。三处比较全部 `torch.equal`/`bit_exact=True`、`max_abs=0`：backbone `merge_qkv_mlp=True`、backbone `merge_qkv_mlp=False`、ActionDiT single。MAXN，`emc_locked=null`，GPU 空闲，未重编。
+
+结论：OPT-032 candidate 1 的单流接入（`_single_stream_layer`、`_action_single_layer`）在 Thor 上完全确认，两轮假失败（`0922` 的种子 bug、`0922b` 的 GemmRunner 脆弱性）都已排除且与这次的新 kernel 无关。`plan.md` Phase 1 关闭；`THOR_CHECKLIST.md` 的 X8 已删除。下一步是 Phase 2（candidate 1 接入 `_double_stream_layer`/`_action_double_layer`，设计已定，两次调用各自带行偏移的 RoPE 指针，未写代码）。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

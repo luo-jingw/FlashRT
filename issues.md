@@ -781,7 +781,7 @@ Not pursued further here (out of this work's scope, and no known production trig
 
 ## Resolution
 
-Worked around in `tests/test_imagewam_thor_real_wiring.py`: `_single_stream_layer`'s and `_action_single_layer`'s fused_qkv comparison tests build weights/attention/input ONCE and replay against them, rather than rebuilding fresh weights per compared call. OPT-032 candidate 1's wiring is confirmed bit-exact for both backbone and ActionDiT once this trap is avoided. The underlying `GemmRunner` behavior is not fixed or further diagnosed; flagged here in case it surfaces again.
+Worked around in `tests/test_imagewam_thor_real_wiring.py`: `_single_stream_layer`'s and `_action_single_layer`'s fused_qkv comparison tests build weights/attention/input ONCE and replay against them, rather than rebuilding fresh weights per compared call. OPT-032 candidate 1's wiring is confirmed bit-exact for both backbone and ActionDiT once this trap is avoided. Thor-confirmed with the corrected test (`0922d`, HEAD `e727f91`): `1 passed, 6 deselected`, all three comparisons `torch.equal`/`bit_exact=True`, `max_abs=0`. The underlying `GemmRunner` behavior itself is not fixed or further diagnosed; flagged here in case it surfaces again outside this test.
 
 ## Index: resolved entries and where their conclusions are recorded
 

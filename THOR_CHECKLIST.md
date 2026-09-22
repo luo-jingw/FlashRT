@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b` 三轮把 X0/X6/X1/X4/X2/X3/X5/X7b 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。candidate 1 的接入代码本身已经在本机确认没问题（两次 Thor 失败都是测试自己的 bug，issues.md ISSUE-089/090）；测试已修好，本节次只剩 X8 做最后一次确认性重跑。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。candidate 1 单流（backbone + ActionDiT）的接入代码在 Thor 上完全确认（`0922d`：`1 passed`，三处 `torch.equal`/`bit_exact=True`，`max_abs=0`），`plan.md` Phase 1 已关闭。本清单当前没有待测项；下一步是 Phase 2（candidate 1 接入双流 `_double_stream_layer`/`_action_double_layer`），设计已定但还没写代码，写完后本清单会加对应测试项。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,17 +52,11 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-### X8 candidate 1（QKV拆分+QK-RMSNorm+RoPE 融合）接入后的 Thor 位一致（第三次；前两次都是测试自己的问题，不是接入代码）
-`0922`：种子重置太晚，已修。`0922b`：修好种子后 `_action_single_layer(fused_qkv=True)` 真崩了（illegal memory access），本机独立复现并定位：**不是这次的 kernel 或接线的问题**——是测试自己"每次比较都重建全新随机权重、共享同一个 GemmRunner"这个构造方式踩中了一个更早就存在的 `GemmRunner` 问题（issues.md ISSUE-090：同一个 GemmRunner 在同一 GEMM 形状上被不同权重指针连续调用两次会出问题，`fuse_qkv_norm_rope=False` 两次调用也一样崩，和这次的新 kernel 完全无关）。测试已经改成"权重只建一次、两次调用复用"，本机验证 backbone 与 ActionDiT 都 `torch.equal`，连续 3 次稳定。
-```
-python -m pytest tests/test_imagewam_thor_real_wiring.py -k fuse_qkv_norm_rope -q -s 2>&1 | tee $OUT/X8_wiring.log
-```
-判据：`torch.equal`（不是余弦）。本机已经反复验证过，这一轮预期是确认性的通过；如果 Thor 上还是不过，说明 Thor 和 Ada 之间有真实差异，把完整报错（尤其是不是同一处 `cuBLAS error`）带回，不要重复本机已经做过的种子/权重排查。过了的话，`plan.md` 这个 Plan 的 Phase 1 就是完全确认了；再考虑要不要跑 `imagewam_fusion_ab.py`（它目前的 `FLAGS` 还没有这一个，加不加是下一步的事，不强求这一轮做）。
-去向：opportunities.md OPT-032、plan.md Phase 1、issues.md ISSUE-090（如果 Thor 这次也过，ISSUE-090 维持"测试已绕开，未深挖"）。
+（当前没有待测项。X8 已在 `0922d` 确认通过，见下方"已完成的轮次"。）
 
 ## 已完成的轮次（不再重跑）
 
-逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
+逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
 
 ---
 
