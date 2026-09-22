@@ -782,16 +782,25 @@ def test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_sh
     gemm = fvk.GemmRunner()
     ctx = fvk.FvkContext()
 
-    def run_single_stream(*, merge_qkv_mlp: bool, fused_qkv: bool) -> torch.Tensor:
-        # Reset BEFORE any draw: every weight, the modulation and x_in must be
-        # bit-identical between the fused_qkv=False/True calls at the same
-        # merge_qkv_mlp, so only the kernel path differs. A reset placed later
-        # (this test's own earlier bug) leaves the weights/modulation drawn
-        # from wherever the global RNG had drifted to, so a "mismatch" then
-        # conflates "the compared runs had different inputs" with "the fused
-        # kernel disagrees with the unfused sequence" -- 0921/0922's Thor run
-        # hit exactly this, reporting cos=0.9993 for what was actually a test
-        # bug, not (as far as this fix can show) a kernel or wiring bug.
+    def build_single_stream(*, merge_qkv_mlp: bool):
+        """Weights/modulation/input/attn built ONCE, reused for both the
+        `fused_qkv=False` and `=True` replay of the SAME layer call --
+        `run_single_stream` below only swaps `dims["fuse_qkv_norm_rope"]`
+        and re-runs against fresh (but identically-seeded) buffers.
+
+        Rebuilding fresh `Fp16Linear` weight tensors for each of the two
+        compared calls (this function's earlier design, and the seed-reset
+        bug fixed above) hits a SEPARATE, pre-existing issue this file's own
+        debugging found: calling one of these layer functions twice against
+        one shared `GemmRunner`, with different weight tensor pointers at
+        the SAME (M,N,K) shape each time, corrupts something the LATER
+        cuBLASLt call then trips over (`RuntimeError: cuBLAS error ...
+        code=13`), reproduced locally even with `fuse_qkv_norm_rope=False`
+        on BOTH calls -- i.e. unrelated to this kernel. Building the
+        weights once and replaying against them (matching
+        `test_single_stream_linear2_merged_vs_split_real_shapes`'s own
+        established pattern) avoids it entirely; see issues.md.
+        """
         torch.manual_seed(11)
         q_norm, k_norm = _norm_scale(HD, DEV), _norm_scale(HD, DEV)
         w = {
@@ -823,6 +832,10 @@ def test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_sh
         table = build_backbone_rope_table(R["x0"], 14, 28, axes_dim=AXES_DIM, theta=THETA, device=DEV)
         attn = _real_attn(a0, a0, 1, ctx, prefill_kv=False)
         x_in = _own((torch.randn(a0, hidden, device=DEV) * 4.0).to(BF16))
+        return w, mod_single, table, attn, x_in
+
+    def run_single_stream(built, *, merge_qkv_mlp: bool, fused_qkv: bool) -> torch.Tensor:
+        w, mod_single, table, attn, x_in = built
         combined = _own(x_in.clone())
         bufs = {
             "backbone_hidden": combined.data_ptr(),
@@ -841,8 +854,9 @@ def test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_sh
         return combined.clone()
 
     for merge_qkv_mlp in (True, False):
-        unfused = run_single_stream(merge_qkv_mlp=merge_qkv_mlp, fused_qkv=False)
-        fused = run_single_stream(merge_qkv_mlp=merge_qkv_mlp, fused_qkv=True)
+        built = build_single_stream(merge_qkv_mlp=merge_qkv_mlp)
+        unfused = run_single_stream(built, merge_qkv_mlp=merge_qkv_mlp, fused_qkv=False)
+        fused = run_single_stream(built, merge_qkv_mlp=merge_qkv_mlp, fused_qkv=True)
         st = _diff_stats(fused, unfused)
         print(f"backbone single (merge_qkv_mlp={merge_qkv_mlp}) fused vs unfused qkv_norm_rope: {_fmt(st)}")
         assert torch.equal(fused, unfused), f"merge_qkv_mlp={merge_qkv_mlp}: not bit-exact, {_fmt(st)}"
@@ -850,29 +864,35 @@ def test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_sh
     ahd, aaw, amh, num_action = R["action_hidden_dim"], R["action_attn_width"], R["action_mlp_hidden"], R["num_action"]
     total = a0 + num_action
 
+    # Weights/modulation/attn/input built ONCE and replayed for both
+    # fused_qkv values -- see build_single_stream's own docstring above for
+    # why (a pre-existing GemmRunner/repeated-fresh-weight issue, not a
+    # fuse_qkv_norm_rope bug: this exact ActionDiT shape is where it was
+    # actually found, issues.md).
+    torch.manual_seed(13)
+    q_norm, k_norm = _norm_scale(HD, DEV), _norm_scale(HD, DEV)
+    al1_w = _own((torch.randn(ahd, 3 * aaw + 2 * amh, device=DEV) * 0.02).to(FP16))
+    a_attn_out = _own((torch.randn(aaw, ahd, device=DEV) * 0.02).to(FP16))
+    a_mlp_down = _own((torch.randn(amh, ahd, device=DEV) * 0.02).to(FP16))
+    aw = {
+        ("action_dit", "single", 0, "linear1.weight"): Fp16Linear(gemm, al1_w.data_ptr(), 3 * aaw + 2 * amh, ahd),
+        ("action_dit", "single", 0, "query_norm"): q_norm.data_ptr(),
+        ("action_dit", "single", 0, "key_norm"): k_norm.data_ptr(),
+        ("action_dit", "single", 0, "attn_out_proj.weight"): Fp16Linear(gemm, a_attn_out.data_ptr(), aaw, ahd),
+        ("action_dit", "single", 0, "mlp_down.weight"): Fp16Linear(gemm, a_mlp_down.data_ptr(), amh, ahd),
+    }
+    amod_w = {
+        "time_in_w1": torch.randn(ahd, 256, dtype=F32, device=DEV) * 0.02,
+        "time_in_w2": torch.randn(ahd, ahd, dtype=F32, device=DEV) * 0.02,
+        "mod_double": torch.randn(6 * ahd, ahd, dtype=F32, device=DEV) * 0.02,
+        "mod_single": torch.randn(3 * ahd, ahd, dtype=F32, device=DEV) * 0.02,
+    }
+    _, amod_single = compute_action_modulation(torch.full((1,), 0.5, device=DEV), amod_w, ahd)
+    atable = build_action_rope_table(num_action, axes_dim=AXES_DIM, theta=THETA, device=DEV)
+    aattn = _real_attn(num_action, total, 1, ctx, prefill_kv=True)
+    a_in = _own(torch.randn(num_action, ahd, dtype=FP16, device=DEV))
+
     def run_action_single(*, fused_qkv: bool) -> torch.Tensor:
-        torch.manual_seed(13)  # reset before any draw -- see run_single_stream's own comment above
-        q_norm, k_norm = _norm_scale(HD, DEV), _norm_scale(HD, DEV)
-        al1_w = _own((torch.randn(ahd, 3 * aaw + 2 * amh, device=DEV) * 0.02).to(FP16))
-        a_attn_out = _own((torch.randn(aaw, ahd, device=DEV) * 0.02).to(FP16))
-        a_mlp_down = _own((torch.randn(amh, ahd, device=DEV) * 0.02).to(FP16))
-        w = {
-            ("action_dit", "single", 0, "linear1.weight"): Fp16Linear(gemm, al1_w.data_ptr(), 3 * aaw + 2 * amh, ahd),
-            ("action_dit", "single", 0, "query_norm"): q_norm.data_ptr(),
-            ("action_dit", "single", 0, "key_norm"): k_norm.data_ptr(),
-            ("action_dit", "single", 0, "attn_out_proj.weight"): Fp16Linear(gemm, a_attn_out.data_ptr(), aaw, ahd),
-            ("action_dit", "single", 0, "mlp_down.weight"): Fp16Linear(gemm, a_mlp_down.data_ptr(), amh, ahd),
-        }
-        amod_w = {
-            "time_in_w1": torch.randn(ahd, 256, dtype=F32, device=DEV) * 0.02,
-            "time_in_w2": torch.randn(ahd, ahd, dtype=F32, device=DEV) * 0.02,
-            "mod_double": torch.randn(6 * ahd, ahd, dtype=F32, device=DEV) * 0.02,
-            "mod_single": torch.randn(3 * ahd, ahd, dtype=F32, device=DEV) * 0.02,
-        }
-        _, amod_single = compute_action_modulation(torch.full((1,), 0.5, device=DEV), amod_w, ahd)
-        atable = build_action_rope_table(num_action, axes_dim=AXES_DIM, theta=THETA, device=DEV)
-        aattn = _real_attn(num_action, total, 1, ctx, prefill_kv=True)
-        a_in = _own(torch.randn(num_action, ahd, dtype=FP16, device=DEV))
         action_x = _own(a_in.clone())
         bufs = {
             "action_hidden": action_x.data_ptr(),
@@ -886,7 +906,7 @@ def test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_sh
         dims = dict(action_hidden_dim=ahd, action_attn_width=aaw, HD=HD, NH=NH, action_mlp_hidden=amh,
                     x0=R["x0"], a0=a0, total=total, num_action=num_action, merge_qkv_mlp=True,
                     merge_linear2=False, fuse_qkv_norm_rope=fused_qkv)
-        _action_single_layer(ctx, fvk, gemm, bufs, w, dims, 0, 0, 0, aattn, amod_single, atable.data_ptr())
+        _action_single_layer(ctx, fvk, gemm, bufs, aw, dims, 0, 0, 0, aattn, amod_single, atable.data_ptr())
         torch.cuda.synchronize()
         return action_x.clone()
 
