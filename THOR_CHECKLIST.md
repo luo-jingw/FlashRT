@@ -60,6 +60,19 @@ python benchmarks/imagewam_thor_path_bench.py --profile default --precision nvfp
 本机没有编好的扩展，只测了 CPU 上的调用顺序（vec 先试、失败才退化到标量）。判据：Thor 上 `quantize_fp4_dynamic_sfa_fp16_vec` 真实跑通（不是每次都退化到标量——如果日志/profiler 显示大量标量 kernel，说明对齐条件没满足，带回原因）；`--profile default` 的 `infer` P50 与不换之前的 108 ms 同量级或更低。
 去向：OPT-032。
 
+### X6 新 kernel 对照当前真正接入的融合 kernel（不是本机测过的旧未融合对）
+四个新 kernel（`csrc/kernels/fused_qkv_norm_rope/`、`fused_norm_fp4/`、`fused_step_boundary/`、last-block 设计）是四个 subagent 用 `isolation: "worktree"` 写的，worktree 分支自 `origin/main`（当时落后 roadmap/integration 很多），本机已核对 `norm.cu`/`rope.cu`/`common.cuh` 与当前 HEAD 逐字节相同、`decoder_fused.cu`/`fusion.cu` 只有新增没有删改，所以这些 kernel 本身的数值验证有效；只有一处没在本机核实：`fused_norm_fp4` 是对照未融合的 `gate_res_bf16res/gate_res_fp16` + `ada_layer_norm_*` 测的逐位一致，当前真正接入的是融合过的 `gate_res_ada_layer_norm_bf16res/_fp16`（`fusion.cu`，`_fused_gate_res` 用的就是它，其文档自称"Bit-identical to gate_res_* + ada_layer_norm_*"，本机确认了两者用同一种 `__shfl_xor_sync` 归约，但没有直接对比）。Thor 上有完整编译好的扩展，加两行就能直接测：
+```
+python - <<'PYEOF'
+import torch
+import flash_rt.flash_rt_kernels as fvk
+# 用 fvk.gate_res_ada_layer_norm_bf16res / _fp16 替代 tests/test_fused_norm_fp4_kernel.py 里
+# fvk.gate_res_bf16res+ada_layer_norm_bf16in_fp16out 那两行，其余不变，跑一遍 16 组形状。
+PYEOF
+```
+判据：`packed`/`sfa`/`residual` 三者 `torch.equal`。不一致就说明融合 kernel 与未融合对不是逐位一致（会是 `fusion.cu` 自己文档写错，不是新 kernel 的问题），带回具体哪个形状、哪个字节。
+去向：OPT-032。
+
 ### X1 fp16 的 cuBLASLt GEMM 探针（ISSUE-088；表里 fp16 一行的数字目前不稳）
 ```
 python benchmarks/imagewam_fp16_gemm_probe.py --x0 25,513 2>&1 | tee $OUT/X1_fp16_gemm_probe.log
