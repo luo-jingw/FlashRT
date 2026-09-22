@@ -429,6 +429,16 @@ HEAD `c5898a2`。`python -m pytest tests/test_imagewam_thor_real_wiring.py -k fu
 
 结论：`plan.md` Phase 4 标记 "completed for Round 1's scope (Thor confirmation pending)"。真正的数值确认是 `THOR_CHECKLIST.md` X10，需要用 `ENABLE_SM100_CUTLASS` 重编。融合 kernel 本身的数值已经在 `0921x`（X6）确认过位一致，这次的测试跟 Phase 1/2 的测试一样，目的是抓接线/指针错误，不是抓数值错误。
 
+### `0922f` 轮：X10 第一次真跑，抓到真实接线 bug——`gate`/`scale`/`shift` 传成了 fp32 指针，kernel 要的是 fp16（commit 待推送）
+
+重编成功（`GPU_ARCH=110`，`flash_rt_fp4: building for sm_110a`，只增量编了 `fused_norm_fp4.cu`+`fp4_bindings.cpp`），测试也真的收集到了（不是 skip）。`X10` `torch.equal` 没过：`fuse_res_norm_fp4=True` 那条链的 bf16 残差炸到 `-7392`、`3008` 这种量级，对照组（`False`）还是 `O(1)`（`-0.79`、`5.16`、`-3.92`）。`_diff_stats` 报的 `cos=nan` 是 fused 侧本身出现 NaN/Inf，不是判据本身的问题。
+
+定位：直接读 `csrc/kernels/fused_norm_fp4/fused_norm_fp4.cu` 里两个导出函数的真实 C++ 参数类型——`gate`/`scale`/`shift`/`inv_s` 全部是 `const __half*`（fp16），跟已有的 `gate_res_ada_layer_norm_bf16res`（`const float*`，kernel 自己在内部转 fp16）是两个不同的约定，K2 自己的测试 `tests/test_fused_norm_fp4_kernel.py` 也确实是拿 `.to(torch.float16)` 之后的 tensor 去调这个 kernel。我接线时错用了 `_mod_vec_ptr`（那是给 `const float*` 约定用的），把一段 fp32 数据的指针直接喂给期待 fp16 的 kernel——等于用一半的元素宽度去读一段本该是两倍宽的数据，读出乱码，跟观察到的"炸到 O(1e3)/NaN"完全对得上（不是普通的数值漂移那种小误差）。
+
+修法：`_fused_gate_res` 的 `fp4_direct` 分支现在自己构造新的 fp16 `(dim,)` tensor（`t[0,0].to(torch.float16).contiguous()`，跟 `_fuse_mod_pair` 已有的转换方式一样）给 `gate`/`scale`/`shift`，`awq_inv_s`（如果有）也一样转一遍，再把这些新 tensor 的指针传给 kernel。加了一个专门的回归测试，在 mock kernel 的 `side_effect` 里同步把实际传进去的指针指向的字节读回来解码成 fp16 数值做校验——不是等 `_fused_gate_res` 返回之后再读（那样读到的内存已经被回收/可能被别的分配复用，这个测试第一版自己就踩了这个坑，读出来的数字明显不对，换成同步读之后才稳定通过）。本机 CPU 侧调用契约测试 9/9 过；本机没法跑真正的数值确认（`Nvfp4Linear` 需要 Blackwell/Thor）。
+
+结论：issues.md ISSUE-091 记录了完整过程。这不是"重编就行"的问题，不需要重编（kernel 本身没改，只改了 Python 侧传参），Thor 直接重跑同一条 pytest 命令即可。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

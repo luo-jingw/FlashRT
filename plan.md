@@ -2312,6 +2312,23 @@ THOR_CHECKLIST.md X10); Round 2 (remaining call sites) pending
   Thor-confirmed against the unfused pair (X6), so this test's job,
   like Phase 1/2's own wiring tests, is to catch a pointer/argument
   wiring bug, not a numerics one.
+- Thor (`0922f`): the real wiring test found exactly that kind of bug --
+  `fuse_res_norm_fp4=True` produced a BF16 residual with O(1e3)
+  values/NaN, not the O(1) the unfused control path gave. Root-caused
+  by reading the kernel's own C++ signature directly: `gate`/`scale`/
+  `shift`/`inv_s` are `const __half*` there (confirmed against
+  `tests/test_fused_norm_fp4_kernel.py`'s own FP16 reference
+  construction), NOT the `const float*` `_mod_vec_ptr` supplies (that
+  helper's contract matches the OLDER, still-live
+  `gate_res_ada_layer_norm_bf16res`, which really does take FP32 and
+  round internally -- a different kernel, a different contract).
+  Fixed in `_fused_gate_res`'s `fp4_direct` branch: round `gate`/
+  `scale`/`shift`/`awq_inv_s` to fresh FP16 tensors before passing
+  their pointers (issues.md ISSUE-091 has the full account, including
+  a regression test that decodes the actual bytes reaching the kernel
+  call). Local CPU dispatch suite re-verified 9/9 passing after the
+  fix; Thor re-run of the real bit-exact wiring test is the remaining
+  confirmation, same THOR_CHECKLIST.md X10 item.
 
 ### Phase 5: candidate 6, step-boundary Euler+cast
 Phase Status: pending, low priority

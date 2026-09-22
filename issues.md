@@ -783,6 +783,32 @@ Not pursued further here (out of this work's scope, and no known production trig
 
 Worked around in `tests/test_imagewam_thor_real_wiring.py`: `_single_stream_layer`'s and `_action_single_layer`'s fused_qkv comparison tests build weights/attention/input ONCE and replay against them, rather than rebuilding fresh weights per compared call. OPT-032 candidate 1's wiring is confirmed bit-exact for both backbone and ActionDiT once this trap is avoided. Thor-confirmed with the corrected test (`0922d`, HEAD `e727f91`): `1 passed, 6 deselected`, all three comparisons `torch.equal`/`bit_exact=True`, `max_abs=0`. The underlying `GemmRunner` behavior itself is not fixed or further diagnosed; flagged here in case it surfaces again outside this test.
 
+# ISSUE-091
+
+Status: resolved
+
+Area: `_fused_gate_res`'s OPT-032 candidate 3 dispatch (`flash_rt/models/imagewam/pipeline_thor.py`)
+
+## Observation
+
+`0922f` (Thor, first real run of `test_single_stream_fuse_res_norm_fp4_direct_bit_exact_at_real_shapes`, after `ENABLE_SM100_CUTLASS` rebuild): `fuse_res_norm_fp4=True` (the new candidate-3 wiring) produced a BF16 residual with values like `-7392`/`3008` (O(1e3)), while `fuse_res_norm_fp4=False` (the existing, already-wired path) stayed `O(1)` (`-0.79`/`5.16`/`-3.92`) on the exact same inputs. `_diff_stats`'s `cos=nan` came from NaN/Inf on the fused side, not from the cosine metric itself.
+
+## Impact
+
+Candidate 3's Round 1 wiring was completely non-functional (not a small numeric drift) whenever `dims["fuse_res_norm_fp4"]` was set. No production deployment could have hit this yet: the flag is new, opt-in, and default off in this same round.
+
+## Evidence
+
+Reading `csrc/kernels/fused_norm_fp4/fused_norm_fp4.cu`'s exported signatures directly: `gate_res_ada_layer_norm_fp4_sfa_bf16res`/`_fp16res` declare `gate`/`scale`/`shift`/`inv_s` as `const void*` typed `__half*` (FP16) inside the kernel launch (`launch<ResT>`'s own `reinterpret_cast<const __half*>`), confirmed against `tests/test_fused_norm_fp4_kernel.py`'s own reference construction, which builds `gate`/`scale`/`shift` as `torch.float16` tensors before calling this exact kernel. `_fused_gate_res`'s new `fp4_direct` branch instead called `_mod_vec_ptr(gate, dim)` etc. -- a helper whose OWN contract (used correctly by the EXISTING `gate_res_ada_layer_norm_bf16res`, which really does take `const float*` and rounds to FP16 internally, `csrc/kernels/fusion.cuh`) requires and returns an FP32 tensor's pointer. Feeding an FP32 pointer to a kernel that reads it as `__half*` reinterprets every 4-byte FP32 element as two 2-byte FP16 elements at half the intended stride -- garbage values, consistent with the observed O(1e3)/NaN blow-up (not the small-drift signature of an ordinary numerics difference).
+
+## Hypotheses
+
+None needed -- root cause fully confirmed by reading both the kernel's own C++ declaration and its own established reference test's construction; no further experiment required.
+
+## Resolution
+
+Fixed in `_fused_gate_res`'s `fp4_direct` branch: build fresh FP16 `(dim,)` tensors for `gate`/`scale`/`shift` (`t[0, 0].to(torch.float16).contiguous()`, same slicing convention `_fuse_mod_pair` already uses) and, when present, for `awq_inv_s`, and pass THEIR pointers instead of `_mod_vec_ptr`'s FP32 ones. Added a CPU-only regression test (`tests/test_imagewam_fuse_res_norm_fp4_dispatch.py::test_gate_scale_shift_are_rounded_to_fp16_not_passed_as_fp32`) that decodes the actual bytes at the pointers passed to the kernel and checks they match the FP16 rounding of the real input -- reading them back synchronously inside the mock kernel's own `side_effect`, since reading a CPU tensor's memory back from saved `call_args` after the producing function has already returned is itself unsound (its refcount hits zero and the allocator is free to reuse it; a first attempt at this same regression test read stale/reused bytes for exactly that reason, not a second real bug). Local dispatch test suite passes 9/9; Thor re-run of the real bit-exact wiring test is the remaining confirmation (THOR_CHECKLIST.md X10, same round).
+
 ## Index: resolved entries and where their conclusions are recorded
 
 

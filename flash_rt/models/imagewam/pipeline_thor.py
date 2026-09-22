@@ -460,16 +460,34 @@ def _fused_gate_res(fvk, proj_ptr: int, gate: torch.Tensor, residual_ptr: int, r
     replacing it with `.gemm_prequantized`); `target.out_ptr` holds no
     valid data in this branch. Bit-exact against the unfused
     `gate_res_*` + `quantize_fp4_dynamic_sfa_fp16` pair, confirmed on
-    Thor (THOR_CHECKLIST.md X6)."""
+    Thor (THOR_CHECKLIST.md X6).
+
+    Unlike `gate_res_ada_layer_norm_bf16res`/`_fp16` (whose `gate`/
+    `scale`/`shift` are `const float*`, rounded to FP16 INSIDE the
+    kernel -- `_mod_vec_ptr`'s own contract), this fused kernel's
+    `gate`/`scale`/`shift`/`inv_s` are `const __half*`: the CALLER must
+    round to FP16 first (`csrc/kernels/fused_norm_fp4/fused_norm_fp4.cu`,
+    confirmed against `tests/test_fused_norm_fp4_kernel.py`'s own
+    reference construction, which builds them as FP16). Found on Thor
+    (THOR_STATUS_SUMMARY.md `0922f`): passing the FP32 chunk's pointer
+    here reads garbage at the wrong stride and blows up the residual to
+    O(1e3)/NaN -- not a numerics difference, a dtype-and-width bug."""
     if fp4_direct and target is not None and isinstance(target.lin, Nvfp4Linear):
         lin = target.lin
         lin._ensure_scratch(rows)
         fvk_fp4 = lin._fvk_fp4
         fp4_kernel = (fvk_fp4.gate_res_ada_layer_norm_fp4_sfa_bf16res if bf16_residual
                       else fvk_fp4.gate_res_ada_layer_norm_fp4_sfa_fp16res)
-        inv_s_ptr = lin.awq_inv_s.data_ptr() if lin.awq_inv_s is not None else 0
-        fp4_kernel(residual_ptr, proj_ptr, _mod_vec_ptr(gate, dim), _mod_vec_ptr(target.scale, dim),
-                   _mod_vec_ptr(target.shift, dim), inv_s_ptr,
+        gate_fp16 = gate[0, 0].to(torch.float16).contiguous()
+        scale_fp16 = target.scale[0, 0].to(torch.float16).contiguous()
+        shift_fp16 = target.shift[0, 0].to(torch.float16).contiguous()
+        inv_s_ptr = 0
+        inv_s_fp16 = None
+        if lin.awq_inv_s is not None:
+            inv_s_fp16 = lin.awq_inv_s.to(torch.float16).contiguous()
+            inv_s_ptr = inv_s_fp16.data_ptr()
+        fp4_kernel(residual_ptr, proj_ptr, gate_fp16.data_ptr(), scale_fp16.data_ptr(),
+                   shift_fp16.data_ptr(), inv_s_ptr,
                    lin.scratch.packed.data_ptr(), lin.scratch.sfa.data_ptr(),
                    rows, dim, eps, stream)
         return
