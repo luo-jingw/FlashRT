@@ -73,6 +73,7 @@ import numpy as np
 import torch
 
 import flash_rt.flash_rt_kernels as fvk
+from flash_rt.hardware import detect_arch
 from flash_rt.hardware.thor import fa4_backend
 from flash_rt.hardware.thor.attn_backend import ImageWAMAttnBackend, make_imagewam_attention_spec
 from flash_rt.models.imagewam.config_resolver import ResolvedConfig
@@ -110,6 +111,7 @@ from flash_rt.models.imagewam.quant_linear import (
     Fp8Linear,
     Fp16Linear,
     Nvfp4Linear,
+    Nvfp4LinearSm120,
     SimNvfp4Linear,
     StaticFp8Linear,
 )
@@ -463,6 +465,12 @@ class ImageWAMTorchFrontendThor:
         # other machine (see quant_linear.py's own module docstring),
         # not here.
         self._precision = precision
+        # OPT-032-adjacent: resolved once, used by `_wrap_linear`'s NVFP4
+        # branch to pick the SM100/Thor kernel (`Nvfp4Linear`) vs the
+        # SM120 one (`Nvfp4LinearSm120`) -- these wrap two structurally
+        # different compiled kernels, not one kernel on two GPUs (see
+        # `Nvfp4LinearSm120`'s own docstring in `quant_linear.py`).
+        self._arch = detect_arch()
         self._keepalive = []
         self.dims = dict(_DEFAULT_DIMS)
         if dims_override:
@@ -1103,6 +1111,13 @@ class ImageWAMTorchFrontendThor:
             # the model is a multiple of 16 already.
             if fallback:
                 return Fp16Linear(self._gemm, w.data_ptr(), n, k)
+            # Arch-selected: SM100/Thor and SM120 (RTX 5090/DGX Spark)
+            # NVFP4 are two different compiled kernels (see
+            # `Nvfp4LinearSm120`'s own docstring) -- untested on the
+            # SM120 side (this project's dev machine is Ada, Thor is
+            # SM110; neither builds the SM120 CUTLASS instantiations).
+            if self._arch == "rtx_sm120":
+                return Nvfp4LinearSm120(w.data_ptr(), n, k, awq_inv_s=awq_inv_s)
             return Nvfp4Linear(w.data_ptr(), n, k, awq_inv_s=awq_inv_s)
         if prec is Precision.E0M3_HADAMARD:
             # opportunities.md OPT-024: E0M3 weights and activations with a

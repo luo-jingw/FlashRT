@@ -41,6 +41,8 @@ such restriction -- `fp8_gemm_descale_fp16`/`_tn` live in the main
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import torch
 
@@ -706,6 +708,134 @@ class Nvfp4Linear(AwqScaledLinear):
             self.scratch.packed.data_ptr(), self.scratch.sfa.data_ptr(),
             self.w_quant['packed'].data_ptr(), self.w_quant['sfb'].data_ptr(),
             out_ptr, m, self.n, self.k, 1.0, 0.0, stream))
+
+
+def _pick_sm120_nvfp4_gemm(fvk_mod):
+    """Same env-var convention as
+    `flash_rt/models/minimax_remover/_nvfp4_linear.py`'s own
+    `_pick_gemm` -- `FLASHRT_FP4_GEMM` in {plain, widen, pingpong},
+    default pingpong (that module's own default)."""
+    mode = os.environ.get("FLASHRT_FP4_GEMM", "pingpong").lower()
+    if mode == "plain":
+        return fvk_mod.fp4_w4a16_gemm_sm120_bf16out
+    if mode == "widen":
+        return fvk_mod.fp4_w4a16_gemm_sm120_bf16out_widen
+    return fvk_mod.fp4_w4a16_gemm_sm120_bf16out_pingpong
+
+
+class Nvfp4LinearSm120(AwqScaledLinear):
+    """SM120-native NVFP4 (W4A4) Linear, for RTX 5090 / DGX Spark
+    (`torch.cuda.get_device_capability()` reporting `(12, 0)`/`(12, 1)`
+    -- `flash_rt.hardware.detect_arch()`'s own `"rtx_sm120"`), as an
+    ARCH-SELECTED ALTERNATIVE to `Nvfp4Linear` above, not a replacement:
+    `Nvfp4Linear` wraps the SM100/Thor-only `flash_rt.flash_rt_fp4`
+    extension; this class wraps `flash_rt.flash_rt_kernels`'s own SM120
+    CUTLASS NVFP4 GEMM (`ENABLE_CUTLASS_SM120_NVFP4_W4A16`, gated ON for
+    `GPU_ARCH 120/121` only -- `CMakeLists.txt`). These are two
+    DIFFERENT compiled kernels with different packing conventions
+    ("swizzled" scale factors here, "tile-interleaved" for `Nvfp4Linear`)
+    and different native activation dtypes (BF16 here, FP16 for
+    `Nvfp4Linear`) -- not interchangeable at the byte level, only at
+    this class's own call-site contract (`__init__(weight_ptr, n, k)`,
+    `__call__(x_ptr, out_ptr, m, stream)`), matching every other
+    `weights[key](...)` callable this module exports.
+
+    `fp4_w4a16_gemm_sm120_bf16out` keeps the legacy "w4a16" name but
+    BOTH operands are FP4 (W4A4) -- confirmed against
+    `csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm120.cuh`'s own header
+    comment and `flash_rt/models/minimax_remover/_nvfp4_linear.py`'s
+    own docstring, the ALREADY-SHIPPED reference this class follows
+    call-for-call (`FlashRTNvfp4Linear`, that same file): weight
+    quantized once via `bf16_weight_to_nvfp4_swizzled`, activation
+    quantized every call via `quantize_bf16_to_nvfp4_swizzled`, no
+    persistent activation scratch (fresh `torch.empty(...)` every call,
+    same as that reference -- graph-capture-safe, since ordinary tensor
+    allocation goes through the caching allocator, unlike a raw
+    `cudaMalloc`; matches this project's own established convention,
+    see `GemmRunner`'s own construction-time-only allocation note
+    elsewhere in this codebase).
+
+    This project's own convention is FP16 activations/residuals (BF16
+    only for ImageWAM's own backbone residual, cast at THAT call site
+    already, before reaching any `weights[key](...)` callable); the
+    SM120 kernel needs BF16 in and produces BF16 out, so this class
+    casts FP16<->BF16 at its own boundary via the raw-pointer
+    `cast_fp16_to_bf16`/`cast_bf16_to_fp16` kernels -- two extra
+    memory-bound kernel launches per call, the same overhead
+    `FlashRTNvfp4Linear.forward()` already documents paying for its own
+    (tensor-based) fp16<->bf16 cast when its caller isn't already BF16.
+
+    AWQ input-scale folding is NOT implemented for this path (unlike
+    `Nvfp4Linear`): `FlashRTNvfp4Linear` itself has no such fold either
+    (its own `calibrating`/`freeze_act_scale` are documented no-ops,
+    "NVFP4 needs no calibration"). `awq_inv_s` is accepted only for
+    call-signature parity with `Nvfp4Linear`'s constructor (so
+    `_wrap_linear`'s dispatch can pass it uniformly); a non-`None` value
+    raises rather than silently folding nothing.
+
+    UNTESTED: this class has never run anywhere with SM120 NVFP4
+    kernels present (this project's own dev machine is Ada/sm_89, Thor
+    is sm_110; neither builds the SM120 CUTLASS instantiations). Its
+    correctness rests on `FlashRTNvfp4Linear`'s own already-shipped,
+    presumably-verified call sequence, which this class follows exactly
+    aside from the raw-pointer/FP16 boundary this project's own
+    convention needs -- not on independent verification here.
+    """
+
+    family = "nvfp4_sm120"
+
+    def __init__(self, weight_fp16_ptr: int, n: int, k: int, *, awq_inv_s: torch.Tensor | None = None):
+        super().__init__()
+        if awq_inv_s is not None:
+            raise NotImplementedError(
+                "Nvfp4LinearSm120 does not implement AWQ input-scale folding "
+                "(no proven precedent for this kernel family -- "
+                "FlashRTNvfp4Linear's own calibration hooks are no-ops too).")
+        self._awq_inv_s = None
+        if not hasattr(fvk, "fp4_w4a16_gemm_sm120_bf16out"):
+            raise RuntimeError(
+                "Nvfp4LinearSm120 requires flash_rt.flash_rt_kernels built with "
+                "SM120 NVFP4 support -- configure cmake with -DGPU_ARCH=120 (or 121) "
+                "so ENABLE_CUTLASS_SM120_NVFP4_W4A16 is set, and rebuild.")
+        if k % 16 != 0 or n % 16 != 0 or k < 64:
+            raise ValueError(f"SM120 NVFP4 requires K>=64, K%16==0, N%16==0; got N={n} K={k}")
+        self.n, self.k = int(n), int(k)
+        self._gemm = _pick_sm120_nvfp4_gemm(fvk)
+
+        # This project's own (K,N) GEMM convention -> NVFP4's own [N,K]
+        # out-major convention (same transpose `Nvfp4Linear` above
+        # already does for the SM100 kernel) -> BF16 (this kernel's own
+        # native dtype, `FlashRTNvfp4Linear.from_linear`'s own
+        # `w_bf16 = linear.weight.data.to(_BF16)`).
+        w_kn = _wrap_fp16(weight_fp16_ptr, self.k, self.n)
+        w_bf16_nk = w_kn.t().contiguous().to(BF16)
+        packed = torch.empty(self.n, self.k // 2, dtype=torch.uint8, device=DEV)
+        sfb = torch.empty(fvk.nvfp4_sf_swizzled_bytes(self.n, self.k), dtype=torch.uint8, device=DEV)
+        scratch_amax = torch.empty(1, dtype=torch.float32, device=DEV)
+        out_global = torch.empty(1, dtype=torch.float32, device=DEV)
+        fvk.bf16_weight_to_nvfp4_swizzled(
+            w_bf16_nk.data_ptr(), packed.data_ptr(), sfb.data_ptr(),
+            scratch_amax.data_ptr(), out_global.data_ptr(), self.n, self.k, 0)
+        torch.cuda.synchronize()
+        self.w_packed = packed
+        self.w_sfb = sfb
+        self.alpha = float(out_global.item())
+
+    @property
+    def awq_inv_s(self):
+        return self._awq_inv_s
+
+    def __call__(self, x_ptr: int, out_ptr: int, m: int, stream: int = 0) -> None:
+        bf16_x = torch.empty(m, self.k, dtype=BF16, device=DEV)
+        fvk.cast_fp16_to_bf16(x_ptr, bf16_x.data_ptr(), m * self.k, stream)
+        a_packed = torch.empty(m, self.k // 2, dtype=torch.uint8, device=DEV)
+        a_sfa = torch.empty(fvk.nvfp4_sf_swizzled_bytes(m, self.k), dtype=torch.uint8, device=DEV)
+        fvk.quantize_bf16_to_nvfp4_swizzled(
+            bf16_x.data_ptr(), a_packed.data_ptr(), a_sfa.data_ptr(), m, self.k, stream)
+        bf16_out = torch.empty(m, self.n, dtype=BF16, device=DEV)
+        self._gemm(a_packed.data_ptr(), self.w_packed.data_ptr(), bf16_out.data_ptr(),
+                   m, self.n, self.k, a_sfa.data_ptr(), self.w_sfb.data_ptr(), self.alpha, stream)
+        fvk.cast_bf16_to_fp16(bf16_out.data_ptr(), out_ptr, m * self.n, stream)
 
 
 class Nvfp4SwiGluMlp:
