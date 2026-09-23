@@ -773,13 +773,20 @@ class Nvfp4LinearSm120(AwqScaledLinear):
     `_wrap_linear`'s dispatch can pass it uniformly); a non-`None` value
     raises rather than silently folding nothing.
 
-    UNTESTED: this class has never run anywhere with SM120 NVFP4
-    kernels present (this project's own dev machine is Ada/sm_89, Thor
-    is sm_110; neither builds the SM120 CUTLASS instantiations). Its
-    correctness rests on `FlashRTNvfp4Linear`'s own already-shipped,
-    presumably-verified call sequence, which this class follows exactly
-    aside from the raw-pointer/FP16 boundary this project's own
-    convention needs -- not on independent verification here.
+Confirmed on real RTX 5090 hardware (opportunities.md OPT-033): numerically
+    correct (`torch.equal` was never the bar here, but cosine vs fp16/fp8/
+    official all land in the same range fp8's own numbers already sit in --
+    quantization itself is not the issue) and dispatches correctly by `arch`.
+    NOT currently a speed win over `Fp8Linear`/`StaticFp8Linear` for
+    ImageWAM's own GEMM shapes on this hardware -- root-caused to the
+    underlying SM120 CUTLASS kernel itself (not this class's own FP16<->BF16
+    cast overhead, and not GEMM variant selection, both measured and ruled
+    out): `fp4_w4a16_gemm_sm120_bf16out*` is slower than fp8's own GEMM at
+    ImageWAM's (much smaller-M, DiT-shaped) dimensions, evidently tuned for
+    Qwen3.6/Motus's own much larger LLM-shaped GEMMs instead. See OPT-033
+    for the full kernel-level profiling breakdown. Prefer FP8 for ImageWAM
+    on `rtx_sm120` until that kernel gets its own per-shape CUTLASS tuning
+    (a separate, not-yet-started piece of work, not a wiring fix).
     """
 
     family = "nvfp4_sm120"

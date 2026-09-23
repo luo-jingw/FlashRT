@@ -809,6 +809,34 @@ None needed -- root cause fully confirmed by reading both the kernel's own C++ d
 
 Fixed in `_fused_gate_res`'s `fp4_direct` branch: build fresh FP16 `(dim,)` tensors for `gate`/`scale`/`shift` (`t[0, 0].to(torch.float16).contiguous()`, same slicing convention `_fuse_mod_pair` already uses) and, when present, for `awq_inv_s`, and pass THEIR pointers instead of `_mod_vec_ptr`'s FP32 ones. Added a CPU-only regression test (`tests/test_imagewam_fuse_res_norm_fp4_dispatch.py::test_gate_scale_shift_are_rounded_to_fp16_not_passed_as_fp32`) that decodes the actual bytes at the pointers passed to the kernel and checks they match the FP16 rounding of the real input -- reading them back synchronously inside the mock kernel's own `side_effect`, since reading a CPU tensor's memory back from saved `call_args` after the producing function has already returned is itself unsound (its refcount hits zero and the allocator is free to reuse it; a first attempt at this same regression test read stale/reused bytes for exactly that reason, not a second real bug). Local dispatch test suite passes 9/9; Thor-confirmed (`0922g`, HEAD `3056b03`, no rebuild needed): `1 passed`, the real two-layer wiring test `torch.equal`/`bit_exact=True`, `max_abs=0`.
 
+# ISSUE-092
+
+Status: open
+
+Area: Pi0.5 RTX's FP8 decoder path (`flash_rt/frontends/torch/pi05_rtx.py`'s `_quantize_all_fp8`/`calibrate_with_real_data`, `flash_rt/models/pi05/pipeline_rtx.py`'s `_fp8_gemm`, `flash_rt/core/calibration.py`'s `check_scale_ceiling`)
+
+## Observation
+
+RTX 5090 (`arch=rtx_sm120`, commit `7a68a1c`), Pi0.5 3-view/10-step, fp8 vs fp16 cosine over the SAME aligned initial noise (CPU `Generator.manual_seed(0..4)`, `(10, 32)`, `copy_`'d into `_noise_buf`, not independently resampled per side): 4 of 5 seeds land at 0.9995-0.9998, seed 1 lands at **0.417** (dummy-data calibration) / **0.417** again, actually worse, after re-calibrating with 8 real stratified LIBERO frames (`0.60704` with dummy calibration -> `0.41653` with real calibration -- switching to real calibration data made it WORSE, ruling out "unrepresentative calibration set" as the cause). `check_scale_ceiling` (`flash_rt/core/calibration.py`) fires both times: 12 scales exceed 20x the calibration's median scale (0.012), `encoder_ffn_down_w_16` the worst offender (amax 16.929 with dummy data, 26.711 with real data -- the real-data amax is HIGHER, not lower, meaning this layer's true activation distribution really does have extreme outliers, the dummy data wasn't underestimating it).
+
+## Impact
+
+Pi0.5 RTX's FP8 path has at least one systematic single-seed catastrophic failure mode (cosine 0.42, not a small drift) tied to one or more FFN-down-projection layers (`encoder_ffn_down_w_14/15/16` at least) whose real activation distribution has a heavy-tailed/outlier-channel shape that a single per-tensor FP8 E4M3 scale cannot cover without either clipping the rare extreme values (this failure mode) or wasting dynamic range on the common case. `check_scale_ceiling`'s own docstring already documents there is no runtime fallback to FP16 for an offending layer if this fires -- a real correctness risk for any deployment that hits an input distribution similar to whatever seed 1's denoise trajectory produces at that layer, not just this specific benchmark's seed 1.
+
+## Evidence
+
+- Two calibration rounds, same layer flagged both times, real-data amax HIGHER than dummy-data amax (26.711 vs 16.929) -- rules out "the calibration set doesn't see the true range" as the cause; the true range really is this large.
+- `flash_rt/core/calibration.py`'s own `check_scale_ceiling` docstring: "the signature of a true outlier sample," "FP8 will still run but dynamic-range headroom on these layers is compressed... Consider lowering percentile, sampling more diversely, or keeping these layers in FP16" -- the project's own diagnostic already anticipated this exact failure shape.
+- 4/5 seeds unaffected (0.9995+) -- this is not a systematic quantization bug affecting every input, it is specific to whatever seed 1's own denoise trajectory produces at this one layer.
+
+## Hypotheses
+
+`encoder_ffn_down_w_*`'s real activation (the FFN's SiLU/gate-gated intermediate, going into the down-projection) has the classic "outlier channel" shape documented in AWQ/SmoothQuant literature for transformer FFN-down layers -- a small number of channels or samples with activation magnitude far above the tensor's typical range, which a single per-tensor scale cannot represent well simultaneously with the common case. Not yet confirmed directly (would need a per-channel or per-sample histogram of this layer's real activation across many real inputs, not attempted here).
+
+## Next Experiment
+
+Lowest-risk, cheapest first step (already the project's own documented recommendation): identify every layer `check_scale_ceiling` persistently flags across several real calibration sets, and keep those specific layers in FP16 rather than FP8 in `_quantize_all_fp8` (a small, targeted exclusion list, negligible speed cost given it is a handful of layers out of dozens) -- then re-run the same 5-seed aligned-noise cosine check to confirm seed 1 recovers. If it does not recover even with those layers excluded, the outlier is elsewhere (a different layer not yet flagged, or the decoder's own attention/residual path) and needs the same check repeated on whatever new layer(s) `check_scale_ceiling` flags once these are removed. Not attempted yet.
+
 ## Index: resolved entries and where their conclusions are recorded
 
 

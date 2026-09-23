@@ -1215,6 +1215,40 @@ The sweep tables must stay readable as measurement records (what shape was measu
 
 - Not started: the benchmarks above still restate their stored widths inside their own kernel-shape tables rather than deriving them from `ImageWAMWorkload` / `ImageWAMStructure`, even where the file already imports `libero_dims.LIBERO_REAL_DIMS` for its `dims` dict.
 
+# OPT-033: ImageWAM on RTX 5090 (SM120) — NVFP4 is wired and numerically correct, but not faster than FP8
+
+Status: measured on real 5090 hardware, root-caused to the CUTLASS kernel itself, not started (needs dedicated CUTLASS tuning, out of scope for the wiring work that found it)
+
+Area: `flash_rt/models/imagewam/quant_linear.py`'s `Nvfp4LinearSm120` (this candidate's own wiring), the underlying SM120 CUTLASS kernel `csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm120.cu` (`fp4_w4a16_gemm_sm120_bf16out{,_widen,_pingpong}`)
+
+## Observation
+
+RTX 5090 (`arch=rtx_sm120`, commit `7a68a1c`), ImageWAM dual-224x224, warmup 5/iters 20, CUDA event: `infer()` P50 official 119.69 ms, fp16 59.65 ms, fp8 42.37 ms, **nvfp4 46.47 ms** -- nvfp4 is *slower* than fp8 by 4.10 ms, not the ~2x faster Blackwell's own FP4-vs-FP8 tensor-core throughput ratio would suggest. Numerically the quantization itself is fine: nvfp4 vs official 0.97859/0.97794 (median/min), nvfp4 vs fp16 0.99900/0.99897, nvfp4 vs fp8 0.99895/0.99894 -- all in the same range fp8's own numbers already sit in, so this is a speed question, not a correctness one.
+
+## Mechanism (root-caused, not guessed)
+
+A `torch.profiler` kernel-level breakdown (5-iter sum / 5, `tmp/bench_5090_imagewam_{fp8,nvfp4}_profile.json`) isolated the gap:
+
+| component | nvfp4 ms/infer |
+|---|---:|
+| `fp4_w4a16_gemm_sm120_bf16out*` (the GEMM itself) | 15.59 |
+| `quantize_bf16_to_nvfp4_swizzled` (activation quant) | 3.61 |
+| `cast_fp16_to_bf16` + `cast_bf16_to_fp16` (this project's own FP16<->BF16 boundary, `Nvfp4LinearSm120`'s own docstring) | 3.89 |
+
+fp8's own GEMM-only kernels (`nvjet_sm120_*` FP8 MMA, summed from the same profile's top-20) total **12.36 ms/infer**. GEMM-only gap: 15.59 - 12.36 = **3.23 ms, about 80% of the whole 4.10 ms e2e gap** -- the cast/quantize overhead (7.5 ms combined) is real but is NOT the dominant term once the actual GEMM-vs-GEMM comparison is made; the SM120 FP4 CUTLASS kernel is itself the slower one at these shapes.
+
+Ruled out: GEMM variant selection (`FLASHRT_FP4_GEMM` env var, `_pick_sm120_nvfp4_gemm`). Swept `plain`/`widen`/`pingpong` (the current default) at the same shapes: `pingpong` 46.33 ms e2e / 15.54 ms GEMM, `plain` 46.10 ms / 15.29 ms (only ~0.2 ms better), `widen` 54.67 ms / 23.87 ms (much worse). None closes anywhere near the 3.23 ms GEMM-only gap.
+
+Conclusion: this SM120 FP4 CUTLASS kernel is validated and evidently well-tuned for Qwen3.6/Motus's own (much larger, LLM-shaped) GEMM dimensions on this same 5090 -- it is not a Thor-kernel-recompiled-for-a-different-arch situation (the SM120 kernel genuinely targets SM120, unlike ISSUE-018's Ada-native-FP8-on-Thor finding) -- but its current tile/cluster/pipeline-stage instantiation does not reach FP4's theoretical throughput advantage over FP8 at ImageWAM's own (much smaller-M, DiT-shaped) GEMM dimensions. This is the same class of finding as OPT-018/ISSUE-023 (ActionDiT's small-M CUTLASS tile selection on Thor): one CUTLASS instantiation is not universally optimal across GEMM shapes from a different workload family, and needs its own per-shape tuning work, not a config toggle.
+
+## Value if pursued
+
+Given the GEMM-only gap is 3.23 ms of a 46.47 ms `infer()` (about 7%), and fp8 already gets 2.82x over official, closing this gap would move nvfp4 from slower-than-fp8 to modestly faster than fp8 -- a real but not dramatic win, and contingent on a genuine CUTLASS re-tuning effort (new tile/cluster/pipeline-stage instantiation validated at ImageWAM's own (M,N,K) shapes), comparable in scope to the still-not-started "Thor-native CUTLASS kernel" item this project's own memory already tracks for the analogous Ada/Thor FP8 case.
+
+## Decision
+
+For ImageWAM on RTX 5090, use FP8 (`precision="fp8_static_cutlass"`/`"fp8_static"`), not NVFP4, until this kernel-tuning work is done -- `Nvfp4LinearSm120` stays wired (bit-exact quantization, correctly dispatched by `arch`) for whenever that tuning work happens, but does not currently deliver a speed reason to prefer it over the existing FP8 path on this hardware.
+
 # Index of removed entries
 
 Status: the entries below are closed and are no longer part of this file. Each block states the result, the measurement that is recorded nowhere else, and where the rest of the account lives. The ids stay literal because code, tests and other persistent files cite them.
