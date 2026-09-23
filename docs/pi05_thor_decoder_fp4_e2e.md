@@ -1,5 +1,24 @@
 # Pi0.5 Thor NVFP4 End-to-End Results
 
+## Official Baseline and FP16 Fill-In (2026-09-23)
+
+The 2026-08-05 result below never had an official-reference or FP16-baseline row on Thor. Filled in the same session, 3-view, `load_model()`, warmup 20 / iters 100, the same `pi05_libero` weights and an 8-observation fixture:
+
+| Row | P50 ms (P10-P90) | vs this session's fp8 | vs official |
+|---|---:|---:|---:|
+| Official OpenPI (`PI0Pytorch` eager bf16) | 267.97 (267.15-271.00) | 0.19x | 1.00x |
+| FlashRT fp16 + FA4 | 85.84 (85.45-86.30) | 0.58x | 3.12x |
+| FlashRT fp8 + FA4 (re-measured this session) | 49.77 (49.67-49.90) | 1.00x | 5.38x |
+| FlashRT nvfp4 + FA4 | 31.74 (2026-08-05 number, not re-measured this session) | 1.54x vs the 2026-08-05 fp8 (49.02 ms) | — |
+
+The re-measured fp8 (49.77 ms) matches the 2026-08-05 value (49.02 ms) within 0.8 ms, confirming the two sessions are comparable. fp16-to-fp8 ratio (85.84/49.77 = 1.73x) matches the RTX 5090 ratio (28.76/16.84 = 1.71x) within noise -- the same relative FP8 win holds on both architectures even though absolute latencies differ by roughly 3x.
+
+Official OpenPI's own JAX reference path does not run on this Thor at all: `jax==0.5.3` does not recognize compute capability 11.0 (`Unknown compute capability 11.0`, ptxas falls back and fails), so the only runnable official implementation is OpenPI's own PyTorch eager reference (`torch.compile` disabled), not the JAX original. `LiberoInputs` (OpenPI's own harness) only consumes base + left-wrist cameras; the right-wrist slot is a zero image, masked. FlashRT's 3-view row still runs SigLIP on all three cameras (the fixture's right-wrist is also a zero image, matching the official pad), so this table's official row and FlashRT rows use the same per-camera content, just processed differently downstream.
+
+The 8-observation fixture used here was reconstructed locally from LIBERO-fastwam video frames -- the original 2026-08-05 `libero_obs_3v_n8.npz` is not present on this machine. The re-measured fp8 landing within 0.8 ms of the historical number is the evidence this reconstruction is a valid substitute for latency purposes; it is not a bit-exact reproduction of that original fixture.
+
+Both FlashRT and the official reference load the same converted weights (`~/.cache/openpi/openpi-assets/checkpoints/pi05_libero_pytorch/model.safetensors`, itself converted from the JAX checkpoint `gs://openpi-assets/checkpoints/pi05_libero`).
+
 ## Current Result (2026-08-05)
 
 The configuration is the full Thor NVFP4 tier, which

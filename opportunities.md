@@ -1223,7 +1223,7 @@ Area: `flash_rt/models/imagewam/quant_linear.py`'s `Nvfp4LinearSm120` (this cand
 
 ## Observation
 
-RTX 5090 (`arch=rtx_sm120`, commit `7a68a1c`), ImageWAM dual-224x224, warmup 5/iters 20, CUDA event: `infer()` P50 official 119.69 ms, fp16 59.65 ms, fp8 42.37 ms, **nvfp4 46.47 ms** -- nvfp4 is *slower* than fp8 by 4.10 ms, not the ~2x faster Blackwell's own FP4-vs-FP8 tensor-core throughput ratio would suggest. Numerically the quantization itself is fine: nvfp4 vs official 0.97859/0.97794 (median/min), nvfp4 vs fp16 0.99900/0.99897, nvfp4 vs fp8 0.99895/0.99894 -- all in the same range fp8's own numbers already sit in, so this is a speed question, not a correctness one.
+RTX 5090 (`arch=rtx_sm120`, commit `7a68a1c`), ImageWAM dual-224x224, warmup 5/iters 20, CUDA event: `infer()` P50 (P10-P90) official 119.69 (119.20-120.03) ms, fp16 59.65 (59.64-59.66) ms, fp8 42.37 (42.36-42.41) ms, **nvfp4 46.47 (46.45-46.48) ms** -- nvfp4 is *slower* than fp8 by 4.10 ms, not the ~2x faster Blackwell's own FP4-vs-FP8 tensor-core throughput ratio would suggest. All four rows have sub-0.1ms P10-P90 spread (regime-stable, not noise). Numerically the quantization itself is fine: nvfp4 vs official 0.97859/0.97794 (median/min), nvfp4 vs fp16 0.99900/0.99897, nvfp4 vs fp8 0.99895/0.99894 -- all in the same range fp8's own numbers already sit in, so this is a speed question, not a correctness one.
 
 ## Mechanism (root-caused, not guessed)
 
