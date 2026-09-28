@@ -947,6 +947,30 @@ Not attempted here -- out of scope for this task to rebuild missing
 kernel extensions on a machine whose own project notes already scope it
 out (`PROJECT.md`'s "Slim build" section).
 
+## Update (cross-hardware benchmark campaign, RTX 5090/Thor)
+
+Confirmed real Thor/RTX hardware use: `Pi05TorchFrontendThor` ran
+`set_prompt()` + `infer()` end to end on Thor (fp16/fp8/nvfp4, all
+finite, no NaN) and `Pi05TorchFrontendRtx` did the same on RTX 5090 --
+the blockers recorded above were specific to this project's own dev
+machine's slim build, not a defect in the generator or either frontend.
+
+One correction to `docs/pi05_synthetic_checkpoint.md`'s "OpenPI reads
+the same format" claim: the generator omits two tensors OpenPI's own
+strict loader expects (`gemma_expert.lm_head.weight`,
+`paligemma.model.language_model.norm.weight`) -- confirmed both keys
+are genuinely absent from the generated `model.safetensors`, not a
+loader-side difference. OpenPI needs `strict=False` (the two missing
+keys keep their module's own random init) to load it at all; FlashRT is
+unaffected (neither frontend uses `strict` loading or reads these two
+keys by name). Also observed: OpenPI measures consistently slower on
+this synthetic checkpoint than on a real one at the same shape (roughly
+13-25 ms), not yet root-caused -- suspected but unconfirmed cause is
+those two tensors keeping an init dtype/value distribution the real
+checkpoint's own weights would not have. Not fixed here; the generator
+should add these two tensors if OpenPI-side numbers need to be trusted
+without the `strict=False` workaround.
+
 ## Index: resolved entries and where their conclusions are recorded
 
 

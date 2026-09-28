@@ -1249,6 +1249,10 @@ Given the GEMM-only gap is 3.23 ms of a 46.47 ms `infer()` (about 7%), and fp8 a
 
 For ImageWAM on RTX 5090, use FP8 (`precision="fp8_static_cutlass"`/`"fp8_static"`), not NVFP4, until this kernel-tuning work is done -- `Nvfp4LinearSm120` stays wired (bit-exact quantization, correctly dispatched by `arch`) for whenever that tuning work happens, but does not currently deliver a speed reason to prefer it over the existing FP8 path on this hardware.
 
+## Addendum: SM120 NVFP4 has a K>=64 minimum, action_dim=32 does not meet it
+
+Found during the cross-hardware benchmark campaign (`CROSS_HW_BENCHMARK_PROTOCOL.md`'s frozen target shape, action_dim=32): the NVFP4 GEMM this precision routes through on RTX 5090 rejects a K dimension below 64. ImageWAM's real LIBERO action_dim (7) and this campaign's synthetic target (32) both fall under that floor for the affected GEMM, so an ImageWAM NVFP4 run at the synthetic target shape silently needs to fall back to the real action_dim=7 for that one precision -- recorded per-run with `matches_target: false` in the benchmark results rather than treated as a like-for-like number, per `docs/pi05_imagewam_benchmark_status.md`.
+
 # OPT-034: ImageWAM on Jetson Orin (rtx_sm87) — registered fp16-only, no INT8 tier yet
 
 Status: registration done (plan.md "Plan: ImageWAM on Jetson Orin (rtx_sm87), registration only"); this entry is the real follow-on, not started
