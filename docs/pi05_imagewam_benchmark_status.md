@@ -126,9 +126,25 @@ for this table.
 
 ### ImageWAM (2-view, action_horizon=64 — real LIBERO shape, unchanged by this campaign)
 
-Canonical table: `docs/imagewam_results.md` (official 456.7 ms, fp16
-226.7, fp8 116.6, fp4 108.0 ms) — this is ImageWAM's native LIBERO
-shape, kept here only for reference; it is not the target shape above.
+`libero` workload, 2 views, text 512 tokens (16-31 valid), horizon 64,
+action_dim 7, proprio 8, shift 5.0, 10 denoise steps. Commit `824f058`,
+2026-09-21, warmup 20 / iters 100, real trained checkpoint
+(ImageWAM-FLUX.2-4B-LIBERO). This is ImageWAM's native LIBERO shape, not
+the campaign's 3-view/action_dim=32/horizon=30 target above.
+
+| Row | P50 ms | P10-P90 ms | vs official | cos vs official (median/min) | MAE vs GT |
+|---|---:|---:|---:|---:|---:|
+| Official (torch, bf16) | 456.7 | 456.1-457.6 | 1.00x | — | — |
+| Ours fp16 | 226.7 | 226.3-227.7 | 2.01x | 0.99998 / 0.99994 | 0.1856 |
+| Ours fp8 | 116.6 | 116.5-116.7 | 3.92x | 0.99994 / 0.99989 | 0.1859 |
+| Ours fp4 | 108.0 | 108.0-108.2 | 4.23x | 0.99936 / 0.99885 | 0.1861 |
+| Ours int8/int4 (GEMM-only) | — | — | — | — | — |
+
+Official's own end-of-session repeat measured 377.0 ms (-17.4%) in the
+same session, so its row is not clock-bracketed as tightly as the
+`Ours` rows; ImageWAM official reference MAE is 0.1855. int8/int4 are
+not measured: the built extension has no int8/int4 fp16-out kernel, and
+it was decided not to add one (`opportunities.md`).
 
 ## Orin
 
