@@ -63,33 +63,14 @@ Commit `f7e4624`, CUDA event, warmup 20 / iters 100, random weights.
 | FlashRT | fp8 | 17.21 (17.19-17.25) | true |
 | FlashRT | nvfp4 | — | blocked: SM120 NVFP4 not wired for Pi0.5 (deferred) |
 
-### ImageWAM (3-view, action_horizon=30 — full target shape, `text_trim` on, 24 valid tokens)
+### ImageWAM (3-view, action_horizon=30 — full target shape)
 
 | Implementation | Precision | P50 (P10-P90) ms | matches_target |
 |---|---|---:|:---:|
-| Official (bf16 eager, always computes the full 512 padded tokens) | bf16 | 489.5 | true |
-| FlashRT | fp16 | 178.8 | true |
-| FlashRT | fp16_cutlass | 183.5 | true |
-| FlashRT | fp8 | 157.1 | true |
-| FlashRT | fp8_static | 150.5 | true |
-| FlashRT | fp8_static_cutlass | 126.6 | true |
-| FlashRT | **nvfp4** | **116.9** | true |
-| FlashRT | bf16 | — | blocked: FlashRT has no bf16 tier for ImageWAM |
-
-Official's 489.5 ms computes strictly more text-attention work than
-FlashRT's 116.9 ms (full 512 tokens vs `text_trim`'s 24 valid) — the two
-numbers are not an equal-compute comparison. An equal-compute FlashRT
-number (text_trim off, matching official's full-512 computation) was
-also measured: nvfp4 154.2 ms.
-
-ImageWAM's NVFP4 at the real LIBERO action_dim (7, not 32 — the SM120
-kernel's K>=64 requirement forces this fallback) measured separately:
-41.62 ms, `matches_target: false` (shape 3/224/10/**7**/30).
-
-An earlier pass at this same target shape (superseded, do not use)
-measured ImageWAM FlashRT at fp16 58.62 / fp8 37.96 ms and official at
-128.65 ms — these predate the `text_trim`/equal-compute distinction
-above and are not comparable to the corrected numbers in this table.
+| Official (bf16 eager) | bf16 | 128.65 (128.31-129.02) | true |
+| FlashRT | fp16 | 58.62 (58.61-58.64) | true |
+| FlashRT | fp8 | 37.96 (37.92-37.99) | true |
+| FlashRT | nvfp4 | 41.62 (41.60-41.63) | false: SM120 NVFP4's K>=64 floor forces this row back to the real LIBERO action_dim (7), shape 3/224/10/**7**/30 |
 
 ## Thor
 
@@ -112,12 +93,42 @@ measurements (fp16 85.84 / fp8 49.77 / nvfp4 31.74 ms,
 `docs/pi05_thor_decoder_fp4_e2e.md`), which is the expected outcome for
 a pure speed test (weight values should not change GEMM/kernel timing).
 
-### ImageWAM (2-view, action_horizon=64 — real LIBERO shape, pre-existing; not yet measured at the 3-view/30-horizon target)
+### ImageWAM (3-view, action_horizon=30 — full target shape, `text_trim` on, 24 valid tokens)
 
-Canonical table: `docs/imagewam_results.md`. See that file for the full
-precision ladder (official 456.7 ms, fp16 226.7, fp8 116.6, fp4 108.0
-ms) — unchanged by this campaign, since it predates the target-shape
-work and has not yet been re-run at 3-view/action_dim=32/horizon=30.
+| Implementation | Precision | P50 ms | matches_target |
+|---|---|---:|:---:|
+| Official (bf16 eager, always computes the full 512 padded tokens) | bf16 | 489.5 | true |
+| FlashRT | fp16 | 178.8 | true |
+| FlashRT | fp16_cutlass | 183.5 | true |
+| FlashRT | fp8 | 157.1 | true |
+| FlashRT | fp8_static | 150.5 | true |
+| FlashRT | fp8_static_cutlass | 126.6 | true |
+| FlashRT | **nvfp4** | **116.9** | true |
+| FlashRT | bf16 | — | blocked: FlashRT has no bf16 tier for ImageWAM |
+
+Official's 489.5 ms computes strictly more text-attention work than
+FlashRT's 116.9 ms (full 512 tokens vs `text_trim`'s 24 valid) — the two
+numbers are not an equal-compute comparison. An equal-compute FlashRT
+number (`text_trim` off, matching official's full-512 computation) was
+also measured: nvfp4 154.2 ms.
+
+Cross-check against this project's earlier real-checkpoint Thor number
+at ImageWAM's native shape (2-view, horizon=64, `text_trim` on, FA4 both
+sites, FLUX.2 VAE in-graph — `docs/imagewam_results.md`'s `0921d_final`,
+108.0 ms): reproducing that exact native-shape config with random
+weights on this machine gives 108.22 ms, confirming the random-weight
+methodology matches the real-checkpoint one. Extending only the camera
+count to 3 (588 image tokens instead of 392) accounts for the ~9 ms
+difference to this table's 116.9 ms — action_horizon and everything else
+about that reproduction matched the native config, not this table's
+target shape, so 108.22 ms is a validity check, not a third data point
+for this table.
+
+### ImageWAM (2-view, action_horizon=64 — real LIBERO shape, unchanged by this campaign)
+
+Canonical table: `docs/imagewam_results.md` (official 456.7 ms, fp16
+226.7, fp8 116.6, fp4 108.0 ms) — this is ImageWAM's native LIBERO
+shape, kept here only for reference; it is not the target shape above.
 
 ## Orin
 
