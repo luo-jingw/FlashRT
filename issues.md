@@ -876,6 +876,77 @@ Add `("imagewam", "torch", "rtx_sm120"): ("flash_rt.frontends.torch.imagewam_tho
 entries added for the Orin work, and confirm `load_model()` resolves it on a 5090.
 Not attempted yet -- small, but out of scope for the Orin registration plan that found it.
 
+# ISSUE-094
+
+Status: open, non-blocking
+
+Area: `scripts/gen_synthetic_pi05_checkpoint.py`, `flash_rt/frontends/torch/{pi05_thor,pi05_rtx}.py`
+
+## Observation
+
+The new synthetic-checkpoint generator was validated end to end as far as
+this dev machine (RTX 4060 Laptop, Ada SM89, 8GB VRAM, WSL2) allows, but
+full `set_prompt()` + `infer()` was not reached for either frontend, for
+two separate reasons unrelated to the generated checkpoint's content:
+
+- `Pi05TorchFrontendRtx(checkpoint, num_views=3, chunk_size=30,
+  num_steps=10, use_fp8=True)` gets all the way through
+  `_load_norm_stats`, `convert_pi05_safetensors`, FP8 weight
+  quantization, and `_precompute_decoder_styles` (9.48 GB allocated on
+  an 8 GB card, completing only because this WSL2 environment pages CUDA
+  allocations into host RAM rather than raising `OutOfMemoryError` -- the
+  same behavior `PROJECT.md` already records for ImageWAM). It then
+  raises constructing `RtxFlashAttnBackend`: `flash_rt.flash_rt_fa2` is
+  not built in this fork's slim build (`PROJECT.md`'s own build notes
+  say this fork only ever builds `flash_rt_kernels`, never
+  `flash_rt_fa2`), and no `pip flash_attn` wheel is installed either
+  (building one from source needs `psutil` as an undeclared build
+  dependency and was not carried further, given the scope of this task).
+- `Pi05TorchFrontendThor(checkpoint, num_views=3)` constructs cleanly
+  (falls back to a cuBLAS attention path when the CUTLASS strided FMHA
+  `.so` is absent, as designed). `set_prompt()` with the default
+  `use_fp8=True` then fails inside `GemmRunner.fp8_nn_bias` with
+  `cuBLAS error ... code=15` (`CUBLAS_STATUS_NOT_SUPPORTED`) on the
+  SigLIP QKV GEMM. This is the same failure class this project's own
+  `opportunities.md` (candidate 6 write-up) and `issues.md` history
+  already document for other shapes on this exact dev Ada GPU, labelled
+  machine-specific there per the project's own no-local-only-closure
+  rule -- not a new phenomenon, but not previously observed at this
+  specific (SigLIP QKV) shape. `use_fp8=False` avoids that GEMM but then
+  fails earlier, in `_encoder_forward_fp16`, on
+  `AttributeError: module 'flash_rt.flash_rt_kernels' has no attribute
+  'flashrt_rms_qkv_fp16'` -- this build's compiled `flash_rt_kernels.so`
+  (built for this fork's ImageWAM/SM89 scope) does not include that
+  Pi0.5 FP16 kernel symbol.
+
+## Impact
+
+The generator itself is verified: `model.safetensors` round-trips
+completely off-GPU (810 tensors, every key/shape read by
+`_load_weights`/`convert_pi05_safetensors` present and finite), and
+`Pi05TorchFrontendRtx`'s weight-loading + FP8-quantization code path
+consumed the generated file correctly on real CUDA hardware without
+error. Neither blocker here originates in the checkpoint content; both
+are pre-existing gaps in this fork's build/environment (a slim build
+that never compiled `flash_rt_fa2`, and a `flash_rt_kernels.so` build
+that does not carry every Pi0.5 FP16 kernel symbol) plus one
+already-documented Ada-specific cuBLASLt limitation. Full `infer()`
+output finiteness at the requested (3-view, action_dim=32,
+chunk_size=30, num_flow_steps=10) shape is therefore unverified on this
+machine and needs confirmation on real Thor or RTX hardware with a full
+(non-slim) build.
+
+## Next Experiment
+
+On a real Thor or RTX box with the full kernel build (including
+`flash_rt_fa2` for RTX and every Pi0.5 FP16/FP8 kernel symbol for
+Thor), construct both frontends from a checkpoint produced by
+`scripts/gen_synthetic_pi05_checkpoint.py` and run one `set_prompt()` +
+`infer()` call each, confirming finite actions at the requested shape.
+Not attempted here -- out of scope for this task to rebuild missing
+kernel extensions on a machine whose own project notes already scope it
+out (`PROJECT.md`'s "Slim build" section).
+
 ## Index: resolved entries and where their conclusions are recorded
 
 
