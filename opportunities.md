@@ -1271,6 +1271,24 @@ Pi0.5's own Orin numbers show the shape of the win to expect: INT8 lossless (`ca
 
 Not started. Blocked on: (1) real Orin hardware to validate on (none in this dev environment), (2) the wiring work itself (comparable in scope to the NVFP4-on-5090 wiring, OPT-033's own precedent for what "add a precision tier for a new arch" costs).
 
+# OPT-035: `Pi05TorchFrontendThor` has no `chunk_size`/`num_steps` override
+
+Status: found while building `scripts/gen_synthetic_pi05_checkpoint.py` (`docs/pi05_synthetic_checkpoint.md`, ISSUE-094's own investigation); not started
+
+Area: `flash_rt/frontends/torch/pi05_thor.py` (`__init__`, `_load_weights`)
+
+## Observation
+
+`Pi05TorchFrontendThor` hardcodes action horizon (`Sa`) and denoise step count (`steps`) to `10` as Python literals inside `_load_weights` -- its `__init__` has no `chunk_size`/`num_steps` parameter at all, unlike `Pi05TorchFrontendRtx`, which already has both as real, checkpoint-independent constructor kwargs (`chunk_size`, `num_steps`, both defaulting to 10). `flash_rt.api.load_model()` only forwards `num_steps` when the target class's `__init__` signature declares it, so this is not a plumbing gap in `load_model()` -- Thor's own class needs the parameter added.
+
+## Impact
+
+Any cross-hardware benchmark or deployment that wants a non-default action horizon or step count (e.g. this project's own `CROSS_HW_BENCHMARK_PROTOCOL.md` target of action_horizon=30) can hit that shape on RTX 5090/Orin (`Pi05TorchFrontendRtx`) today, but not on Thor -- Thor silently runs at chunk_size=10/num_flow_steps=10 regardless of what the checkpoint or any wrapper claims, which would make a "same shape across all three hardwares" comparison quietly wrong on the Thor row unless this gap is either fixed or the Thor row is explicitly recorded at chunk_size=10 with the mismatch noted (`config.matches_target: false` in the benchmark result schema).
+
+## Decision
+
+Not started. Scope: add `chunk_size`/`num_steps` constructor parameters to `Pi05TorchFrontendThor`, thread them through in place of the hardcoded `Sa`/`steps` literals in `_load_weights`, and confirm the buffer shapes and captured-graph sizes that depend on them still construct correctly at a non-default value -- comparable in shape to how `Pi05TorchFrontendRtx` already exposes them, but needs its own real-Thor validation (this project's own rule: a change like this needs confirmation on the real device, not just a passing local construction).
+
 # Index of removed entries
 
 Status: the entries below are closed and are no longer part of this file. Each block states the result, the measurement that is recorded nowhere else, and where the rest of the account lives. The ids stay literal because code, tests and other persistent files cite them.

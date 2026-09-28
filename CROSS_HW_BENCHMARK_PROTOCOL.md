@@ -24,17 +24,54 @@ produced, run at whatever real shape is available now, set
 do not wait for every model to reach the frozen shape before recording
 anything.
 
-## Per (model, implementation) status
+## Per (model, implementation, hardware) status
 
-| Model | Implementation | Synthetic-shape construction | Status |
-|---|---|---|---|
-| ImageWAM | FlashRT | `ImageWAMTorchFrontendThor(checkpoint_dir=None, dims_override={...}, num_views=3, precision=...)` | ready now |
-| ImageWAM | official (torch) | `imagewam_official_torch_bench.py` -- confirm it accepts the same shape override before assuming it does | check before running |
-| Pi0.5 | FlashRT | needs a generated synthetic checkpoint directory (`scripts/gen_synthetic_pi05_checkpoint.py`) | in progress, not landed yet |
-| Pi0.5 | official (torch) | same generated checkpoint, if the loader format is shared (to be confirmed by the same script's own investigation) | in progress, not landed yet |
+| Model | Implementation | Hardware | Synthetic-shape construction | Status |
+|---|---|---|---|---|
+| ImageWAM | FlashRT | Thor / RTX5090 / Orin | `ImageWAMTorchFrontendThor(checkpoint_dir=None, dims_override={...}, num_views=3, precision=...)` | ready now |
+| ImageWAM | official (torch) | all | `imagewam_official_torch_bench.py` -- confirm it accepts the same shape override before assuming it does | check before running |
+| Pi0.5 | FlashRT | RTX5090 / Orin | `scripts/gen_synthetic_pi05_checkpoint.py` output + `Pi05TorchFrontendRtx(checkpoint_dir, num_views=3, chunk_size=30, num_steps=10)` | ready now, unverified end-to-end on real hardware (see below) |
+| Pi0.5 | FlashRT | Thor | same generated checkpoint, but `Pi05TorchFrontendThor` has **no** `chunk_size`/`num_steps` override (OPT-035) -- always runs at chunk_size=10/num_flow_steps=10 regardless | can only be measured at horizon=10, not 30; record `config.matches_target: false` and note "OPT-035: Thor frontend has no chunk_size override" |
+| Pi0.5 | official (torch) | all | same generated checkpoint (confirmed same `model.safetensors` format as both FlashRT frontends) | ready now, needs its own confirmation that the reference implementation's own construction accepts a `chunk_size`/horizon override |
 
-This file will be updated with exact Pi0.5 commands once the generator
-script lands. Do not block ImageWAM's rows on that.
+`action_dim=32` and `num_flow_steps=10` need no override on either
+Pi0.5 frontend -- `action_dim` is a fixed architecture constant (always
+32) and `num_flow_steps` already defaults to 10 everywhere. The only
+real gap is `action_horizon` on Thor specifically (see OPT-035).
+
+### Pi0.5 — generate the checkpoint once, reuse across hardware
+
+```bash
+python scripts/gen_synthetic_pi05_checkpoint.py \
+    --out /tmp/pi05_synthetic_checkpoint \
+    --action-dim 32 --chunk-size 30 --num-flow-steps 10 \
+    --num-views 3 --seed 0
+```
+
+```python
+# RTX 5090 / Orin -- hits the exact target shape
+from flash_rt.frontends.torch.pi05_rtx import Pi05TorchFrontendRtx
+frontend = Pi05TorchFrontendRtx(
+    "/tmp/pi05_synthetic_checkpoint", num_views=3,
+    chunk_size=30, num_steps=10,
+)
+
+# Thor -- constructs from the same directory but ALWAYS runs at
+# chunk_size=10/num_flow_steps=10 (OPT-035); record this run with
+# config.action_horizon=10, config.matches_target=false
+from flash_rt.frontends.torch.pi05_thor import Pi05TorchFrontendThor
+frontend = Pi05TorchFrontendThor(
+    "/tmp/pi05_synthetic_checkpoint", num_views=3,
+)
+```
+
+Full `set_prompt()`+`infer()` finiteness at this shape has not been
+confirmed end to end on any machine yet (the dev machine that built the
+generator hit unrelated, pre-existing build gaps -- `flash_rt_fa2` not
+built for RTX, a missing Pi0.5 FP16 kernel symbol for Thor -- see
+`issues.md` ISSUE-094). The first real run on Thor/RTX5090/Orin should
+confirm finite, non-NaN actions before trusting any timing number from
+it.
 
 ## ImageWAM — ready now
 
