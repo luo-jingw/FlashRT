@@ -229,12 +229,20 @@ _PIPELINE_MAP: dict[tuple[str, str, str], tuple[str, str]] = {
     ("cosmos3_edge", "torch", "thor"):
         ("flash_rt.frontends.torch.cosmos3_edge_thor", "Cosmos3EdgeTorchFrontendThor"),
 
-    # ImageWAM (FLUX.2-4B variant), Thor only. Structural dry-run scope:
+    # ImageWAM (FLUX.2-4B variant). Structural dry-run scope:
     # random-initialized weights, no real checkpoint, no calibration --
     # see PROJECT.md and flash_rt/models/imagewam/pipeline_thor.py's own
     # docstring in this fork. `checkpoint_dir` is accepted for interface
-    # parity but unused.
+    # parity but unused. Same frontend class on Thor and Jetson Orin
+    # (rtx_sm87) -- arch-specific dispatch lives inside the class itself
+    # (`self._arch`, see `imagewam_thor.py`'s `__init__`/`_wrap_linear`),
+    # not as separate frontend classes. Orin is restricted to
+    # `precision="fp16"` (see the `__init__` guard) -- Ampere has no
+    # native FP8/FP4 tensor cores and no other precision's CUTLASS kernel
+    # has been validated for SM87.
     ("imagewam", "torch", "thor"):
+        ("flash_rt.frontends.torch.imagewam_thor", "ImageWAMTorchFrontendThor"),
+    ("imagewam", "torch", "rtx_sm87"):
         ("flash_rt.frontends.torch.imagewam_thor", "ImageWAMTorchFrontendThor"),
 
     # ── Nex-N2-mini / Qwen3.6-35B-A3B (qwen3_5_moe) ──
@@ -281,6 +289,7 @@ _SM87_ALLOWED = {
     ("chameleon", "torch", "rtx_sm87"),
     ("qwen3_vl", "torch", "rtx_sm87"),
     ("hyvla", "torch", "rtx_sm87"),
+    ("imagewam", "torch", "rtx_sm87"),
 }
 
 

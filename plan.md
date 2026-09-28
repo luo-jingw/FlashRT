@@ -2429,3 +2429,65 @@ Phase Status: pending, low priority
   `imagewam_denoise_loop`).
 - Note: measured gain is small (0.03-0.09 ms total, OPT-032); do this
   only if Phases 1-4 leave capacity.
+
+# Plan: ImageWAM on Jetson Orin (rtx_sm87), registration only
+
+Plan Status: completed
+
+## Problem
+
+`ImageWAMTorchFrontendThor` was constructible on Thor (`thor`) and RTX
+5090 (`rtx_sm120`, dispatched internally via `self._arch` inside
+`_wrap_linear`), but `flash_rt.hardware`'s dispatch table had no
+`("imagewam", "torch", "rtx_sm87")` entry and `_SM87_ALLOWED` did not
+list `imagewam` -- construction on Orin was rejected at the API layer
+before any model code ran. Goal: make the frontend constructible on
+Orin, restricted to a precision that is actually safe there (`fp16`,
+cuBLAS-only, no FP8/FP4 tensor cores needed) -- not a full Orin
+precision-tier project (that is OPT-034, not part of this plan).
+
+## Structure / Interface
+
+No new module or class. `ImageWAMTorchFrontendThor` is reused as-is on
+all three architectures; the per-arch difference stays inside the class
+(`self._arch`, already the established pattern from the NVFP4-on-5090
+work), not as separate frontend classes per hardware.
+
+## Code Mapping
+
+- `flash_rt/hardware/__init__.py`: added `("imagewam", "torch",
+  "rtx_sm87")` to `_PIPELINE_MAP` (same class as `thor`/`rtx_sm120`) and
+  to `_SM87_ALLOWED`; updated the ImageWAM dispatch comment (was
+  "Thor only", now stale).
+- `flash_rt/frontends/torch/imagewam_thor.py`: `__init__` raises
+  `ValueError` immediately after `self._arch = detect_arch()` if
+  `self._arch == "rtx_sm87"` and `self._precision != "fp16"` --
+  `_wrap_linear` has no SM87 branch for any other precision, so every
+  other precision would otherwise reach a kernel launch built for a
+  different architecture instead of failing at construction.
+
+## Implementation Phases
+
+### Phase 1: dispatch registration + fp16-only guard
+Phase Status: completed
+- Verified: `flash_rt.hardware._PIPELINE_MAP[("imagewam", "torch",
+  "rtx_sm87")]` resolves; `resolve_pipeline_class`/`load_model()` no
+  longer reject this combination. Not verified on real Orin hardware
+  (none available on this dev machine) -- the change is structural
+  (dispatch table + an explicit precision guard), not a numerically
+  validated Orin run. First real Orin construction should confirm `fp16`
+  actually builds and runs end-to-end before anything is called
+  "supported" in a deployment doc.
+
+## Related, not done here
+
+- OPT-034 (opportunities.md): a real Orin INT8 precision tier for
+  ImageWAM, reusing the existing SM80-family INT8 CUTLASS kernel
+  (OPT-007) the way Pi0.5's own Orin path already uses INT8 -- not
+  started.
+- ISSUE-093 (issues.md): `("imagewam", "torch", "rtx_sm120")` has never
+  been in `_PIPELINE_MAP` either -- every RTX 5090 ImageWAM benchmark
+  this project has run so far constructs `ImageWAMTorchFrontendThor`
+  directly, bypassing `flash_rt.load_model()`. Found while fixing the
+  Orin gap; not fixed here (out of this plan's scope, and nothing
+  currently depends on the public API path for 5090).

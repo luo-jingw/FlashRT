@@ -471,6 +471,19 @@ class ImageWAMTorchFrontendThor:
         # different compiled kernels, not one kernel on two GPUs (see
         # `Nvfp4LinearSm120`'s own docstring in `quant_linear.py`).
         self._arch = detect_arch()
+        # Jetson Orin (rtx_sm87, Ampere) has no native FP8/FP4 tensor
+        # cores, and none of the other precisions' CUTLASS kernels have
+        # been validated for SM87 here (unlike NVFP4's own SM100/SM120
+        # split above, there is no SM87 branch in `_wrap_linear` for any
+        # precision) -- fail loudly at construction instead of letting an
+        # unsupported precision reach a kernel launch mid-`set_prompt()`.
+        if self._arch == "rtx_sm87" and self._precision != "fp16":
+            raise ValueError(
+                f"ImageWAM on Jetson Orin (rtx_sm87) only supports "
+                f"precision='fp16' so far, got {self._precision!r}. "
+                f"Orin has no native FP8/FP4 tensor cores; see "
+                f"opportunities.md for the INT8 tier this would need."
+            )
         self._keepalive = []
         self.dims = dict(_DEFAULT_DIMS)
         if dims_override:

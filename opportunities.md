@@ -1249,6 +1249,28 @@ Given the GEMM-only gap is 3.23 ms of a 46.47 ms `infer()` (about 7%), and fp8 a
 
 For ImageWAM on RTX 5090, use FP8 (`precision="fp8_static_cutlass"`/`"fp8_static"`), not NVFP4, until this kernel-tuning work is done -- `Nvfp4LinearSm120` stays wired (bit-exact quantization, correctly dispatched by `arch`) for whenever that tuning work happens, but does not currently deliver a speed reason to prefer it over the existing FP8 path on this hardware.
 
+# OPT-034: ImageWAM on Jetson Orin (rtx_sm87) — registered fp16-only, no INT8 tier yet
+
+Status: registration done (plan.md "Plan: ImageWAM on Jetson Orin (rtx_sm87), registration only"); this entry is the real follow-on, not started
+
+Area: `flash_rt/frontends/torch/imagewam_thor.py` (`_wrap_linear`), the SM80-family INT8 CUTLASS kernel (`csrc/gemm/cutlass_sm80_int8_rowwise.cu`, `csrc/gemm/cutlass_sm80_int8_rowwise_t64x128.cu`)
+
+## Observation
+
+`ImageWAMTorchFrontendThor` can now be constructed on Orin (`rtx_sm87`), but only at `precision="fp16"` -- every other precision (`fp8`, `fp8_static`, `fp8_static_cutlass`, `nvfp4`, `e0m3_hadamard`) is rejected at construction because Orin has no native FP8/FP4 tensor cores and none of those kernels' CUTLASS instantiations have been built or validated for SM87. `fp16` alone gives no low-bit speed win on this hardware.
+
+## Mechanism
+
+OPT-007 already found and validated, in isolation, a real INT8 W8A8 rowwise CUTLASS GEMM for the SM80 family (`cutlass_sm80_int8_rowwise.cu`, plus a `t64x128` alt tile), built originally for a QuaRot-style Orin/Ampere path: ~4x faster than FP16 at ImageWAM's own `q/proj` (3072x3072) projection shape on real hardware in that isolated test. This is the same class of kernel Pi0.5's own Orin support (`docs/deployment_orin.md`, `FVK_PI05_RTX_FORCE_INT8`) already ships as its production fast path on this exact GPU generation. Wiring it into ImageWAM as a selectable precision tier is a full precision-tier project (a new `Precision` member, an `Int8OrinLinear`-equivalent wrapper class, an `_wrap_linear` branch gated on `self._arch == "rtx_sm87"`, and — per this same OPT-007 entry's own INT4 finding for a *different* SM family — real validation on Orin hardware itself before trusting the shape, not an assumption carried over from the isolated GEMM benchmark).
+
+## Value if pursued
+
+Pi0.5's own Orin numbers show the shape of the win to expect: INT8 lossless (`cache_frames=1`) at 124 ms vs a 193 ms BF16 reference, 1.56x. A comparable win for ImageWAM would meaningfully change its Orin viability, currently unmeasured end-to-end (fp16-only, no real Orin hardware in this dev environment to measure even that).
+
+## Decision
+
+Not started. Blocked on: (1) real Orin hardware to validate on (none in this dev environment), (2) the wiring work itself (comparable in scope to the NVFP4-on-5090 wiring, OPT-033's own precedent for what "add a precision tier for a new arch" costs).
+
 # Index of removed entries
 
 Status: the entries below are closed and are no longer part of this file. Each block states the result, the measurement that is recorded nowhere else, and where the rest of the account lives. The ids stay literal because code, tests and other persistent files cite them.

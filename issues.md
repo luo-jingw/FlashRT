@@ -841,6 +841,41 @@ Pi0.5 RTX's FP8 path has at least one systematic single-seed catastrophic failur
 
 Lowest-risk, cheapest first step (already the project's own documented recommendation): identify every layer `check_scale_ceiling` persistently flags across several real calibration sets, and keep those specific layers in FP16 rather than FP8 in `_quantize_all_fp8` (a small, targeted exclusion list, negligible speed cost given it is a handful of layers out of dozens) -- then re-run the same 5-seed aligned-noise cosine check to confirm seed 1 recovers. If it does not recover even with those layers excluded, the outlier is elsewhere (a different layer not yet flagged, or the decoder's own attention/residual path) and needs the same check repeated on whatever new layer(s) `check_scale_ceiling` flags once these are removed. Not attempted yet.
 
+# ISSUE-093
+
+Status: open, non-blocking
+
+Area: `flash_rt/hardware/__init__.py` (`_PIPELINE_MAP`)
+
+## Observation
+
+`("imagewam", "torch", "rtx_sm120")` has never been a key in
+`_PIPELINE_MAP` -- every RTX 5090 ImageWAM benchmark this project has
+run (OPT-033 and its own predecessors) constructs
+`ImageWAMTorchFrontendThor` directly (`from
+flash_rt.frontends.torch.imagewam_thor import
+ImageWAMTorchFrontendThor`), bypassing `flash_rt.load_model()` and
+`resolve_pipeline_class` entirely. Found incidentally while registering
+Orin (`rtx_sm87`, plan.md "Plan: ImageWAM on Jetson Orin (rtx_sm87),
+registration only") -- Orin's own dispatch-table entry made the same
+gap for `rtx_sm120` visible by comparison.
+
+## Impact
+
+Nothing currently depends on `flash_rt.load_model(config="imagewam",
+hardware="rtx_sm120", ...)` working, so this has not broken anything
+observed so far. It would surface the moment anything (a plugin, a
+served harness, a script following `docs/plugin_model_template.md`'s
+own documented pattern) tried to construct ImageWAM through the public
+API on a 5090 instead of importing the frontend class directly.
+
+## Next Experiment
+
+Add `("imagewam", "torch", "rtx_sm120"): ("flash_rt.frontends.torch.imagewam_thor",
+"ImageWAMTorchFrontendThor")` to `_PIPELINE_MAP`, matching the `thor`/`rtx_sm87`
+entries added for the Orin work, and confirm `load_model()` resolves it on a 5090.
+Not attempted yet -- small, but out of scope for the Orin registration plan that found it.
+
 ## Index: resolved entries and where their conclusions are recorded
 
 
