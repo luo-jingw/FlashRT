@@ -121,9 +121,39 @@ work and has not yet been re-run at 3-view/action_dim=32/horizon=30.
 
 ## Orin
 
-Not yet measured for either model. ImageWAM's registration (fp16-only,
-OPT-034 for a real INT8 tier) landed this session
-(`flash_rt/hardware/__init__.py`); Pi0.5's own real Orin data
-(`docs/deployment_orin.md`) predates this campaign, uses a different
-checkpoint (DROID, not this campaign's synthetic weights) and camera
-count, and is not comparable to the tables above.
+Jetson Orin NX 16GB (SM87), CUDA event (wraps the whole `infer()`:
+image upload, CUDA graph replay, action download; wall-clock P50 is
+within 0.1 ms of the CUDA-event number), warmup 20 / iters 100. MAXN,
+GPU clock **not locked** (DVFS, up to 918 MHz) -- P10-P90 spread is
+still only 2-3 ms, so the clock stayed effectively stable during each
+run despite not being pinned. Output shape confirmed `(30, 32)`.
+
+Unlike every other table in this document: **real weights**
+(`stack-cube-eef-24k` checkpoint, real recorded 3-camera frames), only
+`action_horizon` overridden to 30 -- not the random-weights synthetic
+checkpoint. `matches_target` below means the shape matches (3-view,
+224x224, 10-step, action_dim=32, horizon=30); it does not mean random
+weights. No official row: this machine has no working OpenPI PyTorch
+install (FlashRT-only was also what was asked for this pass).
+
+### Pi0.5 (3-view, action_horizon=30 — full target shape, real weights)
+
+| Precision | P50 (P10-P90) ms | matches_target | status |
+|---|---:|:---:|---|
+| bf16 | 538.62 (537.42-540.46) | true | ok |
+| fp16 | — | — | blocked: this build's FA2 only compiled bf16 |
+| fp8 | — | — | blocked: SM87 has no FP8 tensor cores |
+| nvfp4 | — | — | blocked: SM87 has no FP4 tensor cores |
+| int8 | 421.04 (419.89-422.28) | true | ok |
+| int8_hadamard | 467.23 (466.16-468.58) | true | ok |
+
+`int8`/`int8_hadamard` here are this run's own precision names; they
+have not yet been reconciled against `docs/deployment_orin.md`'s
+existing `cache_frames=1/2` INT8 convention (same underlying SM87 INT8
+path, different naming so far -- worth checking they refer to the same
+thing before quoting both documents side by side). Sanity check against
+RTX 5090 (this doc's own table above, synthetic weights): 5090 fp16 29
+ms / fp8 17 ms vs Orin bf16 539 ms is roughly an 18x gap, consistent
+with the two GPUs' compute difference.
+
+ImageWAM: not yet measured on Orin.
