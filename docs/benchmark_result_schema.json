@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://flashrt/docs/benchmark_result_schema.json",
+  "title": "Cross-hardware Pi0.5 / ImageWAM benchmark result",
+  "description": "One JSON file per (model, implementation, hardware, precision) run. Every field is required unless marked nullable; a value that cannot be produced is recorded explicitly (null, or status != \"ok\"), never omitted.",
+  "type": "object",
+  "required": ["schema_version", "model", "implementation", "hardware", "precision", "status", "config", "timing", "environment", "correctness", "notes"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "model": { "enum": ["pi05", "imagewam"] },
+    "implementation": { "enum": ["flashrt", "torch_official"] },
+    "hardware": { "enum": ["orin", "thor", "rtx5090"] },
+    "precision": {
+      "type": "string",
+      "description": "e.g. bf16, fp16, fp8, fp8_static, fp8_static_cutlass, nvfp4, int8. Whatever this run actually used -- do not normalize away real precision names."
+    },
+    "status": {
+      "enum": ["ok", "blocked", "error"],
+      "description": "\"ok\": timing/correctness fields are real measurements. \"blocked\": construction or the run could not be attempted at all (record why in notes; every timing/correctness field is null). \"error\": attempted and failed (record the failure in notes; timing/correctness fields are null unless partially measured before the failure, which must then be explained in notes)."
+    },
+    "config": {
+      "type": "object",
+      "required": ["num_views", "image_size", "num_flow_steps", "action_dim", "action_horizon", "text_tokens", "random_weights", "checkpoint", "matches_target"],
+      "additionalProperties": false,
+      "properties": {
+        "num_views": { "type": "integer" },
+        "image_size": { "type": "integer", "description": "square edge, e.g. 224" },
+        "num_flow_steps": { "type": "integer", "description": "ODE / denoise steps actually used" },
+        "action_dim": { "type": "integer" },
+        "action_horizon": { "type": "integer" },
+        "text_tokens": { "type": ["integer", "null"], "description": "null if not applicable to this model" },
+        "random_weights": { "type": "boolean" },
+        "checkpoint": { "type": ["string", "null"], "description": "checkpoint name/path if random_weights is false, else null" },
+        "matches_target": {
+          "type": "boolean",
+          "description": "true only if num_views/num_flow_steps/action_dim/action_horizon exactly equal the frozen target config (3, 10, 32, 30) at 224x224. false is expected and fine for interim real-checkpoint runs -- record the real shape used, do not force it."
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "required": ["protocol", "warmup", "iters", "p50_ms", "p10_ms", "p90_ms", "min_ms"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "enum": ["cuda_event", "wall"] },
+        "warmup": { "type": "integer" },
+        "iters": { "type": "integer" },
+        "p50_ms": { "type": ["number", "null"] },
+        "p10_ms": { "type": ["number", "null"] },
+        "p90_ms": { "type": ["number", "null"] },
+        "min_ms": { "type": ["number", "null"] }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": ["commit", "gpu_name", "compute_capability", "clock_locked", "gpu_exclusive", "cuda_version", "torch_version", "date"],
+      "additionalProperties": false,
+      "properties": {
+        "commit": { "type": "string", "description": "git rev-parse HEAD of the FlashRT checkout this run used; \"n/a\" for a torch_official run with no FlashRT checkout" },
+        "gpu_name": { "type": "string" },
+        "compute_capability": { "type": "string", "description": "e.g. \"11.0\", \"12.0\", \"8.7\"" },
+        "clock_locked": { "type": ["boolean", "null"], "description": "null if unknown/not checked on this device" },
+        "gpu_exclusive": { "type": ["boolean", "null"] },
+        "cuda_version": { "type": "string" },
+        "torch_version": { "type": "string" },
+        "date": { "type": "string", "format": "date" }
+      }
+    },
+    "correctness": {
+      "type": "object",
+      "required": ["cos_vs_official_median", "cos_vs_official_min"],
+      "additionalProperties": false,
+      "properties": {
+        "cos_vs_official_median": { "type": ["number", "null"] },
+        "cos_vs_official_min": { "type": ["number", "null"] }
+      }
+    },
+    "notes": {
+      "type": "string",
+      "description": "Free text. Mandatory content when status != \"ok\" (why), when config.matches_target is false (what differs and why), or when anything about this run deviates from the protocol doc. Empty string only when status is \"ok\", config.matches_target is true, and nothing else needs saying."
+    }
+  }
+}
