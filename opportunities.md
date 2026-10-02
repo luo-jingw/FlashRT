@@ -1293,6 +1293,37 @@ Any cross-hardware benchmark or deployment that wants a non-default action horiz
 
 Not started. Scope: add `chunk_size`/`num_steps` constructor parameters to `Pi05TorchFrontendThor`, thread them through in place of the hardcoded `Sa`/`steps` literals in `_load_weights`, and confirm the buffer shapes and captured-graph sizes that depend on them still construct correctly at a non-default value -- comparable in shape to how `Pi05TorchFrontendRtx` already exposes them, but needs its own real-Thor validation (this project's own rule: a change like this needs confirmation on the real device, not just a passing local construction).
 
+# OPT-036: Pi0.5 decoder NVFP4 on RTX 5090 needs an M <= 32 kernel
+
+Status: measured, not started
+
+Area: Pi0.5 RTX decoder (`flash_rt/models/pi05/pipeline_rtx.py`, `_decoder_layer`); SM120 NVFP4 kernels `csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm120.cu` and `csrc/kernels/fp4_w4a4_mma_warpsplit_mrows_sm120.cu`
+
+## Observation
+
+RTX 5090, random weights, us per GEMM with weights round-robined across 18 distinct copies inside one CUDA graph, activation pre-quantized, at the decoder's M = chunk_size = 30:
+
+| GEMM | N | K | FP8 (cuBLASLt, autotuned) | NVFP4 plain | pingpong | widen | `warpsplit_mrows` at M=16 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| qkv | 2560 | 1024 | 2.89 | 7.88 | 8.33 | 13.11 | 2.89 |
+| o | 1024 | 2048 | 3.21 | 11.13 | 11.80 | 20.48 | 3.41 |
+| gate_up | 8192 | 1024 | 6.95 | 8.42 | 8.85 | 13.46 | 5.17 |
+| down | 1024 | 4096 | 4.25 | 18.06 | 19.16 | 35.01 | 4.49 |
+
+Unfused NVFP4 activation quantization adds 2.9-6.4 us per GEMM at M=30; the FP8 decoder's activation quantization is already fused into its norm kernels. The decoder's FP8 GEMMs take about 3.55 ms of the 7.35 ms decoder stage (plus 0.55 ms of cuBLASLt split-K reduce). With the three CUTLASS tiles an NVFP4 decoder would add about 8 ms per `infer()`, which is why `Pi05TorchFrontendRtx(use_fp4_encoder=True)` keeps the decoder FP8.
+
+## Mechanism
+
+At M=30 these GEMMs are weight-bandwidth bound (gate_up FP8 reads 8 MB in 6.95 us, about 1.2 TB/s). NVFP4 halves the weight bytes, but the CUTLASS tiles are 128-row tiles built for large M. `fp4_w4a4_mma_sm120_warpsplit_mrows_bf16out` (16-row MMA atom, warp-split K) already matches or beats FP8 at M=16, but accepts M <= 16 only, so M=30 needs two launches that read each weight twice.
+
+## Value if pursued
+
+A version of `warpsplit_mrows` that computes two 16-row atoms per block (M <= 32, each weight read once) would put the decoder GEMMs at roughly the M=16 times above, against FP8's M=30 times: up to about 1.5 ms of the 3.55 ms if it approaches the halved-byte bound, less the unfused activation quantization (a fused AdaRMSNorm -> NVFP4 kernel does not exist; `ada_layer_norm_nvfp4_swizzled` is LayerNorm).
+
+## Decision
+
+Not started. Requires new CUDA (kernel, binding, CMake) and an isolated per-GEMM measurement against FP8 at M=30 before any decoder wiring.
+
 # Index of removed entries
 
 Status: the entries below are closed and are no longer part of this file. Each block states the result, the measurement that is recorded nowhere else, and where the rest of the account lives. The ids stay literal because code, tests and other persistent files cite them.

@@ -235,6 +235,32 @@ this fork covers Jetson AGX Thor (sm_110).
   pipeline with `precision="nvfp4_sim"` (NVFP4 numerics, fp16 GEMMs;
   `tests/test_imagewam_nvfp4_sim.py`).
 
+### RTX 5090 workstation (`/home/jingwu/workspace/FlashRT`)
+
+- Hardware: NVIDIA GeForce RTX 5090 (sm_120, 32GB), driver 595.91.07,
+  62GB RAM. The machine is shared with the owner's other work (robot
+  teleoperation processes run alongside), so host-side `infer()` time
+  has occasional ~33 ms outliers at P90.
+- SM clock is not locked (locking needs root and is not done here);
+  2.40-2.87 GHz was observed during runs, which moves a Pi0.5 `infer()`
+  P50 by about 1-2 ms between processes. Compare precisions only within
+  one process, interleaved (`benchmark_results/pi05_flashrt_rtx5090_nvfp4.json`
+  records how).
+- Python: conda env `~/anaconda3/envs/flashrt` (Python 3.12.14, torch
+  2.14.0+cu130); there is no `python` on `PATH`, call
+  `~/anaconda3/envs/flashrt/bin/python`. `pytest` was installed into that
+  env on 2026-10-02.
+- Build: `build/` configured with `GPU_ARCH=120`; the in-tree
+  `flash_rt/flash_rt_kernels.cpython-312-x86_64-linux-gnu.so` exports the
+  SM120 NVFP4 GEMMs (`fp4_w4a16_gemm_sm120_bf16out{,_widen,_pingpong}`),
+  quantizers and fused norm -> NVFP4 kernels.
+- `tmp/` and `benchmark_results/` are untracked local directories: the
+  cross-hardware harness scripts (`tmp/bench_pi05_synthetic_rtx5090.py`
+  and siblings) and their JSON results.
+- The Pi0.5 synthetic checkpoint (`scripts/gen_synthetic_pi05_checkpoint.py`,
+  3 views / chunk 30) is not kept on disk; regenerating it takes about
+  11 seconds (6.3 GiB).
+
 ## Credentials
 
 Services that require a scoped identity in this project (git remotes,

@@ -2492,179 +2492,201 @@ Phase Status: completed
   Orin gap; not fixed here (out of this plan's scope, and nothing
   currently depends on the public API path for 5090).
 
-# Plan: Pi0.5 NVFP4 + CUTLASS variant selection on RTX 5090 (SM120)
+# Plan: Pi0.5 NVFP4 encoder on RTX 5090 (SM120)
 
-Plan Status: proposed
+Plan Status: completed
 
 ## Problem
 
-Pi0.5 has no NVFP4 precision tier on RTX 5090 at all (`Pi05TorchFrontendRtx`
-quantizes to FP8 via `GemmRunner`/cuBLASLt only; NVFP4 was deferred
-earlier in this project's history). Separately, Pi0.5 has no
-empirical, per-real-shape kernel-variant selection anywhere on this
-hardware -- `_autotune_fp8_matmul` picks among cuBLASLt's own internal
-algorithms (a narrower, different mechanism), and `GemmVariantTuner`
-(the empirical CUTLASS-tile-variant benchmark-and-cache tool this
-project already built and uses for ImageWAM) has never been called
-from any Pi0.5 code path. Goal: give Pi0.5 an NVFP4 option on SM120,
-with its tile/variant chosen empirically at Pi0.5's own real decoder
-shapes rather than left at a hardcoded default -- then measure,
-not assume, whether it beats FP8 here.
+`Pi05TorchFrontendRtx` has no NVFP4 tier on RTX 5090: every large GEMM is
+FP8 (cuBLASLt) or BF16, and `benchmark_results/pi05_flashrt_rtx5090_nvfp4.json`
+is `blocked`. At the cross-hardware target shape (3 views, chunk 30, 10
+steps, synthetic weights) the FP8 row is `infer()` P50 17.21 ms.
+
+Measured on this RTX 5090 (synthetic weights, CUDA-graph replay of each
+stage, median of 100 after 20 warmup):
+
+| stage | FP8 GPU time |
+|---|---:|
+| vision (SigLIP, 27 layers) | 3.04 ms |
+| encoder (Gemma-2B, 18 layers, M = 768 + prompt length) | 7.16 ms |
+| decoder (Gemma-300M, 18 layers x 10 steps, M = chunk_size = 30) | 7.35 ms |
+
+Per-GEMM time, us per launch, weights round-robined across distinct
+copies inside one CUDA graph (not L2-resident); the SM120 NVFP4 kernels
+are `fp4_w4a16_gemm_sm120_bf16out{,_widen,_pingpong}` (W4A4 despite the
+name), activation pre-quantized:
+
+| stage | GEMM | M | N | K | FP8 | NVFP4 plain | pingpong | widen |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| decoder | qkv | 30 | 2560 | 1024 | 2.89 | 7.88 | 8.33 | 13.11 |
+| decoder | o | 30 | 1024 | 2048 | 3.21 | 11.13 | 11.80 | 20.48 |
+| decoder | gate_up | 30 | 8192 | 1024 | 6.95 | 8.42 | 8.85 | 13.46 |
+| decoder | down | 30 | 1024 | 4096 | 4.25 | 18.06 | 19.16 | 35.01 |
+| encoder | qkv | 788 | 2560 | 2048 | 17.71 | 12.89 | 13.29 | 20.83 |
+| encoder | o | 788 | 2048 | 2048 | 13.43 | 12.24 | 12.39 | 20.69 |
+| encoder | gate_up | 788 | 32768 | 2048 | 175.64 | 106.47 | 112.14 | 142.32 |
+| encoder | down | 788 | 2048 | 16384 | 91.16 | 60.03 | 57.81 | 106.98 |
+
+Unfused NVFP4 activation quantization (`quantize_bf16_to_nvfp4_swizzled`)
+costs 6.5 us (K=2048) and 32.0 us (K=16384) at M=788.
+
+Consequences:
+
+- Decoder (M=30): every existing SM120 NVFP4 tile is slower than FP8,
+  and the decoder's FP8 activation quantization is already fused into
+  its norm kernels. An NVFP4 decoder with these kernels is predicted to
+  add about 8 ms. Tile selection does not change this: `plain` is the
+  fastest of the three at every decoder shape. The existing small-M
+  kernel `fp4_w4a4_mma_sm120_warpsplit_mrows_bf16out` supports M <= 16
+  only (2.89/3.41/5.17/4.49 us at M=16 for qkv/o/gate_up/down); M=30
+  needs two launches that read the weight twice.
+- Encoder (M~788): NVFP4 GEMMs total 189 us per layer vs FP8's 298 us,
+  about 1.95 ms over 18 layers before activation-quantization overhead.
+- Vision: `down` (K=4304) is rejected by all three tiles
+  (`can_implement` status 11); the remaining shapes are within +-2 us of
+  FP8. No vision change.
+
+Goal: an opt-in NVFP4 encoder for `Pi05TorchFrontendRtx` on SM120, with
+vision and decoder unchanged (FP8), and its measured `infer()` P50
+against the 17.21 ms FP8 row. Numerical accuracy on real weights is not
+a gate; synthetic weights are the measurement input.
 
 ## Structure
 
-- `Nvfp4LinearSm120` and `GemmVariantTuner`/`CudaGraphVariantTimer`
-  already exist but live under `flash_rt/models/imagewam/` --
-  ImageWAM-specific by path even though nothing in their own logic is
-  ImageWAM-specific (confirmed: generic quantize/GEMM/tuning code,
-  model-agnostic). Using them from Pi0.5 as-is is a cross-model import
-  that violates this project's own "one file, one responsibility, no
-  hidden cross-module coupling" convention (`AGENTS.md`) -- Phase 1
-  below resolves this before any Pi0.5-specific code is written.
-- Pi0.5's own real decoder GEMM shapes are much smaller-M than
-  ImageWAM's (`docs/pi05_thor_decoder_fp4_e2e.md`'s own table: M=10 for
-  every decoder projection, vs ImageWAM's M in the tens to hundreds) --
-  this project's own ISSUE-088 ("small-M GEMM efficiency collapse is
-  architecture- and precision-agnostic") and OPT-033's SM120-specific
-  finding both predict this could reproduce or worsen the
-  "NVFP4 slower than FP8" result OPT-033 already measured for ImageWAM,
-  not avoid it. The plan treats this as the open empirical question
-  it is, not something Phase 2-3's wiring work can assume away.
+- `flash_rt/models/pi05/nvfp4_sm120.py` (new): the SM120 NVFP4 primitive
+  used by the Pi0.5 RTX pipeline -- an `Nvfp4WeightSm120` record
+  (packed FP4 weight, swizzled scale factors, global scale `alpha`, N, K),
+  its one-time quantization from a `(K, N)` BF16 weight, an
+  `Nvfp4ActBufferSm120` record (packed activation + swizzled scale
+  factors for a fixed `(rows, K)`), and the GEMM dispatch by tile
+  variant. Raw-pointer, BF16 in / BF16 out, matching the pipeline's
+  existing calling convention.
+- `flash_rt/frontends/torch/pi05_rtx.py`: owns the quantized encoder
+  weights (`self._nvfp4_weights`), built once at construction.
+- `flash_rt/models/pi05/pipeline_rtx.py`: owns the per-pipeline NVFP4
+  activation buffers and the NVFP4 encoder layer.
+
+## State Ownership
+
+- NVFP4 encoder weights: `Pi05TorchFrontendRtx._nvfp4_weights`
+  (`dict[str, Nvfp4WeightSm120]`, keyed like the FP8 weight names),
+  shared read-only with every pipeline through `weights["nvfp4"]`.
+- NVFP4 activation buffers: each `Pi05Pipeline` instance (sized by its
+  own `encoder_seq_len`).
+- The FP8 encoder weights for the four encoder projections are not
+  created when the NVFP4 encoder is on; the vision projector stays FP8.
 
 ## Interface
 
-- `Pi05TorchFrontendRtx.__init__` gains an explicit opt-in flag
-  (`use_fp4: bool = False`, matching the naming convention
-  `Pi05TorchFrontendThorFP4`/`use_fp4_decoder` already established on
-  Thor) -- no silent fallback; unsupported combinations raise, per this
-  project's existing `_SM87_ALLOWED`-style discipline.
-- A new `_tune_pi05_gemm_variants(self, d: dict)` method, called once
-  at construction before graph capture, mirroring
-  `ImageWAMTorchFrontendThor._tune_action_dit_gemm_variants` exactly in
-  shape: group every NVFP4-quantized decoder Linear by
-  `(family, M, N, K)`, call the shared tuner, cache the result per
-  group, apply before capture.
+- `Pi05TorchFrontendRtx.__init__(..., use_fp4_encoder: bool = False)`.
+  Raises `ValueError` when combined with an unsupported configuration:
+  a non-SM120 device or a build without the SM120 NVFP4 kernels,
+  `use_fp8=False`, the BF16 fallback (`FVK_PI05_RTX_FORCE_BF16` or no
+  FP8 support), or any INT8 mode (`FVK_PI05_RTX_FORCE_INT8`,
+  `FVK_PI05_RTX_INT8_ENCODER_ONLY`). `set_rl_mode(cfg_enable=True)` and
+  `set_batched_mode(enable=True)` raise `ValueError` when it is on.
+- `Pi05Pipeline.__init__(..., use_fp4_encoder: bool = False)`, passed
+  through `_pipeline_precision_kwargs()`; requires `weights["nvfp4"]`.
+- Tile per encoder GEMM is fixed from the measurement above: `pingpong`
+  for `down`, `plain` for `qkv`/`o`/`gate_up`.
+- `flash_rt.load_model()` routing is not part of this plan.
 
 ## Flow
 
-Construction (`use_fp4=True`): load weights (real or the synthetic
-generator from `scripts/gen_synthetic_pi05_checkpoint.py`) -> quantize
-decoder `qkv`/`o`/`gate_up`/`down` Linears to NVFP4 via
-`Nvfp4LinearSm120` -> group by `(family, M, N, K)` -> `GemmVariantTuner`
-benchmarks each of SM120's existing candidates (`plain`/`widen`/
-`pingpong` -- no new kernel authored in this plan) against that real
-shape, inside a CUDA graph, same correctness/timing discipline already
-established -> cache and apply the winner -> `set_prompt()`/`infer()`
-capture proceeds as today.
+Construction (`use_fp4_encoder=True`): load BF16 checkpoint -> FP8
+quantize vision, vision projector and decoder -> NVFP4 quantize encoder
+`qkv`/`o`/`gate_up` (gate and up concatenated, N = 32768)/`down` for all
+18 layers. `set_prompt()` builds a pipeline that allocates its NVFP4
+activation buffers. Calibration runs the pipeline eagerly once (the
+NVFP4 encoder needs no scales; the eager run also creates the CUTLASS
+per-shape workspace before capture) -> FP8 autotune skips the encoder
+shapes -> graph capture.
+
+Encoder layer `i` (NVFP4):
+1. RMSNorm(x) -> NVFP4 activation -> qkv GEMM -> QKV split + RoPE.
+   (Last layer stops here, as in the FP8 path.)
+2. Attention -> NVFP4-quantize attention output -> o GEMM -> `x_norm`.
+3. Residual add + RMSNorm -> NVFP4 activation -> gate_up GEMM.
+4. GeGLU (merged) -> NVFP4-quantize hidden -> down GEMM -> `x_norm`.
+5. Residual add.
 
 ## Code Mapping
 
-- Phase 1 (structural): relocate `Nvfp4LinearSm120`,
-  `GemmVariantTuner`, `CudaGraphVariantTimer` out of
-  `flash_rt/models/imagewam/quant_linear.py` /
-  `gemm_variant_tuner.py` / `gemm_variant_timer.py` into a
-  model-agnostic home (e.g. `flash_rt/hardware/rtx/nvfp4_linear.py`,
-  `flash_rt/hardware/rtx/gemm_variant_tuner.py`,
-  `flash_rt/hardware/rtx/gemm_variant_timer.py` -- exact location is
-  this phase's own decision, not fixed here), with ImageWAM's own
-  imports updated to the new location and its existing behavior/numbers
-  re-confirmed unchanged (a regression check, not a rewrite).
-- Phase 2: `flash_rt/frontends/torch/pi05_rtx.py`
-  (`Pi05TorchFrontendRtx.__init__`, the decoder weight-wrapping call
-  sites) -- wire `use_fp4`, quantize the four decoder projections per
-  layer to NVFP4, validate bit-exact/cosine locally against the
-  existing fp8/fp16 reference at real decoder shapes before touching
-  hardware (same discipline as every other precision tier in this
-  project).
-- Phase 3: add `_tune_pi05_gemm_variants`, call it from `__init__`
-  before capture, gated by `use_fp4`.
-- Phase 4: real RTX 5090 hardware validation -- correctness (cosine vs
-  the existing fp8/fp16 reference, real checkpoint) and speed
-  (`infer()` P50, same CUDA-event protocol this project uses
-  elsewhere) at Pi0.5's real M=10 decoder shapes, with and without
-  Phase 3's tuner. This phase's own explicit decision point: if NVFP4
-  is slower than FP8 here (plausible, see Structure above), the
-  recommended outcome mirrors OPT-033's for ImageWAM -- keep FP8 as the
-  default, leave NVFP4 wired-but-not-recommended rather than reverting
-  the work.
+- `flash_rt/models/pi05/nvfp4_sm120.py`: `Nvfp4WeightSm120`,
+  `Nvfp4ActBufferSm120`, `quantize_weight_kn`, `allocate_act_buffer`,
+  `gemm_bf16out`.
+- `flash_rt/frontends/torch/pi05_rtx.py`: `use_fp4_encoder` validation,
+  `_quantize_encoder_nvfp4()`, `_quantize_all_fp8()` skipping the
+  encoder projections, `weights["nvfp4"]`, `_pipeline_precision_kwargs()`,
+  guards in `set_rl_mode`/`set_batched_mode`.
+- `flash_rt/models/pi05/pipeline_rtx.py`: `use_fp4_encoder`,
+  `_allocate_fp4_encoder_scratch()`, `_encoder_layer_fp4()`, dispatch
+  from `_encoder_layer`, encoder FP8 autotune skipped.
+- `tests/test_pi05_rtx_fp4_encoder.py` (new): GPU-free dispatch and
+  validation tests.
+- `tests/test_pi05_rtx_autotune_scratch.py`: fixture gains
+  `use_fp4_encoder = False`.
+- `benchmark_results/pi05_flashrt_rtx5090_nvfp4.json`,
+  `docs/pi05_imagewam_benchmark_status.md`, `opportunities.md`: results.
 
-## Related, not in this plan's scope
+## Implementation Phases
 
-- Authoring new SM120 CUTLASS tile variants beyond today's 3
-  (`plain`/`widen`/`pingpong`) is OPT-033's own follow-on, not
-  duplicated here -- if Phase 4 shows the existing 3 aren't enough for
-  Pi0.5's shapes either, that is additional evidence for OPT-033's
-  existing recommendation, not a new, separate kernel-authoring item.
+### Phase 1: NVFP4 encoder, unfused activation quantization
+Phase Status: completed
 
-## Dev checklist
+- Result (RTX 5090, synthetic weights, prompt of 13 tokens so
+  `encoder_seq_len` = 781; SM clock not locked, 2.40-2.87 GHz observed,
+  so only same-process interleaved A/B numbers are compared): encoder
+  stage 7.19 -> 5.70 ms; full-graph replay P50 16.92 -> 15.79 ms;
+  `infer()` P50 17.54 -> 16.42 ms (FP8 -> NVFP4 encoder). Cosine of the
+  32-dim raw actions vs FP8 under identical noise: 0.99947. Peak
+  allocated memory 9.02 -> 8.22 GiB. `tests/test_pi05_rtx_fp4_encoder.py`
+  and `tests/test_pi05_rtx_autotune_scratch.py`: 20 passed.
 
-Checked facts this checklist relies on (confirmed by reading the code
-this session, not assumed):
+- Steps 1-5 of the Flow above, each activation quantized by
+  `quantize_bf16_to_nvfp4_swizzled` into the pipeline's NVFP4 buffer.
+- Validation: GPU-free dispatch test (kernel calls, pointers, shapes,
+  variants per GEMM; rejected configurations raise); on this RTX 5090
+  with synthetic weights: finite `infer()` output, cosine of actions vs
+  the FP8 frontend (recorded, not gated), encoder stage GPU time, and
+  `infer()` P50 (CUDA event, warmup 20 / iters 100) vs FP8 17.21 ms.
 
-- `Nvfp4LinearSm120`, `_pick_sm120_nvfp4_gemm`:
-  `flash_rt/models/imagewam/quant_linear.py`. Base class:
-  `AwqScaledLinear`.
-- `GemmVariantTuner`: `flash_rt/models/imagewam/gemm_variant_tuner.py`.
-  `CudaGraphVariantTimer`: `flash_rt/models/imagewam/gemm_variant_timer.py`.
-- Reference call-pattern to copy: `ImageWAMTorchFrontendThor._tune_action_dit_gemm_variants`
-  (`flash_rt/frontends/torch/imagewam_thor.py`, ~line 1156) -- groups
-  linears by `(family, n, k)`, calls `tuner.tune(members, d["num_action"])`.
-- Pi0.5 decoder constants (`flash_rt/models/pi05/pipeline_rtx.py`):
-  `DEC_L=18, DEC_D=1024, DEC_H=4096, DEC_NH=8, DEC_NKV=1, DEC_HD=256`.
-  Real per-projection decoder shapes at `M=10` (from
-  `docs/pi05_thor_decoder_fp4_e2e.md`'s own table, Thor-side but same
-  architecture constants -- confirm identical on RTX before trusting
-  this number, do not assume): `qkv` N=2560/K=1024, `o` N=1024/K=2048,
-  `gate_up` N=8192/K=1024, `down` N=1024/K=4096.
-  FP8 decoder GEMM call sites today: `pipeline_rtx.py` lines ~990,
-  1029, 1076, 1115, 1188, 1260, 1301, 1361 (`_fp8_gemm` calls) --
-  read these before writing the NVFP4 equivalents, they are the ground
-  truth for call order and buffer ownership, not this summary.
-- `scripts/gen_synthetic_pi05_checkpoint.py` (already landed,
-  `docs/pi05_synthetic_checkpoint.md`) gives a GPU-agnostic way to test
-  construction/wiring before needing a real checkpoint on the 5090 box.
+### Phase 2: fused RMSNorm -> NVFP4 activation
+Phase Status: completed
 
-Steps:
+- Step 1 uses `rms_norm_to_nvfp4_swizzled_bf16` (layer 0) or
+  `residual_add_rms_norm_to_nvfp4_swizzled_bf16` (layers 1-17, folding
+  the previous layer's step-5 residual, in place); step 3 uses
+  `residual_add_rms_norm_to_nvfp4_swizzled_bf16`. Both compute
+  `x * rsqrt(mean(x^2) + eps) * w` per row, the same math as `rms_norm`
+  with the pipeline's all-ones weight. Steps 2 and 4 stay unfused (no
+  GeGLU -> NVFP4 kernel exists).
+- Validation: same measurements as Phase 1, reported side by side.
+- Result: the fused kernels' packed FP4 and scale-factor bytes are
+  identical to `rms_norm` + `quantize_bf16_to_nvfp4_swizzled` (and the
+  in-place residual output identical to `residual_add`) at M=781,
+  D=2048. Per call 11.24 -> 8.69 us (residual variant; its `_v2` measured
+  9.49 us and is not used). Encoder stage, round robin in one process:
+  FP8 6.99 ms, NVFP4 unfused 5.77 ms, NVFP4 fused 5.70 ms.
+  `infer()` vs FP8 in the same process: 18.25 -> 17.35 and
+  18.46 -> 17.95 ms (P50, two runs; SM clock unlocked). 21 tests passed.
 
-- [ ] **Phase 1.** Move `Nvfp4LinearSm120`/`_pick_sm120_nvfp4_gemm` and
-      both `GemmVariantTuner`/`CudaGraphVariantTimer` files to a
-      model-agnostic location under `flash_rt/hardware/rtx/` (pick the
-      exact filenames; keep one class/concept per file per `AGENTS.md`).
-      Update every import in `flash_rt/models/imagewam/*` to the new
-      path. Re-run ImageWAM's existing NVFP4-on-5090 tests/benchmarks
-      unchanged and confirm identical numbers to OPT-033's recorded
-      ones (46.47 ms, cosine 0.97859/0.99900/0.99895 vs
-      official/fp16/fp8) -- any difference means the move broke
-      something, stop and fix before Phase 2.
-- [ ] **Phase 2.** In `pipeline_rtx.py`/`pi05_rtx.py`: add `use_fp4:
-      bool = False` to `Pi05TorchFrontendRtx.__init__`. When true,
-      quantize each decoder layer's `qkv`/`o`/`gate_up`/`down` weight to
-      NVFP4 via the relocated `Nvfp4LinearSm120` instead of the
-      existing FP8 path, for all `DEC_L=18` layers. Raise explicitly
-      (no silent fallback) if `use_fp4=True` is combined with anything
-      not yet validated (e.g. `use_int8_decoder=True`, CFG/batched
-      variants per `pi05_rtx_cfg.py`/`pi05_rtx_batched.py` -- check
-      whether this flag needs plumbing there too or should raise if
-      combined, don't silently ignore it either way).
-      Write a local bit-exact/cosine test (CPU dispatch test first,
-      matching `tests/test_imagewam_fuse_res_norm_fp4_dispatch.py`'s
-      own pattern: mock the kernel call, assert the right pointer/dtype
-      contract, don't require a GPU for this part) before running
-      anything on the 5090 itself.
-- [ ] **Phase 3.** Add `_tune_pi05_gemm_variants(self, d)` (or whatever
-      name fits this file's own convention), called from `__init__`
-      when `use_fp4=True`, before graph capture. Group the 4*18=72
-      decoder NVFP4 linears by `(family, n, k)` (4 distinct groups
-      given the shapes above are shared across all 18 layers), call
-      the relocated `GemmVariantTuner.tune(members, M=10)`.
-- [ ] **Phase 4.** On real RTX 5090 hardware: construct
-      `Pi05TorchFrontendRtx(checkpoint, use_fp4=True, ...)` (use the
-      synthetic generator if no real checkpoint is on that box yet),
-      confirm finite, non-NaN `infer()` output first, then cosine vs
-      the existing fp8 reference at a real checkpoint, then `infer()`
-      P50 (CUDA event, same warmup=10/iters=100 protocol as this
-      project's other RTX 5090 rows) with and without Phase 3's tuner.
-      Decision point: if NVFP4 P50 >= FP8 P50 here, record it exactly
-      like OPT-033 (wired, correct, not recommended by default) rather
-      than treating it as a failed phase -- update `opportunities.md`
-      and `docs/pi05_imagewam_benchmark_status.md` either way.
+### Phase 3: results
+Phase Status: completed
+
+- Update `benchmark_results/pi05_flashrt_rtx5090_nvfp4.json`,
+  `docs/pi05_imagewam_benchmark_status.md` and `opportunities.md`
+  (decoder small-M NVFP4 kernel as a new entry, with the measurements
+  above).
+- Result: `benchmark_results/pi05_flashrt_rtx5090_nvfp4.json` is `ok`
+  (P50 18.21 ms, fp8 in the same process 19.03 ms);
+  `docs/pi05_imagewam_benchmark_status.md` has the interleaved table;
+  `opportunities.md` OPT-036 records the decoder measurements.
+
+## Related, not in this plan
+
+- An M <= 32 NVFP4 kernel for the decoder (a two-atom version of
+  `warpsplit_mrows`, reading each weight once): `opportunities.md`
+  OPT-036.
+- `flash_rt.load_model()` routing for the RTX NVFP4 encoder.

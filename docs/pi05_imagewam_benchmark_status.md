@@ -61,7 +61,25 @@ Commit `f7e4624`, CUDA event, warmup 20 / iters 100, random weights.
 | Official (bf16 eager) | bf16 | 111.77 (111.56-112.08) | true |
 | FlashRT | fp16 | 29.26 (29.23-32.32) | true |
 | FlashRT | fp8 | 17.21 (17.19-17.25) | true |
-| FlashRT | nvfp4 | — | blocked: SM120 NVFP4 not wired for Pi0.5 (deferred) |
+| FlashRT | nvfp4 (encoder) | see below | true |
+
+The nvfp4 row is `Pi05TorchFrontendRtx(use_fp4_encoder=True)`: the 18
+Gemma encoder layers' qkv/o/gate_up/down run as SM120 NVFP4 W4A4 GEMMs;
+vision, the vision projector and the decoder stay FP8. It was measured
+later than the rows above, with the SM clock unlocked (2.40-2.87 GHz
+observed), so it is timed interleaved with an fp8 frontend in one
+process rather than against the 17.21 ms row:
+
+| Measurement (same process, interleaved) | fp8 | nvfp4 encoder |
+|---|---:|---:|
+| Encoder stage, graph replay P50 (round robin, 200 samples) | 6.99 ms | 5.70 ms |
+| `infer()` P50, run 1 | 17.54 ms | 16.42 ms |
+| `infer()` P50, run 2 (`benchmark_results/pi05_flashrt_rtx5090_nvfp4.json`) | 19.03 ms | 18.21 ms |
+
+Cosine of the 32-dim raw actions, nvfp4 encoder vs fp8, identical noise,
+synthetic weights: 0.9995. The decoder stays FP8 because at its M=30
+every SM120 NVFP4 tile is slower than FP8 (per-GEMM table in
+`opportunities.md` OPT-036).
 
 ### ImageWAM (3-view, action_horizon=30 — full target shape)
 
