@@ -2595,3 +2595,76 @@ capture proceeds as today.
   duplicated here -- if Phase 4 shows the existing 3 aren't enough for
   Pi0.5's shapes either, that is additional evidence for OPT-033's
   existing recommendation, not a new, separate kernel-authoring item.
+
+## Dev checklist
+
+Checked facts this checklist relies on (confirmed by reading the code
+this session, not assumed):
+
+- `Nvfp4LinearSm120`, `_pick_sm120_nvfp4_gemm`:
+  `flash_rt/models/imagewam/quant_linear.py`. Base class:
+  `AwqScaledLinear`.
+- `GemmVariantTuner`: `flash_rt/models/imagewam/gemm_variant_tuner.py`.
+  `CudaGraphVariantTimer`: `flash_rt/models/imagewam/gemm_variant_timer.py`.
+- Reference call-pattern to copy: `ImageWAMTorchFrontendThor._tune_action_dit_gemm_variants`
+  (`flash_rt/frontends/torch/imagewam_thor.py`, ~line 1156) -- groups
+  linears by `(family, n, k)`, calls `tuner.tune(members, d["num_action"])`.
+- Pi0.5 decoder constants (`flash_rt/models/pi05/pipeline_rtx.py`):
+  `DEC_L=18, DEC_D=1024, DEC_H=4096, DEC_NH=8, DEC_NKV=1, DEC_HD=256`.
+  Real per-projection decoder shapes at `M=10` (from
+  `docs/pi05_thor_decoder_fp4_e2e.md`'s own table, Thor-side but same
+  architecture constants -- confirm identical on RTX before trusting
+  this number, do not assume): `qkv` N=2560/K=1024, `o` N=1024/K=2048,
+  `gate_up` N=8192/K=1024, `down` N=1024/K=4096.
+  FP8 decoder GEMM call sites today: `pipeline_rtx.py` lines ~990,
+  1029, 1076, 1115, 1188, 1260, 1301, 1361 (`_fp8_gemm` calls) --
+  read these before writing the NVFP4 equivalents, they are the ground
+  truth for call order and buffer ownership, not this summary.
+- `scripts/gen_synthetic_pi05_checkpoint.py` (already landed,
+  `docs/pi05_synthetic_checkpoint.md`) gives a GPU-agnostic way to test
+  construction/wiring before needing a real checkpoint on the 5090 box.
+
+Steps:
+
+- [ ] **Phase 1.** Move `Nvfp4LinearSm120`/`_pick_sm120_nvfp4_gemm` and
+      both `GemmVariantTuner`/`CudaGraphVariantTimer` files to a
+      model-agnostic location under `flash_rt/hardware/rtx/` (pick the
+      exact filenames; keep one class/concept per file per `AGENTS.md`).
+      Update every import in `flash_rt/models/imagewam/*` to the new
+      path. Re-run ImageWAM's existing NVFP4-on-5090 tests/benchmarks
+      unchanged and confirm identical numbers to OPT-033's recorded
+      ones (46.47 ms, cosine 0.97859/0.99900/0.99895 vs
+      official/fp16/fp8) -- any difference means the move broke
+      something, stop and fix before Phase 2.
+- [ ] **Phase 2.** In `pipeline_rtx.py`/`pi05_rtx.py`: add `use_fp4:
+      bool = False` to `Pi05TorchFrontendRtx.__init__`. When true,
+      quantize each decoder layer's `qkv`/`o`/`gate_up`/`down` weight to
+      NVFP4 via the relocated `Nvfp4LinearSm120` instead of the
+      existing FP8 path, for all `DEC_L=18` layers. Raise explicitly
+      (no silent fallback) if `use_fp4=True` is combined with anything
+      not yet validated (e.g. `use_int8_decoder=True`, CFG/batched
+      variants per `pi05_rtx_cfg.py`/`pi05_rtx_batched.py` -- check
+      whether this flag needs plumbing there too or should raise if
+      combined, don't silently ignore it either way).
+      Write a local bit-exact/cosine test (CPU dispatch test first,
+      matching `tests/test_imagewam_fuse_res_norm_fp4_dispatch.py`'s
+      own pattern: mock the kernel call, assert the right pointer/dtype
+      contract, don't require a GPU for this part) before running
+      anything on the 5090 itself.
+- [ ] **Phase 3.** Add `_tune_pi05_gemm_variants(self, d)` (or whatever
+      name fits this file's own convention), called from `__init__`
+      when `use_fp4=True`, before graph capture. Group the 4*18=72
+      decoder NVFP4 linears by `(family, n, k)` (4 distinct groups
+      given the shapes above are shared across all 18 layers), call
+      the relocated `GemmVariantTuner.tune(members, M=10)`.
+- [ ] **Phase 4.** On real RTX 5090 hardware: construct
+      `Pi05TorchFrontendRtx(checkpoint, use_fp4=True, ...)` (use the
+      synthetic generator if no real checkpoint is on that box yet),
+      confirm finite, non-NaN `infer()` output first, then cosine vs
+      the existing fp8 reference at a real checkpoint, then `infer()`
+      P50 (CUDA event, same warmup=10/iters=100 protocol as this
+      project's other RTX 5090 rows) with and without Phase 3's tuner.
+      Decision point: if NVFP4 P50 >= FP8 P50 here, record it exactly
+      like OPT-033 (wired, correct, not recommended by default) rather
+      than treating it as a failed phase -- update `opportunities.md`
+      and `docs/pi05_imagewam_benchmark_status.md` either way.
