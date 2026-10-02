@@ -2491,3 +2491,107 @@ Phase Status: completed
   directly, bypassing `flash_rt.load_model()`. Found while fixing the
   Orin gap; not fixed here (out of this plan's scope, and nothing
   currently depends on the public API path for 5090).
+
+# Plan: Pi0.5 NVFP4 + CUTLASS variant selection on RTX 5090 (SM120)
+
+Plan Status: proposed
+
+## Problem
+
+Pi0.5 has no NVFP4 precision tier on RTX 5090 at all (`Pi05TorchFrontendRtx`
+quantizes to FP8 via `GemmRunner`/cuBLASLt only; NVFP4 was deferred
+earlier in this project's history). Separately, Pi0.5 has no
+empirical, per-real-shape kernel-variant selection anywhere on this
+hardware -- `_autotune_fp8_matmul` picks among cuBLASLt's own internal
+algorithms (a narrower, different mechanism), and `GemmVariantTuner`
+(the empirical CUTLASS-tile-variant benchmark-and-cache tool this
+project already built and uses for ImageWAM) has never been called
+from any Pi0.5 code path. Goal: give Pi0.5 an NVFP4 option on SM120,
+with its tile/variant chosen empirically at Pi0.5's own real decoder
+shapes rather than left at a hardcoded default -- then measure,
+not assume, whether it beats FP8 here.
+
+## Structure
+
+- `Nvfp4LinearSm120` and `GemmVariantTuner`/`CudaGraphVariantTimer`
+  already exist but live under `flash_rt/models/imagewam/` --
+  ImageWAM-specific by path even though nothing in their own logic is
+  ImageWAM-specific (confirmed: generic quantize/GEMM/tuning code,
+  model-agnostic). Using them from Pi0.5 as-is is a cross-model import
+  that violates this project's own "one file, one responsibility, no
+  hidden cross-module coupling" convention (`AGENTS.md`) -- Phase 1
+  below resolves this before any Pi0.5-specific code is written.
+- Pi0.5's own real decoder GEMM shapes are much smaller-M than
+  ImageWAM's (`docs/pi05_thor_decoder_fp4_e2e.md`'s own table: M=10 for
+  every decoder projection, vs ImageWAM's M in the tens to hundreds) --
+  this project's own ISSUE-088 ("small-M GEMM efficiency collapse is
+  architecture- and precision-agnostic") and OPT-033's SM120-specific
+  finding both predict this could reproduce or worsen the
+  "NVFP4 slower than FP8" result OPT-033 already measured for ImageWAM,
+  not avoid it. The plan treats this as the open empirical question
+  it is, not something Phase 2-3's wiring work can assume away.
+
+## Interface
+
+- `Pi05TorchFrontendRtx.__init__` gains an explicit opt-in flag
+  (`use_fp4: bool = False`, matching the naming convention
+  `Pi05TorchFrontendThorFP4`/`use_fp4_decoder` already established on
+  Thor) -- no silent fallback; unsupported combinations raise, per this
+  project's existing `_SM87_ALLOWED`-style discipline.
+- A new `_tune_pi05_gemm_variants(self, d: dict)` method, called once
+  at construction before graph capture, mirroring
+  `ImageWAMTorchFrontendThor._tune_action_dit_gemm_variants` exactly in
+  shape: group every NVFP4-quantized decoder Linear by
+  `(family, M, N, K)`, call the shared tuner, cache the result per
+  group, apply before capture.
+
+## Flow
+
+Construction (`use_fp4=True`): load weights (real or the synthetic
+generator from `scripts/gen_synthetic_pi05_checkpoint.py`) -> quantize
+decoder `qkv`/`o`/`gate_up`/`down` Linears to NVFP4 via
+`Nvfp4LinearSm120` -> group by `(family, M, N, K)` -> `GemmVariantTuner`
+benchmarks each of SM120's existing candidates (`plain`/`widen`/
+`pingpong` -- no new kernel authored in this plan) against that real
+shape, inside a CUDA graph, same correctness/timing discipline already
+established -> cache and apply the winner -> `set_prompt()`/`infer()`
+capture proceeds as today.
+
+## Code Mapping
+
+- Phase 1 (structural): relocate `Nvfp4LinearSm120`,
+  `GemmVariantTuner`, `CudaGraphVariantTimer` out of
+  `flash_rt/models/imagewam/quant_linear.py` /
+  `gemm_variant_tuner.py` / `gemm_variant_timer.py` into a
+  model-agnostic home (e.g. `flash_rt/hardware/rtx/nvfp4_linear.py`,
+  `flash_rt/hardware/rtx/gemm_variant_tuner.py`,
+  `flash_rt/hardware/rtx/gemm_variant_timer.py` -- exact location is
+  this phase's own decision, not fixed here), with ImageWAM's own
+  imports updated to the new location and its existing behavior/numbers
+  re-confirmed unchanged (a regression check, not a rewrite).
+- Phase 2: `flash_rt/frontends/torch/pi05_rtx.py`
+  (`Pi05TorchFrontendRtx.__init__`, the decoder weight-wrapping call
+  sites) -- wire `use_fp4`, quantize the four decoder projections per
+  layer to NVFP4, validate bit-exact/cosine locally against the
+  existing fp8/fp16 reference at real decoder shapes before touching
+  hardware (same discipline as every other precision tier in this
+  project).
+- Phase 3: add `_tune_pi05_gemm_variants`, call it from `__init__`
+  before capture, gated by `use_fp4`.
+- Phase 4: real RTX 5090 hardware validation -- correctness (cosine vs
+  the existing fp8/fp16 reference, real checkpoint) and speed
+  (`infer()` P50, same CUDA-event protocol this project uses
+  elsewhere) at Pi0.5's real M=10 decoder shapes, with and without
+  Phase 3's tuner. This phase's own explicit decision point: if NVFP4
+  is slower than FP8 here (plausible, see Structure above), the
+  recommended outcome mirrors OPT-033's for ImageWAM -- keep FP8 as the
+  default, leave NVFP4 wired-but-not-recommended rather than reverting
+  the work.
+
+## Related, not in this plan's scope
+
+- Authoring new SM120 CUTLASS tile variants beyond today's 3
+  (`plain`/`widen`/`pingpong`) is OPT-033's own follow-on, not
+  duplicated here -- if Phase 4 shows the existing 3 aren't enough for
+  Pi0.5's shapes either, that is additional evidence for OPT-033's
+  existing recommendation, not a new, separate kernel-authoring item.
