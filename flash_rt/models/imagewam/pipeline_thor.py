@@ -383,6 +383,27 @@ def _add_inplace(dst_ptr: int, src_ptr: int, seq: int, dim: int) -> None:
     dst.add_(src)
 
 
+def _rms_norm_qk(fvk, dims: dict, x_ptr: int, w_ptr: int, out_ptr: int, rows: int,
+                 dim: int, eps: float, stream) -> None:
+    """Per-head Q/K RMSNorm. `rms_norm_fp16` (`csrc/kernels/norm.cu`) launches a
+    fixed 256-thread block per row regardless of `dim`; at the real per-head
+    width (HD=128) only 64 of those 256 threads ever enter the vectorized
+    load loop (`dim>>1`), and the other 192 still pay the full 256-wide
+    shared-memory block reduction every row -- opportunities.md OPT-032
+    candidate 5 measured this at ~26 GB/s against Thor's ~260 GB/s ceiling
+    (10% utilization), ~21 ms per `infer()`. `dims["vec_rms_norm"]` switches
+    to `rms_norm_fp16_vec`, which dispatches to a warp-per-row kernel at
+    dim<=512 (`csrc/kernels/vec_fp16_backbone.cu`; already compiled into
+    every `ENABLE_SM100_CUTLASS` build, no new build flag needed). Same
+    math, different reduction order -- NOT bit-exact against the default
+    path; verify with a cosine/relative-error check, not `torch.equal`,
+    before trusting a Thor/RTX run of this flag. Default off."""
+    if dims.get("vec_rms_norm"):
+        fvk.rms_norm_fp16_vec(x_ptr, w_ptr, out_ptr, rows, dim, eps, stream)
+    else:
+        fvk.rms_norm_fp16(x_ptr, w_ptr, out_ptr, rows, dim, eps, stream)
+
+
 def _merge_linear2(dims: dict) -> bool:
     """`dims["merge_linear2"]` (roadmap item 4): single-stream blocks run
     the real `linear2` as ONE GEMM over `[attn_out | mlp_act]`. Only the
@@ -665,8 +686,8 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
         _copy_slice(Q_O, txt_qkv_merged, x0, hidden, src_row_stride=3 * hidden)
         _copy_slice(K_cache, _col_ptr(txt_qkv_merged, hidden), x0, hidden, src_row_stride=3 * hidden)
         _copy_slice(V_cache, _col_ptr(txt_qkv_merged, 2 * hidden), x0, hidden, src_row_stride=3 * hidden)
-        fvk.rms_norm_fp16(Q_O, key("txt_query_norm"), Q_O, x0 * NH, HD, eps, stream)
-        fvk.rms_norm_fp16(K_cache, key("txt_key_norm"), K_cache, x0 * NH, HD, eps, stream)
+        _rms_norm_qk(fvk, dims, Q_O, key("txt_query_norm"), Q_O, x0 * NH, HD, eps, stream)
+        _rms_norm_qk(fvk, dims, K_cache, key("txt_key_norm"), K_cache, x0 * NH, HD, eps, stream)
 
     # --- image stream: PERSISTENT residual, rows [x0,a0) of combined.
     # `img_in` is projected ONCE, by `imagewam_prefill`, before this
@@ -694,8 +715,8 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
         _copy_slice(img_Q_ptr, img_qkv_merged, img_len, hidden, src_row_stride=3 * hidden)
         _copy_slice(img_K_ptr, _col_ptr(img_qkv_merged, hidden), img_len, hidden, src_row_stride=3 * hidden)
         _copy_slice(img_V_ptr, _col_ptr(img_qkv_merged, 2 * hidden), img_len, hidden, src_row_stride=3 * hidden)
-        fvk.rms_norm_fp16(img_Q_ptr, key("img_query_norm"), img_Q_ptr, img_len * NH, HD, eps, stream)
-        fvk.rms_norm_fp16(img_K_ptr, key("img_key_norm"), img_K_ptr, img_len * NH, HD, eps, stream)
+        _rms_norm_qk(fvk, dims, img_Q_ptr, key("img_query_norm"), img_Q_ptr, img_len * NH, HD, eps, stream)
+        _rms_norm_qk(fvk, dims, img_K_ptr, key("img_key_norm"), img_K_ptr, img_len * NH, HD, eps, stream)
 
     if not fused_qkv:
         # RoPE over the FULL combined [txt|img] sequence, once each for Q
@@ -868,8 +889,8 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         _mlp_gate_up(fvk, key, "mlp_in.weight", modded, mlp_merged, mlp_gated, a0, mlp_hidden, stream)
 
     if not fused_qkv:
-        fvk.rms_norm_fp16(Q_O, key("query_norm"), Q_O, a0 * NH, HD, eps, stream)
-        fvk.rms_norm_fp16(K_cache, key("key_norm"), K_cache, a0 * NH, HD, eps, stream)
+        _rms_norm_qk(fvk, dims, Q_O, key("query_norm"), Q_O, a0 * NH, HD, eps, stream)
+        _rms_norm_qk(fvk, dims, K_cache, key("key_norm"), K_cache, a0 * NH, HD, eps, stream)
         fvk.rope_apply_fp16_perhead(Q_O, rope_table, a0, NH, HD, stream)
         fvk.rope_apply_fp16_perhead(K_cache, rope_table, a0, NH, HD, stream)
 
@@ -944,7 +965,7 @@ def _single_stream_layer_kv_only(ctx, fvk, gemm, bufs, weights, dims, weight_lay
     key("linear1_kv.weight")(modded, kv_merged, a0, stream)
     _copy_slice(K_cache, kv_merged, a0, hidden, src_row_stride=2 * hidden)
     _copy_slice(V_cache, _col_ptr(kv_merged, hidden), a0, hidden, src_row_stride=2 * hidden)
-    fvk.rms_norm_fp16(K_cache, key("key_norm"), K_cache, a0 * NH, HD, eps, stream)
+    _rms_norm_qk(fvk, dims, K_cache, key("key_norm"), K_cache, a0 * NH, HD, eps, stream)
     fvk.rope_apply_fp16_perhead(K_cache, rope_table, a0, NH, HD, stream)
 
 
@@ -1176,8 +1197,8 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
                     src_row_stride=3 * action_attn_width)
         _copy_slice(action_V_ptr, _col_ptr(qkv_merged, 2 * action_attn_width), num_action, action_attn_width,
                     src_row_stride=3 * action_attn_width)
-        fvk.rms_norm_fp16(action_Q_ptr, key("query_norm"), action_Q_ptr, num_action * NH, HD, eps, stream)
-        fvk.rms_norm_fp16(action_K_ptr, key("key_norm"), action_K_ptr, num_action * NH, HD, eps, stream)
+        _rms_norm_qk(fvk, dims, action_Q_ptr, key("query_norm"), action_Q_ptr, num_action * NH, HD, eps, stream)
+        _rms_norm_qk(fvk, dims, action_K_ptr, key("key_norm"), action_K_ptr, num_action * NH, HD, eps, stream)
         fvk.rope_apply_fp16_perhead(action_Q_ptr, action_rope_table, num_action, NH, HD, stream)
         fvk.rope_apply_fp16_perhead(action_K_ptr, action_rope_table, num_action, NH, HD, stream)
 
@@ -1311,8 +1332,8 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         mlp_merged, mlp_gated = bufs["action_mlp_merged"], bufs["action_mlp_gated"]
         _mlp_gate_up(fvk, key, "mlp_in.weight", modded, mlp_merged, mlp_gated, num_action, action_mlp_hidden, stream)
     if not fused_qkv:
-        fvk.rms_norm_fp16(action_Q_ptr, key("query_norm"), action_Q_ptr, num_action * NH, HD, eps, stream)
-        fvk.rms_norm_fp16(action_K_ptr, key("key_norm"), action_K_ptr, num_action * NH, HD, eps, stream)
+        _rms_norm_qk(fvk, dims, action_Q_ptr, key("query_norm"), action_Q_ptr, num_action * NH, HD, eps, stream)
+        _rms_norm_qk(fvk, dims, action_K_ptr, key("key_norm"), action_K_ptr, num_action * NH, HD, eps, stream)
         fvk.rope_apply_fp16_perhead(action_Q_ptr, action_rope_table, num_action, NH, HD, stream)
         fvk.rope_apply_fp16_perhead(action_K_ptr, action_rope_table, num_action, NH, HD, stream)
 
