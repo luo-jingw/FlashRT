@@ -389,17 +389,37 @@ def _rms_norm_qk(fvk, dims: dict, x_ptr: int, w_ptr: int, out_ptr: int, rows: in
     fixed 256-thread block per row regardless of `dim`; at the real per-head
     width (HD=128) only 64 of those 256 threads ever enter the vectorized
     load loop (`dim>>1`), and the other 192 still pay the full 256-wide
-    shared-memory block reduction every row -- opportunities.md OPT-032
-    candidate 5 measured this at ~26 GB/s against Thor's ~260 GB/s ceiling
-    (10% utilization), ~21 ms per `infer()`. `dims["vec_rms_norm"]` switches
-    to `rms_norm_fp16_vec`, which dispatches to a warp-per-row kernel at
-    dim<=512 (`csrc/kernels/vec_fp16_backbone.cu`; already compiled into
-    every `ENABLE_SM100_CUTLASS` build, no new build flag needed). Same
-    math, different reduction order -- NOT bit-exact against the default
-    path; verify with a cosine/relative-error check, not `torch.equal`,
-    before trusting a Thor/RTX run of this flag. Default off."""
+    shared-memory block reduction every row. `dims["vec_rms_norm"]` switches
+    to `rms_norm_fp16_vec`, a warp-per-row kernel at dim<=512
+    (`csrc/kernels/vec_fp16_backbone.cu`). Same math, different reduction
+    order -- NOT bit-exact against the default path (kernel-level cosine
+    1.0000000 / max 1 ulp at real ImageWAM shapes, confirmed on both Thor
+    and RTX 5090); verify with a cosine/relative-error check, not
+    `torch.equal`.
+
+    Real-hardware confirmation (OPT-032 candidate 5, opportunities.md):
+    the same inefficiency has a very different cost depending on the
+    device. Thor (real checkpoint, LIBERO config): the default kernel
+    achieves ~26 GB/s against a ~260 GB/s ceiling (10%), 23.008 ms per
+    `infer()` over 560 calls; the warp-per-row kernel cuts that to
+    2.733 ms, 20.2 ms faster end to end (1.23x), cosine >= 0.99995 over 8
+    real observations. RTX 5090 (synthetic weights): the default kernel
+    is already much closer to its ceiling there (~455 GB/s at the same
+    dim=128), so the same kernel swap is worth only 1.6-1.8 ms end to end
+    (-3 to -4%) -- a real win on both devices, but Thor's is an order of
+    magnitude larger because Thor's default kernel was the one actually
+    starved.
+
+    Default off. Not yet exposed through `config_resolver`'s named
+    profiles or `load_imagewam` -- only reachable via `dims_override`."""
     if dims.get("vec_rms_norm"):
-        fvk.rms_norm_fp16_vec(x_ptr, w_ptr, out_ptr, rows, dim, eps, stream)
+        rc = fvk.rms_norm_fp16_vec(x_ptr, w_ptr, out_ptr, rows, dim, eps, stream)
+        if rc != 0:
+            raise RuntimeError(
+                f"rms_norm_fp16_vec returned {rc} (expects 0) -- it silently skips "
+                f"the computation on an unmet precondition (dim%8!=0, or x/w/out not "
+                f"16-byte aligned) rather than raising on its own. dim={dim}, "
+                f"x_ptr={x_ptr:#x}, w_ptr={w_ptr:#x}, out_ptr={out_ptr:#x}.")
     else:
         fvk.rms_norm_fp16(x_ptr, w_ptr, out_ptr, rows, dim, eps, stream)
 

@@ -1580,17 +1580,15 @@ set_target_properties(flash_rt_kernels PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/flash_rt)
 
 # ── Thor-class VLA helper kernels (SM100/SM110 only) ──
-# The masked-softmax MHA variants, the 16-byte-load norm/rope/quantize
-# rewrites, the seqused-fold decoder attention and the vectorized QKV
-# split-RoPE exist for the GROOT N1.7 and Pi0.5 Thor paths; their element
-# math targets SM100-class memory behaviour and no SM8x frontend calls
-# them. Their bindings in csrc/bindings.cpp are guarded by
-# FLASHRT_HAVE_THOR_VLA_KERNELS so source and binding drop together on
-# other architectures.
+# The masked-softmax MHA variants, the seqused-fold decoder attention and
+# the vectorized QKV split-RoPE exist for the GROOT N1.7 and Pi0.5 Thor
+# paths; their element math targets SM100-class memory behaviour and no
+# SM8x/SM120 frontend calls them. Their bindings in csrc/bindings.cpp are
+# guarded by FLASHRT_HAVE_THOR_VLA_KERNELS so source and binding drop
+# together on other architectures.
 if(ENABLE_SM100_CUTLASS)
   target_sources(flash_rt_kernels PRIVATE
     csrc/kernels/attention_mha_masked.cu
-    csrc/kernels/vec_fp16_backbone.cu
     csrc/kernels/attention_seqused_fused.cu
     csrc/kernels/rope_vec.cu
     csrc/kernels/qk_norm_rope_rotate_half_bf16.cu)
@@ -1598,6 +1596,21 @@ if(ENABLE_SM100_CUTLASS)
   message(STATUS "Thor VLA helper kernels: ENABLED (sm_${GPU_ARCH})")
 else()
   message(STATUS "Thor VLA helper kernels: DISABLED (SM100-class only)")
+endif()
+
+# ── Vectorized fp16 backbone kernels (ordinary CUDA, no SM100-only
+#    instructions -- portable to SM120/121 too, unlike the Thor-class
+#    kernels above). OPT-032 candidate 5 (opportunities.md): confirmed on
+#    both Thor and RTX 5090. Kept as its own source/gate pair, separate
+#    from FLASHRT_HAVE_THOR_VLA_KERNELS, so this one file's portability
+#    doesn't have to argue for the genuinely SM100-only kernels above it.
+if(ENABLE_SM100_CUTLASS OR GPU_ARCH STREQUAL "120" OR GPU_ARCH STREQUAL "121")
+  target_sources(flash_rt_kernels PRIVATE
+    csrc/kernels/vec_fp16_backbone.cu)
+  target_compile_definitions(flash_rt_kernels PRIVATE FLASHRT_HAVE_VEC_FP16_BACKBONE=1)
+  message(STATUS "Vectorized fp16 backbone kernels: ENABLED (sm_${GPU_ARCH})")
+else()
+  message(STATUS "Vectorized fp16 backbone kernels: DISABLED (needs SM100-class or SM120/121)")
 endif()
 
 if(FLASHRT_ENABLE_COSMOS3_EDGE)
