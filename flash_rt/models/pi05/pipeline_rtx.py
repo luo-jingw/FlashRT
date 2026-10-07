@@ -47,6 +47,14 @@ import ml_dtypes
 
 from flash_rt.core.cuda_buffer import CudaBuffer
 from flash_rt.core.cuda_graph import CUDAGraph
+from flash_rt.models.pi05.nvfp4_sm120 import (
+    Nvfp4ActBufferSm120,
+    Nvfp4Variant,
+    Nvfp4WeightSm120,
+    allocate_act_buffer,
+    gemm_bf16out,
+    quantize_act,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +123,14 @@ FP8 = np.uint8
 FP32 = np.float32
 INT8 = np.int8
 
+# NVFP4 encoder tile per projection (use_fp4_encoder). Measured on RTX 5090
+# at M=788 (us per GEMM, plain / pingpong / widen): qkv 12.89/13.29/20.83,
+# o 12.24/12.39/20.69, gate_up 106.47/112.14/142.32, down 60.03/57.81/106.98.
+ENC_FP4_VARIANT_QKV: Nvfp4Variant = "plain"
+ENC_FP4_VARIANT_O: Nvfp4Variant = "plain"
+ENC_FP4_VARIANT_GATE_UP: Nvfp4Variant = "plain"
+ENC_FP4_VARIANT_DOWN: Nvfp4Variant = "pingpong"
+
 
 class Pi05Pipeline:
     """Pi0.5 inference pipeline for RTX (Blackwell / Ada) consumer GPUs.
@@ -136,6 +152,8 @@ class Pi05Pipeline:
         use_fp8:      Enable FP8 E4M3 quantization for large GEMMs.
         use_fp8_decoder: Enable FP8 on decoder branch (else BF16).
         use_int8_decoder: Enable experimental decoder-only INT8 GEMMs.
+        use_fp4_encoder: Run the four encoder projections as SM120 NVFP4
+                      GEMMs (``weights["nvfp4"]``) instead of FP8.
         num_steps:    Diffusion denoise steps (default 10).
 
     Expected weights dict keys:
@@ -156,6 +174,10 @@ class Pi05Pipeline:
             fp8.encoder_attn_qkv_w_{0..17}, fp8.encoder_attn_o_w_{0..17},
             fp8.encoder_ffn_gate_up_w_{0..17}  (merged gate+up: (D,2H)),
             fp8.encoder_ffn_down_w_{0..17},
+        Encoder NVFP4 (use_fp4_encoder; each entry is an Nvfp4WeightSm120):
+            nvfp4.encoder_attn_qkv_w_{0..17}, nvfp4.encoder_attn_o_w_{0..17},
+            nvfp4.encoder_ffn_gate_up_w_{0..17}  (merged gate+up: N=2H),
+            nvfp4.encoder_ffn_down_w_{0..17},
         Decoder BF16:
             decoder_time_mlp_in_w/b, decoder_time_mlp_out_w/b,
             decoder_time_embeds (10,1024),
@@ -182,6 +204,7 @@ class Pi05Pipeline:
                  use_int8_encoder: bool = False,
                  use_int8_vision: bool = False,
                  use_int8_vision_static: bool = False,
+                 use_fp4_encoder: bool = False,
                  vision_pool_factor: int = 1,
                  vision_num_layers: int = VIS_L,
                  num_steps: int = NUM_STEPS_DEFAULT,
@@ -215,6 +238,10 @@ class Pi05Pipeline:
         # Eliminates the per-row amax reduction → 1 quantize kernel vs 3.
         # Scales are collected once during calibrate_int8_vision_static().
         self.use_int8_vision_static = bool(use_int8_vision_static)
+        self.use_fp4_encoder = bool(use_fp4_encoder)
+        if self.use_fp4_encoder and (not self.use_fp8 or self.use_int8_encoder):
+            raise ValueError(
+                "use_fp4_encoder requires use_fp8=True and use_int8_encoder=False")
         self.vis_int8_static_scales: dict = {}   # name → CudaBuffer(1, FP32)
         self.vis_int8_static_calibrated = False
         # Encoder INT8 static-rowwise: after calibration, the per-row scale
@@ -295,6 +322,7 @@ class Pi05Pipeline:
         self._allocate_int8_scratch()
         self._allocate_encoder_int8_scratch()
         self._allocate_vision_int8_static_scratch()
+        self._allocate_fp4_encoder_scratch()
 
         # Pre-computed decoder style params — frontend pre-computes these in
         # its native framework and passes raw bf16 bytes; see frontend's
@@ -419,6 +447,23 @@ class Pi05Pipeline:
         B["dec_act_fp8"] = CudaBuffer.device_zeros(ds * DEC_D, FP8)
         B["dec_act_fp8_large"] = CudaBuffer.device_zeros(ds * 2 * DEC_H, FP8)
         B["dec_act_scale"] = CudaBuffer.device_zeros(1, FP32)
+
+    def _allocate_fp4_encoder_scratch(self) -> None:
+        """NVFP4 encoder activation buffers: K=ENC_D (qkv/o/gate_up inputs)
+        and K=ENC_H (down input), sized for ``encoder_seq_len`` rows."""
+        self.enc_act_fp4: Nvfp4ActBufferSm120 | None = None
+        self.enc_act_fp4_large: Nvfp4ActBufferSm120 | None = None
+        if not self.use_fp4_encoder:
+            return
+        if "nvfp4" not in self.weights:
+            raise ValueError('use_fp4_encoder requires weights["nvfp4"]')
+        es = self.encoder_seq_len
+        self.enc_act_fp4 = allocate_act_buffer(self.fvk, es, ENC_D)
+        self.enc_act_fp4_large = allocate_act_buffer(self.fvk, es, ENC_H)
+
+    def _weight_nvfp4(self, name: str) -> Nvfp4WeightSm120:
+        """Look up an NVFP4-quantized weight."""
+        return self.weights["nvfp4"][name]
 
     def _allocate_int8_scratch(self) -> None:
         """Allocate reusable INT8 activation scratch for the decoder path."""
@@ -1215,6 +1260,9 @@ class Pi05Pipeline:
         attn_ptrs = self._attn_ptrs
         fused = self.use_fp8 and self.fp8_calibrated
         use_int8_enc = self.use_int8_encoder
+        if self.use_fp4_encoder:
+            self._encoder_layer_fp4(i, seq, stream)
+            return
 
         # B1: RMSNorm → QKV GEMM
         if use_int8_enc:
@@ -1428,6 +1476,79 @@ class Pi05Pipeline:
             fvk.residual_add(
                 B["encoder_x"].ptr.value, B["encoder_x_norm"].ptr.value,
                 seq * ENC_D, stream=stream)
+
+    def _encoder_layer_fp4(self, i: int, seq: int, stream: int) -> None:
+        """One Gemma-2B encoder layer with NVFP4 projections (SM120).
+
+        Each projection input is quantized to NVFP4 into the pipeline's
+        activation buffer, then the NVFP4 GEMM writes BF16. The qkv and
+        gate_up inputs come from fused (residual +) RMSNorm -> NVFP4
+        kernels, byte-identical to ``rms_norm`` + ``quantize_bf16_to_nvfp4_
+        swizzled``; the previous layer's post-FFN residual is folded into
+        this layer's B1 (layer 0 has none), so B5 never runs separately.
+        The o and down inputs are quantized unfused.
+        """
+        fvk = self.fvk
+        B = self.bufs
+        act = self.enc_act_fp4
+        act_large = self.enc_act_fp4_large
+
+        # B1: (previous layer's residual +) RMSNorm → NVFP4 → QKV GEMM
+        if i == 0:
+            fvk.rms_norm_to_nvfp4_swizzled_bf16(
+                B["encoder_x"].ptr.value, self._rms_ones_enc.ptr.value,
+                act.packed.ptr.value, act.sf.ptr.value,
+                seq, ENC_D, 1e-6, stream)
+        else:
+            fvk.residual_add_rms_norm_to_nvfp4_swizzled_bf16(
+                B["encoder_x"].ptr.value, B["encoder_x_norm"].ptr.value,
+                B["encoder_x"].ptr.value, self._rms_ones_enc.ptr.value,
+                act.packed.ptr.value, act.sf.ptr.value,
+                seq, ENC_D, 1e-6, stream)
+        gemm_bf16out(fvk, ENC_FP4_VARIANT_QKV, act,
+                     self._weight_nvfp4(f"encoder_attn_qkv_w_{i}"),
+                     B["encoder_QKV"].ptr.value, seq, stream)
+
+        k_ptr, v_ptr = self._enc_kv_layer_ptrs(i, offset_tokens=0)
+        fvk.qkv_split_rope(
+            B["encoder_QKV"].ptr.value,
+            B["encoder_rope_weights"].ptr.value,
+            self._attn_ptrs["enc_Q"],
+            k_ptr, v_ptr,
+            seq, ENC_NH * ENC_HD, ENC_NKV * ENC_HD, ENC_NKV * ENC_HD,
+            ENC_HD, stream=stream)
+
+        if i == ENC_L - 1:
+            # Last layer: only its K/V are consumed (by the decoder).
+            return
+
+        # B2: Attention; B3: NVFP4 → attn output projection → x_norm
+        enc_o_ptr = self.attn.run("encoder", i, q_seq=seq, stream=stream)
+        quantize_act(fvk, enc_o_ptr, act, seq, stream)
+        gemm_bf16out(fvk, ENC_FP4_VARIANT_O, act,
+                     self._weight_nvfp4(f"encoder_attn_o_w_{i}"),
+                     B["encoder_x_norm"].ptr.value, seq, stream)
+
+        # B4: residual + RMSNorm → NVFP4 (fused, x updated in place) → gate_up GEMM
+        fvk.residual_add_rms_norm_to_nvfp4_swizzled_bf16(
+            B["encoder_x"].ptr.value, B["encoder_x_norm"].ptr.value,
+            B["encoder_x"].ptr.value, self._rms_ones_enc.ptr.value,
+            act.packed.ptr.value, act.sf.ptr.value,
+            seq, ENC_D, 1e-6, stream)
+        gemm_bf16out(fvk, ENC_FP4_VARIANT_GATE_UP, act,
+                     self._weight_nvfp4(f"encoder_ffn_gate_up_w_{i}"),
+                     B["encoder_gate_merged"].ptr.value, seq, stream)
+
+        # GeGLU(gate, up) → NVFP4 → down GEMM → x_norm
+        fvk.gate_geglu_merged(
+            B["encoder_gate_merged"].ptr.value,
+            B["encoder_hidden"].ptr.value,
+            seq, ENC_H, stream=stream)
+        quantize_act(fvk, B["encoder_hidden"].ptr.value, act_large, seq, stream)
+        gemm_bf16out(fvk, ENC_FP4_VARIANT_DOWN, act_large,
+                     self._weight_nvfp4(f"encoder_ffn_down_w_{i}"),
+                     B["encoder_x_norm"].ptr.value, seq, stream)
+        # B5 (residual) is folded into layer i+1's B1.
 
     # ══════════════════════════════════════════════════════════════════
     #   Phase C: Gemma-300M decoder (flow matching)
@@ -1858,8 +1979,8 @@ class Pi05Pipeline:
                     act_buf_ptr, w_fp8_ptr, B[out_key].ptr.value,
                     M_val, N_val, K_val, act_scale_ptr, w_scale_ptr)
 
-        # Encoder FP8 shapes
-        if self.use_fp8 and self.fp8_calibrated:
+        # Encoder FP8 shapes (the NVFP4 encoder uses fixed CUTLASS tiles)
+        if self.use_fp8 and self.fp8_calibrated and not self.use_fp4_encoder:
             for name_prefix, M_val, N_val, K_val, out_key in [
                 ("encoder_attn_qkv_w_0",    seq, (ENC_NH + 2 * ENC_NKV) * ENC_HD, ENC_D, "encoder_QKV"),
                 ("encoder_attn_o_w_0",      seq, ENC_D,      ENC_D, "encoder_x_norm"),

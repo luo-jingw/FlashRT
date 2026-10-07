@@ -42,6 +42,11 @@ from flash_rt.models.pi05.pipeline_rtx import (
     DEC_L, DEC_D, DEC_H, DEC_HD,
     ACTION_DIM, NUM_STEPS_DEFAULT,
 )
+from flash_rt.models.pi05.nvfp4_sm120 import (
+    REQUIRED_KERNELS as NVFP4_SM120_KERNELS,
+    Nvfp4WeightSm120,
+    check_nvfp4_shape,
+)
 from flash_rt.models.pi05.pipeline_rtx_cfg import Pi05CFGPipeline
 from flash_rt.models.pi05.pipeline_rtx_batched import Pi05BatchedPipeline
 from flash_rt.models.pi05.pipeline_rtx_cfg_batched import Pi05CFGBatchedPipeline
@@ -350,6 +355,28 @@ def _quantize_fp8_e4m3(w_bf16: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor
     return w_fp8, scale_tensor
 
 
+def _quantize_nvfp4_sm120(fvk, w_kn: torch.Tensor) -> tuple[Nvfp4WeightSm120, list[torch.Tensor]]:
+    """Quantize a CUDA BF16 ``(K, N)`` weight to SM120 NVFP4 ``(N, K)``.
+
+    Returns the pointer record and the tensors that back it (the caller
+    keeps them alive)."""
+    k, n = int(w_kn.shape[0]), int(w_kn.shape[1])
+    check_nvfp4_shape(n, k)
+    w_nk = w_kn.to(bf16).t().contiguous()
+    packed = torch.empty(n, k // 2, dtype=torch.uint8, device="cuda")
+    sf = torch.empty(int(fvk.nvfp4_sf_swizzled_bytes(n, k)), dtype=torch.uint8, device="cuda")
+    amax_scratch = torch.empty(1, dtype=torch.float32, device="cuda")
+    global_scale = torch.empty(1, dtype=torch.float32, device="cuda")
+    fvk.bf16_weight_to_nvfp4_swizzled(
+        w_nk.data_ptr(), packed.data_ptr(), sf.data_ptr(),
+        amax_scratch.data_ptr(), global_scale.data_ptr(), n, k, 0)
+    torch.cuda.synchronize()
+    record = Nvfp4WeightSm120(
+        packed_ptr=packed.data_ptr(), sf_ptr=sf.data_ptr(),
+        alpha=float(global_scale.item()), n=n, k=k)
+    return record, [packed, sf]
+
+
 def _resolve_effective_hardware(hardware: Optional[str]) -> Optional[str]:
     """Resolve the RTX hardware tag used by lower-level policy decisions."""
     if hardware is not None:
@@ -474,7 +501,8 @@ class Pi05TorchFrontendRtx:
                  hardware: Optional[str] = None,
                  fp8_layout: Optional[str] = None,
                  state_prompt_mode: str = "exact",
-                 use_cuda_graph: bool = True):
+                 use_cuda_graph: bool = True,
+                 use_fp4_encoder: bool = False):
         checkpoint_dir = pathlib.Path(checkpoint_dir)
         # State-in-prompt graph strategy (Pi0.5 renders robot state into the
         # prompt, so its token length drifts with the state values):
@@ -563,6 +591,11 @@ class Pi05TorchFrontendRtx:
             (env_force_bf16 or not supports_fp8()) and
             not self._force_int8_decoder
         )
+        # NVFP4 encoder (SM120 only): the four Gemma encoder projections run
+        # as NVFP4 GEMMs; vision, projector and decoder stay FP8.
+        self.use_fp4_encoder = bool(use_fp4_encoder)
+        if self.use_fp4_encoder:
+            self._validate_fp4_encoder_config()
 
         # ── Load norm_stats ──
         self._load_norm_stats(checkpoint_dir)
@@ -600,8 +633,12 @@ class Pi05TorchFrontendRtx:
         self._int8_weights: dict = {}
         self._int8_store: list = []
         self._int8_weight_scales: dict[str, torch.Tensor] = {}
+        self._nvfp4_weights: dict[str, Nvfp4WeightSm120] = {}
+        self._nvfp4_store: list[torch.Tensor] = []
         if self.use_fp8 and not self._force_bf16 and not self._force_int8_decoder:
             self._quantize_all_fp8()
+        if self.use_fp4_encoder:
+            self._quantize_encoder_nvfp4()
         if self._force_int8_decoder:
             self._quantize_decoder_int8()
         if self._use_int8_encoder:
@@ -700,6 +737,7 @@ class Pi05TorchFrontendRtx:
             "use_int8_encoder": False,
             "use_int8_vision": False,
             "use_int8_vision_static": False,
+            "use_fp4_encoder": self.use_fp4_encoder,
         }
 
     # -----------------------------------------------------------------
@@ -741,15 +779,17 @@ class Pi05TorchFrontendRtx:
             quant(f"vision_ffn_down_w_{i}", W["vision_ffn_down_w"][i])
         quant("vision_projector_w", W["encoder_multi_modal_projector_w"])
 
-        # Encoder (18 layers × 4) — fuse gate+up into (D, 2H)
-        for i in range(ENC_L):
-            quant(f"encoder_attn_qkv_w_{i}", W["encoder_attn_qkv_w"][i])
-            quant(f"encoder_attn_o_w_{i}", W["encoder_attn_o_w"][i])
-            gate_up = torch.cat(
-                [W["encoder_ffn_gate_w"][i], W["encoder_ffn_up_w"][i]], dim=1
-            ).contiguous()
-            quant(f"encoder_ffn_gate_up_w_{i}", gate_up)
-            quant(f"encoder_ffn_down_w_{i}", W["encoder_ffn_down_w"][i])
+        # Encoder (18 layers × 4) — fuse gate+up into (D, 2H). Skipped when
+        # the NVFP4 encoder owns these projections.
+        if not self.use_fp4_encoder:
+            for i in range(ENC_L):
+                quant(f"encoder_attn_qkv_w_{i}", W["encoder_attn_qkv_w"][i])
+                quant(f"encoder_attn_o_w_{i}", W["encoder_attn_o_w"][i])
+                gate_up = torch.cat(
+                    [W["encoder_ffn_gate_w"][i], W["encoder_ffn_up_w"][i]], dim=1
+                ).contiguous()
+                quant(f"encoder_ffn_gate_up_w_{i}", gate_up)
+                quant(f"encoder_ffn_down_w_{i}", W["encoder_ffn_down_w"][i])
 
         # Decoder (18 layers × 4)
         for i in range(DEC_L):
@@ -762,6 +802,50 @@ class Pi05TorchFrontendRtx:
             quant(f"decoder_ffn_down_w_{i}", W["decoder_ffn_down_w"][i])
 
         logger.info("FP8 quantized %d GEMM weights (layout=%s)", len(fp8), self.fp8_layout)
+
+    def _validate_fp4_encoder_config(self) -> None:
+        """Reject every configuration the NVFP4 encoder is not wired for."""
+        from flash_rt import flash_rt_kernels as fvk
+        major, minor = torch.cuda.get_device_capability()
+        if major != 12:
+            raise ValueError(
+                f"use_fp4_encoder requires an SM120 GPU; got sm_{major}{minor}")
+        missing = [name for name in NVFP4_SM120_KERNELS if not hasattr(fvk, name)]
+        if missing:
+            raise ValueError(
+                "use_fp4_encoder requires flash_rt_kernels built with SM120 NVFP4 "
+                f"(-DGPU_ARCH=120); missing {missing}")
+        if not self.use_fp8:
+            raise ValueError("use_fp4_encoder requires use_fp8=True")
+        if self._force_bf16:
+            raise ValueError(
+                "use_fp4_encoder is incompatible with the BF16 fallback "
+                "(FVK_PI05_RTX_FORCE_BF16 or no FP8 support)")
+        if self._force_int8_decoder or self._int8_encoder_only or self._use_int8_vision:
+            raise ValueError(
+                "use_fp4_encoder is incompatible with FVK_PI05_RTX_FORCE_INT8, "
+                "FVK_PI05_RTX_INT8_ENCODER_ONLY and FVK_PI05_RTX_INT8_VISION")
+
+    def _quantize_encoder_nvfp4(self) -> None:
+        """Pre-quantize the four Gemma encoder projections to SM120 NVFP4,
+        under the same names as the FP8 store (gate+up merged to (D, 2H))."""
+        from flash_rt import flash_rt_kernels as fvk
+        W = self._ckpt_bf16
+
+        def quant(name: str, w: torch.Tensor) -> None:
+            record, tensors = _quantize_nvfp4_sm120(fvk, w)
+            self._nvfp4_store.extend(tensors)
+            self._nvfp4_weights[name] = record
+
+        for i in range(ENC_L):
+            quant(f"encoder_attn_qkv_w_{i}", W["encoder_attn_qkv_w"][i])
+            quant(f"encoder_attn_o_w_{i}", W["encoder_attn_o_w"][i])
+            gate_up = torch.cat(
+                [W["encoder_ffn_gate_w"][i], W["encoder_ffn_up_w"][i]], dim=1)
+            quant(f"encoder_ffn_gate_up_w_{i}", gate_up)
+            quant(f"encoder_ffn_down_w_{i}", W["encoder_ffn_down_w"][i])
+        logger.info("NVFP4 (SM120) quantized %d encoder GEMM weights",
+                    len(self._nvfp4_weights))
 
     def _quantize_decoder_int8(self) -> None:
         """Pre-quantize the decoder hot-path GEMM weights to INT8."""
@@ -930,6 +1014,7 @@ class Pi05TorchFrontendRtx:
             # FP8 quantized weights
             "fp8": self._fp8_weights,
             "int8": self._int8_weights,
+            "nvfp4": self._nvfp4_weights,
             "fp8_layout": self.fp8_layout,
             "hardware": self.hardware,
 
@@ -983,6 +1068,8 @@ class Pi05TorchFrontendRtx:
                 self.graph_recorded = False
                 self.calibrated = False
             return
+        if self.use_fp4_encoder:
+            raise ValueError("RL CFG mode is not wired for use_fp4_encoder=True")
         if cfg_beta < 1.0:
             raise ValueError(
                 f"cfg_beta must be >= 1.0 (1.0 disables CFG); got {cfg_beta}")
@@ -1703,6 +1790,8 @@ class Pi05TorchFrontendRtx:
                 self.calibrated = False
                 self._batched_active = False
             return
+        if self.use_fp4_encoder:
+            raise ValueError("batched mode is not wired for use_fp4_encoder=True")
         # Switch to a batched-capable attention backend if not already.
         if not isinstance(self.attn_backend, RtxFlashAttnBatchedBackendPi05):
             enc_seq_max = self.num_views * 256 + self.max_prompt_len

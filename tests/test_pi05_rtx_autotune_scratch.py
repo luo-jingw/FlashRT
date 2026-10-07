@@ -61,6 +61,7 @@ def _setup_pi05_pipe(pipe_cls):
     pipe.use_int8_encoder = False
     pipe.use_fp8_decoder = True
     pipe.use_int8_decoder = False
+    pipe.use_fp4_encoder = False
     pipe.num_views = 2
     pipe.vision_seq = 512
     pipe.encoder_seq_len = 692
