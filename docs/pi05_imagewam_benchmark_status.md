@@ -110,37 +110,57 @@ numbers land within ~5% of this project's earlier real-checkpoint Thor
 measurements (fp16 85.84 / fp8 49.77 / nvfp4 31.74 ms,
 `docs/pi05_thor_decoder_fp4_e2e.md`), which is the expected outcome for
 a pure speed test (weight values should not change GEMM/kernel timing).
+Re-confirmed again on commit `fb9ed3c` (after the OPT-032 candidate 5
+RMSNorm fix, which does not touch Pi0.5's own kernels): fp16 85.0 / fp8
+49.2 / nvfp4 33.6 ms, synthetic weights -- 1.2-4 ms off both this row
+and the real-checkpoint numbers above, treated as ordinary run-to-run
+variation, not investigated further.
 
 ### ImageWAM (3-view, action_horizon=30 — full target shape, `text_trim` on, 24 valid tokens)
 
-| Implementation | Precision | P50 ms | matches_target |
-|---|---|---:|:---:|
-| Official (bf16 eager, always computes the full 512 padded tokens) | bf16 | 489.5 | true |
-| FlashRT | fp16 | 178.8 | true |
-| FlashRT | fp16_cutlass | 183.5 | true |
-| FlashRT | fp8 | 157.1 | true |
-| FlashRT | fp8_static | 150.5 | true |
-| FlashRT | fp8_static_cutlass | 126.6 | true |
-| FlashRT | **nvfp4** | **116.9** | true |
-| FlashRT | bf16 | — | blocked: FlashRT has no bf16 tier for ImageWAM |
+Re-measured on commit `fb9ed3c` with OPT-032 candidate 5
+(`dims_override={"vec_rms_norm": True}`, not yet reachable through
+`load_imagewam`'s named profiles) on top of every precision below the
+official row, random weights:
+
+| Implementation | Precision | P50 ms, before | P50 ms, `vec_rms_norm=True` | change | matches_target |
+|---|---|---:|---:|---:|:---:|
+| Official (bf16 eager, always computes the full 512 padded tokens) | bf16 | 489.5 | not re-run (no FlashRT code on this path) | — | true |
+| FlashRT | fp16 | 178.8 | 161.7 | -17.1 | true |
+| FlashRT | fp16_cutlass | 183.5 | 161.5 | -22.0 | true |
+| FlashRT | fp8 | 157.1 | 138.1 | -19.0 | true |
+| FlashRT | fp8_static | 150.5 | 130.3 | -20.2 | true |
+| FlashRT | fp8_static_cutlass | 126.6 | 106.7 | -19.9 | true |
+| FlashRT | **nvfp4** | 116.9 | **98.0** | -18.9 | true |
+| FlashRT | bf16 | — | — | — | blocked: FlashRT has no bf16 tier for ImageWAM |
+
+Every precision drops by roughly the same ~17-22 ms, consistent with
+removing a fixed per-`infer()` RMSNorm cost that does not depend on the
+GEMM precision (OPT-032 candidate 5's own Thor kernel-level breakdown:
+23.008 -> 2.733 ms). `fp16`'s first run measured 189.3 ms (an outlier --
+a same-commit re-check with the flag off and on separately gave 179.8
+and 161.7 ms, confirming the flag itself speeds things up normally;
+179.8 ms is closer to the `fp16_cutlass`/`fp8` family's own before-row
+than 178.8 ms is, so the outlier is attributed to that one construction,
+not to this table's "before" column). The old (pre-fix) numbers are
+kept in `logs/0928_crosshw/side/` (`_trim24_novec` suffix) for
+reference.
 
 Official's 489.5 ms computes strictly more text-attention work than
-FlashRT's 116.9 ms (full 512 tokens vs `text_trim`'s 24 valid) — the two
+FlashRT's 98.0 ms (full 512 tokens vs `text_trim`'s 24 valid) — the two
 numbers are not an equal-compute comparison. An equal-compute FlashRT
-number (`text_trim` off, matching official's full-512 computation) was
-also measured: nvfp4 154.2 ms.
+number (`text_trim` off, matching official's full-512 computation,
+pre-RMSNorm-fix) was also measured: nvfp4 154.2 ms.
 
 Cross-check against this project's earlier real-checkpoint Thor number
 at ImageWAM's native shape (2-view, horizon=64, `text_trim` on, FA4 both
 sites, FLUX.2 VAE in-graph — `docs/imagewam_results.md`'s `0921d_final`,
 108.0 ms): reproducing that exact native-shape config with random
-weights on this machine gives 108.22 ms, confirming the random-weight
-methodology matches the real-checkpoint one. Extending only the camera
-count to 3 (588 image tokens instead of 392) accounts for the ~9 ms
-difference to this table's 116.9 ms — action_horizon and everything else
-about that reproduction matched the native config, not this table's
-target shape, so 108.22 ms is a validity check, not a third data point
-for this table.
+weights and `vec_rms_norm=True` gives 87.3 ms, matching the real-checkpoint
+`vec_rms_norm=True` confirmation (86.4 ms, OPT-032 candidate 5's own
+Thor entry) within noise -- the random-weight methodology continues to
+track the real-checkpoint one after this fix. Extending only the camera
+count to 3 accounts for the remaining gap to this table's 98.0 ms.
 
 ### ImageWAM (2-view, action_horizon=64 — real LIBERO shape, unchanged by this campaign)
 
