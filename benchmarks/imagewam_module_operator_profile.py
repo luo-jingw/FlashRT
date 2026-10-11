@@ -201,13 +201,15 @@ def attribute(t):
 
 OPS = [  # (op class, regex on kernel name), first match wins
     ("conv", r"fprop|implicit_gemm|conv|Conv|cudnn|nhwc"),
-    ("attention", r"fmha|flash|Attention"),
+    # quant/cast before attention: Thor NVFP4 kernels live in flash_rt::fp4::
+    # and `flash` would otherwise steal kernel_quantize_* (4 ms on nvfp4).
+    ("quant/cast", r"quantiz|kernel_quantize|cast_|_cast|to_fp8|fp8_|nvfp4"),
+    ("attention", r"fmha|flash_fwd|FlashAttention|fa4cute|cuteFlash"),
     ("gemm", r"nvjet|GemmUniversal|gemm|Gemm|cutlass|splitKreduce|xmma|cublas|matmul"),
-    ("quant/cast", r"quantiz|cast_|_cast|to_fp8|fp8_|nvfp4|fp4"),
     ("norm", r"norm|Norm|rms|gn_|ada"),
     ("softmax", r"softmax|Softmax"),
     ("memcpy/set", r"Memcpy|Memset|memcpy|memset"),
-    ("elementwise", r"elementwise|silu|glu|gelu|residual|add|mul|gate|rope|rotary|copy|scale|reduce|cat|fill|index|unrolled|vectorized|euler"),
+    ("elementwise", r"elementwise|silu|glu|gelu|residual|add|mul|gate|rope|rotary|copy|scale|reduce|cat|fill|index|unrolled|vectorized|euler|preprocess"),
 ]
 
 
