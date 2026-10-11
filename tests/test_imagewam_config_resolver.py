@@ -308,9 +308,11 @@ def test_libero_dims_equal_libero_real_dims():
 def test_every_frontend_dims_key_is_resolved_or_frontend_filled():
     """Required string-subscript keys of the frontend and pipeline == resolver
     dims plus the flags the frontend fills itself (`merge_qkv_mlp`,
-    `merge_linear2`; `fuse_res_norm` is `dims.setdefault(..., True)`)."""
+    `merge_linear2`; `fuse_res_norm` / `vec_rms_norm` are
+    `dims.setdefault(..., True)`)."""
     consumed = _subscript_keys(FRONTEND_SRC) | _subscript_keys(PIPELINE_SRC)
-    frontend_filled = {"merge_qkv_mlp", "merge_linear2", "fuse_res_norm"}
+    frontend_filled = {"merge_qkv_mlp", "merge_linear2", "fuse_res_norm",
+                       "vec_rms_norm"}
     missing = consumed - set(resolve().dims) - frontend_filled
     assert not missing, f"frontend reads dims keys the resolver does not produce: {sorted(missing)}"
     # and the canonical LIBERO dims carry every one of those keys

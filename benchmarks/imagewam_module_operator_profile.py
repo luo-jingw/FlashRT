@@ -54,7 +54,8 @@ fe.set_prompt(PROMPT)
 torch.cuda.synchronize()
 opts = fe._resolved.options
 print(f"built {PRECISION} in {time.time() - t0:.0f}s; text_trim={opts.text_trim} vae_graph_input={opts.vae_graph_input} "
-      f"use_fa4={opts.use_fa4} active x0={fe._active_dims['x0']} a0={fe._active_dims['a0']} "
+      f"use_fa4={opts.use_fa4} vec_rms_norm={fe.dims.get('vec_rms_norm')} "
+      f"active x0={fe._active_dims['x0']} a0={fe._active_dims['a0']} "
       f"num_action={fe._active_dims['num_action']}", flush=True)
 
 rng = np.random.default_rng(0)

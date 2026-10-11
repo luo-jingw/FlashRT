@@ -520,6 +520,11 @@ class ImageWAMTorchFrontendThor:
         # `dims_override={"fuse_res_norm": False}` selects the unfused
         # path for A/B measurement.
         self.dims.setdefault("fuse_res_norm", True)
+        # OPT-032 candidate 5: warp-per-row QK RMSNorm. Default on --
+        # Thor's served LIBERO nvfp4 goes 108 -> 86.4 ms; the old
+        # 256-thread kernel is 23 ms of the infer. Override with
+        # dims_override={"vec_rms_norm": False} for A/B.
+        self.dims.setdefault("vec_rms_norm", True)
         d = self.dims
         if d["action_attn_width"] != d["hidden"]:
             raise ValueError(

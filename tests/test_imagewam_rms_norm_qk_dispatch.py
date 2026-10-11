@@ -3,7 +3,8 @@
 
 CPU only: no CUDA, no build needed -- `fvk` is a plain mock, so this
 checks only the CALL-ORDER / dispatch contract (which function gets
-called, with which positional arguments), the default-off behaviour,
+called, with which positional arguments), the missing-key-means-old-kernel
+behaviour (the served frontend defaults the flag on via setdefault),
 and the return-code check added after a real gap was found on RTX 5090
 (`rms_norm_fp16_vec` silently skips its computation and returns -1 on
 an unmet precondition -- dim%8!=0 or an unaligned pointer -- instead of
