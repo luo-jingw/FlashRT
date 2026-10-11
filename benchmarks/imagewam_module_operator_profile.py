@@ -154,6 +154,12 @@ ITERS = 3
 for _ in range(2):
     fe.stage_images(*views); fe.run_eager()
 torch.cuda.synchronize()
+# A throwaway profiler session first: the first torch.profiler session of a
+# process initializes CUPTI and can drop kernel records (on Thor it returned
+# about half of the kernels; same fix as imagewam_stage_operator_grid.py).
+with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]):
+    fe.stage_images(*views); fe.run_eager()
+    torch.cuda.synchronize()
 with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]) as prof:
     for _ in range(ITERS):
         torch.cuda.synchronize()
@@ -237,6 +243,13 @@ for k in kernels:
     nm[1] += 1 / ITERS
     nm[2].add(f"{mod}|{cls}")
 total_eager = sum(v[0] for v in grid.values())
+# Every iteration launches the same kernels: unequal per-iteration counts mean
+# the profiler dropped kernel records and the grid is not usable.
+iter_starts = sorted(st for st, en, name in ranges if name == "stage_inputs") + [float("inf")]
+kernels_per_iter = [sum(1 for k in kernels if iter_starts[i] <= k.time_range.start < iter_starts[i + 1])
+                    for i in range(ITERS)]
+print(f"kernels per iteration {kernels_per_iter} ({'equal' if len(set(kernels_per_iter)) == 1 else 'UNEQUAL'})",
+      flush=True)
 print(f"eager kernel total {total_eager:.2f} ms/infer; unattributed {unattributed / ITERS / 1000:.3f} ms", flush=True)
 for (mod, cls), (ms, n) in sorted(grid.items(), key=lambda kv: -kv[1][0]):
     print(f"  {mod:20s} {cls:22s} {ms:9.3f} ms  {n:7.0f} launches  {1000 * ms / max(n, 1):8.2f} us/launch")
@@ -257,7 +270,7 @@ print("graph-replay kernel ms by op class:", {k: round(v, 3) for k, v in sorted(
       "total", round(sum(graph_cls.values()), 3), flush=True)
 
 json.dump({"precision": PRECISION, "timing": timing, "eager_kernel_total_ms": total_eager,
-           "unattributed_ms": unattributed / ITERS / 1000,
+           "unattributed_ms": unattributed / ITERS / 1000, "kernels_per_iter": kernels_per_iter,
            "grid": [{"module": m, "op": c, "ms": v[0], "launches": v[1]} for (m, c), v in grid.items()],
            "kernels": [{"name": nm, "ms": v[0], "launches": v[1], "cells": sorted(v[2])} for nm, v in names.items()],
            "graph_kernel_ms_by_op": dict(graph_cls),
