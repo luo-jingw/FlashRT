@@ -410,8 +410,10 @@ def _rms_norm_qk(fvk, dims: dict, x_ptr: int, w_ptr: int, out_ptr: int, rows: in
     magnitude larger because Thor's default kernel was the one actually
     starved.
 
-    Default off. Not yet exposed through `config_resolver`'s named
-    profiles or `load_imagewam` -- only reachable via `dims_override`."""
+    Default on at the frontend (`dims.setdefault("vec_rms_norm", True)`);
+    `dims_override={"vec_rms_norm": False}` selects the old kernel.
+    Missing key here still means the old kernel, so a hand-built dims
+    dict without the flag is unchanged."""
     if dims.get("vec_rms_norm"):
         rc = fvk.rms_norm_fp16_vec(x_ptr, w_ptr, out_ptr, rows, dim, eps, stream)
         if rc != 0:
