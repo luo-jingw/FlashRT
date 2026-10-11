@@ -56,16 +56,12 @@ else fixed as above.
   `flash_rt::fp4::kernel_quantize_fp4_sfa_vec` is quant/cast and
   not attention. `absmax_kernel` stays "other", as on 5090. Unattributed
   kernel time: 0.000 ms on all three cells.
-- CUPTI warmup: the first `torch.profiler` session of a process initializes
-  CUPTI and can drop kernel records. An earlier write of this document
-  (commit `97a3bcb`) used that broken first session: launch counts were
-  non-integers, below the structural floor (ActionDiT double GEMM 100 vs
-  ≥200; backbone single GEMM 30 vs ≥40), and eager totals were 16–64 ms
-  below `infer()` P50. That was dropped records, not a Thor platform
-  property. `286dd82` warms CUPTI with a throwaway profiler session
-  before the timed one (same fix as `196ee27` on
-  `imagewam_stage_operator_grid.py`) and prints `kernels per iteration`.
-  This grid is the rerun on that script.
+- CUPTI warmup: on Thor the first `torch.profiler` session of a process
+  initializes CUPTI and drops about half of the kernel records (symptoms:
+  non-integer per-infer launch counts, counts below the structural floor,
+  eager total far below `infer()` P50). The script runs a throwaway
+  profiler session before the attributed one and prints the kernel count
+  of each attributed iteration; unequal counts invalidate the grid.
 - Cross-check: kernels per iteration were equal in every cell. Eager
   kernel total, graph-replay kernel total and `infer()` P50 (ms):
 
@@ -283,10 +279,9 @@ machines.
 1. Served wall time on Thor, LIBERO config, default profile: nvfp4 106.65
    ms, fp8 137.25 ms, fp16 168.26 ms. nvfp4 is the fastest of the three
    (5090's fastest was fp8).
-2. After the CUPTI warmup (`286dd82`), kernels per iteration are equal
-   (4504 / 6974 / 4929) and eager totals track `infer()` P50 and
-   graph-replay kernel time to a few percent. The previous 16–64 ms
-   eager-vs-wall gap was dropped profiler records, not a Thor property.
+2. Kernels per iteration are equal in every cell (4504 / 6974 / 4929),
+   and eager totals track `infer()` P50 and graph-replay kernel time to a
+   few percent.
 3. With `vec_rms_norm` off, norm is 18–26% of eager time and 28.4–28.5 ms
    in every precision, vs ~3.7 ms / 10–14% on 5090 at the same flag. The
    kernel is `rms_norm_kernel`.
