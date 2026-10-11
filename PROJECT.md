@@ -241,6 +241,13 @@ this fork covers Jetson AGX Thor (sm_110).
   62GB RAM. The machine is shared with the owner's other work (robot
   teleoperation processes run alongside), so host-side `infer()` time
   has occasional ~33 ms outliers at P90.
+- The GPU is also shared with another user's long-running ImageWAM
+  serving process (`serve_imagewam_g1_multitask.py`, observed
+  2026-10-07 holding ~27.8 GB while idle). Check
+  `nvidia-smi --query-compute-apps=pid,used_memory --format=csv` before a
+  benchmark: one ImageWAM frontend needs ~9-10 GB, and latency measured
+  while another process uses the GPU is not a performance number. Do not
+  stop another user's process.
 - SM clock is not locked (locking needs root and is not done here);
   2.40-2.87 GHz was observed during runs, which moves a Pi0.5 `infer()`
   P50 by about 1-2 ms between processes. Compare precisions only within

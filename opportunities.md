@@ -1372,6 +1372,28 @@ A version of `warpsplit_mrows` that computes two 16-row atoms per block (M <= 32
 
 Not started. Requires new CUDA (kernel, binding, CMake) and an isolated per-GEMM measurement against FP8 at M=30 before any decoder wiring.
 
+# OPT-037: ImageWAM on RTX 5090 — precision-independent and per-call overheads
+
+Status: measured (`docs/imagewam_rtx5090_profile.md`), none started
+
+Area: `flash_rt/models/imagewam/pipeline_thor.py` (ActionDiT layers, Q/K/V slicing, attention backend), `flash_rt/models/imagewam/quant_linear.py` (`Nvfp4LinearSm120`, `Fp8Linear`)
+
+## Observation
+
+In the served LIBERO configuration on RTX 5090 (fp8 `infer()` 27.34 ms), about 13.5 ms per `infer()` does not depend on the GEMM precision, and most of it in ActionDiT is launch/latency-bound kernels of 1–3 µs. Candidate levers, each with its measured cost in that profile:
+
+| lever | measured cost it targets (per `infer()`) |
+|---|---|
+| per-head QK RMSNorm on `rms_norm_fp16_vec` (`dims["vec_rms_norm"]`, default off) | `rms_norm_kernel` 2.4 ms / 560 launches; the flag measured −1.6 to −1.8 ms on this GPU (synthetic weights) |
+| fuse the Q/K/V slice copies (`_copy_slice` → `at::native` copy kernels) into the producing kernel | 1,060 copy launches, ≈1.8 ms |
+| fused attention for ActionDiT instead of the cuBLAS QK^T / softmax / PV chain | 750 launches, ≈2.4 ms |
+| NVFP4 without the FP16↔BF16 casts and with quantization fused into the preceding norm | 5.98 ms of casts + quantization in `nvfp4` (1.73 ms backbone, 4.24 ms ActionDiT) |
+| static-scale FP8 (needs a calibration file on this machine) instead of dynamic | `absmax_kernel` + memset 1.19 ms |
+
+## Decision
+
+Not started. Each lever is a separate change with its own measurement against the profile above.
+
 # Index of removed entries
 
 Status: the entries below are closed and are no longer part of this file. Each block states the result, the measurement that is recorded nowhere else, and where the rest of the account lives. The ids stay literal because code, tests and other persistent files cite them.
