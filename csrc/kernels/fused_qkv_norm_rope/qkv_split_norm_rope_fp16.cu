@@ -5,20 +5,63 @@
 // ================================================================
 #include "qkv_split_norm_rope_fp16.cuh"
 
-// Reuses the project's own warp_reduce_sum/block_reduce_sum verbatim
-// (unmodified header, included read-only) so the block-reduction
-// summation order is bit-for-bit identical to rms_norm_fp16's own
-// (csrc/kernels/norm.cu), not merely numerically close.
-#include "../common.cuh"
+#include <cstdint>
 
 namespace {
 
-// Fixed at 256 to match rms_norm_fp16's own hardcoded launch config
-// (csrc/kernels/norm.cu: `<<<seq_len, 256, ...>>>`) — see the .cuh
-// header's own comment for why this is a correctness requirement, not
-// a tuning knob.
-constexpr int kBlockThreads = 256;
+// Same butterfly as csrc/kernels/vec_fp16_backbone.cu's `warp_sum`, so the
+// per-head sum of squares is reduced in the same order as
+// `rms_norm_fp16_vec_warp_kernel` (the per-head Q/K RMSNorm the served
+// default runs, `dims["vec_rms_norm"]`).
+__device__ __forceinline__ float warp_sum(float v) {
+    #pragma unroll
+    for (int o = 16; o > 0; o >>= 1)
+        v += __shfl_xor_sync(0xffffffffu, v, o);
+    return v;
+}
 
+constexpr int kWarpsPerBlock = 8;
+
+// Sum of squares of one head: lane `lane` accumulates its int4 chunks
+// (8 halves each, left to right) exactly as rms_norm_fp16_vec_warp_kernel
+// does, then the warp butterfly.
+__device__ __forceinline__ float head_sum_sq(const int4* x4, int n4, int lane) {
+    float ss = 0.f;
+    for (int i = lane; i < n4; i += 32) {
+        const int4 raw = x4[i];
+        const __half* hh = reinterpret_cast<const __half*>(&raw);
+        #pragma unroll
+        for (int j = 0; j < 8; ++j) {
+            const float v = __half2float(hh[j]);
+            ss += v * v;
+        }
+    }
+    return warp_sum(ss);
+}
+
+// One int4 chunk (4 interleaved pairs): RMSNorm with the same
+// (x*rms)*w order as rms_norm_fp16_vec_warp_kernel, rounded to fp16 (the
+// reference writes the normed head to memory before RoPE reads it back),
+// then rope_apply_fp16_perhead_kernel's pair rotation.
+__device__ __forceinline__ int4 norm_rope_chunk(int4 raw, int4 wr, int4 rp, float rms) {
+    const __half* hh = reinterpret_cast<const __half*>(&raw);
+    const __half* wh = reinterpret_cast<const __half*>(&wr);
+    const __half* ph = reinterpret_cast<const __half*>(&rp);
+    int4 res;
+    __half* rh = reinterpret_cast<__half*>(&res);
+    #pragma unroll
+    for (int p = 0; p < 4; ++p) {
+        const float x0 = __half2float(__float2half(__half2float(hh[2 * p]) * rms * __half2float(wh[2 * p])));
+        const float x1 = __half2float(__float2half(__half2float(hh[2 * p + 1]) * rms * __half2float(wh[2 * p + 1])));
+        const float c = __half2float(ph[2 * p]);
+        const float s = __half2float(ph[2 * p + 1]);
+        rh[2 * p] = __float2half(x0 * c - x1 * s);
+        rh[2 * p + 1] = __float2half(x1 * c + x0 * s);
+    }
+    return res;
+}
+
+// One warp per (row, head).
 __global__ void qkv_split_norm_rope_fp16_kernel(
     const __half* __restrict__ qkv,
     const __half* __restrict__ q_norm_weight,
@@ -27,120 +70,46 @@ __global__ void qkv_split_norm_rope_fp16_kernel(
     __half* __restrict__ Q_out,
     __half* __restrict__ K_out,
     __half* __restrict__ V_out,
-    int NH, int HD, int hidden,
+    int rows, int NH, int HD,
     int src_row_stride,
     int q_col_offset, int k_col_offset, int v_col_offset,
     int dst_row_stride,
     float eps) {
-    (void)hidden;  // not needed for addressing (see .cuh: kept for interface
-                    // completeness / future dst_row_stride != hidden cases)
-    const int row = blockIdx.x;
-    const int head = blockIdx.y;
-    // Precondition: HD must be even. Q/K/V slices are read/written via
-    // __half2 (4-byte) vectorized loads at per-head byte offset
-    // head*HD*sizeof(__half); that offset is only guaranteed 4-byte
-    // aligned when HD is even (real ImageWAM: HD=128 for both the
-    // backbone and ActionDiT, always even — see .cuh header). An odd
-    // HD is out of scope here (not just numerically different from
-    // the reference — it segfaults/misaligns), matching this
-    // project's convention of validating kernels at real, fixed
-    // production shapes rather than designing for arbitrary N.
-    const int dim2 = HD >> 1;  // matches rms_norm_kernel<__half>'s own `dim >> 1`
+    const int item = blockIdx.x * kWarpsPerBlock + (threadIdx.x >> 5);
+    if (item >= rows * NH) return;
+    const int row = item / NH;
+    const int head = item % NH;
+    const int lane = threadIdx.x & 31;
+    const int n4 = HD >> 3;
 
-    extern __shared__ float shared[];  // block_reduce_sum's own scratch, reused sequentially for Q then K
+    const __half* src = qkv + (long)row * src_row_stride + (long)head * HD;
+    const int4* q4 = reinterpret_cast<const int4*>(src + q_col_offset);
+    const int4* k4 = reinterpret_cast<const int4*>(src + k_col_offset);
+    const int4* v4 = reinterpret_cast<const int4*>(src + v_col_offset);
+    const long dst = (long)row * dst_row_stride + (long)head * HD;
+    int4* qo4 = reinterpret_cast<int4*>(Q_out + dst);
+    int4* ko4 = reinterpret_cast<int4*>(K_out + dst);
+    int4* vo4 = reinterpret_cast<int4*>(V_out + dst);
+    const int4* qw4 = reinterpret_cast<const int4*>(q_norm_weight);
+    const int4* kw4 = reinterpret_cast<const int4*>(k_norm_weight);
+    const int4* rope4 = reinterpret_cast<const int4*>(rope_table + (long)row * HD);
 
-    const long qkv_row_base = (long)row * src_row_stride;
-    const __half* q_src = qkv + qkv_row_base + q_col_offset + (long)head * HD;
-    const __half* k_src = qkv + qkv_row_base + k_col_offset + (long)head * HD;
-    const __half* v_src = qkv + qkv_row_base + v_col_offset + (long)head * HD;
+    const float q_rms = rsqrtf(head_sum_sq(q4, n4, lane) / HD + eps);
+    const float k_rms = rsqrtf(head_sum_sq(k4, n4, lane) / HD + eps);
 
-    __half* q_dst = Q_out + (long)row * dst_row_stride + (long)head * HD;
-    __half* k_dst = K_out + (long)row * dst_row_stride + (long)head * HD;
-    __half* v_dst = V_out + (long)row * dst_row_stride + (long)head * HD;
-
-    // RoPE table: shared across heads for a given row (rope_base =
-    // seq_pos*HD in rope_apply_fp16_perhead_kernel, no head term).
-    const __half* rope_row = rope_table + (long)row * HD;
-
-    const __half2* q_src2 = reinterpret_cast<const __half2*>(q_src);
-    const __half2* k_src2 = reinterpret_cast<const __half2*>(k_src);
-    const __half2* qw2 = reinterpret_cast<const __half2*>(q_norm_weight);
-    const __half2* kw2 = reinterpret_cast<const __half2*>(k_norm_weight);
-    const __half2* rope2 = reinterpret_cast<const __half2*>(rope_row);
-    __half2* q_dst2 = reinterpret_cast<__half2*>(q_dst);
-    __half2* k_dst2 = reinterpret_cast<__half2*>(k_dst);
-
-    // ---- pass 1: sum of squares (Q), matching rms_norm_kernel<__half> ----
-    float q_local = 0.0f;
-    for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
-        __half2 v = q_src2[i];
-        float v0 = __half2float(v.x), v1 = __half2float(v.y);
-        q_local += v0 * v0 + v1 * v1;
-    }
-    const float q_rms = rsqrtf(block_reduce_sum(q_local, shared) / HD + eps);
-
-    // block_reduce_sum's own internal syncs guarantee every thread has
-    // WRITTEN its partial sum before any thread READS shared[0], but
-    // there is no barrier AFTER that read. Without this explicit sync,
-    // a fast thread can start WRITING K's own partial sums into the
-    // same `shared[]` scratch (reused sequentially, see the .cuh
-    // header) before a slower thread has finished READING Q's
-    // shared[0] above -- a real race, not just a style nit (caught by
-    // torch.equal failing on specific rows/columns during development,
-    // not from static reasoning alone).
-    __syncthreads();
-
-    // ---- pass 1: sum of squares (K) ----
-    float k_local = 0.0f;
-    for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
-        __half2 v = k_src2[i];
-        float v0 = __half2float(v.x), v1 = __half2float(v.y);
-        k_local += v0 * v0 + v1 * v1;
-    }
-    const float k_rms = rsqrtf(block_reduce_sum(k_local, shared) / HD + eps);
-
-    // ---- pass 2: normalize (register-resident, same (x*rms)*w order
-    // as rms_norm_kernel<__half>) then RoPE the just-normalized pair
-    // in place (register round-trip through __half mirrors the
-    // reference's real memory round-trip between its two separate
-    // kernel launches bit-for-bit: __half2float(__float2half(v)) is
-    // exactly what the RoPE kernel would read back from memory). ----
-    for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
-        __half2 qv = q_src2[i];
-        __half2 qw = qw2[i];
-        float qn0 = __half2float(qv.x) * q_rms * __half2float(qw.x);
-        float qn1 = __half2float(qv.y) * q_rms * __half2float(qw.y);
-        const float q_normed0 = __half2float(__float2half(qn0));
-        const float q_normed1 = __half2float(__float2half(qn1));
-
-        __half2 kv = k_src2[i];
-        __half2 kw = kw2[i];
-        float kn0 = __half2float(kv.x) * k_rms * __half2float(kw.x);
-        float kn1 = __half2float(kv.y) * k_rms * __half2float(kw.y);
-        const float k_normed0 = __half2float(__float2half(kn0));
-        const float k_normed1 = __half2float(__float2half(kn1));
-
-        __half2 rp = rope2[i];
-        const float c = __half2float(rp.x);
-        const float s = __half2float(rp.y);
-
-        q_dst2[i] = __halves2half2(
-            __float2half(q_normed0 * c - q_normed1 * s),
-            __float2half(q_normed1 * c + q_normed0 * s));
-        k_dst2[i] = __halves2half2(
-            __float2half(k_normed0 * c - k_normed1 * s),
-            __float2half(k_normed1 * c + k_normed0 * s));
-    }
-
-    // ---- V: plain copy, no norm/rope — full HD width, elementwise ----
-    for (int i = threadIdx.x; i < HD; i += blockDim.x) {
-        v_dst[i] = v_src[i];
+    for (int i = lane; i < n4; i += 32) {
+        const int4 rp = rope4[i];
+        qo4[i] = norm_rope_chunk(q4[i], qw4[i], rp, q_rms);
+        ko4[i] = norm_rope_chunk(k4[i], kw4[i], rp, k_rms);
+        vo4[i] = v4[i];
     }
 }
 
+bool aligned16(const void* p) { return (reinterpret_cast<uintptr_t>(p) & 15) == 0; }
+
 }  // namespace
 
-void qkv_split_norm_rope_fp16(
+int qkv_split_norm_rope_fp16(
     const __half* qkv,
     const __half* q_norm_weight,
     const __half* k_norm_weight,
@@ -154,12 +123,19 @@ void qkv_split_norm_rope_fp16(
     int dst_row_stride,
     float eps,
     cudaStream_t stream) {
-    dim3 grid(rows, NH);
-    const size_t shared_bytes = 32 * sizeof(float);  // >= blockDim.x/32 floats
-    qkv_split_norm_rope_fp16_kernel<<<grid, kBlockThreads, shared_bytes, stream>>>(
+    (void)hidden;  // = NH*HD; kept in the interface, not needed for addressing
+    if (HD % 8 != 0 || src_row_stride % 8 != 0 || dst_row_stride % 8 != 0 ||
+        q_col_offset % 8 != 0 || k_col_offset % 8 != 0 || v_col_offset % 8 != 0) return -1;
+    if (!aligned16(qkv) || !aligned16(q_norm_weight) || !aligned16(k_norm_weight) ||
+        !aligned16(rope_table) || !aligned16(Q_out) || !aligned16(K_out) || !aligned16(V_out)) return -1;
+    const int items = rows * NH;
+    const int blocks = (items + kWarpsPerBlock - 1) / kWarpsPerBlock;
+    qkv_split_norm_rope_fp16_kernel<<<blocks, kWarpsPerBlock * 32, 0, stream>>>(
         qkv, q_norm_weight, k_norm_weight, rope_table,
         Q_out, K_out, V_out,
-        NH, HD, hidden, src_row_stride,
+        rows, NH, HD, src_row_stride,
         q_col_offset, k_col_offset, v_col_offset,
         dst_row_stride, eps);
+    const cudaError_t e = cudaGetLastError();
+    return (e == cudaSuccess) ? 0 : -static_cast<int>(e);
 }

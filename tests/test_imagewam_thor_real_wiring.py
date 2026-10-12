@@ -770,7 +770,8 @@ def test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_sh
     `_single_stream_layer` and `_action_single_layer`: `fvk.qkv_split_norm_rope_fp16`
     (`csrc/kernels/fused_qkv_norm_rope/`) must give the EXACT same
     layer output as the unfused 3-copy + 2-rms_norm + 2-rope sequence it
-    replaces, at real production shapes (backbone a0=905,
+    replaces with `dims["vec_rms_norm"]` on (the served default; the
+    fused kernel reduces in `rms_norm_fp16_vec`'s order), at real production shapes (backbone a0=905,
     hidden=3072/mlp=9216; ActionDiT M=64, 1024/3072/4096), both on the
     `merge_qkv_mlp=True` path (the real deployment default) and the
     split `qkv.weight` path. `torch.equal`, not cosine: the kernel was
@@ -851,7 +852,7 @@ def test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_sh
             "proj_scratch2": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
         }
         dims = dict(hidden=hidden, HD=HD, NH=NH, mlp_hidden=mlp_hidden, a0=a0,
-                    merge_qkv_mlp=merge_qkv_mlp, merge_linear2=False, fuse_qkv_norm_rope=fused_qkv)
+                    merge_qkv_mlp=merge_qkv_mlp, merge_linear2=False, fuse_qkv_norm_rope=fused_qkv, vec_rms_norm=True)
         _single_stream_layer(ctx, fvk, gemm, bufs, w, dims, 0, 0, 0, attn, mod_single, table.data_ptr())
         torch.cuda.synchronize()
         return combined.clone()
@@ -908,7 +909,7 @@ def test_single_stream_and_action_single_fuse_qkv_norm_rope_bit_exact_at_real_sh
         }
         dims = dict(action_hidden_dim=ahd, action_attn_width=aaw, HD=HD, NH=NH, action_mlp_hidden=amh,
                     x0=R["x0"], a0=a0, total=total, num_action=num_action, merge_qkv_mlp=True,
-                    merge_linear2=False, fuse_qkv_norm_rope=fused_qkv)
+                    merge_linear2=False, fuse_qkv_norm_rope=fused_qkv, vec_rms_norm=True)
         _action_single_layer(ctx, fvk, gemm, bufs, aw, dims, 0, 0, 0, aattn, amod_single, atable.data_ptr())
         torch.cuda.synchronize()
         return action_x.clone()
@@ -988,7 +989,7 @@ def test_double_stream_and_action_double_fuse_qkv_norm_rope_bit_exact_at_real_sh
             "proj_scratch": _own(torch.zeros(a0, hidden, dtype=FP16, device=DEV)).data_ptr(),
         }
         dims = dict(hidden=hidden, HD=HD, NH=NH, mlp_hidden=mlp_hidden, x0=x0, a0=a0,
-                    fuse_qkv_norm_rope=fused_qkv)
+                    fuse_qkv_norm_rope=fused_qkv, vec_rms_norm=True)
         _double_stream_layer(ctx, fvk, gemm, bufs, w, dims, 0, 0, attn, mod_txt, mod_img, table.data_ptr())
         torch.cuda.synchronize()
         return combined.clone()
@@ -1039,7 +1040,7 @@ def test_double_stream_and_action_double_fuse_qkv_norm_rope_bit_exact_at_real_sh
             "action_mlp_gated": _own(torch.zeros(num_action, amh, dtype=FP16, device=DEV)).data_ptr(),
         }
         dims = dict(action_hidden_dim=ahd, action_attn_width=aaw, HD=HD, NH=NH, action_mlp_hidden=amh,
-                    x0=x0, a0=a0, total=total, num_action=num_action, fuse_qkv_norm_rope=fused_qkv)
+                    x0=x0, a0=a0, total=total, num_action=num_action, fuse_qkv_norm_rope=fused_qkv, vec_rms_norm=True)
         _action_double_layer(ctx, fvk, gemm, bufs, aw, dims, 0, 0, 0, aattn, amod_double, atable.data_ptr())
         torch.cuda.synchronize()
         return action_x.clone()

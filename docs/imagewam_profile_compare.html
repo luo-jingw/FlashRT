@@ -167,7 +167,7 @@ svg text{fill:var(--muted);font-size:11px}
     <h3 class="h3">优化方向</h3>
     <div class="tablewrap"><table>
       <tr><th>方向</th><th style="text-align:left">去掉什么</th><th style="text-align:left">状态</th></tr>
-      <tr><td><code>fuse_qkv_norm_rope</code>（OPT-032 #1）</td><td style="text-align:left;white-space:normal">每层的 3 次拷贝 + 2 次 QK norm + 2 次 RoPE 合成 1 个 kernel：每次推理少 1670 次启动；Q/K/V 的读写量从约 14S 降到 6S（S 为一个 Q 张量的大小）</td><td style="text-align:left;white-space:normal">已接入，默认关闭；5090 净省 1.0–1.7 ms，Thor 净亏 7–9.6 ms（见下）</td></tr>
+      <tr><td><code>fuse_qkv_norm_rope</code>（OPT-032 #1）</td><td style="text-align:left;white-space:normal">每层的 3 次拷贝 + 2 次 QK norm + 2 次 RoPE 合成 1 个 kernel：每次推理少 1670 次启动；Q/K/V 的读写量从约 14S 降到 6S（S 为一个 Q 张量的大小）</td><td style="text-align:left;white-space:normal">已接入，默认关闭；256 线程版本在 5090 上省 1.0–1.7 ms、在 Thor 上慢 7–9.6 ms；warp 版在 5090 上省 2.0–2.7 ms，且与默认路径逐位一致，Thor 待测（见下）</td></tr>
       <tr><td>attention 输出直接写入 <code>linear2</code> 输入（OPT-032 #2）</td><td style="text-align:left;white-space:normal">单流层的 attention 输出拷贝（220 次）。5090 走 cuBLAS 链，可以让 PV GEMM 通过 <code>ldc</code> 直接写到 <code>linear2_in</code> 的列切片；Thor 要改 FA4 的输出指针</td><td style="text-align:left;white-space:normal">未做</td></tr>
       <tr><td>SiLU-GLU 并进 GEMM epilogue（#11）</td><td style="text-align:left;white-space:normal">280 次 GLU，以及 backbone 每层约 23 MB 的中间张量往返</td><td style="text-align:left;white-space:normal">需要改 CUTLASS；两个 GEMM 的版本试过，已回退（OPT-015）</td></tr>
       <tr><td>fp8 静态 scale</td><td style="text-align:left;white-space:normal">680 次 <code>compute_scale</code> 和 680 次 absmax</td><td style="text-align:left;white-space:normal">会改变数值，需要校准</td></tr>
@@ -226,7 +226,7 @@ svg text{fill:var(--muted);font-size:11px}
       <li><b>数值差全部来自归约顺序。</b>② 证明 fused 和旧 norm 路径逐位一致；① 的偏差与 ③（vec 开/关）几乎相同（backbone cos 都是 0.998926 / 0.990500 / 0.999989）。也就是说，打开 fused 在数值上等于退回旧 norm，并没有引入新的误差。nvfp4 的 backbone cos 0.9905 看着偏低，但这个偏差在 <code>vec_rms_norm</code> 变成默认时已经接受过了（Thor 用真实 checkpoint 验证的 actions cos ≥ 0.99995）。</li>
       <li><b>Thor 上是净亏，不能设为默认。</b>在 vec on 的默认配置上打开 fused，三档分别慢 7.2 / 7.0 / 9.6 ms，虽然同样少了 1670 个 kernel。② 逐位一致，说明 FA4 路径上的接线没问题；数值偏差和 ③ 相同，和 5090 一样。</li>
       <li><b>原因在 block 结构，不在字节量。</b>Thor 上每个 256 线程的 (row, head) block 固定花约 30 ns：prefill 每次约 8,300 个 block、283 µs，denoise 每次 1,536 个 block、44.7 µs。vec norm 处理同样的行只要每行约 2 ns。融合 kernel 本身就有 19.7 ms，已经超过它替换掉的拷贝 + norm + RoPE（≤18.8 ms）。相对旧的 256 线程 norm 它仍然省 11 ms（②），但相对 warp 版 norm 就亏了。</li>
-      <li><b>下一步：</b>把 Q/K 归约改成每个 (row, head) 一个 warp，照抄 <code>rms_norm_fp16_vec_warp_kernel</code> 的 int4 加载和 <code>warp_sum</code> 顺序。这样能去掉每个 block 的固定开销，并且和当前默认逐位一致。在新 kernel 于 Thor 上测过之前，开关保持关闭。</li>
+      <li><b>已改成每个 (row, head) 一个 warp：</b>照抄 <code>rms_norm_fp16_vec_warp_kernel</code> 的 int4 加载和 <code>warp_sum</code> 顺序。改完后，它和当前默认路径（vec norm）在 kernel 级、5 处层接线以及端到端输出上都逐位一致。5090 上（vec on，served shape）三档分别省 2.03 / 2.47 / 2.71 ms，旧的 256 线程版本只省 1.0 / 1.5 / 1.7 ms。开关在 Thor 实测之前仍保持关闭。</li>
     </ol>
   </div>
 
