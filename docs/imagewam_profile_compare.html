@@ -132,8 +132,8 @@ svg text{fill:var(--muted);font-size:11px}
     <h3 style="font-size:14px;margin:16px 0 8px">跨表结论</h3>
     <ol class="findings" style="margin:0;padding-left:20px">
       <li><b>ActionDiT 单流层的 GEMM 在 6 张表里都排进前两名</b>，所以减少去噪步数是最通用的方向；降低精度在 5090 上要配一个能吃满带宽的小 M kernel，在 Thor 上已经由 nvfp4 实现。</li>
-      <li><b>5090 nvfp4 的瓶颈不在 GEMM 算力</b>，而在 kernel 效率（带宽只用到 25%）和量化开销（10.4%），这正是 5090 上 nvfp4 比 fp8 慢的原因。</li>
-      <li><b>Thor nvfp4 的第 3 名已经是逐元素</b>（1420 次启动，平均 5 µs），说明在 Thor 上，kernel 融合和减少启动次数比在 5090 上更值钱。</li>
+      <li><b>5090 nvfp4 的瓶颈不在 GEMM 算力</b>，而在 kernel 效率（带宽只用到 25%）和量化开销（11.2%），这正是 5090 上 nvfp4 比 fp8 慢的原因。</li>
+      <li><b><code>fuse_qkv_norm_rope</code> 设为默认之后，Thor nvfp4 的第 3 名从逐元素变成了 ActionDiT 的 attention</b>（FA4，6.5 ms）。逐元素降到 9.0 ms，其中最大的是 <code>silu_glu_merged</code>（5.7 ms）。</li>
       <li><b>Thor 的瓶颈判断缺少实测上限</b>，目前只能给出实测速率；建议先在 Thor 上测一次 GEMM 峰值和带宽，这样才能判断 Thor nvfp4 的 GEMM 离上限还有多远。</li>
     </ol>
     <div class="hint">随上方的设备和精度切换；点击某一项可以在 3D 图和表格中定位。瓶颈判断依据两份 profile 文档；Thor 的上限没有实测，所以 Thor 的条目只给出实测速率。</div>
@@ -145,36 +145,35 @@ svg text{fill:var(--muted);font-size:11px}
     <div class="tablewrap"><table id="ewTbl"></table></div>
     <div class="hint">"每层"是一个 block 每执行一次发出的逐元素 kernel 数；fp8 另有 <code>compute_scale_kernel</code>（每个动态量化 linear 一个）。ActionDiT 每层执行 10 次（10 步），各模块还有少量入口/出口 kernel，所以次数不一定是整倍数。</div>
 
-    <h3 class="h3">kernel 清单（RTX 5090 fp8 实测；Thor 次数相同）</h3>
+    <h3 class="h3">kernel 清单（当前默认，<code>fuse_qkv_norm_rope</code> 打开）</h3>
     <div class="tablewrap"><table>
-      <tr><th>kernel</th><th style="text-align:left">来源</th><th>每层</th><th>次数 / 推理</th><th>ms</th><th>µs / 次</th></tr>
-      <tr><td><code>at::native::elementwise_kernel</code>（torch <code>copy_</code>）</td><td style="text-align:left;white-space:normal">把合并 GEMM（<code>qkv</code> / <code>linear1</code>）输出里的 Q、K、V 列切片拷进 attention 缓冲（<code>_copy_slice</code>，每层 3 次，backbone 双流的 txt、img 各 3 次）；单流层再把 attention 输出拷进 <code>linear2</code> 输入（1 次）</td><td>3–6</td><td>1060</td><td>1.79</td><td>1.7</td></tr>
-      <tr><td><code>rope_apply_fp16_perhead</code></td><td style="text-align:left;white-space:normal">Q、K 各做一次 RoPE（原地）</td><td>2</td><td>550</td><td>0.65</td><td>1.2</td></tr>
-      <tr><td><code>silu_glu_merged</code></td><td style="text-align:left;white-space:normal">MLP 的 SiLU(gate)·up（backbone 双流 txt、img 各 1 次）</td><td>1–2</td><td>280</td><td>0.58</td><td>2.1</td></tr>
-      <tr><td><code>compute_scale_kernel</code>（仅 fp8）</td><td style="text-align:left;white-space:normal">fp8 动态量化：absmax 之后算 scale</td><td>2–8</td><td>680</td><td>0.53</td><td>0.8</td></tr>
-      <tr><td>VAE 的 <code>bias_residual</code> 等</td><td style="text-align:left;white-space:normal">VAE 编码器</td><td>–</td><td>31</td><td>0.14</td><td>–</td></tr>
+      <tr><th>kernel</th><th style="text-align:left">来源</th><th>每层</th><th>次数 / 推理</th><th>5090 fp8 ms</th><th>Thor fp8 ms</th></tr>
+      <tr><td><code>silu_glu_merged</code></td><td style="text-align:left;white-space:normal">MLP 的 SiLU(gate)·up（backbone 双流 txt、img 各 1 次）</td><td>1–2</td><td>280</td><td>0.58</td><td>5.67</td></tr>
+      <tr><td><code>at::native::elementwise_kernel</code>（torch <code>copy_</code>）</td><td style="text-align:left;white-space:normal">单流层把 attention 输出拷进 <code>linear2</code> 输入</td><td>1（单流）</td><td>220</td><td>0.39</td><td>1.31</td></tr>
+      <tr><td><code>compute_scale_kernel</code>（仅 fp8）</td><td style="text-align:left;white-space:normal">fp8 动态量化：absmax 之后算 scale</td><td>2–8</td><td>680</td><td>0.54</td><td>–</td></tr>
+      <tr><td>VAE 的 <code>bias_residual</code> 等</td><td style="text-align:left;white-space:normal">VAE 编码器</td><td>–</td><td>31</td><td>0.14</td><td>0.91（<code>bias_residual</code>）</td></tr>
     </table></div>
-    <div class="hint">每层个数：ActionDiT 单流 7 = 3 次 Q/K/V 拷贝 + 1 次 attention 输出拷贝 + 2 次 RoPE + 1 次 SiLU-GLU；ActionDiT 双流 6（没有 attention 输出拷贝，<code>proj</code> 直接读 attention 输出）；backbone 单流 7；backbone 双流 10。</div>
+    <div class="hint">每层个数：单流层 2 个（attention 输出拷贝 + SiLU-GLU），ActionDiT 双流 1 个，backbone 双流 2 个。Thor 一栏只列出了 Thor agent 报告的 elementwise 前 3 名。融合之前，每层还有 3 次 Q/K/V 切片拷贝和 2 次 RoPE（每次推理 1060 次拷贝、550 次 RoPE）；这些现在都在 <code>qkv_split_norm_rope_fp16</code> 里，归入 "norm" 列：280 次调用，5090 上 0.73–0.77 ms，Thor 上 3.64 ms。</div>
 
-    <h3 class="h3">为什么这么多，两台设备的瓶颈为什么不同</h3>
+    <h3 class="h3">两台设备的瓶颈为什么不同</h3>
     <ul class="findings" style="margin:0;padding-left:20px">
-      <li><b>次数主要来自 ActionDiT：</b>每层 6–7 个，25 个 block × 10 步 = 250 次层执行，合计约 1,700 次启动，占逐元素启动总数的 80% 以上。</li>
-      <li><b>RTX 5090：受启动次数限制。</b>以 fp16 为例（不含 fp8 的 <code>compute_scale</code>），ActionDiT 单流平均 1.4 µs/次，每个 kernel 只搬 0.4–1.5 MB，耗时基本就是启动和收尾的延迟。backbone 单流（M=416）每层 7 个 kernel 读写约 54 MB，20 层合计约 1.07 GB，却只用 0.65 ms；有效速率超过 DRAM 实测带宽，说明这些中间张量大多命中 L2。</li>
-      <li><b>Thor：受字节量限制。</b>同样的 1.07 GB，backbone 单流用了 6.5 ms（fp16，140 次，47 µs/次），约 165 GB/s。ActionDiT 单流每层约 6.3 MB，200 次层执行合计 1.26 GB，用 7.1 ms，约 177 GB/s。两者都接近 Thor 实际能达到的带宽，不是启动延迟的问题。</li>
-      <li><b>所以优化思路要分开看：</b>在 5090 上要减少 kernel 个数；在 Thor 上要减少中间张量的写回和再读。融合 kernel 要是能同时去掉中间往返，两边都受益；只合并启动、字节量不变的改动，对 Thor 帮助很小。</li>
+      <li><b>RTX 5090：受启动次数限制。</b>剩下的逐元素 kernel 每次 1–2 µs。backbone 单流（M=416）的 GLU 每层读写约 23 MB，加上 attention 输出拷贝约 5 MB，20 层合计约 0.56 GB，只用 0.27 ms，说明这些中间张量大多命中 L2。</li>
+      <li><b>Thor：受字节量限制。</b>同样的 0.56 GB，backbone 单流用了 3.4 ms（fp16，40 次，85 µs/次），约 165 GB/s，接近 Thor 实际能达到的带宽。<code>silu_glu_merged</code> 一项就有 5.7 ms，是 5090 的 10 倍。</li>
+      <li><b>融合前后对比：</b>融合前 Thor 的逐元素是 18.3–19.1 ms，现在是 9.0–9.7 ms。原因是 Q/K/V 切片拷贝和 RoPE 被并进了一个 kernel，中间张量少了一次写回和再读。融合 kernel 本身在 Thor 上是 3.64 ms，它替换掉的部分约 11.9 ms。</li>
+      <li><b>下一个目标是 SiLU-GLU：</b>在 Thor 上要省掉 GLU 的中间张量往返（把 GLU 并进 GEMM 的 epilogue，或者并进下一层 GEMM 的输入），5090 上收益很小。</li>
     </ul>
 
     <h3 class="h3">优化方向</h3>
     <div class="tablewrap"><table>
       <tr><th>方向</th><th style="text-align:left">去掉什么</th><th style="text-align:left">状态</th></tr>
-      <tr><td><code>fuse_qkv_norm_rope</code>（OPT-032 #1）</td><td style="text-align:left;white-space:normal">每层的 3 次拷贝 + 2 次 QK norm + 2 次 RoPE 合成 1 个 kernel：每次推理少 1670 次启动；Q/K/V 的读写量从约 14S 降到 6S（S 为一个 Q 张量的大小）</td><td style="text-align:left;white-space:normal">现为默认。256 线程版本在 5090 上省 1.0–1.7 ms、在 Thor 上慢 7–9.6 ms；warp 版与 vec norm 路径逐位一致，在 Thor 上省 7.3–8.3 ms、在 5090 上省 2.0–2.7 ms（见下）</td></tr>
-      <tr><td>attention 输出直接写入 <code>linear2</code> 输入（OPT-032 #2）</td><td style="text-align:left;white-space:normal">单流层的 attention 输出拷贝（220 次）。5090 走 cuBLAS 链，可以让 PV GEMM 通过 <code>ldc</code> 直接写到 <code>linear2_in</code> 的列切片；Thor 要改 FA4 的输出指针</td><td style="text-align:left;white-space:normal">未做</td></tr>
-      <tr><td>SiLU-GLU 并进 GEMM epilogue（#11）</td><td style="text-align:left;white-space:normal">280 次 GLU，以及 backbone 每层约 23 MB 的中间张量往返</td><td style="text-align:left;white-space:normal">需要改 CUTLASS；两个 GEMM 的版本试过，已回退（OPT-015）</td></tr>
+      <tr><td><code>fuse_qkv_norm_rope</code>（OPT-032 #1）</td><td style="text-align:left;white-space:normal">每层的 3 次拷贝 + 2 次 QK norm + 2 次 RoPE 合成 1 个 kernel：每次推理少 1670 次启动；Q/K/V 的读写量从约 14S 降到 6S（S 为一个 Q 张量的大小）</td><td style="text-align:left;white-space:normal"><b>已完成，现为默认</b>。256 线程版本在 5090 上省 1.0–1.7 ms、在 Thor 上慢 7–9.6 ms；warp 版与 vec norm 路径逐位一致，在 Thor 上省 7.3–8.3 ms、在 5090 上省 2.0–2.7 ms（见下）</td></tr>
+      <tr><td>attention 输出直接写入 <code>linear2</code> 输入（OPT-032 #2）</td><td style="text-align:left;white-space:normal">单流层的 attention 输出拷贝（220 次；Thor 上 1.3 ms）。5090 走 cuBLAS 链，可以让 PV GEMM 通过 <code>ldc</code> 直接写到 <code>linear2_in</code> 的列切片；Thor 要改 FA4 的输出指针</td><td style="text-align:left;white-space:normal">未做</td></tr>
+      <tr><td>SiLU-GLU 并进 GEMM epilogue（#11）</td><td style="text-align:left;white-space:normal">280 次 GLU，以及 backbone 每层约 23 MB 的中间张量往返（Thor 上 5.7 ms）</td><td style="text-align:left;white-space:normal">需要改 CUTLASS；两个 GEMM 的版本试过，已回退（OPT-015）</td></tr>
       <tr><td>fp8 静态 scale</td><td style="text-align:left;white-space:normal">680 次 <code>compute_scale</code> 和 680 次 absmax</td><td style="text-align:left;white-space:normal">会改变数值，需要校准</td></tr>
       <tr><td>PDL（#10）</td><td style="text-align:left;white-space:normal">不减少 kernel 个数，但让相邻小 kernel 的启动重叠</td><td style="text-align:left;white-space:normal">未测</td></tr>
     </table></div>
 
-    <h3 class="h3" id="fqnr">为什么 <code>fuse_qkv_norm_rope</code> 必须实测</h3>
+    <h3 class="h3" id="fqnr"><code>fuse_qkv_norm_rope</code>：为什么必须实测，以及实测结果</h3>
     <ol class="findings" style="margin:0;padding-left:20px">
       <li><b>它内部用的还是旧 norm 的结构。</b>这个融合 kernel 为每个 (row, head) 启动一个 256 线程的 block；HD=128 时只有 64 个线程在干活，而且每个 block 要做两次 256 宽的 <code>block_reduce_sum</code>，每次都带 <code>__syncthreads</code>。这和 <code>vec_rms_norm</code> 修掉的 <code>rms_norm_kernel</code> 是同一种结构；当初保留它，是为了和旧路径逐位一致（<code>qkv_split_norm_rope_fp16.cu</code>，<code>kBlockThreads = 256</code>）。</li>
       <li><b>开关的对照组已经变了。</b>现在默认是 <code>vec_rms_norm</code>（一个 warp 处理一行，不用 shared memory，也没有 block 级同步）。打开开关后，省掉的是"3 次拷贝 + 2 次 vec norm + 2 次 RoPE"，换来的是一个内部效率和旧 norm 相同的 kernel。净收益取决于这个 kernel 在各设备上能跑到多少带宽，没法只靠启动次数来推算。</li>
@@ -198,7 +197,7 @@ svg text{fill:var(--muted);font-size:11px}
       <tr><td></td><td>nvfp4</td><td>28.66</td><td>27.27</td><td><b>+1.39</b></td><td></td><td>0.999830</td><td>1.86%</td><td>0.990500</td><td>否</td></tr>
       <tr><td></td><td>fp16</td><td>33.25</td><td>31.86</td><td><b>+1.39</b></td><td></td><td>1.000000</td><td>0.07%</td><td>0.999989</td><td>否</td></tr>
     </table></div>
-    <div class="hint">RTX 5090 实测，真实 LIBERO checkpoint，部署形状（x0=24，a0=416，total=480），cuBLAS attention。时间是 A/B 前端的 <code>infer()</code> P50（不含 VAE 编码，所以比上方的 26.0 ms 小）；A、B 两侧在同一进程内按 ABBA 顺序交替测，各 100 次。B 复用 A 自动调优得到的 GEMM 算法。命令：<code>X0=24 AB=fuse_qkv_norm_rope benchmarks/imagewam_fusion_ab.py</code>（② 加 <code>HOLD=vec_rms_norm=0</code>，③ 用 <code>AB=vec_rms_norm</code>）；不设 <code>X0</code> 时是未裁剪的 x0=513 形状，那里，fp8 / nvfp4 / fp16 分别省 0.70 / 1.38 / 1.11 ms。</div>
+    <div class="hint">RTX 5090 实测，真实 LIBERO checkpoint，部署形状（x0=24，a0=416，total=480），cuBLAS attention。时间是 A/B 前端的 <code>infer()</code> P50（不含 VAE 编码）；A、B 两侧在同一进程内按 ABBA 顺序交替测，各 100 次。B 复用 A 自动调优得到的 GEMM 算法。命令：<code>X0=24 AB=fuse_qkv_norm_rope benchmarks/imagewam_fusion_ab.py</code>（② 加 <code>HOLD=vec_rms_norm=0</code>，③ 用 <code>AB=vec_rms_norm</code>）；不设 <code>X0</code> 时是未裁剪的 x0=513 形状，那里 fp8 / nvfp4 / fp16 分别省 0.70 / 1.38 / 1.11 ms。</div>
     <h3 class="h3">Jetson AGX Thor 实测</h3>
     <div class="tablewrap"><table>
 <tr><th>对比</th><th>精度</th><th>A ms</th><th>B ms</th><th>A − B</th><th>kernel 数</th><th>actions cos</th><th>actions rel_l2</th><th>backbone cos</th><th>逐位一致</th></tr>
@@ -240,12 +239,12 @@ svg text{fill:var(--muted);font-size:11px}
       <h2>RTX 5090：视觉 token 数的影响（10 步）</h2>
       <svg id="tokSvg" viewBox="0 0 520 240" width="100%" role="img" aria-label="token sweep"></svg>
       <div class="legend" id="tokLegend"></div>
-      <div class="hint">token 数通过视图宽度改变，只复现形状，不含选 token 的开销；实线 prefill，虚线 denoise。此组在 vec_rms_norm 关闭时测得（7ca7c99），绝对值比上方约高 1.3 ms。</div>
+      <div class="hint">token 数通过视图宽度改变，只复现形状，不含选 token 的开销；实线 prefill，虚线 denoise。此组在 vec_rms_norm 和 fuse_qkv_norm_rope 都关闭时测得（7ca7c99），绝对值比上方高 3.2–3.6 ms。</div>
     </div>
     <div class="panel">
       <h2>RTX 5090：去噪步数的影响</h2>
       <div class="bars" id="stepBars"></div>
-      <div class="hint">去噪 graph 耗时与步数严格线性（fp8 每步 1.63 ms）。此组在 vec_rms_norm 关闭时测得。</div>
+      <div class="hint">去噪 graph 耗时与步数严格线性。此组在两个融合都关闭时测得（fp8 每步 1.63 ms）；当前默认下 fp8 每步约 1.37 ms。</div>
     </div>
   </div>
 
@@ -253,24 +252,24 @@ svg text{fill:var(--muted);font-size:11px}
     <div class="panel findings">
       <h2>要点</h2>
       <ul>
-        <li><b>最快精度不同：</b>5090 是 fp8（26.0 ms），Thor 是 nvfp4（87.3 ms），Thor 慢 2.9–4.6 倍。</li>
-        <li><b>5090 fp8：</b>attention、norm、逐元素和 absmax 合计 43%，和 GEMM 的 44% 相当；ActionDiT 占 58%。</li>
-        <li><b>Thor：</b>GEMM 占 50–72%；非 GEMM 里最大的是逐元素（18–19 ms，约 13–17%），其次是 attention（FA4，约 9 ms）和 norm（约 8.2 ms）。</li>
-        <li><b>Thor fp8：</b>GEMM 只比 fp16 快 1.56 倍，另有约 8 ms 花在 quant 和 absmax 上。</li>
-        <li><b>和精度无关的部分</b>（VAE、attention、norm、逐元素）：5090 约 12 ms，Thor 约 44 ms。</li>
-        <li><b>5090 nvfp4：</b>quant/cast 占 19.6%，是它比 fp8 慢的直接原因。</li>
-        <li><b>vec_rms_norm（现为默认）：</b>5090 每次推理省 1.3–1.4 ms，Thor 省约 19 ms（norm 28.5 → 8.2 ms）。</li>
+        <li><b>最快精度不同：</b>5090 是 fp8（23.85 ms），Thor 是 nvfp4（80.22 ms），Thor 慢 2.8–4.7 倍。</li>
+        <li><b>5090 fp8：</b>attention、norm、逐元素和 absmax 合计 37%，GEMM 占 48%；ActionDiT 占 56%。</li>
+        <li><b>Thor：</b>GEMM 占 55–76%；非 GEMM 的四大块 attention（FA4，约 9.7 ms）、逐元素（9.0–9.7 ms）、norm（约 9.0 ms）、VAE（8.7 ms）差不多大。</li>
+        <li><b>Thor fp8：</b>GEMM 只比 fp16 快 1.55 倍，另有约 8 ms 花在 quant 和 absmax 上。</li>
+        <li><b>和精度无关的部分</b>（VAE、attention、norm、逐元素）：5090 约 10 ms，Thor 约 37 ms。</li>
+        <li><b>5090 nvfp4：</b>quant/cast 占 21.0%，是它比 fp8 慢的直接原因。</li>
+        <li><b>两个默认打开的融合：</b><code>vec_rms_norm</code> 在 Thor 上省约 19 ms、在 5090 上省 1.3–1.4 ms；<code>fuse_qkv_norm_rope</code>（warp 版）在 Thor 上省 7.1–10.2 ms、在 5090 上省 1.9–2.1 ms，每次推理少 1670 个 kernel。</li>
       </ul>
     </div>
     <div class="panel">
       <h2>范围与条件</h2>
       <ul class="cond">
         <li>工作负载 <code>ImageWAMWorkload.libero()</code>：2 视角 224×224，horizon 64，10 步去噪；真实 LIBERO checkpoint 与 FLUX.2 AE；prompt 裁短后文本 24 token，图像 392 token，ActionDiT M=64。</li>
-        <li>部署入口 <code>load_imagewam</code> 默认 profile，VAE 在 CUDA graph 内，<code>vec_rms_norm</code> 打开，<code>fuse_qkv_norm_rope</code> 关闭（测量时的默认值；之后已改为默认打开，5090 上 fp8 / nvfp4 / fp16 变为 23.85 / 28.23 / 32.88 ms）。attention：5090 为 cuBLAS QKᵀ/softmax/PV 链，Thor 默认 FA4（不是同一种算子）。</li>
+        <li>部署入口 <code>load_imagewam</code> 默认 profile，VAE 在 CUDA graph 内，<code>vec_rms_norm</code> 和 <code>fuse_qkv_norm_rope</code> 都打开（两台设备的当前默认值）。attention：5090 为 cuBLAS QKᵀ/softmax/PV 链，Thor 默认 FA4（不是同一种算子）。</li>
         <li>ImageWAM 没有 bf16 精度，16 位档是 fp16；fp8 为动态 scale。</li>
-        <li>占比的分母是 eager kernel 合计（5090: 35.15 / 24.67 / 30.52 ms；Thor: 139.49 / 112.39 / 88.47 ms），与 <code>infer()</code> 实测相差在约 7% 以内。</li>
-        <li>backbone 入口投影并入"backbone 单流"，ActionDiT 输入输出投影与 Euler 并入"ActionDiT 单流"。"absmax"列：fp8 动态 scale 的 absmax（5090 含 memset，Thor 不含 0.26 ms memset）。</li>
-        <li>5090：FlashRT 74b5efe，driver 595.91.07，torch 2.14.0+cu130，SM 时钟未锁定。Thor：MAXN，GPC 1.575 GHz，torch 2.9.1+cu130。</li>
+        <li>占比的分母是 eager kernel 合计（5090: 33.13 / 22.47 / 28.35 ms；Thor: 131.28 / 104.97 / 80.53 ms），与 <code>infer()</code> 实测相差在约 6% 以内。融合后的 <code>qkv_split_norm_rope_fp16</code> 归入 norm。</li>
+        <li>backbone 入口投影并入"backbone 单流"，ActionDiT 输入输出投影与 Euler 并入"ActionDiT 单流"。"absmax"列：fp8 动态 scale 的 absmax（5090 含 memset，Thor 不含 0.28 ms memset）。</li>
+        <li>两台设备都是 FlashRT a21507e。5090：driver 595.91.07，torch 2.14.0+cu130，SM 时钟未锁定。Thor：MAXN，GPC 1.575 GHz，torch 2.9.1+cu130。</li>
         <li>来源：<code>docs/imagewam_rtx5090_profile.md</code>、<code>docs/imagewam_thor_profile.md</code>，脚本 <code>benchmarks/imagewam_module_operator_profile.py</code>。</li>
       </ul>
     </div>
@@ -282,7 +281,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
 
-const DATA = {"5090": {"fp16": {"cells": {"vae": {"gemm": [0.027, 2], "quant": [0.0, 0], "absmax": [0.002, 2], "attention": [0.205, 1], "conv": [2.404, 30], "norm": [0.312, 68], "elementwise": [0.142, 31]}, "bb_double": {"gemm": [3.491, 55], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.148, 15], "conv": [0.0, 0], "norm": [0.178, 42], "elementwise": [0.142, 54]}, "bb_single": {"gemm": [10.394, 63], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.59, 60], "conv": [0.0, 0], "norm": [0.26, 60], "elementwise": [0.649, 140]}, "ad_double": {"gemm": [2.182, 300], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.49, 150], "conv": [0.0, 0], "norm": [0.419, 210], "elementwise": [0.426, 320]}, "ad_single": {"gemm": [7.73, 630], "quant": [0.008, 10], "absmax": [0.0, 0], "attention": [1.947, 600], "conv": [0.0, 0], "norm": [1.073, 600], "elementwise": [1.923, 1420]}}, "wall": {"infer": 34.8, "prefill": 15.6, "denoise": 15.98}, "total": 35.15}, "fp8": {"cells": {"vae": {"gemm": [0.026, 2], "quant": [0.0, 0], "absmax": [0.002, 2], "attention": [0.205, 1], "conv": [2.403, 30], "norm": [0.311, 68], "elementwise": [0.142, 31]}, "bb_double": {"gemm": [1.404, 55], "quant": [0.067, 40], "absmax": [0.088, 80], "attention": [0.149, 15], "conv": [0.0, 0], "norm": [0.179, 42], "elementwise": [0.175, 94]}, "bb_single": {"gemm": [3.423, 63], "quant": [0.153, 40], "absmax": [0.137, 80], "attention": [0.602, 60], "conv": [0.0, 0], "norm": [0.26, 60], "elementwise": [0.62, 180]}, "ad_double": {"gemm": [1.424, 300], "quant": [0.175, 200], "absmax": [0.322, 400], "attention": [0.494, 150], "conv": [0.0, 0], "norm": [0.419, 210], "elementwise": [0.577, 520]}, "ad_single": {"gemm": [4.61, 630], "quant": [0.401, 410], "absmax": [0.637, 800], "attention": [1.952, 600], "conv": [0.0, 0], "norm": [1.071, 600], "elementwise": [2.231, 1820]}}, "wall": {"infer": 25.98, "prefill": 7.29, "denoise": 15.33}, "total": 24.67}, "nvfp4": {"cells": {"vae": {"gemm": [0.026, 2], "quant": [0.0, 0], "absmax": [0.002, 2], "attention": [0.205, 1], "conv": [2.403, 30], "norm": [0.311, 68], "elementwise": [0.141, 31]}, "bb_double": {"gemm": [1.095, 40], "quant": [0.504, 120], "absmax": [0.0, 0], "attention": [0.147, 15], "conv": [0.0, 0], "norm": [0.183, 42], "elementwise": [0.141, 54]}, "bb_single": {"gemm": [2.345, 43], "quant": [1.214, 120], "absmax": [0.0, 0], "attention": [0.592, 60], "conv": [0.0, 0], "norm": [0.246, 60], "elementwise": [0.508, 140]}, "ad_double": {"gemm": [2.378, 200], "quant": [1.078, 600], "absmax": [0.0, 0], "attention": [0.496, 150], "conv": [0.0, 0], "norm": [0.422, 210], "elementwise": [0.423, 320]}, "ad_single": {"gemm": [7.495, 430], "quant": [3.173, 1210], "absmax": [0.0, 0], "attention": [1.963, 600], "conv": [0.0, 0], "norm": [1.076, 600], "elementwise": [1.948, 1420]}}, "wall": {"infer": 30.35, "prefill": 6.89, "denoise": 20.2}, "total": 30.52}}, "thor": {"fp16": {"cells": {"vae": {"gemm": [0.15, 5], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.33, 1], "conv": [3.97, 25], "norm": [2.36, 68], "elementwise": [1.93, 29]}, "bb_double": {"gemm": [11.25, 45], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.21, 10], "conv": [0.0, 0], "norm": [0.76, 42], "elementwise": [1.25, 54]}, "bb_single": {"gemm": [26.68, 43], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.83, 40], "conv": [0.0, 0], "norm": [1.66, 60], "elementwise": [6.58, 140]}, "ad_double": {"gemm": [11.48, 250], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [1.57, 100], "conv": [0.0, 0], "norm": [0.93, 210], "elementwise": [1.6, 320]}, "ad_single": {"gemm": [50.16, 630], "quant": [0.01, 10], "absmax": [0.0, 0], "attention": [6.13, 400], "conv": [0.0, 0], "norm": [2.51, 600], "elementwise": [7.13, 1420]}}, "wall": {"infer": 149.38, "prefill": 49.32, "denoise": 90.78}, "total": 139.49}, "fp8": {"cells": {"vae": {"gemm": [0.14, 5], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.33, 1], "conv": [3.97, 25], "norm": [2.37, 68], "elementwise": [1.95, 29]}, "bb_double": {"gemm": [9.32, 45], "quant": [0.43, 40], "absmax": [0.33, 40], "attention": [0.21, 10], "conv": [0.0, 0], "norm": [0.76, 42], "elementwise": [1.25, 94]}, "bb_single": {"gemm": [16.51, 43], "quant": [1.34, 40], "absmax": [0.68, 40], "attention": [0.85, 40], "conv": [0.0, 0], "norm": [1.67, 60], "elementwise": [6.56, 180]}, "ad_double": {"gemm": [6.19, 200], "quant": [0.53, 200], "absmax": [0.96, 200], "attention": [1.53, 100], "conv": [0.0, 0], "norm": [0.92, 210], "elementwise": [1.82, 520]}, "ad_single": {"gemm": [31.72, 430], "quant": [1.55, 410], "absmax": [2.2, 400], "attention": [5.98, 400], "conv": [0.0, 0], "norm": [2.54, 600], "elementwise": [7.52, 1820]}}, "wall": {"infer": 118.81, "prefill": 40.66, "denoise": 69.05}, "total": 112.39}, "nvfp4": {"cells": {"vae": {"gemm": [0.15, 5], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.33, 1], "conv": [3.98, 25], "norm": [2.36, 68], "elementwise": [1.96, 29]}, "bb_double": {"gemm": [6.08, 40], "quant": [0.51, 40], "absmax": [0.0, 0], "attention": [0.21, 10], "conv": [0.0, 0], "norm": [0.73, 42], "elementwise": [1.15, 54]}, "bb_single": {"gemm": [12.27, 43], "quant": [1.36, 40], "absmax": [0.0, 0], "attention": [0.83, 40], "conv": [0.0, 0], "norm": [1.67, 60], "elementwise": [6.53, 140]}, "ad_double": {"gemm": [6.2, 200], "quant": [0.83, 200], "absmax": [0.0, 0], "attention": [1.54, 100], "conv": [0.0, 0], "norm": [0.91, 210], "elementwise": [1.58, 320]}, "ad_single": {"gemm": [19.29, 430], "quant": [2.28, 410], "absmax": [0.0, 0], "attention": [6.09, 400], "conv": [0.0, 0], "norm": [2.57, 600], "elementwise": [7.07, 1420]}}, "wall": {"infer": 87.34, "prefill": 31.17, "denoise": 47.25}, "total": 88.47}}, "sweep5090": [{"p": "fp16", "img": 392, "steps": 10, "infer": 36.1, "prefill": 16.1, "denoise": 16.79}, {"p": "fp16", "img": 252, "steps": 10, "infer": 29.66, "prefill": 10.7, "denoise": 16.84}, {"p": "fp16", "img": 196, "steps": 10, "infer": 28.8, "prefill": 10.17, "denoise": 16.7}, {"p": "fp16", "img": 140, "steps": 10, "infer": 25.58, "prefill": 7.63, "denoise": 16.47}, {"p": "fp16", "img": 392, "steps": 5, "infer": 27.87, "prefill": 16.15, "denoise": 8.51}, {"p": "fp8", "img": 392, "steps": 10, "infer": 27.4, "prefill": 7.81, "denoise": 16.27}, {"p": "fp8", "img": 252, "steps": 10, "infer": 24.51, "prefill": 6.01, "denoise": 16.31}, {"p": "fp8", "img": 196, "steps": 10, "infer": 23.43, "prefill": 5.2, "denoise": 16.22}, {"p": "fp8", "img": 140, "steps": 10, "infer": 21.95, "prefill": 4.55, "denoise": 15.86}, {"p": "fp8", "img": 392, "steps": 5, "infer": 19.23, "prefill": 7.82, "denoise": 8.14}, {"p": "nvfp4", "img": 392, "steps": 10, "infer": 31.79, "prefill": 7.43, "denoise": 21.1}, {"p": "nvfp4", "img": 252, "steps": 10, "infer": 29.16, "prefill": 5.89, "denoise": 21.09}, {"p": "nvfp4", "img": 196, "steps": 10, "infer": 28.35, "prefill": 5.36, "denoise": 21.05}, {"p": "nvfp4", "img": 140, "steps": 10, "infer": 27.12, "prefill": 4.85, "denoise": 20.77}, {"p": "nvfp4", "img": 392, "steps": 5, "infer": 21.23, "prefill": 7.44, "denoise": 10.55}]};
+const DATA = {"5090": {"fp16": {"cells": {"vae": {"gemm": [0.027, 2], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.206, 1], "conv": [2.415, 30], "norm": [0.312, 68], "elementwise": [0.142, 31]}, "bb_double": {"gemm": [3.499, 55], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.148, 15], "conv": [0.0, 0], "norm": [0.178, 32], "elementwise": [0.053, 14]}, "bb_single": {"gemm": [10.431, 63], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.592, 60], "conv": [0.0, 0], "norm": [0.297, 40], "elementwise": [0.266, 40]}, "ad_double": {"gemm": [2.186, 300], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.489, 150], "conv": [0.0, 0], "norm": [0.384, 160], "elementwise": [0.088, 70]}, "ad_single": {"gemm": [7.896, 630], "quant": [0.008, 10], "absmax": [0.0, 0], "attention": [1.947, 600], "conv": [0.0, 0], "norm": [0.939, 400], "elementwise": [0.619, 420]}}, "wall": {"infer": 32.88, "prefill": 15.2, "denoise": 14.46}, "total": 33.13}, "fp8": {"cells": {"vae": {"gemm": [0.026, 2], "quant": [0.0, 0], "absmax": [0.002, 2], "attention": [0.205, 1], "conv": [2.405, 30], "norm": [0.311, 68], "elementwise": [0.142, 31]}, "bb_double": {"gemm": [1.403, 55], "quant": [0.067, 40], "absmax": [0.087, 80], "attention": [0.15, 15], "conv": [0.0, 0], "norm": [0.175, 32], "elementwise": [0.084, 54]}, "bb_single": {"gemm": [3.424, 63], "quant": [0.153, 40], "absmax": [0.137, 80], "attention": [0.613, 60], "conv": [0.0, 0], "norm": [0.273, 40], "elementwise": [0.285, 80]}, "ad_double": {"gemm": [1.421, 300], "quant": [0.175, 200], "absmax": [0.325, 400], "attention": [0.487, 150], "conv": [0.0, 0], "norm": [0.383, 160], "elementwise": [0.244, 270]}, "ad_single": {"gemm": [4.587, 630], "quant": [0.402, 410], "absmax": [0.666, 800], "attention": [1.957, 600], "conv": [0.0, 0], "norm": [0.935, 400], "elementwise": [0.943, 820]}}, "wall": {"infer": 23.85, "prefill": 6.92, "denoise": 13.67}, "total": 22.47}, "nvfp4": {"cells": {"vae": {"gemm": [0.026, 2], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.205, 1], "conv": [2.405, 30], "norm": [0.312, 68], "elementwise": [0.141, 31]}, "bb_double": {"gemm": [1.096, 40], "quant": [0.504, 120], "absmax": [0.0, 0], "attention": [0.147, 15], "conv": [0.0, 0], "norm": [0.181, 32], "elementwise": [0.052, 14]}, "bb_single": {"gemm": [2.346, 43], "quant": [1.215, 120], "absmax": [0.0, 0], "attention": [0.595, 60], "conv": [0.0, 0], "norm": [0.262, 40], "elementwise": [0.234, 40]}, "ad_double": {"gemm": [2.382, 200], "quant": [1.07, 600], "absmax": [0.0, 0], "attention": [0.49, 150], "conv": [0.0, 0], "norm": [0.386, 160], "elementwise": [0.087, 70]}, "ad_single": {"gemm": [7.524, 430], "quant": [3.167, 1210], "absmax": [0.0, 0], "attention": [1.95, 600], "conv": [0.0, 0], "norm": [0.937, 400], "elementwise": [0.625, 420]}}, "wall": {"infer": 28.23, "prefill": 6.56, "denoise": 18.44}, "total": 28.35}}, "thor": {"fp16": {"cells": {"vae": {"gemm": [0.15, 5], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.33, 1], "conv": [3.93, 25], "norm": [2.36, 68], "elementwise": [1.94, 29]}, "bb_double": {"gemm": [11.44, 45], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.23, 10], "conv": [0.0, 0], "norm": [0.8, 32], "elementwise": [0.68, 14]}, "bb_single": {"gemm": [26.48, 43], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.95, 40], "conv": [0.0, 0], "norm": [2.25, 40], "elementwise": [3.41, 40]}, "ad_double": {"gemm": [11.22, 250], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [1.68, 100], "conv": [0.0, 0], "norm": [0.97, 160], "elementwise": [0.46, 70]}, "ad_single": {"gemm": [50.17, 630], "quant": [0.01, 10], "absmax": [0.0, 0], "attention": [6.49, 400], "conv": [0.0, 0], "norm": [2.67, 400], "elementwise": [2.65, 420]}}, "wall": {"infer": 139.17, "prefill": 46.63, "denoise": 83.46}, "total": 131.28}, "fp8": {"cells": {"vae": {"gemm": [0.14, 5], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.33, 1], "conv": [3.95, 25], "norm": [2.35, 68], "elementwise": [1.91, 29]}, "bb_double": {"gemm": [9.4, 45], "quant": [0.43, 40], "absmax": [0.33, 40], "attention": [0.23, 10], "conv": [0.0, 0], "norm": [0.8, 32], "elementwise": [0.68, 54]}, "bb_single": {"gemm": [16.64, 43], "quant": [1.34, 40], "absmax": [0.68, 40], "attention": [0.99, 40], "conv": [0.0, 0], "norm": [2.32, 40], "elementwise": [3.38, 80]}, "ad_double": {"gemm": [6.21, 200], "quant": [0.53, 200], "absmax": [0.96, 200], "attention": [1.68, 100], "conv": [0.0, 0], "norm": [0.97, 160], "elementwise": [0.67, 270]}, "ad_single": {"gemm": [31.91, 430], "quant": [1.52, 410], "absmax": [2.19, 400], "attention": [6.41, 400], "conv": [0.0, 0], "norm": [2.64, 400], "elementwise": [3.06, 820]}}, "wall": {"infer": 111.86, "prefill": 38.31, "denoise": 64.57}, "total": 104.97}, "nvfp4": {"cells": {"vae": {"gemm": [0.15, 5], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.33, 1], "conv": [3.93, 25], "norm": [2.36, 68], "elementwise": [1.96, 29]}, "bb_double": {"gemm": [6.11, 40], "quant": [0.51, 40], "absmax": [0.0, 0], "attention": [0.23, 10], "conv": [0.0, 0], "norm": [0.79, 32], "elementwise": [0.59, 14]}, "bb_single": {"gemm": [12.2, 43], "quant": [1.36, 40], "absmax": [0.0, 0], "attention": [0.97, 40], "conv": [0.0, 0], "norm": [2.26, 40], "elementwise": [3.31, 40]}, "ad_double": {"gemm": [6.01, 200], "quant": [0.82, 200], "absmax": [0.0, 0], "attention": [1.72, 100], "conv": [0.0, 0], "norm": [0.92, 160], "elementwise": [0.46, 70]}, "ad_single": {"gemm": [19.44, 430], "quant": [2.25, 410], "absmax": [0.0, 0], "attention": [6.54, 400], "conv": [0.0, 0], "norm": [2.61, 400], "elementwise": [2.68, 420]}}, "wall": {"infer": 80.22, "prefill": 28.23, "denoise": 43.1}, "total": 80.53}}, "sweep5090": [{"p": "fp16", "img": 392, "steps": 10, "infer": 36.1, "prefill": 16.1, "denoise": 16.79}, {"p": "fp16", "img": 252, "steps": 10, "infer": 29.66, "prefill": 10.7, "denoise": 16.84}, {"p": "fp16", "img": 196, "steps": 10, "infer": 28.8, "prefill": 10.17, "denoise": 16.7}, {"p": "fp16", "img": 140, "steps": 10, "infer": 25.58, "prefill": 7.63, "denoise": 16.47}, {"p": "fp16", "img": 392, "steps": 5, "infer": 27.87, "prefill": 16.15, "denoise": 8.51}, {"p": "fp8", "img": 392, "steps": 10, "infer": 27.4, "prefill": 7.81, "denoise": 16.27}, {"p": "fp8", "img": 252, "steps": 10, "infer": 24.51, "prefill": 6.01, "denoise": 16.31}, {"p": "fp8", "img": 196, "steps": 10, "infer": 23.43, "prefill": 5.2, "denoise": 16.22}, {"p": "fp8", "img": 140, "steps": 10, "infer": 21.95, "prefill": 4.55, "denoise": 15.86}, {"p": "fp8", "img": 392, "steps": 5, "infer": 19.23, "prefill": 7.82, "denoise": 8.14}, {"p": "nvfp4", "img": 392, "steps": 10, "infer": 31.79, "prefill": 7.43, "denoise": 21.1}, {"p": "nvfp4", "img": 252, "steps": 10, "infer": 29.16, "prefill": 5.89, "denoise": 21.09}, {"p": "nvfp4", "img": 196, "steps": 10, "infer": 28.35, "prefill": 5.36, "denoise": 21.05}, {"p": "nvfp4", "img": 140, "steps": 10, "infer": 27.12, "prefill": 4.85, "denoise": 20.77}, {"p": "nvfp4", "img": 392, "steps": 5, "infer": 21.23, "prefill": 7.44, "denoise": 10.55}]};
 const TOTALS = Object.fromEntries(["5090", "thor"].map((d) => [d, Object.fromEntries(["fp16", "fp8", "nvfp4"].map((p) => [p, DATA[d][p].total]))]));
 const MODS = [
   ["vae", "VAE 编码"], ["bb_double", "Backbone 双流 (5 blocks)"], ["bb_single", "Backbone 单流 (20 blocks)"],
@@ -502,30 +501,30 @@ function table() {
     highlight(); detail(); table();
   }));
   document.getElementById("tblHint").textContent = m === "pct"
-    ? "占比的分母是该设备该精度的 eager kernel 合计；Thor fp8 的合计含 0.26 ms 未列出的 memset。"
+    ? "占比的分母是该设备该精度的 eager kernel 合计；Thor fp8 的合计含 0.28 ms 未列出的 memset。"
     : "点击单元格可固定选中，3D 视图和详情面板同步。";
 }
 
 /* ---------- top-3 analysis ---------- */
 const NOTE = {
-  "5090|fp16|bb_single|gemm": ["算力受限：M=416 时达到 fp16 峰值的 87%", ["换成 fp8：同一格降到 3.4 ms，prefill 从 15.6 降到 7.3 ms", "减少视觉 token：实测保留 36% 时 prefill 降约 50%"]],
-  "5090|fp16|ad_single|gemm": ["显存带宽受限：每步重读 1.26 GB 权重，达到带宽的 86%", ["降低权重字节数：fp8 后这一格降到 4.6 ms", "减少去噪步数：这一格和步数成正比"]],
+  "5090|fp16|bb_single|gemm": ["算力受限：M=416 时达到 fp16 峰值的 87%", ["换成 fp8：同一格降到 3.4 ms，prefill 从 15.2 降到 6.9 ms", "减少视觉 token：实测保留 36% 时 prefill 降约 50%"]],
+  "5090|fp16|ad_single|gemm": ["显存带宽受限：每步重读 1.26 GB 权重，达到带宽的 84%", ["降低权重字节数：fp8 后这一格降到 4.6 ms", "减少去噪步数：这一格和步数成正比"]],
   "5090|fp16|bb_double|gemm": ["算力受限，但只达到峰值的 65%：文本那一路 M=24，GEMM 效率很低", ["换成 fp8", "用 grouped GEMM 让文本和图像两路共用一次启动"]],
-  "5090|fp8|ad_single|gemm": ["显存带宽受限：M=64，带宽利用率 72%，所以 fp8 只比 fp16 快 1.7 倍", ["改用只量化权重到 4 位的小 M kernel，读的字节数减半（现有 nvfp4 kernel 带宽利用率只有 25%，用不上）", "把去噪蒸馏到 1–2 步（SnapFlow、Flash-WAM）", "并行采样：M 变大几乎不增加时间，要先测 M=128 和 256"]],
+  "5090|fp8|ad_single|gemm": ["显存带宽受限：M=64，带宽利用率 73%，所以 fp8 只比 fp16 快 1.7 倍", ["改用只量化权重到 4 位的小 M kernel，读的字节数减半（现有 nvfp4 kernel 带宽利用率只有 25%，用不上）", "把去噪蒸馏到 1–2 步（SnapFlow、Flash-WAM）", "并行采样：M 变大几乎不增加时间，要先测 M=128 和 256"]],
   "5090|fp8|bb_single|gemm": ["算力受限：已接近 fp8 峰值（≈100%）", ["换 NVFP4 并把量化融进 kernel：GEMM 能快 1.4 倍，但现在量化开销把收益抵掉了", "减少视觉 token，或跨帧复用 KV"]],
   "5090|fp8|vae|conv": ["bf16 的 cuDNN 卷积，和精度无关；总耗时越短，它的占比越高", ["把卷积降到 fp16 或 fp8，调一下 layout", "用异步执行，让 VAE 和上一帧的去噪重叠"]],
   "5090|nvfp4|ad_single|gemm": ["kernel 效率低：带宽只用到 25%（128 行的 tile 对 M=64 太大，N=1024 时 SM 喂不满）", ["写针对 M≤64 的 FP4 kernel（warpsplit 一类）", "或者 ActionDiT 保持 fp8，只让 backbone 用 nvfp4"]],
   "5090|nvfp4|ad_single|quant": ["每个 GEMM 前后都有 fp16→bf16 转换、量化、bf16→fp16 转换，1210 次，平均 2.6 µs，受启动延迟限制", ["去掉转换，直接从 fp16 量化", "把量化融进前面的 norm（Thor 路径已有 fused_norm_fp4）"]],
   "5090|nvfp4|vae|conv": ["bf16 卷积，和精度无关", ["卷积降精度，或用异步执行藏掉"]],
-  "thor|fp16|ad_single|gemm": ["主要花在读权重上：约 200 GB/s，接近 Thor 标称的 273 GB/s（上限没有实测）", ["换成 nvfp4：同一格降到 19.3 ms", "减少去噪步数"]],
-  "thor|fp16|bb_single|gemm": ["M=416，每个 GEMM 620 µs，只有 77 TFLOPS", ["换成 nvfp4：降到 12.3 ms", "减少视觉 token"]],
-  "thor|fp16|ad_double|gemm": ["和 ActionDiT 单流层的 GEMM 一样，主要花在读权重上", ["降精度", "减少去噪步数"]],
-  "thor|fp8|ad_single|gemm": ["fp8 只比 fp16 快 1.58 倍，带宽约 160 GB/s，低于 fp16 时的 200 GB/s", ["Thor 上 nvfp4 更快（19.3 ms），fp8 不划算", "减少去噪步数"]],
-  "thor|fp8|bb_single|gemm": ["每个 GEMM 384 µs，124 TFLOPS", ["换成 nvfp4：降到 12.3 ms", "减少视觉 token"]],
-  "thor|fp8|bb_double|gemm": ["文本那一路 M=24，加上 fp8 动态量化，效率很低（55 TFLOPS）", ["换成 nvfp4", "用 grouped GEMM 合并文本和图像两路"]],
-  "thor|nvfp4|ad_single|gemm": ["主要花在读权重上，但带宽只有约 147 GB/s，比 fp16 时的约 200 GB/s 低，小 M 的 FP4 kernel 还有提升空间", ["先实测 Thor 的带宽上限和 FP4 峰值，再判断 kernel 效率", "把去噪蒸馏到 1–2 步，收益最大", "调小 M 时 FP4 kernel 的 tile（之前做过 small-M tile 扫描）"]],
-  "thor|nvfp4|bb_single|gemm": ["每个 GEMM 285 µs，167 TFLOPS，没有峰值可以对比", ["减少视觉 token，或跨帧复用 KV", "实测 FP4 峰值后再决定要不要优化 kernel"]],
-  "thor|nvfp4|ad_single|elementwise": ["1420 次启动，平均 5 µs（5090 是 1.2 µs）：Thor 每次启动的开销更大，受启动延迟限制", ["打开 fuse_qkv_norm_rope：每层少 6 次启动，要在 vec_rms_norm 打开的前提下做 A/B", "attention 直接把输出写进 linear2_in，省掉一次拷贝", "长期方向是 megakernel，或者把逐元素运算融进 GEMM 的 epilogue"]],
+  "thor|fp16|ad_single|gemm": ["主要花在读权重上：约 200 GB/s，接近 Thor 标称的 273 GB/s（上限没有实测）", ["换成 nvfp4：同一格降到 19.4 ms", "减少去噪步数"]],
+  "thor|fp16|bb_single|gemm": ["M=416，每个 GEMM 约 620 µs，只有 77 TFLOPS", ["换成 nvfp4：降到 12.2 ms", "减少视觉 token"]],
+  "thor|fp16|bb_double|gemm": ["文本那一路 M=24，45 TFLOPS，是四个 GEMM 格子里效率最低的", ["换成 nvfp4：降到 6.1 ms", "用 grouped GEMM 合并文本和图像两路"]],
+  "thor|fp8|ad_single|gemm": ["fp8 只比 fp16 快 1.57 倍，带宽约 158 GB/s，低于 fp16 时的 200 GB/s", ["Thor 上 nvfp4 更快（19.4 ms），fp8 不划算", "减少去噪步数"]],
+  "thor|fp8|bb_single|gemm": ["每个 GEMM 约 390 µs，123 TFLOPS", ["换成 nvfp4：降到 12.2 ms", "减少视觉 token"]],
+  "thor|fp8|bb_double|gemm": ["文本那一路 M=24，加上 fp8 动态量化，效率很低（54 TFLOPS）", ["换成 nvfp4", "用 grouped GEMM 合并文本和图像两路"]],
+  "thor|nvfp4|ad_single|gemm": ["主要花在读权重上，但带宽只有约 146 GB/s，比 fp16 时的约 200 GB/s 低，小 M 的 FP4 kernel 还有提升空间", ["先实测 Thor 的带宽上限和 FP4 峰值，再判断 kernel 效率", "把去噪蒸馏到 1–2 步，收益最大", "调小 M 时 FP4 kernel 的 tile（之前做过 small-M tile 扫描）"]],
+  "thor|nvfp4|bb_single|gemm": ["每个 GEMM 约 285 µs，167 TFLOPS，没有峰值可以对比", ["减少视觉 token，或跨帧复用 KV", "实测 FP4 峰值后再决定要不要优化 kernel"]],
+  "thor|nvfp4|ad_single|attention": ["FA4，200 次层执行，每次一个 FA4 加一次拷贝，共 400 次 6.5 ms；q_seq=64 对 kv_seq=480，每次只有几个 tile，SM 喂不满", ["让 attention 直接写进 linear2_in，顺带省掉 220 次拷贝（1.3 ms）", "试 split-KV / flash-decoding 式的切分，用更多 SM 处理短 q 序列", "减少去噪步数"]],
 };
 function top3() {
   const el = document.getElementById("top3");
@@ -558,8 +557,8 @@ function top3() {
 }
 
 /* ---------- wall bars ---------- */
-const EW_PER_LAYER = { vae: "–", bb_double: "10", bb_single: "7", ad_double: "6", ad_single: "7" };
-const EW_PER_LAYER_FP8 = { vae: "–", bb_double: "10 + 8", bb_single: "7 + 2", ad_double: "6 + 4", ad_single: "7 + 2" };
+const EW_PER_LAYER = { vae: "–", bb_double: "2", bb_single: "2", ad_double: "1", ad_single: "2" };
+const EW_PER_LAYER_FP8 = { vae: "–", bb_double: "2 + 8", bb_single: "2 + 2", ad_double: "1 + 4", ad_single: "2 + 2" };
 function ew() {
   const p = state.prec;
   let h = '<tr><th>模块</th><th>每层</th><th>5090 ms</th><th>次数</th><th>µs / 次</th><th>Thor ms</th><th>次数</th><th>µs / 次</th></tr>';
