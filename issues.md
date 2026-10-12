@@ -971,6 +971,49 @@ checkpoint's own weights would not have. Not fixed here; the generator
 should add these two tensors if OpenPI-side numbers need to be trusted
 without the `strict=False` workaround.
 
+# ISSUE-095
+
+Status: open, non-blocking
+
+Area: `benchmarks/imagewam_fusion_ab.py` on Thor (cross-process latency)
+
+## Observation
+
+In the Thor A/B of `fuse_qkv_norm_rope` at `989547d` (opportunities.md OPT-032, "Candidate 1, end-to-end with `vec_rms_norm` on"), the same configuration measured in different processes gives different `infer()` P50. Conditions: three runs in sequence (R1 `AB=fuse_qkv_norm_rope`, R2 the same with `HOLD=vec_rms_norm=0`, R3 `AB=vec_rms_norm`); MAXN, GPC locked, `emc_locked=null`.
+
+| configuration | precision | run, side → ms | run, side → ms |
+|---|---|---|---|
+| vec on, fused off | nvfp4 | R1 A 80.34 | R3 B 66.94 |
+| vec on, fused off | fp8 | R1 A 113.86 | R3 B 93.18 |
+| vec on, fused off | fp16 | R1 A 144.80 | R3 B 123.91 |
+| vec off, fused off | nvfp4 | R2 A 99.67 | R3 A 85.58 |
+| vec off, fused off | fp8 | R2 A 112.76 | R3 A 112.62 |
+| vec off, fused off | fp16 | R2 A 143.47 | R3 A 143.63 |
+| fused on (vec bypassed) | nvfp4 | R1 B 87.53 | R2 B 88.18 |
+| fused on (vec bypassed) | fp8 | R1 B 120.85 | R2 B 101.47 |
+| fused on (vec bypassed) | fp16 | R1 B 154.40 | R2 B 132.43 |
+
+R1 fp16's A side also spread from P10 124.57 to P50 144.80.
+
+## Impact
+
+Absolute Thor latencies from one process cannot be compared with another process's. The within-process ABBA differences remain the comparable quantity. In R1, their sign agrees with the cross-run fp8/fp16 comparison of fused-on against vec-on (R2 B against R3 B: −8.3 / −8.5 ms). The magnitude of a few-ms effect is not reliable to better than the spread above.
+
+## Evidence
+
+Thor logs `logs/1011_thor_opt032_c1/{R1_fused_vec_on,R2_fused_vec_off,R3_vec}.log`.
+
+## Hypotheses
+
+- EMC (memory clock) frequency is not locked and differs between processes. Most of the affected work is bandwidth-bound on Thor.
+- A whole-process slow state in R1, the first run after idle, inflates both sides by about 20 ms for fp8 and fp16. The nvfp4 cells do not fit this pattern cleanly.
+
+## Next Experiment
+
+Repeat one configuration pair (vec on fused off, fused on) in 3 separate processes in alternating order. Record the EMC frequency read-only (tegrastats) at the start and end of each process, and report the spread per configuration.
+
+## Resolution
+
 ## Index: resolved entries and where their conclusions are recorded
 
 
