@@ -167,7 +167,7 @@ svg text{fill:var(--muted);font-size:11px}
     <h3 class="h3">优化方向</h3>
     <div class="tablewrap"><table>
       <tr><th>方向</th><th style="text-align:left">去掉什么</th><th style="text-align:left">状态</th></tr>
-      <tr><td><code>fuse_qkv_norm_rope</code>（OPT-032 #1）</td><td style="text-align:left;white-space:normal">每层的 3 次拷贝 + 2 次 QK norm + 2 次 RoPE 合成 1 个 kernel：每次推理少 1670 次启动；Q/K/V 的读写量从约 14S 降到 6S（S 为一个 Q 张量的大小）</td><td style="text-align:left;white-space:normal">已接入，默认关闭；5090 实测见下</td></tr>
+      <tr><td><code>fuse_qkv_norm_rope</code>（OPT-032 #1）</td><td style="text-align:left;white-space:normal">每层的 3 次拷贝 + 2 次 QK norm + 2 次 RoPE 合成 1 个 kernel：每次推理少 1670 次启动；Q/K/V 的读写量从约 14S 降到 6S（S 为一个 Q 张量的大小）</td><td style="text-align:left;white-space:normal">已接入，默认关闭；5090 净省 1.0–1.7 ms，Thor 净亏 7–9.6 ms（见下）</td></tr>
       <tr><td>attention 输出直接写入 <code>linear2</code> 输入（OPT-032 #2）</td><td style="text-align:left;white-space:normal">单流层的 attention 输出拷贝（220 次）。5090 走 cuBLAS 链，可以让 PV GEMM 通过 <code>ldc</code> 直接写到 <code>linear2_in</code> 的列切片；Thor 要改 FA4 的输出指针</td><td style="text-align:left;white-space:normal">未做</td></tr>
       <tr><td>SiLU-GLU 并进 GEMM epilogue（#11）</td><td style="text-align:left;white-space:normal">280 次 GLU，以及 backbone 每层约 23 MB 的中间张量往返</td><td style="text-align:left;white-space:normal">需要改 CUTLASS；两个 GEMM 的版本试过，已回退（OPT-015）</td></tr>
       <tr><td>fp8 静态 scale</td><td style="text-align:left;white-space:normal">680 次 <code>compute_scale</code> 和 680 次 absmax</td><td style="text-align:left;white-space:normal">会改变数值，需要校准</td></tr>
@@ -182,7 +182,7 @@ svg text{fill:var(--muted);font-size:11px}
         <ul>
           <li>Thor 上，它替换掉的部分大约是 vec norm 的 2.7 ms，加上拷贝和 RoPE 约 9–10 ms（按约 1.6 GB 读写、约 170 GB/s 估算），合计约 12 ms。</li>
           <li>融合 kernel 本身：如果能跑到约 170 GB/s，约 6 ms（省约 6 ms）；如果像旧 norm 那样被结构卡住，接近 23 ms（反而慢约 11 ms）。</li>
-          <li>这两个数字都是估算，只能用实测来定。</li>
+          <li>实测落在后一种：融合 kernel 本身 19.7 ms，端到端慢 7–9.6 ms（见下方 Thor 表）。</li>
         </ul></li>
       <li><b>数值：只对旧路径逐位一致，对当前默认不是。</b>这个 kernel 和 256 线程的旧 norm 逐位一致（Thor 已确认 <code>torch.equal</code>）；但和 vec norm 的归约顺序不同（kernel 级 ≤1 ulp）。打开开关后，相对当前默认会有一个很小的数值差，这个差在整个网络里会放大。下表的对照组用来确认这个差全部来自归约顺序。</li>
     </ol>
@@ -199,11 +199,34 @@ svg text{fill:var(--muted);font-size:11px}
       <tr><td></td><td>fp16</td><td>33.25</td><td>31.86</td><td><b>+1.39</b></td><td></td><td>1.000000</td><td>0.07%</td><td>0.999989</td><td>否</td></tr>
     </table></div>
     <div class="hint">RTX 5090 实测，真实 LIBERO checkpoint，部署形状（x0=24，a0=416，total=480），cuBLAS attention。时间是 A/B 前端的 <code>infer()</code> P50（不含 VAE 编码，所以比上方的 26.0 ms 小）；A、B 两侧在同一进程内按 ABBA 顺序交替测，各 100 次。B 复用 A 自动调优得到的 GEMM 算法。命令：<code>X0=24 AB=fuse_qkv_norm_rope benchmarks/imagewam_fusion_ab.py</code>（② 加 <code>HOLD=vec_rms_norm=0</code>，③ 用 <code>AB=vec_rms_norm</code>）；不设 <code>X0</code> 时是未裁剪的 x0=513 形状，那里，fp8 / nvfp4 / fp16 分别省 0.70 / 1.38 / 1.11 ms。</div>
+    <h3 class="h3">Jetson AGX Thor 实测</h3>
+    <div class="tablewrap"><table>
+<tr><th>对比</th><th>精度</th><th>A ms</th><th>B ms</th><th>A − B</th><th>kernel 数</th><th>actions cos</th><th>actions rel_l2</th><th>backbone cos</th><th>逐位一致</th></tr>
+<tr><td>① 当前默认（vec on）：fused 关 → 开</td><td>nvfp4</td><td>80.34</td><td>87.53</td><td><b>-7.19</b></td><td>5024 → 3354</td><td>0.999838</td><td>1.80%</td><td>0.986896</td><td>否</td></tr>
+<tr><td></td><td>fp8</td><td>113.86</td><td>120.85</td><td><b>-6.99</b></td><td>6389 → 4719</td><td>0.999906</td><td>1.37%</td><td>0.999152</td><td>否</td></tr>
+<tr><td></td><td>fp16</td><td>144.80</td><td>154.40</td><td><b>-9.60</b></td><td>4599 → 2929</td><td>1.000000</td><td>0.06%</td><td>0.999992</td><td>否</td></tr>
+<tr><td>② vec off：fused 关 → 开</td><td>nvfp4</td><td>99.67</td><td>88.18</td><td><b>+11.49</b></td><td></td><td>1</td><td>0</td><td>1</td><td>是</td></tr>
+<tr><td></td><td>fp8</td><td>112.76</td><td>101.47</td><td><b>+11.29</b></td><td></td><td>1</td><td>0</td><td>1</td><td>是</td></tr>
+<tr><td></td><td>fp16</td><td>143.47</td><td>132.43</td><td><b>+11.04</b></td><td></td><td>1</td><td>0</td><td>1</td><td>是</td></tr>
+<tr><td>③ 对照：vec off → vec on（fused 关）</td><td>nvfp4</td><td>85.58</td><td>66.94</td><td><b>+18.64</b></td><td></td><td>0.999797</td><td>2.02%</td><td>0.986896</td><td>否</td></tr>
+<tr><td></td><td>fp8</td><td>112.62</td><td>93.18</td><td><b>+19.44</b></td><td></td><td>0.999931</td><td>1.18%</td><td>0.999152</td><td>否</td></tr>
+<tr><td></td><td>fp16</td><td>143.63</td><td>123.91</td><td><b>+19.72</b></td><td></td><td>1.000000</td><td>0.06%</td><td>0.999992</td><td>否</td></tr>
+    </table></div>
+    <div class="hint">Thor，HEAD 989547d，MAXN，GPC 1.575 GHz 锁定，EMC 未锁，真实 checkpoint，<code>X0=24 USE_FA4=1</code>，各 100 次，同进程 ABBA。只有同一进程内的 A − B 可以直接比较：同一配置在不同进程之间最多差 21 ms（issues.md ISSUE-095）。</div>
+    <div class="tablewrap" style="margin-top:8px"><table>
+<tr><th>侧</th><th>阶段</th><th>kernel</th><th>ms</th><th>次数</th><th>µs / 次</th></tr>
+<tr><td>fused 关</td><td>prefill</td><td>拷贝 + <code>rms_norm_fp16_vec</code> + RoPE</td><td>7.29</td><td>196</td><td>–</td></tr>
+<tr><td>fused 关</td><td>denoise</td><td>拷贝 + <code>rms_norm_fp16_vec</code> + RoPE</td><td>11.55</td><td>2181</td><td>–</td></tr>
+<tr><td>fused 开</td><td>prefill</td><td><code>qkv_split_norm_rope_fp16</code></td><td><b>8.50</b></td><td>30</td><td><b>283.5</b></td></tr>
+<tr><td>fused 开</td><td>denoise</td><td><code>qkv_split_norm_rope_fp16</code></td><td><b>11.18</b></td><td>250</td><td>44.7</td></tr>
+    </table></div>
+    <div class="hint">Thor nvfp4，vec on，eager，先做 CUPTI 预热，3 次迭代的 kernel 数相等。"fused 关"的拷贝里还包括 Q/K/V 以外的拷贝（例如 attention 输出拷贝），所以是被替换部分的上限。</div>
     <ol class="findings" start="5" style="margin:8px 0 0;padding-left:20px">
       <li><b>5090 上是净收益。</b>在当前默认之上再打开，fp8 / nvfp4 / fp16 分别省 1.0 / 1.5 / 1.7 ms，每次推理少 1670 个 kernel（和 OPT-032 的估算完全一致）。相对旧的 256 线程 norm 路径，省 2.4 ms。打开之后 vec 开关就不起作用了（fused 绕过 <code>_rms_norm_qk</code>），所以 ① 的 B 和 ② 的 B 基本是同一个耗时（21.71 和 21.76 ms）。</li>
       <li><b>数值差全部来自归约顺序。</b>② 证明 fused 和旧 norm 路径逐位一致；① 的偏差与 ③（vec 开/关）几乎相同（backbone cos 都是 0.998926 / 0.990500 / 0.999989）。也就是说，打开 fused 在数值上等于退回旧 norm，并没有引入新的误差。nvfp4 的 backbone cos 0.9905 看着偏低，但这个偏差在 <code>vec_rms_norm</code> 变成默认时已经接受过了（Thor 用真实 checkpoint 验证的 actions cos ≥ 0.99995）。</li>
-      <li><b>Thor 还没有结论。</b>5090 上旧 norm 结构的代价只有约 1.4 ms，所以融合 kernel 继承这个结构也照样能赢；Thor 上同一个结构的代价是 20 ms。在 Thor 上用真实 checkpoint 跑 <code>X0=24 USE_FA4=1 AB=fuse_qkv_norm_rope</code>（默认 vec on），就能直接得到答案。</li>
-      <li><b>如果 Thor 变慢了：</b>把融合 kernel 的 Q/K 归约改成每个 (row, head) 一个 warp，照抄 <code>rms_norm_fp16_vec_warp_kernel</code> 的 int4 加载和 <code>warp_sum</code> 顺序。这样能去掉 256 线程的开销，并且和当前默认路径逐位一致，①、③ 里那点数值差也会一起消失。这是让它成为默认值的前提。</li>
+      <li><b>Thor 上是净亏，不能设为默认。</b>在 vec on 的默认配置上打开 fused，三档分别慢 7.2 / 7.0 / 9.6 ms，虽然同样少了 1670 个 kernel。② 逐位一致，说明 FA4 路径上的接线没问题；数值偏差和 ③ 相同，和 5090 一样。</li>
+      <li><b>原因在 block 结构，不在字节量。</b>Thor 上每个 256 线程的 (row, head) block 固定花约 30 ns：prefill 每次约 8,300 个 block、283 µs，denoise 每次 1,536 个 block、44.7 µs。vec norm 处理同样的行只要每行约 2 ns。融合 kernel 本身就有 19.7 ms，已经超过它替换掉的拷贝 + norm + RoPE（≤18.8 ms）。相对旧的 256 线程 norm 它仍然省 11 ms（②），但相对 warp 版 norm 就亏了。</li>
+      <li><b>下一步：</b>把 Q/K 归约改成每个 (row, head) 一个 warp，照抄 <code>rms_norm_fp16_vec_warp_kernel</code> 的 int4 加载和 <code>warp_sum</code> 顺序。这样能去掉每个 block 的固定开销，并且和当前默认逐位一致。在新 kernel 于 Thor 上测过之前，开关保持关闭。</li>
     </ol>
   </div>
 
