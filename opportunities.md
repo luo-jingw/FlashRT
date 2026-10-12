@@ -649,7 +649,7 @@ This list ranks candidates by nodes removed from the ~5350-node graph. That axis
 
 | # | change | nodes / bytes | size (inf) | precedent, risk |
 |---|---|---|---|---|
-| 1 | one kernel for Q/K/V split + QK-RMSNorm + RoPE + write to Q_O / K_cache / V_cache (replaces 3 copies + 2 rms + 2 rope) | -1670 (1500 denoise, 170 prefill) | 8-15 ms (inf); local Ada single-call ratio 4.18x (1.101 -> 0.264 ms at rows=905, informative only) | **kernel authored and bit-exact** (`csrc/kernels/fused_qkv_norm_rope/`, `tests/test_fused_qkv_norm_rope_kernel.py`, 8/8 `torch.equal` at rows in {25, 417, 905, 64}, plain and merged-linear1 shapes). A real synchronization bug (missing `__syncthreads()` between the Q and K block-reductions sharing one scratch array) was caught by the bit-exact check, not by a cosine check -- fixed. Double-stream needs this kernel called TWICE (once per txt/img stream, each at its own row offset into the shared RoPE table and the shared Q_O/K_cache destination); proved bit-exact against the reference's separate-norm-then-joint-rope sequence. Single-stream and both ActionDiT blocks need one call each. Even HD is a precondition (vectorized 4-byte-aligned loads); real ImageWAM's HD=128 always satisfies it. **Wired** into `_single_stream_layer`/`_action_single_layer` behind `dims["fuse_qkv_norm_rope"]` (default off), plan.md "Plan: wire OPT-032's kernel-fusion candidates into the served pipeline" Phase 1. Thor found two real problems in the WIRING TEST (not the kernel or the wiring): a seed-reset-too-late bug (`0922`, fixed) and, after that fix, a real crash (`0922b`) narrowed down locally to a pre-existing `GemmRunner` fragility unrelated to this kernel (issues.md ISSUE-090: two calls to the SAME layer function against a shared `GemmRunner` with fresh weight tensors at the same shape corrupts something a later cuBLAS call trips over, reproduced with `fuse_qkv_norm_rope=False` on both calls too). Once the test builds weights once and replays instead of rebuilding per call, it is confirmed bit-exact locally for BOTH backbone (`merge_qkv_mlp` True and False) and ActionDiT, stable over 3 runs. Thor-confirmed (`0922d`, HEAD `e727f91`): `1 passed`, all three comparisons `torch.equal`/`bit_exact=True`, `max_abs=0`. Phase 1 closed. Phase 2 (double-stream wiring, `_double_stream_layer`/`_action_double_layer`) done and Thor-confirmed (`0922e`, HEAD `c5898a2`: `2 passed`, all five comparisons `torch.equal`/`bit_exact=True`, `max_abs=0`; plan.md's own Phase 2 entry has the full account, including a test-construction bug found and fixed along the way -- a swapped `Fp16Linear` n/k argument for ActionDiT's `proj.weight`, unrelated to this kernel). Phases 1-2 of candidate 1's wiring are closed; Phase 3 (candidate 8) and Phase 4 (candidate 3) remain. With `vec_rms_norm` on (the default), the 256-thread version of the kernel was a net win on RTX 5090 and a net loss on Thor; the kernel is now one warp per (row, head), bit-exact against the `vec_rms_norm` default (see "Candidate 1, end-to-end with `vec_rms_norm` on" below). Stays default off until Thor measures it. |
+| 1 | one kernel for Q/K/V split + QK-RMSNorm + RoPE + write to Q_O / K_cache / V_cache (replaces 3 copies + 2 rms + 2 rope) | -1670 (1500 denoise, 170 prefill) | 8-15 ms (inf); local Ada single-call ratio 4.18x (1.101 -> 0.264 ms at rows=905, informative only) | **kernel authored and bit-exact** (`csrc/kernels/fused_qkv_norm_rope/`, `tests/test_fused_qkv_norm_rope_kernel.py`, 8/8 `torch.equal` at rows in {25, 417, 905, 64}, plain and merged-linear1 shapes). A real synchronization bug (missing `__syncthreads()` between the Q and K block-reductions sharing one scratch array) was caught by the bit-exact check, not by a cosine check -- fixed. Double-stream needs this kernel called TWICE (once per txt/img stream, each at its own row offset into the shared RoPE table and the shared Q_O/K_cache destination); proved bit-exact against the reference's separate-norm-then-joint-rope sequence. Single-stream and both ActionDiT blocks need one call each. HD, row strides and column offsets that are multiples of 8, and 16-byte-aligned pointers, are checked preconditions (int4 loads); real ImageWAM shapes satisfy them. **Wired** into `_single_stream_layer`/`_action_single_layer` behind `dims["fuse_qkv_norm_rope"]`, plan.md "Plan: wire OPT-032's kernel-fusion candidates into the served pipeline" Phase 1. Thor found two real problems in the WIRING TEST (not the kernel or the wiring): a seed-reset-too-late bug (`0922`, fixed) and, after that fix, a real crash (`0922b`) narrowed down locally to a pre-existing `GemmRunner` fragility unrelated to this kernel (issues.md ISSUE-090: two calls to the SAME layer function against a shared `GemmRunner` with fresh weight tensors at the same shape corrupts something a later cuBLAS call trips over, reproduced with `fuse_qkv_norm_rope=False` on both calls too). Once the test builds weights once and replays instead of rebuilding per call, it is confirmed bit-exact locally for BOTH backbone (`merge_qkv_mlp` True and False) and ActionDiT, stable over 3 runs. Thor-confirmed (`0922d`, HEAD `e727f91`): `1 passed`, all three comparisons `torch.equal`/`bit_exact=True`, `max_abs=0`. Phase 1 closed. Phase 2 (double-stream wiring, `_double_stream_layer`/`_action_double_layer`) done and Thor-confirmed (`0922e`, HEAD `c5898a2`: `2 passed`, all five comparisons `torch.equal`/`bit_exact=True`, `max_abs=0`; plan.md's own Phase 2 entry has the full account, including a test-construction bug found and fixed along the way -- a swapped `Fp16Linear` n/k argument for ActionDiT's `proj.weight`, unrelated to this kernel). Phases 1-2 of candidate 1's wiring are closed; Phase 3 (candidate 8) and Phase 4 (candidate 3) remain. With `vec_rms_norm` on (the default), the 256-thread version of the kernel was a net win on RTX 5090 and a net loss on Thor; the kernel is now one warp per (row, head), bit-exact against the `vec_rms_norm` default, and 7.3–8.3 ms faster on Thor and 2.0–2.7 ms faster on RTX 5090; **served default on** (see "Candidate 1, end-to-end with `vec_rms_norm` on" below). |
 | 2 | FA4 writes straight into its consumer (linear2 input / proj input), dropping the copy-back and the concat copy | -495 | 2-4 ms | not attempted (FA4 does not run on Ada at all, so this needs Thor for any validation, unlike 1/3/4/6/8) |
 | 3 | gated-residual + AdaLN kernel emits FP4 + scale factors directly (no quantize before qkv / mlp0 / linear1, no fp16 `modded` round trip) | -340 | 2-4 ms (inf) | **kernel authored and bit-exact** (`csrc/kernels/fused_norm_fp4/`, `tests/test_fused_norm_fp4_kernel.py`: run directly, not pytest-collectible -- `python tests/test_fused_norm_fp4_kernel.py`; 16/16 bit-exact, both BF16-residual (backbone) and FP16-residual (ActionDiT) variants, rows in {25, 417, 905, 64}, dim in {3072, 1024}). Validated against the UNFUSED `gate_res_bf16res`/`gate_res_fp16` + `ada_layer_norm_*` pair on this dev machine; **confirmed on Thor too** (`0921x`, THOR_CHECKLIST.md X6): the new kernel's `packed`/`sfa`/`residual` outputs are `torch.equal` against `gate_res_ada_layer_norm_bf16res`/`_fp16` (the CURRENTLY-WIRED `fuse_res_norm=True` fusion, `fusion.cu`) + `quantize_fp4_dynamic_sfa_fp16`, 16/16 shapes. Bit-exact against today's production fused path, not just the older unfused pair; safe to wire. AWQ `inv_s` fold: same kernel, one extra nullable per-channel argument (diagnostic-only test found a rounding-order mismatch in the TEST's own reference construction, not the kernel -- the real kernel rounds once, a from-scratch two-kernel reference double-rounds). **Wired, Round 1 scope** (plan.md Phase 4): `Nvfp4Linear.gemm_prequantized` (skip-quantize GEMM), `AdaLNTarget.lin` + `_awq_target` (always attaches the consuming GEMM object), `_fused_gate_res`'s opt-in `fp4_direct` dispatch, and `_single_stream_layer`'s own `merge_qkv_mlp=True` `linear1.weight` consumer behind `dims["fuse_res_norm_fp4"]`. Also wired into the real build: `CMakeLists.txt`'s `fp4_kernels_obj` sources and production `flash_rt_fp4` bindings (`csrc/fp4_bindings.cpp`) -- this kernel was JIT-only before this round. CPU-only dispatch/call-order test passes 9/9 (`tests/test_imagewam_fuse_res_norm_fp4_dispatch.py`). First real Thor run (`0922f`) found a genuine bug: `gate`/`scale`/`shift`/`inv_s` are `const __half*` in this kernel (unlike the older `gate_res_ada_layer_norm_bf16res`'s `const float*`), and the wiring passed FP32 pointers, producing an O(1e3)/NaN residual instead of the correct O(1) value -- root-caused and fixed (round to fresh FP16 tensors before the call, issues.md ISSUE-091), CPU dispatch suite re-verified 9/9. **Thor-confirmed** (`0922g`, HEAD `3056b03`, no rebuild needed): `1 passed`, the two-layer single-stream chain `torch.equal`/`bit_exact=True`, `max_abs=0`. Phase 4 Round 1 closed. Round 2: same pattern extended to `_action_single_layer` (ActionDiT's own single-stream chain); **Thor-confirmed** (`0922h`, HEAD `11e8869`): `3 passed`, all `torch.equal`/`bit_exact=True`, `max_abs=0` (X10's backbone chain re-confirmed too). Round 3 (closing the double->single boundary, `_double_stream_layer`/`_action_double_layer`) was ATTEMPTED and REVERTED this round after finding a genuine kernel limitation: `fused_norm_fp4.cu`'s `launch()` computes its CUTLASS tile-interleaved SFA layout fresh from `seq_len` every call (`tile_atom_to_shape_SFA(make_shape(seq_len, ...))`), with no row-offset/total-seq-len parameter -- unlike candidate 1's kernel, it cannot be called twice (once for `_double_stream_layer`'s txt rows, once for its img rows) to jointly populate one combined a0-row destination scratch the way `_single_stream_layer`'s consumer (`linear1.weight`, ONE GEMM over all a0 rows) needs; the two calls would each compute their own small tile layout at the same base pointer instead of two slices of one larger tiled layout. Closing this needs either a kernel change (an explicit row-offset parameter) or a consumer-side redesign (two separate GEMMs instead of Round 1's single combined one) -- real design work, not attempted, a Round 4. Neither Round 1 nor Round 2 covers this boundary layer (weight_layer_idx=0, real for LIBERO's structure), so `fuse_res_norm_fp4` must stay off in any full-model config until it's closed -- documented explicitly in both `_single_stream_layer`'s and `_action_single_layer`'s own code comments. |
 | 4 | use the existing bit-exact vectorized activation quantizer (`quantize_fp4_sfa_vec.cu`, used by Pi0.5) instead of the scalar one | 0 | 2-4 ms (inf) | **done and wired** (`flash_rt/executors/fp4_utils.py:quant_act_nvfp4`, tries `quantize_fp4_dynamic_sfa_fp16_vec` first, falls back to the scalar kernel on rc != 0; CPU-only fallback-order test `tests/test_fp4_utils_quant_act.py`, 4/4 passed -- the extension is not built on this machine, so the vec kernel's own numerics were not re-run here, only its call-order contract). THOR_CHECKLIST.md X0. |
@@ -741,20 +741,20 @@ Times are `infer()` P50, which excludes the VAE encode.
 | | fp8 | 112.62 | 93.18 | +19.45 | – | 0.999931 / 1.2e-2 | 0.999152 | no |
 | | fp16 | 143.63 | 123.91 | +19.72 | – | 1.000000 / 6.1e-4 | 0.999992 | no |
 
-Kernel time per infer, eager, nvfp4, vec on. Measured after a CUPTI warmup session, over 3 iterations with equal kernel counts per iteration:
+Kernel time per infer, eager, nvfp4, vec on. Measured after a CUPTI warmup session, over 3 iterations with equal kernel counts per iteration. Kernels are attributed by call site. The fused-off rows come from the warp-kernel round below; they are the same configuration.
 
 | side | stage | kernel | ms | launches | µs / launch |
 |---|---|---|---:|---:|---:|
-| fused off | prefill | `_copy_slice` copies | 5.142 | 86 | 59.8 |
-| fused off | prefill | `rms_norm_fp16_vec` | 0.919 | 60 | 15.3 |
-| fused off | prefill | `rope_apply_fp16_perhead` | 1.226 | 50 | 24.5 |
-| fused off | denoise | `_copy_slice` copies | 7.386 | 1181 | 6.3 |
-| fused off | denoise | `rms_norm_fp16_vec` | 1.888 | 500 | 3.8 |
-| fused off | denoise | `rope_apply_fp16_perhead` | 2.278 | 500 | 4.6 |
-| fused on | prefill | `qkv_split_norm_rope_fp16` | 8.504 | 30 | 283.5 |
-| fused on | denoise | `qkv_split_norm_rope_fp16` | 11.179 | 250 | 44.7 |
+| fused off | prefill | `_copy_slice` copies | 2.944 | 110 | 26.8 |
+| fused off | prefill | `rms_norm_fp16_vec` | 0.903 | 60 | 15.1 |
+| fused off | prefill | `rope_apply_fp16_perhead` | 1.232 | 50 | 24.6 |
+| fused off | denoise | `_copy_slice` copies | 4.039 | 950 | 4.3 |
+| fused off | denoise | `rms_norm_fp16_vec` | 1.860 | 500 | 3.7 |
+| fused off | denoise | `rope_apply_fp16_perhead` | 2.257 | 500 | 4.5 |
+| fused on (256-thread) | prefill | `qkv_split_norm_rope_fp16` | 8.504 | 30 | 283.5 |
+| fused on (256-thread) | denoise | `qkv_split_norm_rope_fp16` | 11.179 | 250 | 44.7 |
 
-The fused-off copy rows include copies outside the Q/K/V split, such as the attention-output copy, so they bound the replaced work from above.
+With the fused kernel on, 20 prefill copies (0.408 ms) and 200 denoise copies (0.921 ms) remain: the attention-output copies. So the work the fused kernel replaces is 11.9 ms.
 
 - **With the default `vec_rms_norm` on, enabling the fused kernel is a net loss on Thor in every precision.** The within-process A/B gives −7.0 to −9.6 ms. It removes the same 1670 kernels as on RTX 5090.
 - **Its numerics are as on RTX 5090.**
@@ -766,10 +766,8 @@ The fused-off copy rows include copies outside the Q/K/V split, such as the atte
     - denoise has 64 × 24 = 1,536 blocks per call, at 44.7 µs.
   - `rms_norm_fp16_vec` does the same rows at about 2 ns per row (prefill: 15.3 µs for one tensor).
   - Against the 256-thread norm, fusion still saves 11 ms (second group). Against the warp-per-row norm it loses.
-- **The magnitude is uncertain; the sign is not.**
-  - The kernel sums (19.68 ms fused against 18.84 ms replaced) show no gain.
-  - Same configurations measured in different processes differ by up to 21 ms (issues.md ISSUE-095), so only the within-process differences above are comparable.
-- **Fix: the Q/K reduction is now one warp per (row, head)** (below). The flag stays default off until that kernel is measured on Thor.
+- **The kernel sums match the end-to-end loss.** The 256-thread fused kernel takes 19.68 ms against the 11.9 ms it replaces (+7.8 ms), the same size as the within-process A/B. Same configurations measured in different processes differ by up to 21 ms (issues.md ISSUE-095), so only within-process differences are compared.
+- **Fix: the Q/K reduction is now one warp per (row, head)** (below).
 
 #### Warp-per-(row, head) kernel
 
@@ -791,6 +789,42 @@ End to end on RTX 5090, `X0=24 AB=fuse_qkv_norm_rope` (vec on), real checkpoint,
 | fp16 | 33.51 | 30.79 | +2.71 | 4729 → 3059 | bit-exact / bit-exact |
 
 The 256-thread version saved 1.0 / 1.5 / 1.7 ms at the same shape on this GPU.
+
+On Thor (HEAD `a2ac9c2`, rebuilt for GPU_ARCH=110):
+
+- Conditions: MAXN, GPC 1.575 GHz locked, GPU idle; real LIBERO checkpoint, `X0=24 USE_FA4=1`; 100 iterations per side, warmup 20.
+- The EMC frequency cannot be read without root. tegrastats prints no `EMC_FREQ`, and debugfs is not readable; the nvpmodel EMC cap is 4266 MHz.
+- Tests: kernel test 8 passed; wiring tests 2 passed, all five layer sites `bit_exact=True`, `max_abs=0`.
+- The A/B below ran in three separate processes.
+
+| precision | process | A ms | B ms | A − B | kernels / pass | actions / backbone |
+|---|---|---:|---:|---:|---|---|
+| nvfp4 | 1 | 81.09 | 72.84 | +8.25 | 5024 → 3354 | bit-exact / bit-exact |
+| nvfp4 | 2 | 66.64 | 59.01 | +7.63 | 5024 → 3354 | bit-exact / bit-exact |
+| nvfp4 | 3 | 66.36 | 59.09 | +7.27 | 5024 → 3354 | bit-exact / bit-exact |
+| fp8 | 1 | 114.19 | 106.15 | +8.04 | 6389 → 4719 | bit-exact / bit-exact |
+| fp8 | 2 | 93.52 | 86.27 | +7.25 | 6389 → 4719 | bit-exact / bit-exact |
+| fp8 | 3 | 93.59 | 85.95 | +7.64 | 6389 → 4719 | bit-exact / bit-exact |
+| fp16 | 1 | 125.10 | 117.18 | +7.92 | 4599 → 2929 | bit-exact / bit-exact |
+| fp16 | 2 | 124.68 | 116.99 | +7.68 | 4599 → 2929 | bit-exact / bit-exact |
+| fp16 | 3 | 125.03 | 117.08 | +7.95 | 4599 → 2929 | bit-exact / bit-exact |
+
+Kernel split, eager, nvfp4, vec on. The fused-off rows are in the 256-thread table above.
+
+| side | stage | kernel | ms | launches | µs / launch |
+|---|---|---|---:|---:|---:|
+| fused on (warp) | prefill | `qkv_split_norm_rope_fp16` | 1.502 | 30 | 50.1 |
+| fused on (warp) | denoise | `qkv_split_norm_rope_fp16` | 1.959 | 250 | 7.8 |
+| fused on (warp) | prefill | remaining `_copy_slice` | 0.408 | 20 | 20.4 |
+| fused on (warp) | denoise | remaining `_copy_slice` | 0.921 | 200 | 4.6 |
+
+- The 11.9 ms of copies, norms and RoPE become 3.46 ms of fused kernel, 8.4 ms less. That matches the end-to-end +7.3 to +8.3 ms.
+- The copies drop by 90 (prefill) and 750 (denoise), three per fused call.
+- Process 1 is slower than processes 2–3 on both sides for nvfp4 and fp8 (ISSUE-095), but the A − B values stay between +7.25 and +8.25 ms.
+
+**Served default on**: `ImageWAMTorchFrontendThor` does `dims.setdefault("fuse_qkv_norm_rope", True)`. `dims_override={"fuse_qkv_norm_rope": False}` keeps the unfused path for A/B. An A/B of the 256-thread norm (`vec_rms_norm` off) also needs this flag off, because the fused sites bypass `_rms_norm_qk`.
+
+RTX 5090 served `infer()` P50 with the default on: fp8 23.85 ms, nvfp4 28.23 ms, fp16 32.88 ms. The kernels per iteration are 5915 / 4900 / 3195, 1670 fewer than `docs/imagewam_rtx5090_profile.md`'s 7585 / 6570 / 4865. That profile measured 25.98 / 30.35 / 34.80 ms in a different process, with SM clock unlocked.
 
 ## Already done or rejected (do not redo)
 

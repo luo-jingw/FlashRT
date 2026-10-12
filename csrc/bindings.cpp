@@ -1096,8 +1096,9 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
     // separate rms_norm_fp16_vec + rope_apply_fp16_perhead + 3 strided copies
     // it replaces (csrc/kernels/fused_qkv_norm_rope/qkv_split_norm_rope_fp16.cuh
     // has the full numerics account). Returns 0, -1 on an unmet shape or
-    // alignment precondition (nothing launched), or -cudaError_t. Opt-in via
-    // dims["fuse_qkv_norm_rope"] (flash_rt/models/imagewam/pipeline_thor.py).
+    // alignment precondition (nothing launched), or -cudaError_t. Selected by
+    // dims["fuse_qkv_norm_rope"] (flash_rt/models/imagewam/pipeline_thor.py;
+    // default on at the ImageWAM frontend).
     m.def("qkv_split_norm_rope_fp16", [](uintptr_t qkv, uintptr_t q_norm_weight, uintptr_t k_norm_weight,
                                           uintptr_t rope_table, uintptr_t Q_out, uintptr_t K_out, uintptr_t V_out,
                                           int rows, int NH, int HD, int hidden, int src_row_stride,

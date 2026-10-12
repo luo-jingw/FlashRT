@@ -21,6 +21,9 @@ one, and a same-cell comparison to the RTX 5090 profile
   `flashrt_fa4` / `FlashAttentionForwardSm100` is in the kernel dump).
   `vec_rms_norm` on (frontend `setdefault`; the QK RMSNorm kernel is
   `rms_norm_fp16_vec`, not the 256-thread `rms_norm_kernel`).
+  `fuse_qkv_norm_rope` off (its default at the measured commit; it is
+  default on from the commit after `a2ac9c2`, measured in
+  opportunities.md OPT-032 candidate 1).
 - GEMM M: backbone text stream 24, image stream 392, single-stream 416;
   ActionDiT 64.
 - Precisions: `fp16`, `fp8` (dynamic-scale `Fp8Linear`), `nvfp4`. ImageWAM
