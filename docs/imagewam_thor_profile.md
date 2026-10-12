@@ -225,8 +225,10 @@ Fastest served tier on this GPU for this configuration: `nvfp4`
 
 ## Same-cell comparison to RTX 5090
 
-5090 numbers from `docs/imagewam_rtx5090_profile.md` (eager ms and % of
-that machine's eager total). Both machines run `vec_rms_norm` on. Thor
+5090 numbers from `docs/imagewam_rtx5090_profile.md` at `74b5efe` (eager
+ms and % of that machine's eager total), the version measured in the same
+configuration as these Thor tables: both machines run `vec_rms_norm` on
+and `fuse_qkv_norm_rope` off. Thor
 numbers from the tables above. Wall time is
 `infer()` P50. Configuration also differs where the default profile
 does: Thor FA4 on, 5090 cuBLAS attention; both have VAE in graph,
