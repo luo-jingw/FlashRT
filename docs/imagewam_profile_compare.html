@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ImageWAM Profile Compare</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --ink:#1c2230; --muted:#5d6678; --line:#dfe3ea;
+  --accent:#2f6fde; --c5090:#2f8f6b; --cthor:#d9772b; --chip:#eef1f6; --hi:#fff4c2;
+  --shadow:0 1px 3px rgba(20,30,50,.08);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#11141a; --panel:#1a1f28; --ink:#e7eaf0; --muted:#9aa3b5; --line:#2c3340;
+    --accent:#6b9cff; --c5090:#4cc596; --cthor:#ff9d52; --chip:#242b37; --hi:#4a4220;
+    --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#11141a; --panel:#1a1f28; --ink:#e7eaf0; --muted:#9aa3b5; --line:#2c3340;
+  --accent:#6b9cff; --c5090:#4cc596; --cthor:#ff9d52; --chip:#242b37; --hi:#4a4220;
+  --shadow:none;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}
+.wrap{max-width:1280px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:22px;margin:0 0 4px}
+h2{font-size:16px;margin:0 0 10px}
+.sub{color:var(--muted);margin:0 0 16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;box-shadow:var(--shadow);margin-bottom:16px}
+.controls{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{background:var(--panel);color:var(--ink);border:0;padding:6px 12px;cursor:pointer;font:inherit;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button.on{background:var(--accent);color:#fff}
+.lbl{color:var(--muted);font-size:12px;margin-right:6px}
+.grid2{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:16px}
+@media (max-width:900px){.grid2{grid-template-columns:minmax(0,1fr)}}
+#stage{position:relative;height:520px;border-radius:8px;overflow:hidden;background:var(--chip)}
+@media (max-width:600px){#stage{height:380px}}
+#stage canvas{display:block}
+.axis-label{font-size:11px;color:var(--ink);background:color-mix(in srgb,var(--panel) 80%,transparent);padding:1px 5px;border-radius:4px;white-space:nowrap;pointer-events:none}
+.axis-label.op{font-weight:600}
+#tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.18);display:none;min-width:200px;z-index:5}
+#tip b{font-size:13px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{padding:5px 6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:600}
+td.cell{cursor:pointer}
+td.sel{outline:2px solid var(--accent);outline-offset:-2px}
+.tablewrap{overflow-x:auto}
+.hint{font-size:12px;color:var(--muted);margin-top:6px}
+.bars .row{display:grid;grid-template-columns:96px minmax(0,1fr) 64px;gap:8px;align-items:center;margin:4px 0;font-size:12px}
+.bars .track{display:flex;height:18px;border-radius:4px;overflow:hidden;background:var(--chip)}
+.bars .seg1{height:100%}
+.detail{overflow-x:auto}
+.detail dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:0;font-size:13px}
+.detail dt{color:var(--muted)}
+.findings li{margin:4px 0}
+.cond{font-size:12px;color:var(--muted)}
+.cond li{margin:2px 0}
+svg text{fill:var(--muted);font-size:11px}
+.themebtn{float:right}
+.t3{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:8px;cursor:pointer}
+.t3:hover{border-color:var(--accent)}
+.t3h{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.t3h span{color:var(--muted);font-size:12px}
+.t3b{font-size:13px;margin-top:4px}
+.t3 ul{margin:4px 0 0;padding-left:18px;font-size:13px}
+.h3{font-size:14px;margin:16px 0 8px}
+.h3:first-of-type{margin-top:4px}
+#ewPanel li ul{margin:4px 0;padding-left:18px}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<div class="wrap">
+  <div class="seg themebtn"><button id="themeBtn" title="切换明暗">◐</button></div>
+  <h1>ImageWAM 推理 profiling：RTX 5090 vs Jetson AGX Thor</h1>
+  <p class="sub">LIBERO 部署配置，按模型模块 × 算子拆分一次 <code>infer()</code> 的 GPU 时间。拖动旋转、滚轮缩放，悬停看数值，点击柱子或表格固定选中。</p>
+
+  <div class="panel controls">
+    <div><span class="lbl">设备</span><span class="seg" id="segDev">
+      <button data-v="5090">RTX 5090</button><button data-v="thor">Thor</button><button data-v="both" class="on">并排对比</button></span></div>
+    <div><span class="lbl">精度</span><span class="seg" id="segPrec">
+      <button data-v="fp16">fp16</button><button data-v="fp8" class="on">fp8</button><button data-v="nvfp4">nvfp4</button></span></div>
+    <div><span class="lbl">指标</span><span class="seg" id="segMetric">
+      <button data-v="pct" class="on">占比 %</button><button data-v="ms">耗时 ms</button><button data-v="launch">kernel 数</button><button data-v="us">µs / kernel</button></span></div>
+    <div id="scaleBox"><span class="lbl">高度缩放</span><span class="seg" id="segScale">
+      <button data-v="shared" class="on">统一</button><button data-v="per">每设备独立</button></span></div>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <div id="stage"><div id="tip"></div></div>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div>
+      <div class="panel detail">
+        <h2 id="detTitle">选中格子</h2>
+        <div id="detBody" class="hint">悬停或点击一个柱子。</div>
+      </div>
+      <div class="panel">
+        <h2>端到端耗时（<code>infer()</code> P50, ms）</h2>
+        <div class="bars" id="wallBars"></div>
+        <div class="legend">
+          <span><span class="sw" style="background:var(--accent)"></span>prefill graph</span>
+          <span><span class="sw" style="background:var(--cthor);opacity:.75"></span>denoise graph (10 步)</span>
+          <span><span class="sw" style="background:var(--muted);opacity:.5"></span>其余 (VAE 等)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 id="tblTitle">模块 × 算子表</h2>
+    <div class="tablewrap"><table id="tbl"></table></div>
+    <div class="hint" id="tblHint"></div>
+  </div>
+
+  <div class="panel">
+    <h2>占比 Top 3：瓶颈与优化建议</h2>
+    <div id="top3" style="display:grid;gap:16px"></div>
+    <h3 style="font-size:14px;margin:16px 0 8px">全部 6 张表的 Top 3 总览</h3>
+    <div class="tablewrap"><table id="top3all"></table></div>
+    <h3 style="font-size:14px;margin:16px 0 8px">跨表结论</h3>
+    <ol class="findings" style="margin:0;padding-left:20px">
+      <li><b>ActionDiT 单流层的 GEMM 在 6 张表里都排进前两名</b>，所以减少去噪步数是最通用的方向；降低精度在 5090 上要配一个能吃满带宽的小 M kernel，在 Thor 上已经由 nvfp4 实现。</li>
+      <li><b>5090 nvfp4 的瓶颈不在 GEMM 算力</b>，而在 kernel 效率（带宽只用到 25%）和量化开销（10.4%），这正是 5090 上 nvfp4 比 fp8 慢的原因。</li>
+      <li><b>Thor nvfp4 的第 3 名已经是逐元素</b>（1420 次启动，平均 5 µs），说明在 Thor 上，kernel 融合和减少启动次数比在 5090 上更值钱。</li>
+      <li><b>Thor 的瓶颈判断缺少实测上限</b>，目前只能给出实测速率；建议先在 Thor 上测一次 GEMM 峰值和带宽，这样才能判断 Thor nvfp4 的 GEMM 离上限还有多远。</li>
+    </ol>
+    <div class="hint">随上方的设备和精度切换；点击某一项可以在 3D 图和表格中定位。瓶颈判断依据两份 profile 文档；Thor 的上限没有实测，所以 Thor 的条目只给出实测速率。</div>
+  </div>
+
+  <div class="panel" id="ewPanel">
+    <h2>逐元素算子：组成、来源与优化</h2>
+    <h3 class="h3">按模块（随上方精度切换）</h3>
+    <div class="tablewrap"><table id="ewTbl"></table></div>
+    <div class="hint">"每层"是一个 block 每执行一次发出的逐元素 kernel 数；fp8 另有 <code>compute_scale_kernel</code>（每个动态量化 linear 一个）。ActionDiT 每层执行 10 次（10 步），各模块还有少量入口/出口 kernel，所以次数不一定是整倍数。</div>
+
+    <h3 class="h3">kernel 清单（RTX 5090 fp8 实测；Thor 次数相同）</h3>
+    <div class="tablewrap"><table>
+      <tr><th>kernel</th><th style="text-align:left">来源</th><th>每层</th><th>次数 / 推理</th><th>ms</th><th>µs / 次</th></tr>
+      <tr><td><code>at::native::elementwise_kernel</code>（torch <code>copy_</code>）</td><td style="text-align:left;white-space:normal">把合并 GEMM（<code>qkv</code> / <code>linear1</code>）输出里的 Q、K、V 列切片拷进 attention 缓冲（<code>_copy_slice</code>，每层 3 次，backbone 双流的 txt、img 各 3 次）；单流层再把 attention 输出拷进 <code>linear2</code> 输入（1 次）</td><td>3–6</td><td>1060</td><td>1.79</td><td>1.7</td></tr>
+      <tr><td><code>rope_apply_fp16_perhead</code></td><td style="text-align:left;white-space:normal">Q、K 各做一次 RoPE（原地）</td><td>2</td><td>550</td><td>0.65</td><td>1.2</td></tr>
+      <tr><td><code>silu_glu_merged</code></td><td style="text-align:left;white-space:normal">MLP 的 SiLU(gate)·up（backbone 双流 txt、img 各 1 次）</td><td>1–2</td><td>280</td><td>0.58</td><td>2.1</td></tr>
+      <tr><td><code>compute_scale_kernel</code>（仅 fp8）</td><td style="text-align:left;white-space:normal">fp8 动态量化：absmax 之后算 scale</td><td>2–8</td><td>680</td><td>0.53</td><td>0.8</td></tr>
+      <tr><td>VAE 的 <code>bias_residual</code> 等</td><td style="text-align:left;white-space:normal">VAE 编码器</td><td>–</td><td>31</td><td>0.14</td><td>–</td></tr>
+    </table></div>
+    <div class="hint">每层个数：ActionDiT 单流 7 = 3 次 Q/K/V 拷贝 + 1 次 attention 输出拷贝 + 2 次 RoPE + 1 次 SiLU-GLU；ActionDiT 双流 6（没有 attention 输出拷贝，<code>proj</code> 直接读 attention 输出）；backbone 单流 7；backbone 双流 10。</div>
+
+    <h3 class="h3">为什么这么多，两台设备的瓶颈为什么不同</h3>
+    <ul class="findings" style="margin:0;padding-left:20px">
+      <li><b>次数主要来自 ActionDiT：</b>每层 6–7 个，25 个 block × 10 步 = 250 次层执行，合计约 1,700 次启动，占逐元素启动总数的 80% 以上。</li>
+      <li><b>RTX 5090：受启动次数限制。</b>以 fp16 为例（不含 fp8 的 <code>compute_scale</code>），ActionDiT 单流平均 1.4 µs/次，每个 kernel 只搬 0.4–1.5 MB，耗时基本就是启动和收尾的延迟。backbone 单流（M=416）每层 7 个 kernel 读写约 54 MB，20 层合计约 1.07 GB，却只用 0.65 ms；有效速率超过 DRAM 实测带宽，说明这些中间张量大多命中 L2。</li>
+      <li><b>Thor：受字节量限制。</b>同样的 1.07 GB，backbone 单流用了 6.5 ms（fp16，140 次，47 µs/次），约 165 GB/s。ActionDiT 单流每层约 6.3 MB，200 次层执行合计 1.26 GB，用 7.1 ms，约 177 GB/s。两者都接近 Thor 实际能达到的带宽，不是启动延迟的问题。</li>
+      <li><b>所以优化思路要分开看：</b>在 5090 上要减少 kernel 个数；在 Thor 上要减少中间张量的写回和再读。融合 kernel 要是能同时去掉中间往返，两边都受益；只合并启动、字节量不变的改动，对 Thor 帮助很小。</li>
+    </ul>
+
+    <h3 class="h3">优化方向</h3>
+    <div class="tablewrap"><table>
+      <tr><th>方向</th><th style="text-align:left">去掉什么</th><th style="text-align:left">状态</th></tr>
+      <tr><td><code>fuse_qkv_norm_rope</code>（OPT-032 #1）</td><td style="text-align:left;white-space:normal">每层的 3 次拷贝 + 2 次 QK norm + 2 次 RoPE 合成 1 个 kernel：每次推理少 1670 次启动；Q/K/V 的读写量从约 14S 降到 6S（S 为一个 Q 张量的大小）</td><td style="text-align:left;white-space:normal">已接入，默认关闭；5090 实测见下</td></tr>
+      <tr><td>attention 输出直接写入 <code>linear2</code> 输入（OPT-032 #2）</td><td style="text-align:left;white-space:normal">单流层的 attention 输出拷贝（220 次）。5090 走 cuBLAS 链，可以让 PV GEMM 通过 <code>ldc</code> 直接写到 <code>linear2_in</code> 的列切片；Thor 要改 FA4 的输出指针</td><td style="text-align:left;white-space:normal">未做</td></tr>
+      <tr><td>SiLU-GLU 并进 GEMM epilogue（#11）</td><td style="text-align:left;white-space:normal">280 次 GLU，以及 backbone 每层约 23 MB 的中间张量往返</td><td style="text-align:left;white-space:normal">需要改 CUTLASS；两个 GEMM 的版本试过，已回退（OPT-015）</td></tr>
+      <tr><td>fp8 静态 scale</td><td style="text-align:left;white-space:normal">680 次 <code>compute_scale</code> 和 680 次 absmax</td><td style="text-align:left;white-space:normal">会改变数值，需要校准</td></tr>
+      <tr><td>PDL（#10）</td><td style="text-align:left;white-space:normal">不减少 kernel 个数，但让相邻小 kernel 的启动重叠</td><td style="text-align:left;white-space:normal">未测</td></tr>
+    </table></div>
+
+    <h3 class="h3" id="fqnr">为什么 <code>fuse_qkv_norm_rope</code> 必须实测</h3>
+    <ol class="findings" style="margin:0;padding-left:20px">
+      <li><b>它内部用的还是旧 norm 的结构。</b>这个融合 kernel 为每个 (row, head) 启动一个 256 线程的 block；HD=128 时只有 64 个线程在干活，而且每个 block 要做两次 256 宽的 <code>block_reduce_sum</code>，每次都带 <code>__syncthreads</code>。这和 <code>vec_rms_norm</code> 修掉的 <code>rms_norm_kernel</code> 是同一种结构；当初保留它，是为了和旧路径逐位一致（<code>qkv_split_norm_rope_fp16.cu</code>，<code>kBlockThreads = 256</code>）。</li>
+      <li><b>开关的对照组已经变了。</b>现在默认是 <code>vec_rms_norm</code>（一个 warp 处理一行，不用 shared memory，也没有 block 级同步）。打开开关后，省掉的是"3 次拷贝 + 2 次 vec norm + 2 次 RoPE"，换来的是一个内部效率和旧 norm 相同的 kernel。净收益取决于这个 kernel 在各设备上能跑到多少带宽，没法只靠启动次数来推算。</li>
+      <li><b>两台设备上旧 norm 的代价差了 10 倍。</b>5090 上旧 norm 是 4.3 µs/次（560 次共 2.4 ms），离上限不远；Thor 上是 41 µs/次（560 次共 23.0 ms），只跑到约 26 GB/s。融合 kernel 发出的 block 数和两次旧 norm 相同（rows × NH），每个 block 也做两次归约。
+        <ul>
+          <li>Thor 上，它替换掉的部分大约是 vec norm 的 2.7 ms，加上拷贝和 RoPE 约 9–10 ms（按约 1.6 GB 读写、约 170 GB/s 估算），合计约 12 ms。</li>
+          <li>融合 kernel 本身：如果能跑到约 170 GB/s，约 6 ms（省约 6 ms）；如果像旧 norm 那样被结构卡住，接近 23 ms（反而慢约 11 ms）。</li>
+          <li>这两个数字都是估算，只能用实测来定。</li>
+        </ul></li>
+      <li><b>数值：只对旧路径逐位一致，对当前默认不是。</b>这个 kernel 和 256 线程的旧 norm 逐位一致（Thor 已确认 <code>torch.equal</code>）；但和 vec norm 的归约顺序不同（kernel 级 ≤1 ulp）。打开开关后，相对当前默认会有一个很小的数值差，这个差在整个网络里会放大。下表的对照组用来确认这个差全部来自归约顺序。</li>
+    </ol>
+    <div class="tablewrap" style="margin-top:8px"><table id="abTbl">
+      <tr><th>对比</th><th>精度</th><th>A ms</th><th>B ms</th><th>A − B</th><th>kernel 数</th><th>actions cos</th><th>actions rel_l2</th><th>backbone cos</th><th>逐位一致</th></tr>
+      <tr><td>① 当前默认（vec on）：fused 关 → 开</td><td>fp8</td><td>22.71</td><td>21.71</td><td><b>+1.00</b></td><td>6769 → 5099</td><td>0.999980</td><td>0.63%</td><td>0.998926</td><td>否</td></tr>
+      <tr><td></td><td>nvfp4</td><td>29.66</td><td>28.13</td><td><b>+1.53</b></td><td>6434 → 4764</td><td>0.999811</td><td>1.96%</td><td>0.990500</td><td>否</td></tr>
+      <tr><td></td><td>fp16</td><td>33.74</td><td>32.05</td><td><b>+1.69</b></td><td>4729 → 3059</td><td>1.000000</td><td>0.07%</td><td>0.999989</td><td>否</td></tr>
+      <tr><td>② vec off：fused 关 → 开</td><td>fp8</td><td>24.19</td><td>21.76</td><td><b>+2.43</b></td><td></td><td>1</td><td>0</td><td>1</td><td>是</td></tr>
+      <tr><td></td><td>nvfp4</td><td>28.68</td><td>26.28</td><td><b>+2.40</b></td><td></td><td>1</td><td>0</td><td>1</td><td>是</td></tr>
+      <tr><td></td><td>fp16</td><td>33.17</td><td>30.78</td><td><b>+2.39</b></td><td></td><td>1</td><td>0</td><td>1</td><td>是</td></tr>
+      <tr><td>③ 对照：vec off → vec on（fused 关）</td><td>fp8</td><td>24.22</td><td>22.78</td><td><b>+1.44</b></td><td></td><td>0.999982</td><td>0.61%</td><td>0.998926</td><td>否</td></tr>
+      <tr><td></td><td>nvfp4</td><td>28.66</td><td>27.27</td><td><b>+1.39</b></td><td></td><td>0.999830</td><td>1.86%</td><td>0.990500</td><td>否</td></tr>
+      <tr><td></td><td>fp16</td><td>33.25</td><td>31.86</td><td><b>+1.39</b></td><td></td><td>1.000000</td><td>0.07%</td><td>0.999989</td><td>否</td></tr>
+    </table></div>
+    <div class="hint">RTX 5090 实测，真实 LIBERO checkpoint，部署形状（x0=24，a0=416，total=480），cuBLAS attention。时间是 A/B 前端的 <code>infer()</code> P50（不含 VAE 编码，所以比上方的 26.0 ms 小）；A、B 两侧在同一进程内按 ABBA 顺序交替测，各 100 次。B 复用 A 自动调优得到的 GEMM 算法。命令：<code>X0=24 AB=fuse_qkv_norm_rope benchmarks/imagewam_fusion_ab.py</code>（② 加 <code>HOLD=vec_rms_norm=0</code>，③ 用 <code>AB=vec_rms_norm</code>）；不设 <code>X0</code> 时是未裁剪的 x0=513 形状，那里，fp8 / nvfp4 / fp16 分别省 0.70 / 1.38 / 1.11 ms。</div>
+    <ol class="findings" start="5" style="margin:8px 0 0;padding-left:20px">
+      <li><b>5090 上是净收益。</b>在当前默认之上再打开，fp8 / nvfp4 / fp16 分别省 1.0 / 1.5 / 1.7 ms，每次推理少 1670 个 kernel（和 OPT-032 的估算完全一致）。相对旧的 256 线程 norm 路径，省 2.4 ms。打开之后 vec 开关就不起作用了（fused 绕过 <code>_rms_norm_qk</code>），所以 ① 的 B 和 ② 的 B 基本是同一个耗时（21.71 和 21.76 ms）。</li>
+      <li><b>数值差全部来自归约顺序。</b>② 证明 fused 和旧 norm 路径逐位一致；① 的偏差与 ③（vec 开/关）几乎相同（backbone cos 都是 0.998926 / 0.990500 / 0.999989）。也就是说，打开 fused 在数值上等于退回旧 norm，并没有引入新的误差。nvfp4 的 backbone cos 0.9905 看着偏低，但这个偏差在 <code>vec_rms_norm</code> 变成默认时已经接受过了（Thor 用真实 checkpoint 验证的 actions cos ≥ 0.99995）。</li>
+      <li><b>Thor 还没有结论。</b>5090 上旧 norm 结构的代价只有约 1.4 ms，所以融合 kernel 继承这个结构也照样能赢；Thor 上同一个结构的代价是 20 ms。在 Thor 上用真实 checkpoint 跑 <code>X0=24 USE_FA4=1 AB=fuse_qkv_norm_rope</code>（默认 vec on），就能直接得到答案。</li>
+      <li><b>如果 Thor 变慢了：</b>把融合 kernel 的 Q/K 归约改成每个 (row, head) 一个 warp，照抄 <code>rms_norm_fp16_vec_warp_kernel</code> 的 int4 加载和 <code>warp_sum</code> 顺序。这样能去掉 256 线程的开销，并且和当前默认路径逐位一致，①、③ 里那点数值差也会一起消失。这是让它成为默认值的前提。</li>
+    </ol>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h2>RTX 5090：视觉 token 数的影响（10 步）</h2>
+      <svg id="tokSvg" viewBox="0 0 520 240" width="100%" role="img" aria-label="token sweep"></svg>
+      <div class="legend" id="tokLegend"></div>
+      <div class="hint">token 数通过视图宽度改变，只复现形状，不含选 token 的开销；实线 prefill，虚线 denoise。此组在 vec_rms_norm 关闭时测得（7ca7c99），绝对值比上方约高 1.3 ms。</div>
+    </div>
+    <div class="panel">
+      <h2>RTX 5090：去噪步数的影响</h2>
+      <div class="bars" id="stepBars"></div>
+      <div class="hint">去噪 graph 耗时与步数严格线性（fp8 每步 1.63 ms）。此组在 vec_rms_norm 关闭时测得。</div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="panel findings">
+      <h2>要点</h2>
+      <ul>
+        <li><b>最快精度不同：</b>5090 是 fp8（26.0 ms），Thor 是 nvfp4（87.3 ms），Thor 慢 2.9–4.6 倍。</li>
+        <li><b>5090 fp8：</b>attention、norm、逐元素和 absmax 合计 43%，和 GEMM 的 44% 相当；ActionDiT 占 58%。</li>
+        <li><b>Thor：</b>GEMM 占 50–72%；非 GEMM 里最大的是逐元素（18–19 ms，约 13–17%），其次是 attention（FA4，约 9 ms）和 norm（约 8.2 ms）。</li>
+        <li><b>Thor fp8：</b>GEMM 只比 fp16 快 1.56 倍，另有约 8 ms 花在 quant 和 absmax 上。</li>
+        <li><b>和精度无关的部分</b>（VAE、attention、norm、逐元素）：5090 约 12 ms，Thor 约 44 ms。</li>
+        <li><b>5090 nvfp4：</b>quant/cast 占 19.6%，是它比 fp8 慢的直接原因。</li>
+        <li><b>vec_rms_norm（现为默认）：</b>5090 每次推理省 1.3–1.4 ms，Thor 省约 19 ms（norm 28.5 → 8.2 ms）。</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h2>范围与条件</h2>
+      <ul class="cond">
+        <li>工作负载 <code>ImageWAMWorkload.libero()</code>：2 视角 224×224，horizon 64，10 步去噪；真实 LIBERO checkpoint 与 FLUX.2 AE；prompt 裁短后文本 24 token，图像 392 token，ActionDiT M=64。</li>
+        <li>部署入口 <code>load_imagewam</code> 默认 profile，VAE 在 CUDA graph 内，<code>vec_rms_norm</code> 打开（两台设备的当前默认值）。attention：5090 为 cuBLAS QKᵀ/softmax/PV 链，Thor 默认 FA4（不是同一种算子）。</li>
+        <li>ImageWAM 没有 bf16 精度，16 位档是 fp16；fp8 为动态 scale。</li>
+        <li>占比的分母是 eager kernel 合计（5090: 35.15 / 24.67 / 30.52 ms；Thor: 139.49 / 112.39 / 88.47 ms），与 <code>infer()</code> 实测相差在约 7% 以内。</li>
+        <li>backbone 入口投影并入"backbone 单流"，ActionDiT 输入输出投影与 Euler 并入"ActionDiT 单流"。"absmax"列：fp8 动态 scale 的 absmax（5090 含 memset，Thor 不含 0.26 ms memset）。</li>
+        <li>5090：FlashRT 74b5efe，driver 595.91.07，torch 2.14.0+cu130，SM 时钟未锁定。Thor：MAXN，GPC 1.575 GHz，torch 2.9.1+cu130。</li>
+        <li>来源：<code>docs/imagewam_rtx5090_profile.md</code>、<code>docs/imagewam_thor_profile.md</code>，脚本 <code>benchmarks/imagewam_module_operator_profile.py</code>。</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
+
+const DATA = {"5090": {"fp16": {"cells": {"vae": {"gemm": [0.027, 2], "quant": [0.0, 0], "absmax": [0.002, 2], "attention": [0.205, 1], "conv": [2.404, 30], "norm": [0.312, 68], "elementwise": [0.142, 31]}, "bb_double": {"gemm": [3.491, 55], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.148, 15], "conv": [0.0, 0], "norm": [0.178, 42], "elementwise": [0.142, 54]}, "bb_single": {"gemm": [10.394, 63], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.59, 60], "conv": [0.0, 0], "norm": [0.26, 60], "elementwise": [0.649, 140]}, "ad_double": {"gemm": [2.182, 300], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.49, 150], "conv": [0.0, 0], "norm": [0.419, 210], "elementwise": [0.426, 320]}, "ad_single": {"gemm": [7.73, 630], "quant": [0.008, 10], "absmax": [0.0, 0], "attention": [1.947, 600], "conv": [0.0, 0], "norm": [1.073, 600], "elementwise": [1.923, 1420]}}, "wall": {"infer": 34.8, "prefill": 15.6, "denoise": 15.98}, "total": 35.15}, "fp8": {"cells": {"vae": {"gemm": [0.026, 2], "quant": [0.0, 0], "absmax": [0.002, 2], "attention": [0.205, 1], "conv": [2.403, 30], "norm": [0.311, 68], "elementwise": [0.142, 31]}, "bb_double": {"gemm": [1.404, 55], "quant": [0.067, 40], "absmax": [0.088, 80], "attention": [0.149, 15], "conv": [0.0, 0], "norm": [0.179, 42], "elementwise": [0.175, 94]}, "bb_single": {"gemm": [3.423, 63], "quant": [0.153, 40], "absmax": [0.137, 80], "attention": [0.602, 60], "conv": [0.0, 0], "norm": [0.26, 60], "elementwise": [0.62, 180]}, "ad_double": {"gemm": [1.424, 300], "quant": [0.175, 200], "absmax": [0.322, 400], "attention": [0.494, 150], "conv": [0.0, 0], "norm": [0.419, 210], "elementwise": [0.577, 520]}, "ad_single": {"gemm": [4.61, 630], "quant": [0.401, 410], "absmax": [0.637, 800], "attention": [1.952, 600], "conv": [0.0, 0], "norm": [1.071, 600], "elementwise": [2.231, 1820]}}, "wall": {"infer": 25.98, "prefill": 7.29, "denoise": 15.33}, "total": 24.67}, "nvfp4": {"cells": {"vae": {"gemm": [0.026, 2], "quant": [0.0, 0], "absmax": [0.002, 2], "attention": [0.205, 1], "conv": [2.403, 30], "norm": [0.311, 68], "elementwise": [0.141, 31]}, "bb_double": {"gemm": [1.095, 40], "quant": [0.504, 120], "absmax": [0.0, 0], "attention": [0.147, 15], "conv": [0.0, 0], "norm": [0.183, 42], "elementwise": [0.141, 54]}, "bb_single": {"gemm": [2.345, 43], "quant": [1.214, 120], "absmax": [0.0, 0], "attention": [0.592, 60], "conv": [0.0, 0], "norm": [0.246, 60], "elementwise": [0.508, 140]}, "ad_double": {"gemm": [2.378, 200], "quant": [1.078, 600], "absmax": [0.0, 0], "attention": [0.496, 150], "conv": [0.0, 0], "norm": [0.422, 210], "elementwise": [0.423, 320]}, "ad_single": {"gemm": [7.495, 430], "quant": [3.173, 1210], "absmax": [0.0, 0], "attention": [1.963, 600], "conv": [0.0, 0], "norm": [1.076, 600], "elementwise": [1.948, 1420]}}, "wall": {"infer": 30.35, "prefill": 6.89, "denoise": 20.2}, "total": 30.52}}, "thor": {"fp16": {"cells": {"vae": {"gemm": [0.15, 5], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.33, 1], "conv": [3.97, 25], "norm": [2.36, 68], "elementwise": [1.93, 29]}, "bb_double": {"gemm": [11.25, 45], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.21, 10], "conv": [0.0, 0], "norm": [0.76, 42], "elementwise": [1.25, 54]}, "bb_single": {"gemm": [26.68, 43], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.83, 40], "conv": [0.0, 0], "norm": [1.66, 60], "elementwise": [6.58, 140]}, "ad_double": {"gemm": [11.48, 250], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [1.57, 100], "conv": [0.0, 0], "norm": [0.93, 210], "elementwise": [1.6, 320]}, "ad_single": {"gemm": [50.16, 630], "quant": [0.01, 10], "absmax": [0.0, 0], "attention": [6.13, 400], "conv": [0.0, 0], "norm": [2.51, 600], "elementwise": [7.13, 1420]}}, "wall": {"infer": 149.38, "prefill": 49.32, "denoise": 90.78}, "total": 139.49}, "fp8": {"cells": {"vae": {"gemm": [0.14, 5], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.33, 1], "conv": [3.97, 25], "norm": [2.37, 68], "elementwise": [1.95, 29]}, "bb_double": {"gemm": [9.32, 45], "quant": [0.43, 40], "absmax": [0.33, 40], "attention": [0.21, 10], "conv": [0.0, 0], "norm": [0.76, 42], "elementwise": [1.25, 94]}, "bb_single": {"gemm": [16.51, 43], "quant": [1.34, 40], "absmax": [0.68, 40], "attention": [0.85, 40], "conv": [0.0, 0], "norm": [1.67, 60], "elementwise": [6.56, 180]}, "ad_double": {"gemm": [6.19, 200], "quant": [0.53, 200], "absmax": [0.96, 200], "attention": [1.53, 100], "conv": [0.0, 0], "norm": [0.92, 210], "elementwise": [1.82, 520]}, "ad_single": {"gemm": [31.72, 430], "quant": [1.55, 410], "absmax": [2.2, 400], "attention": [5.98, 400], "conv": [0.0, 0], "norm": [2.54, 600], "elementwise": [7.52, 1820]}}, "wall": {"infer": 118.81, "prefill": 40.66, "denoise": 69.05}, "total": 112.39}, "nvfp4": {"cells": {"vae": {"gemm": [0.15, 5], "quant": [0.0, 0], "absmax": [0.0, 0], "attention": [0.33, 1], "conv": [3.98, 25], "norm": [2.36, 68], "elementwise": [1.96, 29]}, "bb_double": {"gemm": [6.08, 40], "quant": [0.51, 40], "absmax": [0.0, 0], "attention": [0.21, 10], "conv": [0.0, 0], "norm": [0.73, 42], "elementwise": [1.15, 54]}, "bb_single": {"gemm": [12.27, 43], "quant": [1.36, 40], "absmax": [0.0, 0], "attention": [0.83, 40], "conv": [0.0, 0], "norm": [1.67, 60], "elementwise": [6.53, 140]}, "ad_double": {"gemm": [6.2, 200], "quant": [0.83, 200], "absmax": [0.0, 0], "attention": [1.54, 100], "conv": [0.0, 0], "norm": [0.91, 210], "elementwise": [1.58, 320]}, "ad_single": {"gemm": [19.29, 430], "quant": [2.28, 410], "absmax": [0.0, 0], "attention": [6.09, 400], "conv": [0.0, 0], "norm": [2.57, 600], "elementwise": [7.07, 1420]}}, "wall": {"infer": 87.34, "prefill": 31.17, "denoise": 47.25}, "total": 88.47}}, "sweep5090": [{"p": "fp16", "img": 392, "steps": 10, "infer": 36.1, "prefill": 16.1, "denoise": 16.79}, {"p": "fp16", "img": 252, "steps": 10, "infer": 29.66, "prefill": 10.7, "denoise": 16.84}, {"p": "fp16", "img": 196, "steps": 10, "infer": 28.8, "prefill": 10.17, "denoise": 16.7}, {"p": "fp16", "img": 140, "steps": 10, "infer": 25.58, "prefill": 7.63, "denoise": 16.47}, {"p": "fp16", "img": 392, "steps": 5, "infer": 27.87, "prefill": 16.15, "denoise": 8.51}, {"p": "fp8", "img": 392, "steps": 10, "infer": 27.4, "prefill": 7.81, "denoise": 16.27}, {"p": "fp8", "img": 252, "steps": 10, "infer": 24.51, "prefill": 6.01, "denoise": 16.31}, {"p": "fp8", "img": 196, "steps": 10, "infer": 23.43, "prefill": 5.2, "denoise": 16.22}, {"p": "fp8", "img": 140, "steps": 10, "infer": 21.95, "prefill": 4.55, "denoise": 15.86}, {"p": "fp8", "img": 392, "steps": 5, "infer": 19.23, "prefill": 7.82, "denoise": 8.14}, {"p": "nvfp4", "img": 392, "steps": 10, "infer": 31.79, "prefill": 7.43, "denoise": 21.1}, {"p": "nvfp4", "img": 252, "steps": 10, "infer": 29.16, "prefill": 5.89, "denoise": 21.09}, {"p": "nvfp4", "img": 196, "steps": 10, "infer": 28.35, "prefill": 5.36, "denoise": 21.05}, {"p": "nvfp4", "img": 140, "steps": 10, "infer": 27.12, "prefill": 4.85, "denoise": 20.77}, {"p": "nvfp4", "img": 392, "steps": 5, "infer": 21.23, "prefill": 7.44, "denoise": 10.55}]};
+const TOTALS = Object.fromEntries(["5090", "thor"].map((d) => [d, Object.fromEntries(["fp16", "fp8", "nvfp4"].map((p) => [p, DATA[d][p].total]))]));
+const MODS = [
+  ["vae", "VAE 编码"], ["bb_double", "Backbone 双流 (5 blocks)"], ["bb_single", "Backbone 单流 (20 blocks)"],
+  ["ad_double", "ActionDiT 双流 (5×10 步)"], ["ad_single", "ActionDiT 单流 (20×10 步)"]];
+const OPS = [["gemm", "GEMM"], ["quant", "量化/转换"], ["absmax", "absmax"], ["attention", "attention"],
+  ["conv", "卷积"], ["norm", "norm"], ["elementwise", "逐元素"]];
+const DEV = { "5090": "RTX 5090", thor: "Thor" };
+const state = { dev: "both", prec: "fp8", metric: "pct", scale: "shared", hover: null, pinned: null };
+
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fmt = (v, m) => m === "pct" ? v.toFixed(1) + "%" : m === "ms" ? v.toFixed(2) + " ms" : m === "launch" ? Math.round(v).toString() : v.toFixed(1) + " µs";
+
+function cell(dev, prec, mod, op) {
+  const [ms, n] = DATA[dev][prec].cells[mod][op];
+  return { ms, n, pct: 100 * ms / TOTALS[dev][prec], us: n ? 1000 * ms / n : 0 };
+}
+const val = (dev, mod, op) => {
+  const c = cell(dev, state.prec, mod, op);
+  return state.metric === "pct" ? c.pct : state.metric === "ms" ? c.ms : state.metric === "launch" ? c.n : c.us;
+};
+const devices = () => state.dev === "both" ? ["5090", "thor"] : [state.dev];
+
+/* ---------- three.js scene ---------- */
+const stage = document.getElementById("stage");
+const tip = document.getElementById("tip");
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+stage.appendChild(renderer.domElement);
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.domElement.style.position = "absolute";
+labelRenderer.domElement.style.top = "0";
+labelRenderer.domElement.style.pointerEvents = "none";
+stage.appendChild(labelRenderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 200);
+camera.position.set(-2.5, 12, 16);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0.8, 1.2, 0);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.49;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.1));
+const dl = new THREE.DirectionalLight(0xffffff, 1.2);
+dl.position.set(6, 14, 8);
+scene.add(dl);
+
+const SX = 1.7, SZ = 1.8, HMAX = 6;
+const x0 = -(OPS.length - 1) * SX / 2, z0 = -(MODS.length - 1) * SZ / 2;
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(OPS.length * SX + 1, MODS.length * SZ + 1),
+  new THREE.MeshStandardMaterial({ color: 0x888888, transparent: true, opacity: 0.12 }));
+floor.rotation.x = -Math.PI / 2;
+scene.add(floor);
+const grid = new THREE.GridHelper(Math.max(OPS.length * SX, MODS.length * SZ) + 1, 14, 0x888888, 0x888888);
+grid.material.transparent = true; grid.material.opacity = 0.15;
+scene.add(grid);
+
+function label(text, cls, pos) {
+  const d = document.createElement("div");
+  d.className = "axis-label " + cls; d.textContent = text;
+  const o = new CSS2DObject(d); o.position.copy(pos); scene.add(o); return o;
+}
+OPS.forEach(([, n], i) => label(n, "op", new THREE.Vector3(x0 + i * SX, 0, z0 + MODS.length * SZ - SZ / 2 + 0.6)));
+const SHORT = { vae: "VAE", bb_double: "Backbone 双流", bb_single: "Backbone 单流", ad_double: "ActionDiT 双流", ad_single: "ActionDiT 单流" };
+MODS.forEach(([k], j) => { label(SHORT[k], "mod", new THREE.Vector3(x0 + (OPS.length - 0.5) * SX + 0.2, 0, z0 + j * SZ)).center.set(0, 0.5); });
+
+const geo = new THREE.BoxGeometry(1, 1, 1); geo.translate(0, 0.5, 0);
+const bars = [];
+const valueLabels = [];
+for (let j = 0; j < MODS.length; j++) for (let i = 0; i < OPS.length; i++) for (const dev of ["5090", "thor"]) {
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.05 }));
+  m.userData = { mod: MODS[j][0], op: OPS[i][0], dev, i, j, h: 0.001, target: 0.001 };
+  m.scale.set(0.6, 0.001, 0.6);
+  scene.add(m); bars.push(m);
+}
+
+function devColor(dev) { return new THREE.Color(css(dev === "5090" ? "--c5090" : "--cthor")); }
+
+function layout() {
+  const devs = devices();
+  const both = devs.length === 2;
+  const maxBy = {};
+  for (const d of devs) maxBy[d] = Math.max(1e-9, ...MODS.flatMap(([m]) => OPS.map(([o]) => val(d, m, o))));
+  const shared = Math.max(...devs.map((d) => maxBy[d]));
+  for (const b of bars) {
+    const { mod, op, dev, i, j } = b.userData;
+    const on = devs.includes(dev);
+    b.visible = on;
+    if (!on) continue;
+    const v = val(dev, mod, op);
+    const ref = state.scale === "per" ? maxBy[dev] : shared;
+    b.userData.target = Math.max(0.001, HMAX * v / ref);
+    const w = both ? 0.55 : 0.95;
+    b.scale.x = w; b.scale.z = both ? 0.95 : 0.95;
+    b.position.set(x0 + i * SX + (both ? (dev === "5090" ? -0.31 : 0.31) : 0), 0, z0 + j * SZ);
+    b.material.color.copy(devColor(dev));
+  }
+  highlight();
+}
+
+function highlight() {
+  const sel = state.pinned || state.hover;
+  for (const b of bars) {
+    const hit = sel && b.userData.mod === sel.mod && b.userData.op === sel.op;
+    b.material.emissive = new THREE.Color(hit ? 0x333333 : 0x000000);
+    b.material.transparent = !!sel && !hit;
+    b.material.opacity = sel && !hit ? 0.55 : 1;
+  }
+}
+
+const ray = new THREE.Raycaster(); const mouse = new THREE.Vector2();
+function pick(ev) {
+  const r = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((ev.clientX - r.left) / r.width) * 2 - 1;
+  mouse.y = -((ev.clientY - r.top) / r.height) * 2 + 1;
+  ray.setFromCamera(mouse, camera);
+  const hit = ray.intersectObjects(bars.filter((b) => b.visible))[0];
+  return hit ? hit.object.userData : null;
+}
+renderer.domElement.addEventListener("pointermove", (ev) => {
+  const u = pick(ev);
+  state.hover = u ? { mod: u.mod, op: u.op } : null;
+  if (u) {
+    const r = stage.getBoundingClientRect();
+    tip.innerHTML = tipHTML(u.mod, u.op);
+    tip.style.display = "block";
+    const x = ev.clientX - r.left + 14, y = ev.clientY - r.top + 14;
+    tip.style.left = Math.min(x, r.width - tip.offsetWidth - 6) + "px";
+    tip.style.top = Math.min(y, r.height - tip.offsetHeight - 6) + "px";
+  } else tip.style.display = "none";
+  highlight(); detail();
+});
+renderer.domElement.addEventListener("pointerleave", () => { tip.style.display = "none"; state.hover = null; highlight(); detail(); });
+let downAt = null;
+renderer.domElement.addEventListener("pointerdown", (ev) => { downAt = [ev.clientX, ev.clientY]; });
+renderer.domElement.addEventListener("pointerup", (ev) => {
+  if (!downAt || Math.hypot(ev.clientX - downAt[0], ev.clientY - downAt[1]) > 4) return;
+  const u = pick(ev);
+  state.pinned = u && !(state.pinned && state.pinned.mod === u.mod && state.pinned.op === u.op) ? { mod: u.mod, op: u.op } : null;
+  highlight(); detail(); table();
+});
+
+const nameOf = (list, k) => list.find((x) => x[0] === k)[1];
+function tipHTML(mod, op) {
+  let h = `<b>${nameOf(MODS, mod)} · ${nameOf(OPS, op)}</b><br><span style="color:var(--muted)">${state.prec}</span>`;
+  for (const d of ["5090", "thor"]) {
+    const c = cell(d, state.prec, mod, op);
+    h += `<div style="margin-top:4px"><span class="sw" style="background:var(${d === "5090" ? "--c5090" : "--cthor"})"></span>${DEV[d]}: ${c.ms.toFixed(2)} ms · ${c.pct.toFixed(1)}% · ${c.n} 个 kernel</div>`;
+  }
+  const a = cell("5090", state.prec, mod, op).ms, b = cell("thor", state.prec, mod, op).ms;
+  if (a > 0.005 && b > 0.005) h += `<div style="margin-top:4px;color:var(--muted)">Thor / 5090 = ${(b / a).toFixed(1)}×</div>`;
+  return h;
+}
+
+function detail() {
+  const sel = state.pinned || state.hover;
+  const t = document.getElementById("detTitle"), body = document.getElementById("detBody");
+  if (!sel) { t.textContent = "选中格子"; body.className = "hint"; body.textContent = "悬停或点击一个柱子 / 表格单元。"; return; }
+  t.textContent = `${nameOf(MODS, sel.mod)} · ${nameOf(OPS, sel.op)}${state.pinned ? "（已固定）" : ""}`;
+  body.className = "";
+  let rows = `<table><tr><th>精度</th><th>5090 ms</th><th>5090 %</th><th>Thor ms</th><th>Thor %</th><th>Thor/5090</th></tr>`;
+  for (const p of ["fp16", "fp8", "nvfp4"]) {
+    const a = cell("5090", p, sel.mod, sel.op), b = cell("thor", p, sel.mod, sel.op);
+    const r = a.ms > 0.005 && b.ms > 0.005 ? (b.ms / a.ms).toFixed(1) + "×" : "–";
+    const st = p === state.prec ? ' style="background:var(--hi)"' : "";
+    rows += `<tr${st}><td>${p}</td><td>${a.ms.toFixed(2)}</td><td>${a.pct.toFixed(1)}</td><td>${b.ms.toFixed(2)}</td><td>${b.pct.toFixed(1)}</td><td>${r}</td></tr>`;
+  }
+  rows += "</table>";
+  const a = cell("5090", state.prec, sel.mod, sel.op), b = cell("thor", state.prec, sel.mod, sel.op);
+  rows += `<div class="hint">${state.prec}：kernel 数 5090 ${a.n} / Thor ${b.n}；平均每个 kernel 5090 ${a.us.toFixed(1)} µs / Thor ${b.us.toFixed(1)} µs。</div>`;
+  body.innerHTML = rows;
+}
+
+/* ---------- heat table ---------- */
+function table() {
+  const devs = devices(), both = devs.length === 2, m = state.metric;
+  const el = document.getElementById("tbl");
+  const metricName = { pct: "占比 %", ms: "耗时 ms", launch: "kernel 数", us: "µs / kernel" }[m];
+  document.getElementById("tblTitle").textContent = `模块 × 算子表 · ${state.prec} · ${both ? "并排对比" : DEV[devs[0]]} · ${metricName}`;
+  let max = 0;
+  for (const d of devs) for (const [mm] of MODS) for (const [o] of OPS) max = Math.max(max, val(d, mm, o));
+  const bg = (d, v) => {
+    const a = max ? Math.min(1, v / max) : 0;
+    const c = d === "5090" ? "--c5090" : "--cthor";
+    return v > 0 ? `background:color-mix(in srgb, var(${c}) ${Math.round(8 + 62 * a)}%, transparent)` : "";
+  };
+  let h = "<tr><th>模块</th>" + OPS.map(([, n]) => `<th>${n}</th>`).join("") + "<th>合计</th></tr>";
+  const showRow = (mm, label) => {
+    for (const d of devs) {
+      const sel = (o) => state.pinned && state.pinned.mod === mm && state.pinned.op === o ? " sel" : "";
+      let row = `<tr><td>${label}${both ? ` <span class="sw" style="background:var(${d === "5090" ? "--c5090" : "--cthor"})"></span>${DEV[d]}` : ""}</td>`;
+      let tot = 0;
+      for (const [o] of OPS) {
+        const c = cell(d, state.prec, mm, o); const v = val(d, mm, o);
+        tot += m === "pct" ? c.pct : m === "ms" ? c.ms : m === "launch" ? c.n : 0;
+        row += `<td class="cell${sel(o)}" data-mod="${mm}" data-op="${o}" style="${bg(d, v)}">${c.ms > 0.0045 ? fmt(v, m).replace(" ms", "").replace(" µs", "").replace("%", "") : "–"}</td>`;
+      }
+      row += `<td><b>${m === "us" ? "" : m === "launch" ? Math.round(tot) : tot.toFixed(m === "pct" ? 1 : 2)}</b></td></tr>`;
+      h += row;
+    }
+  };
+  MODS.forEach(([mm, n]) => showRow(mm, n));
+  for (const d of devs) {
+    let row = `<tr><td><b>合计</b>${both ? ` <span class="sw" style="background:var(${d === "5090" ? "--c5090" : "--cthor"})"></span>${DEV[d]}` : ""}</td>`;
+    for (const [o] of OPS) {
+      let s = 0, n = 0;
+      for (const [mm] of MODS) { const c = cell(d, state.prec, mm, o); s += c.ms; n += c.n; }
+      const v = m === "pct" ? 100 * s / TOTALS[d][state.prec] : m === "ms" ? s : m === "launch" ? n : n ? 1000 * s / n : 0;
+      row += `<td><b>${s > 0.0045 ? fmt(v, m).replace(" ms", "").replace(" µs", "").replace("%", "") : "–"}</b></td>`;
+    }
+    row += `<td><b>${m === "pct" ? "100" : m === "ms" ? TOTALS[d][state.prec].toFixed(2) : ""}</b></td></tr>`;
+    h += row;
+  }
+  el.innerHTML = h;
+  el.querySelectorAll("td.cell").forEach((td) => td.addEventListener("click", () => {
+    const k = { mod: td.dataset.mod, op: td.dataset.op };
+    state.pinned = state.pinned && state.pinned.mod === k.mod && state.pinned.op === k.op ? null : k;
+    highlight(); detail(); table();
+  }));
+  document.getElementById("tblHint").textContent = m === "pct"
+    ? "占比的分母是该设备该精度的 eager kernel 合计；Thor fp8 的合计含 0.26 ms 未列出的 memset。"
+    : "点击单元格可固定选中，3D 视图和详情面板同步。";
+}
+
+/* ---------- top-3 analysis ---------- */
+const NOTE = {
+  "5090|fp16|bb_single|gemm": ["算力受限：M=416 时达到 fp16 峰值的 87%", ["换成 fp8：同一格降到 3.4 ms，prefill 从 15.6 降到 7.3 ms", "减少视觉 token：实测保留 36% 时 prefill 降约 50%"]],
+  "5090|fp16|ad_single|gemm": ["显存带宽受限：每步重读 1.26 GB 权重，达到带宽的 86%", ["降低权重字节数：fp8 后这一格降到 4.6 ms", "减少去噪步数：这一格和步数成正比"]],
+  "5090|fp16|bb_double|gemm": ["算力受限，但只达到峰值的 65%：文本那一路 M=24，GEMM 效率很低", ["换成 fp8", "用 grouped GEMM 让文本和图像两路共用一次启动"]],
+  "5090|fp8|ad_single|gemm": ["显存带宽受限：M=64，带宽利用率 72%，所以 fp8 只比 fp16 快 1.7 倍", ["改用只量化权重到 4 位的小 M kernel，读的字节数减半（现有 nvfp4 kernel 带宽利用率只有 25%，用不上）", "把去噪蒸馏到 1–2 步（SnapFlow、Flash-WAM）", "并行采样：M 变大几乎不增加时间，要先测 M=128 和 256"]],
+  "5090|fp8|bb_single|gemm": ["算力受限：已接近 fp8 峰值（≈100%）", ["换 NVFP4 并把量化融进 kernel：GEMM 能快 1.4 倍，但现在量化开销把收益抵掉了", "减少视觉 token，或跨帧复用 KV"]],
+  "5090|fp8|vae|conv": ["bf16 的 cuDNN 卷积，和精度无关；总耗时越短，它的占比越高", ["把卷积降到 fp16 或 fp8，调一下 layout", "用异步执行，让 VAE 和上一帧的去噪重叠"]],
+  "5090|nvfp4|ad_single|gemm": ["kernel 效率低：带宽只用到 25%（128 行的 tile 对 M=64 太大，N=1024 时 SM 喂不满）", ["写针对 M≤64 的 FP4 kernel（warpsplit 一类）", "或者 ActionDiT 保持 fp8，只让 backbone 用 nvfp4"]],
+  "5090|nvfp4|ad_single|quant": ["每个 GEMM 前后都有 fp16→bf16 转换、量化、bf16→fp16 转换，1210 次，平均 2.6 µs，受启动延迟限制", ["去掉转换，直接从 fp16 量化", "把量化融进前面的 norm（Thor 路径已有 fused_norm_fp4）"]],
+  "5090|nvfp4|vae|conv": ["bf16 卷积，和精度无关", ["卷积降精度，或用异步执行藏掉"]],
+  "thor|fp16|ad_single|gemm": ["主要花在读权重上：约 200 GB/s，接近 Thor 标称的 273 GB/s（上限没有实测）", ["换成 nvfp4：同一格降到 19.3 ms", "减少去噪步数"]],
+  "thor|fp16|bb_single|gemm": ["M=416，每个 GEMM 620 µs，只有 77 TFLOPS", ["换成 nvfp4：降到 12.3 ms", "减少视觉 token"]],
+  "thor|fp16|ad_double|gemm": ["和 ActionDiT 单流层的 GEMM 一样，主要花在读权重上", ["降精度", "减少去噪步数"]],
+  "thor|fp8|ad_single|gemm": ["fp8 只比 fp16 快 1.58 倍，带宽约 160 GB/s，低于 fp16 时的 200 GB/s", ["Thor 上 nvfp4 更快（19.3 ms），fp8 不划算", "减少去噪步数"]],
+  "thor|fp8|bb_single|gemm": ["每个 GEMM 384 µs，124 TFLOPS", ["换成 nvfp4：降到 12.3 ms", "减少视觉 token"]],
+  "thor|fp8|bb_double|gemm": ["文本那一路 M=24，加上 fp8 动态量化，效率很低（55 TFLOPS）", ["换成 nvfp4", "用 grouped GEMM 合并文本和图像两路"]],
+  "thor|nvfp4|ad_single|gemm": ["主要花在读权重上，但带宽只有约 147 GB/s，比 fp16 时的约 200 GB/s 低，小 M 的 FP4 kernel 还有提升空间", ["先实测 Thor 的带宽上限和 FP4 峰值，再判断 kernel 效率", "把去噪蒸馏到 1–2 步，收益最大", "调小 M 时 FP4 kernel 的 tile（之前做过 small-M tile 扫描）"]],
+  "thor|nvfp4|bb_single|gemm": ["每个 GEMM 285 µs，167 TFLOPS，没有峰值可以对比", ["减少视觉 token，或跨帧复用 KV", "实测 FP4 峰值后再决定要不要优化 kernel"]],
+  "thor|nvfp4|ad_single|elementwise": ["1420 次启动，平均 5 µs（5090 是 1.2 µs）：Thor 每次启动的开销更大，受启动延迟限制", ["打开 fuse_qkv_norm_rope：每层少 6 次启动，要在 vec_rms_norm 打开的前提下做 A/B", "attention 直接把输出写进 linear2_in，省掉一次拷贝", "长期方向是 megakernel，或者把逐元素运算融进 GEMM 的 epilogue"]],
+};
+function top3() {
+  const el = document.getElementById("top3");
+  const devs = devices();
+  el.style.gridTemplateColumns = devs.length === 2 ? "repeat(auto-fit,minmax(min(100%,360px),1fr))" : "minmax(0,1fr)";
+  el.innerHTML = devs.map((d) => {
+    const items = MODS.flatMap(([m]) => OPS.map(([o]) => ({ m, o, c: cell(d, state.prec, m, o) })))
+      .sort((a, b) => b.c.ms - a.c.ms).slice(0, 3);
+    return `<div><h3 style="margin:0 0 8px;font-size:14px"><span class="sw" style="background:var(${d === "5090" ? "--c5090" : "--cthor"})"></span>${DEV[d]} · ${state.prec}</h3>` +
+      items.map(({ m, o, c }, i) => {
+        const n = NOTE[`${d}|${state.prec}|${m}|${o}`] || ["", []];
+        return `<div class="t3" data-mod="${m}" data-op="${o}"><div class="t3h"><b>#${i + 1} ${nameOf(MODS, m)} · ${nameOf(OPS, o)}</b><span>${c.pct.toFixed(1)}% · ${c.ms.toFixed(2)} ms · ${c.n} 个 kernel</span></div>` +
+          `<div class="t3b">瓶颈：${n[0]}</div><ul>${n[1].map((x) => `<li>${x}</li>`).join("")}</ul></div>`;
+      }).join("") + "</div>";
+  }).join("");
+  const all = document.getElementById("top3all");
+  let h = '<tr><th>设备 · 精度</th><th>#</th><th style="text-align:left">格子</th><th>占比</th><th>ms</th><th style="text-align:left">瓶颈</th><th style="text-align:left">首要建议</th></tr>';
+  for (const d of ["5090", "thor"]) for (const p of ["fp16", "fp8", "nvfp4"]) {
+    const items = MODS.flatMap(([m]) => OPS.map(([o]) => ({ m, o, c: cell(d, p, m, o) }))).sort((a, b) => b.c.ms - a.c.ms).slice(0, 3);
+    items.forEach(({ m, o, c }, i) => {
+      const n = NOTE[`${d}|${p}|${m}|${o}`] || ["", [""]];
+      const cur = p === state.prec && devs.includes(d) ? ' style="background:var(--hi)"' : "";
+      h += `<tr${cur}>${i === 0 ? `<td rowspan="3"><span class="sw" style="background:var(${d === "5090" ? "--c5090" : "--cthor"})"></span>${DEV[d]} · ${p}</td>` : ""}<td>${i + 1}</td><td style="text-align:left">${nameOf(MODS, m)} · ${nameOf(OPS, o)}</td><td>${c.pct.toFixed(1)}%</td><td>${c.ms.toFixed(2)}</td><td style="text-align:left;white-space:normal;min-width:220px">${n[0]}</td><td style="text-align:left;white-space:normal;min-width:200px">${n[1][0]}</td></tr>`;
+    });
+  }
+  all.innerHTML = h;
+  el.querySelectorAll(".t3").forEach((t) => t.addEventListener("click", () => {
+    state.pinned = { mod: t.dataset.mod, op: t.dataset.op }; highlight(); detail(); table();
+  }));
+}
+
+/* ---------- wall bars ---------- */
+const EW_PER_LAYER = { vae: "–", bb_double: "10", bb_single: "7", ad_double: "6", ad_single: "7" };
+const EW_PER_LAYER_FP8 = { vae: "–", bb_double: "10 + 8", bb_single: "7 + 2", ad_double: "6 + 4", ad_single: "7 + 2" };
+function ew() {
+  const p = state.prec;
+  let h = '<tr><th>模块</th><th>每层</th><th>5090 ms</th><th>次数</th><th>µs / 次</th><th>Thor ms</th><th>次数</th><th>µs / 次</th></tr>';
+  const sum = { "5090": [0, 0], thor: [0, 0] };
+  for (const [m, name] of MODS) {
+    h += `<tr><td>${name}</td><td>${(p === "fp8" ? EW_PER_LAYER_FP8 : EW_PER_LAYER)[m]}</td>`;
+    for (const d of ["5090", "thor"]) {
+      const c = cell(d, p, m, "elementwise");
+      sum[d][0] += c.ms; sum[d][1] += c.n;
+      h += `<td>${c.ms.toFixed(2)}</td><td>${c.n}</td><td>${c.us.toFixed(1)}</td>`;
+    }
+    h += "</tr>";
+  }
+  h += "<tr><td><b>合计</b></td><td></td>";
+  for (const d of ["5090", "thor"]) h += `<td><b>${sum[d][0].toFixed(2)}</b></td><td><b>${sum[d][1]}</b></td><td>${(1000 * sum[d][0] / sum[d][1]).toFixed(1)}</td>`;
+  document.getElementById("ewTbl").innerHTML = h + "</tr>";
+}
+function wall() {
+  const el = document.getElementById("wallBars");
+  const max = Math.max(...["5090", "thor"].flatMap((d) => ["fp16", "fp8", "nvfp4"].map((p) => DATA[d][p].wall.infer)));
+  let h = "";
+  for (const d of ["5090", "thor"]) for (const p of ["fp16", "fp8", "nvfp4"]) {
+    const w = DATA[d][p].wall, rest = Math.max(0, w.infer - w.prefill - w.denoise);
+    const pc = (x) => (100 * x / max).toFixed(2) + "%";
+    const on = p === state.prec ? "font-weight:700" : "";
+    h += `<div class="row" style="${on}"><span>${DEV[d]} ${p}</span><span class="track">
+      <span class="seg1" style="width:${pc(w.prefill)};background:var(--accent)" title="prefill ${w.prefill} ms"></span>
+      <span class="seg1" style="width:${pc(w.denoise)};background:var(--cthor);opacity:.75" title="denoise ${w.denoise} ms"></span>
+      <span class="seg1" style="width:${pc(rest)};background:var(--muted);opacity:.5" title="其余 ${rest.toFixed(2)} ms"></span>
+      </span><span>${w.infer.toFixed(1)}</span></div>`;
+  }
+  el.innerHTML = h;
+}
+
+/* ---------- 5090 sweeps ---------- */
+function sweeps() {
+  const sw = DATA.sweep5090, svg = document.getElementById("tokSvg");
+  const W = 520, H = 240, L = 44, R = 12, T = 12, B = 34;
+  const xs = [140, 196, 252, 392], ymax = 22;
+  const X = (t) => L + (t - 120) / (400 - 120) * (W - L - R), Y = (v) => T + (1 - v / ymax) * (H - T - B);
+  const col = { fp16: css("--muted"), fp8: css("--c5090"), nvfp4: css("--cthor") };
+  let s = "";
+  for (let v = 0; v <= ymax; v += 5) s += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="currentColor" opacity=".12"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${v}</text>`;
+  for (const t of xs) s += `<text x="${X(t)}" y="${H - 14}" text-anchor="middle">${t}</text>`;
+  s += `<text x="${(W + L) / 2}" y="${H - 1}" text-anchor="middle">图像 token 数</text><text x="12" y="${T + 8}">ms</text>`;
+  for (const p of ["fp16", "fp8", "nvfp4"]) for (const k of ["prefill", "denoise"]) {
+    const pts = sw.filter((r) => r.p === p && r.steps === 10).sort((a, b) => a.img - b.img);
+    s += `<polyline fill="none" stroke="${col[p]}" stroke-width="${p === state.prec ? 3 : 1.6}" ${k === "denoise" ? 'stroke-dasharray="5 4"' : ""} points="${pts.map((r) => X(r.img) + "," + Y(r[k])).join(" ")}"/>`;
+    for (const r of pts) s += `<circle cx="${X(r.img)}" cy="${Y(r[k])}" r="3" fill="${col[p]}"><title>${p} ${k} ${r.img} token: ${r[k]} ms</title></circle>`;
+  }
+  svg.style.color = css("--ink");
+  svg.innerHTML = s;
+  document.getElementById("tokLegend").innerHTML = ["fp16", "fp8", "nvfp4"].map((p) => `<span><span class="sw" style="background:${col[p]}"></span>${p}</span>`).join("");
+  const el = document.getElementById("stepBars");
+  const max = Math.max(...sw.map((r) => r.infer));
+  let h = "";
+  for (const p of ["fp16", "fp8", "nvfp4"]) for (const st of [10, 5]) {
+    const r = sw.find((x) => x.p === p && x.steps === st && x.img === 392);
+    const rest = r.infer - r.prefill - r.denoise, pc = (x) => (100 * x / max).toFixed(2) + "%";
+    h += `<div class="row" style="${p === state.prec ? "font-weight:700" : ""}"><span>${p} · ${st} 步</span><span class="track">
+      <span class="seg1" style="width:${pc(r.prefill)};background:var(--accent)" title="prefill ${r.prefill} ms"></span>
+      <span class="seg1" style="width:${pc(r.denoise)};background:var(--cthor);opacity:.75" title="denoise ${r.denoise} ms"></span>
+      <span class="seg1" style="width:${pc(rest)};background:var(--muted);opacity:.5" title="其余 ${rest.toFixed(2)} ms"></span>
+      </span><span>${r.infer.toFixed(1)}</span></div>`;
+  }
+  el.innerHTML = h;
+}
+
+function legend() {
+  const devs = devices();
+  document.getElementById("legend").innerHTML = devs.map((d) => `<span><span class="sw" style="background:var(${d === "5090" ? "--c5090" : "--cthor"})"></span>${DEV[d]}</span>`).join("")
+    + `<span>柱高 = ${({ pct: "占该设备 eager 合计的百分比", ms: "GPU ms / infer", launch: "kernel 数 / infer", us: "平均每个 kernel 的 µs" })[state.metric]}${devs.length === 2 ? (state.scale === "per" ? "，每设备独立缩放" : "，两设备统一缩放") : ""}</span>`;
+  document.getElementById("scaleBox").style.display = devs.length === 2 ? "" : "none";
+}
+
+function refresh() { layout(); table(); top3(); ew(); detail(); wall(); sweeps(); legend(); }
+
+function bindSeg(id, key) {
+  document.querySelectorAll(`#${id} button`).forEach((b) => b.addEventListener("click", () => {
+    state[key] = b.dataset.v;
+    document.querySelectorAll(`#${id} button`).forEach((x) => x.classList.toggle("on", x === b));
+    refresh();
+  }));
+}
+bindSeg("segDev", "dev"); bindSeg("segPrec", "prec"); bindSeg("segMetric", "metric"); bindSeg("segScale", "scale");
+
+document.getElementById("themeBtn").addEventListener("click", () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("iwam-theme", root.dataset.theme); } catch (e) {}
+  refresh();
+});
+try { const t = localStorage.getItem("iwam-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h); labelRenderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.position.setLength(w < 600 ? 30 : 21);
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(stage);
+resize();
+
+function tick() {
+  for (const b of bars) {
+    if (!b.visible) continue;
+    const u = b.userData; u.h += (u.target - u.h) * 0.18; b.scale.y = u.h;
+  }
+  controls.update();
+  renderer.render(scene, camera); labelRenderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+refresh(); tick();
+</script>
+</body>
+</html>

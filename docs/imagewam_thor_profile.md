@@ -223,8 +223,8 @@ Fastest served tier on this GPU for this configuration: `nvfp4`
 ## Same-cell comparison to RTX 5090
 
 5090 numbers from `docs/imagewam_rtx5090_profile.md` (eager ms and % of
-that machine's eager total; that run had `vec_rms_norm` off). Thor
-numbers from the tables above (`vec_rms_norm` on). Wall time is
+that machine's eager total). Both machines run `vec_rms_norm` on. Thor
+numbers from the tables above. Wall time is
 `infer()` P50. Configuration also differs where the default profile
 does: Thor FA4 on, 5090 cuBLAS attention; both have VAE in graph,
 `text_trim`, `x0` = 24.
@@ -233,9 +233,9 @@ does: Thor FA4 on, 5090 cuBLAS attention; both have VAE in graph,
 
 | precision | Thor `infer()` | 5090 `infer()` | Thor / 5090 |
 |---|---:|---:|---:|
-| fp16 | 149.38 | 36.14 | 4.1× |
-| fp8 | 118.81 | 27.34 | 4.3× |
-| nvfp4 | 87.34 | 31.68 | 2.8× |
+| fp16 | 149.38 | 34.80 | 4.3× |
+| fp8 | 118.81 | 25.98 | 4.6× |
+| nvfp4 | 87.34 | 30.35 | 2.9× |
 
 5090's fastest tier is fp8; Thor's is nvfp4.
 
@@ -243,32 +243,32 @@ does: Thor FA4 on, 5090 cuBLAS attention; both have VAE in graph,
 
 | module | fp16 Thor | fp16 5090 | fp8 Thor | fp8 5090 | nvfp4 Thor | nvfp4 5090 |
 |---|---:|---:|---:|---:|---:|---:|
-| backbone double | 11.25 | 3.50 | 9.32 | 1.41 | 6.08 | 1.10 |
-| backbone single | 26.68 | 10.39 | 16.51 | 3.39 | 12.27 | 2.32 |
-| ActionDiT double | 11.48 | 2.19 | 6.19 | 1.42 | 6.20 | 2.38 |
-| ActionDiT single | 50.16 | 7.69 | 31.72 | 4.55 | 19.29 | 7.48 |
+| backbone double | 11.25 | 3.49 | 9.32 | 1.40 | 6.08 | 1.10 |
+| backbone single | 26.68 | 10.35 | 16.51 | 3.38 | 12.27 | 2.30 |
+| ActionDiT double | 11.48 | 2.18 | 6.19 | 1.42 | 6.20 | 2.38 |
+| ActionDiT single | 50.16 | 7.67 | 31.72 | 4.55 | 19.29 | 7.44 |
 
 ### Eager norm, attention and VAE ms
 
 | part | fp16 Thor | fp16 5090 | fp8 Thor | fp8 5090 | nvfp4 Thor | nvfp4 5090 |
 |---|---:|---:|---:|---:|---:|---:|
-| norm total | 8.21 | 3.73 | 8.26 | 3.77 | 8.23 | 3.75 |
-| attention total | 9.07 | 3.38 | 8.90 | 3.39 | 9.00 | 3.40 |
-| VAE encode total | 8.73 | 3.10 | 8.76 | 3.10 | 8.76 | 3.11 |
+| norm total | 8.21 | 2.24 | 8.26 | 2.24 | 8.23 | 2.24 |
+| attention total | 9.07 | 3.38 | 8.90 | 3.40 | 9.00 | 3.40 |
+| VAE encode total | 8.73 | 3.09 | 8.76 | 3.09 | 8.76 | 3.09 |
 
 Thor QK RMSNorm is now `rms_norm_fp16_vec`; the remaining ~8.2 ms of
 "norm" is mostly VAE group-norm plus the cheap warp-per-row QK path
-(with the flag off the same cell was 28.5 ms). Attention is FA4 vs
-cuBLAS. VAE is precision-independent on both machines.
+(with the flag off the same cell was 28.5 ms); on 5090 the same flag
+leaves 2.24 ms. Attention is FA4 vs cuBLAS. VAE is precision-independent on both machines.
 
 ### Share of eager total, GEMM and norm (%)
 
 | cell | fp16 Thor | fp16 5090 | fp8 Thor | fp8 5090 | nvfp4 Thor | nvfp4 5090 |
 |---|---:|---:|---:|---:|---:|---:|
-| GEMM total | 71.5 | 65.1 | 56.8 | 41.6 | 49.7 | 41.8 |
-| norm total | 5.9 | 10.2 | 7.4 | 14.4 | 9.3 | 11.7 |
-| ActionDiT single GEMM | 36.0 | 21.1 | 28.2 | 17.6 | 21.8 | 23.5 |
-| backbone single GEMM | 19.1 | 28.4 | 14.7 | 13.1 | 13.9 | 7.3 |
+| GEMM total | 71.5 | 67.8 | 56.8 | 44.1 | 49.7 | 43.7 |
+| norm total | 5.9 | 6.4 | 7.4 | 9.1 | 9.3 | 7.3 |
+| ActionDiT single GEMM | 36.0 | 21.8 | 28.2 | 18.4 | 21.8 | 24.4 |
+| backbone single GEMM | 19.1 | 29.4 | 14.7 | 13.7 | 13.9 | 7.5 |
 
 ## Conclusions
 
@@ -290,6 +290,5 @@ cuBLAS. VAE is precision-independent on both machines.
 5. NVFP4 activation quantization on Thor is `kernel_quantize_fp4_sfa_vec`
    (4.98 ms), not the 5090 `cast_fp16_to_bf16` + `quantize_bf16_to_nvfp4`
    + `cast_bf16_to_fp16` sequence (5.98 ms).
-6. Defaults that match 5090: `text_trim`, VAE in graph, `x0` = 24.
-   Defaults that do not: FA4; `vec_rms_norm` (on here, off in the 5090
-   profile).
+6. Defaults that match 5090: `text_trim`, VAE in graph, `x0` = 24,
+   `vec_rms_norm` on. Default that does not: FA4.
