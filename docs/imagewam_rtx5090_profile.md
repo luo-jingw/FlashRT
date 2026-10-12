@@ -15,9 +15,9 @@ loop scale with the visual-token count and the denoise-step count.
   and place it in the tray" → `x0` = 24), VAE inside the CUDA graph
   (`vae_graph_input=(2,224,224)`), cuBLAS attention chain (no FA4 on SM120),
   `vec_rms_norm` on (frontend default: warp-per-row QK RMSNorm
-  `rms_norm_fp16_vec`), `fuse_qkv_norm_rope` off (its default at the
-  measured commit; it is default on from the commit after `a2ac9c2`,
-  measured in opportunities.md OPT-032 candidate 1).
+  `rms_norm_fp16_vec`), `fuse_qkv_norm_rope` on (frontend default: the
+  Q/K/V split, per-head Q/K RMSNorm and RoPE as one kernel per layer
+  site, `qkv_split_norm_rope_fp16`).
 - GEMM M: backbone text stream 24, image stream 392, single-stream 416;
   ActionDiT 64.
 - Precisions: ImageWAM has no `bf16` precision; the 16-bit tier is `fp16`
@@ -26,7 +26,7 @@ loop scale with the visual-token count and the denoise-step count.
   machine. `nvfp4` is `Nvfp4LinearSm120` (SM120 CUTLASS ping-pong, FP16↔BF16
   casts + per-call activation quantization).
 - Machine: RTX 5090, driver 595.91.07, torch 2.14.0+cu130, FlashRT
-  `74b5efe`, SM clock not locked, GPU not shared during the runs.
+  `a21507e`, SM clock not locked, GPU not shared during the runs.
 
 ## Method
 
@@ -42,18 +42,20 @@ loop scale with the visual-token count and the denoise-step count.
   A throwaway profiler session runs first (CUPTI initialization can drop
   kernel records in the first session). Operator class by kernel name;
   kernels inside `attn.run` are "attention" (QK^T GEMM + softmax + PV
-  GEMM).
+  GEMM). The fused `qkv_split_norm_rope_fp16` kernel counts as "norm", so
+  the Q/K/V split copies and RoPE it absorbs are in "norm", not
+  "elementwise".
 - Cross-check: kernels per profiled iteration were equal in every cell
-  (fp16 4865, fp8 7585, nvfp4 6570); no kernel unattributed.
+  (fp16 3195, fp8 5915, nvfp4 4900); no kernel unattributed.
 
   | precision | eager kernels | graph-replay kernels | `infer()` P50 |
   |---|---:|---:|---:|
-  | fp16 | 35.15 | 35.19 | 34.80 |
-  | fp8 | 24.67 | 24.47 | 25.98 |
-  | nvfp4 | 30.52 | 30.74 | 30.35 |
+  | fp16 | 33.13 | 32.90 | 32.88 |
+  | fp8 | 22.47 | 22.08 | 23.85 |
+  | nvfp4 | 28.35 | 28.05 | 28.23 |
 
-  Graph-replay kernel time equals `infer()` wall time to within 0.4 ms
-  (fp16, nvfp4) and 1.5 ms (fp8): the GPU is not idle between kernels.
+  Graph-replay kernel time equals `infer()` wall time to within 0.2 ms
+  (fp16, nvfp4) and 1.8 ms (fp8): the GPU is not idle between kernels.
 - Ceilings measured on the same GPU: dense GEMM 8192³ — fp16 225.5,
   fp8 601.6, nvfp4 1217.8 TFLOPS; DRAM 1528 GB/s (1 GiB device copy). No
   hardware counters (`RmProfilingAdminOnly=1`): bottlenecks below come from
@@ -68,45 +70,48 @@ loop scale with the visual-token count and the denoise-step count.
 
 ## Wall time (ms)
 
-| precision | `infer()` P50 | prefill graph | denoise-loop graph | `infer()` P50, `vec_rms_norm` off |
+| precision | `infer()` P50 | prefill graph | denoise-loop graph | `infer()` P50, `fuse_qkv_norm_rope` off |
 |---|---:|---:|---:|---:|
-| fp16 | 34.80 | 15.60 | 15.98 | 36.14 |
-| fp8 | 25.98 | 7.29 | 15.33 | 27.34 |
-| nvfp4 | 30.35 | 6.89 | 20.20 | 31.68 |
+| fp16 | 32.88 | 15.20 | 14.46 | 34.80 |
+| fp8 | 23.85 | 6.92 | 13.67 | 25.98 |
+| nvfp4 | 28.23 | 6.56 | 18.44 | 30.35 |
 
-The last column is the same configuration with `vec_rms_norm` off
-(`7ca7c99`, same machine, separate processes): the flag saves 1.3–1.4 ms
-per `infer()`.
+The last column is the same configuration with `fuse_qkv_norm_rope` off
+(`74b5efe`, the default there; same machine, separate processes): the
+fused kernel removes 1670 kernels per `infer()` and saves 1.9–2.1 ms. The
+within-process A/B of the flag is in opportunities.md OPT-032 candidate 1
+(2.0–2.7 ms).
 
 ## GPU ms per `infer()` by module and operator (launches)
 
-Attention = cuBLAS QK^T + softmax + PV. The backbone entry projection is
-merged into "backbone single"; the ActionDiT input/output projections and
-Euler update into "ActionDiT single". ActionDiT rows are summed over 10
-denoise steps. Totals are the eager kernel total (input staging, 0.01 ms,
-not shown).
+Attention = cuBLAS QK^T + softmax + PV. "norm" includes the fused
+`qkv_split_norm_rope_fp16` kernel (280 launches, 0.73–0.77 ms per
+`infer()`). The backbone entry projection is merged into "backbone
+single"; the ActionDiT input/output projections and Euler update into
+"ActionDiT single". ActionDiT rows are summed over 10 denoise steps.
+Totals are the eager kernel total (input staging, 0.01 ms, not shown).
 
 ### fp16
 
 | module | GEMM | quant/cast | attention | conv | norm | elementwise | total |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| VAE encode | 0.03 (2) | - | 0.20 (1) | 2.40 (30) | 0.31 (68) | 0.14 (31) | 3.09 |
-| backbone double (5 blocks) | 3.49 (55) | - | 0.15 (15) | - | 0.18 (42) | 0.14 (54) | 3.96 |
-| backbone single (20 blocks) | 10.39 (63) | - | 0.59 (60) | - | 0.26 (60) | 0.65 (140) | 11.89 |
-| ActionDiT double (5 blocks × 10 steps) | 2.18 (300) | - | 0.49 (150) | - | 0.42 (210) | 0.43 (320) | 3.52 |
-| ActionDiT single (20 blocks × 10 steps) | 7.73 (630) | 0.01 (10) | 1.95 (600) | - | 1.07 (600) | 1.92 (1420) | 12.68 |
-| **total** | **23.82** | **0.01** | **3.38** | **2.40** | **2.24** | **3.28** | **35.15** |
+| VAE encode | 0.03 (2) | - | 0.21 (1) | 2.41 (30) | 0.31 (68) | 0.14 (31) | 3.10 |
+| backbone double (5 blocks) | 3.50 (55) | - | 0.15 (15) | - | 0.18 (32) | 0.05 (14) | 3.88 |
+| backbone single (20 blocks) | 10.43 (63) | - | 0.59 (60) | - | 0.30 (40) | 0.27 (40) | 11.59 |
+| ActionDiT double (5 blocks × 10 steps) | 2.19 (300) | - | 0.49 (150) | - | 0.38 (160) | 0.09 (70) | 3.15 |
+| ActionDiT single (20 blocks × 10 steps) | 7.90 (630) | 0.01 (10) | 1.95 (600) | - | 0.94 (400) | 0.62 (420) | 11.41 |
+| **total** | **24.04** | **0.01** | **3.38** | **2.41** | **2.11** | **1.17** | **33.13** |
 
 ### fp8
 
 | module | GEMM | quant/cast | absmax + memset | attention | conv | norm | elementwise | total |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| VAE encode | 0.03 (2) | - | - | 0.20 (1) | 2.40 (30) | 0.31 (68) | 0.14 (31) | 3.09 |
-| backbone double (5 blocks) | 1.40 (55) | 0.07 (40) | 0.09 (80) | 0.15 (15) | - | 0.18 (42) | 0.17 (94) | 2.06 |
-| backbone single (20 blocks) | 3.42 (63) | 0.15 (40) | 0.13 (80) | 0.60 (60) | - | 0.26 (60) | 0.62 (180) | 5.20 |
-| ActionDiT double (5 blocks × 10 steps) | 1.42 (300) | 0.17 (200) | 0.32 (400) | 0.49 (150) | - | 0.42 (210) | 0.58 (520) | 3.41 |
-| ActionDiT single (20 blocks × 10 steps) | 4.61 (630) | 0.40 (410) | 0.63 (800) | 1.95 (600) | - | 1.07 (600) | 2.23 (1820) | 10.90 |
-| **total** | **10.89** | **0.80** | **1.18** | **3.40** | **2.40** | **2.24** | **3.75** | **24.67** |
+| VAE encode | 0.03 (2) | - | - | 0.21 (1) | 2.41 (30) | 0.31 (68) | 0.14 (31) | 3.09 |
+| backbone double (5 blocks) | 1.40 (55) | 0.07 (40) | 0.09 (80) | 0.15 (15) | - | 0.17 (32) | 0.08 (54) | 1.97 |
+| backbone single (20 blocks) | 3.42 (63) | 0.15 (40) | 0.14 (80) | 0.61 (60) | - | 0.27 (40) | 0.28 (80) | 4.88 |
+| ActionDiT double (5 blocks × 10 steps) | 1.42 (300) | 0.18 (200) | 0.32 (400) | 0.49 (150) | - | 0.38 (160) | 0.24 (270) | 3.03 |
+| ActionDiT single (20 blocks × 10 steps) | 4.59 (630) | 0.40 (410) | 0.67 (800) | 1.96 (600) | - | 0.94 (400) | 0.94 (820) | 9.49 |
+| **total** | **10.86** | **0.80** | **1.22** | **3.41** | **2.41** | **2.08** | **1.70** | **22.47** |
 
 "absmax + memset" is the dynamic-scale `absmax_kernel` and its memset.
 
@@ -115,11 +120,11 @@ not shown).
 | module | GEMM | quant/cast | attention | conv | norm | elementwise | total |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | VAE encode | 0.03 (2) | - | 0.21 (1) | 2.40 (30) | 0.31 (68) | 0.14 (31) | 3.09 |
-| backbone double (5 blocks) | 1.10 (40) | 0.50 (120) | 0.15 (15) | - | 0.18 (42) | 0.14 (54) | 2.07 |
-| backbone single (20 blocks) | 2.34 (43) | 1.21 (120) | 0.59 (60) | - | 0.25 (60) | 0.51 (140) | 4.90 |
-| ActionDiT double (5 blocks × 10 steps) | 2.38 (200) | 1.08 (600) | 0.50 (150) | - | 0.42 (210) | 0.42 (320) | 4.80 |
-| ActionDiT single (20 blocks × 10 steps) | 7.50 (430) | 3.17 (1210) | 1.96 (600) | - | 1.08 (600) | 1.95 (1420) | 15.65 |
-| **total** | **13.34** | **5.97** | **3.40** | **2.40** | **2.24** | **3.16** | **30.52** |
+| backbone double (5 blocks) | 1.10 (40) | 0.50 (120) | 0.15 (15) | - | 0.18 (32) | 0.05 (14) | 1.98 |
+| backbone single (20 blocks) | 2.35 (43) | 1.21 (120) | 0.59 (60) | - | 0.26 (40) | 0.23 (40) | 4.65 |
+| ActionDiT double (5 blocks × 10 steps) | 2.38 (200) | 1.07 (600) | 0.49 (150) | - | 0.39 (160) | 0.09 (70) | 4.42 |
+| ActionDiT single (20 blocks × 10 steps) | 7.52 (430) | 3.17 (1210) | 1.95 (600) | - | 0.94 (400) | 0.62 (420) | 14.20 |
+| **total** | **13.37** | **5.96** | **3.39** | **2.40** | **2.08** | **1.14** | **28.35** |
 
 "quant/cast" in nvfp4 is `cast_fp16_to_bf16` + `quantize_bf16_to_nvfp4_swizzled`
 + `cast_bf16_to_fp16` around every NVFP4 GEMM.
@@ -127,42 +132,42 @@ not shown).
 ## Share of `infer()` GPU time by module and operator (%)
 
 Same runs. Each cell is the cell's GPU time divided by the eager kernel
-total of that precision (fp16 35.15, fp8 24.67, nvfp4 30.52 ms); the
-kernel total is within 1.5 ms of `infer()` wall time, so the shares read
+total of that precision (fp16 33.13, fp8 22.47, nvfp4 28.35 ms); the
+kernel total is within 1.4 ms of `infer()` wall time, so the shares read
 as shares of inference time. Rows merged as in the tables above.
 
 ### fp16
 
-| module | GEMM | attention | conv | norm | elementwise | total |
-|---|---:|---:|---:|---:|---:|---:|
-| VAE encode | 0.1 | 0.6 | 6.8 | 0.9 | 0.4 | 8.8 |
-| backbone double (5 blocks) | 9.9 | 0.4 | - | 0.5 | 0.4 | 11.3 |
-| backbone single (20 blocks) | 29.6 | 1.7 | - | 0.7 | 1.8 | 33.8 |
-| ActionDiT double (5 blocks × 10 steps) | 6.2 | 1.4 | - | 1.2 | 1.2 | 10.0 |
-| ActionDiT single (20 blocks × 10 steps) | 22.0 | 5.5 | - | 3.1 | 5.5 | 36.1 |
-| **total** | **67.8** | **9.6** | **6.8** | **6.4** | **9.3** | **100** |
+| module | GEMM | quant/cast | attention | conv | norm | elementwise | total |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| VAE encode | 0.1 | - | 0.6 | 7.3 | 0.9 | 0.4 | 9.4 |
+| backbone double (5 blocks) | 10.6 | - | 0.4 | - | 0.5 | 0.2 | 11.7 |
+| backbone single (20 blocks) | 31.5 | - | 1.8 | - | 0.9 | 0.8 | 35.0 |
+| ActionDiT double (5 blocks × 10 steps) | 6.6 | - | 1.5 | - | 1.2 | 0.3 | 9.5 |
+| ActionDiT single (20 blocks × 10 steps) | 23.8 | 0.0 | 5.9 | - | 2.8 | 1.9 | 34.4 |
+| **total** | **72.6** | **0.0** | **10.2** | **7.3** | **6.4** | **3.5** | **100** |
 
 ### fp8
 
 | module | GEMM | quant/cast | absmax + memset | attention | conv | norm | elementwise | total |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| VAE encode | 0.1 | - | - | 0.8 | 9.7 | 1.3 | 0.6 | 12.5 |
-| backbone double (5 blocks) | 5.7 | 0.3 | 0.4 | 0.6 | - | 0.7 | 0.7 | 8.4 |
-| backbone single (20 blocks) | 13.9 | 0.6 | 0.5 | 2.4 | - | 1.1 | 2.5 | 21.1 |
-| ActionDiT double (5 blocks × 10 steps) | 5.8 | 0.7 | 1.3 | 2.0 | - | 1.7 | 2.3 | 13.8 |
-| ActionDiT single (20 blocks × 10 steps) | 18.7 | 1.6 | 2.6 | 7.9 | - | 4.3 | 9.0 | 44.2 |
-| **total** | **44.1** | **3.2** | **4.8** | **13.8** | **9.7** | **9.1** | **15.2** | **100** |
+| VAE encode | 0.1 | - | - | 0.9 | 10.7 | 1.4 | 0.6 | 13.8 |
+| backbone double (5 blocks) | 6.2 | 0.3 | 0.4 | 0.7 | - | 0.8 | 0.4 | 8.7 |
+| backbone single (20 blocks) | 15.2 | 0.7 | 0.6 | 2.7 | - | 1.2 | 1.3 | 21.7 |
+| ActionDiT double (5 blocks × 10 steps) | 6.3 | 0.8 | 1.4 | 2.2 | - | 1.7 | 1.1 | 13.5 |
+| ActionDiT single (20 blocks × 10 steps) | 20.4 | 1.8 | 3.0 | 8.7 | - | 4.2 | 4.2 | 42.2 |
+| **total** | **48.3** | **3.5** | **5.4** | **15.2** | **10.7** | **9.2** | **7.6** | **100** |
 
 ### nvfp4
 
 | module | GEMM | quant/cast | attention | conv | norm | elementwise | total |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| VAE encode | 0.1 | - | 0.7 | 7.9 | 1.0 | 0.5 | 10.1 |
-| backbone double (5 blocks) | 3.6 | 1.7 | 0.5 | - | 0.6 | 0.5 | 6.8 |
-| backbone single (20 blocks) | 7.7 | 4.0 | 1.9 | - | 0.8 | 1.7 | 16.1 |
-| ActionDiT double (5 blocks × 10 steps) | 7.8 | 3.5 | 1.6 | - | 1.4 | 1.4 | 15.7 |
-| ActionDiT single (20 blocks × 10 steps) | 24.6 | 10.4 | 6.4 | - | 3.5 | 6.4 | 51.3 |
-| **total** | **43.7** | **19.6** | **11.1** | **7.9** | **7.3** | **10.4** | **100** |
+| VAE encode | 0.1 | - | 0.7 | 8.5 | 1.1 | 0.5 | 10.9 |
+| backbone double (5 blocks) | 3.9 | 1.8 | 0.5 | - | 0.6 | 0.2 | 7.0 |
+| backbone single (20 blocks) | 8.3 | 4.3 | 2.1 | - | 0.9 | 0.8 | 16.4 |
+| ActionDiT double (5 blocks × 10 steps) | 8.4 | 3.8 | 1.7 | - | 1.4 | 0.3 | 15.6 |
+| ActionDiT single (20 blocks × 10 steps) | 26.5 | 11.2 | 6.9 | - | 3.3 | 2.2 | 50.1 |
+| **total** | **47.2** | **21.0** | **11.9** | **8.5** | **7.3** | **4.0** | **100** |
 
 ## GEMM against the measured ceilings
 
@@ -172,33 +177,33 @@ excluded). Weight bytes per parameter: fp16 2, fp8 1, nvfp4 0.5625.
 
 | module | precision | GEMM ms | TFLOPS | % of GEMM peak | weight GB/s | % of DRAM |
 |---|---|---:|---:|---:|---:|---:|
-| backbone double | fp16 | 3.49 | 146 | 65% | 703 | 46% |
+| backbone double | fp16 | 3.50 | 146 | 65% | 701 | 46% |
 | backbone double | fp8 | 1.40 | 364 | 60% | 874 | 57% |
 | backbone double | nvfp4 | 1.10 | 466 | 38% | 630 | 41% |
-| backbone single | fp16 | 10.35 | 197 | 87% | 474 | 31% |
-| backbone single | fp8 | 3.38 | 604 | ≈100% | 726 | 48% |
-| backbone single | nvfp4 | 2.30 | 887 | 73% | 600 | 39% |
-| ActionDiT double | fp16 | 2.18 | 74 | 33% | 1153 | 75% |
-| ActionDiT double | fp8 | 1.42 | 113 | 19% | 884 | 58% |
-| ActionDiT double | nvfp4 | 2.38 | 68 | 6% | 298 | 19% |
-| ActionDiT single | fp16 | 7.67 | 84 | 37% | 1312 | 86% |
-| ActionDiT single | fp8 | 4.55 | 141 | 24% | 1105 | 72% |
-| ActionDiT single | nvfp4 | 7.44 | 87 | 7% | 381 | 25% |
+| backbone single | fp16 | 10.39 | 197 | 87% | 472 | 31% |
+| backbone single | fp8 | 3.38 | 604 | ≈100% | 726 | 47% |
+| backbone single | nvfp4 | 2.30 | 887 | 73% | 599 | 39% |
+| ActionDiT double | fp16 | 2.19 | 74 | 33% | 1151 | 75% |
+| ActionDiT double | fp8 | 1.42 | 113 | 19% | 885 | 58% |
+| ActionDiT double | nvfp4 | 2.38 | 68 | 6% | 297 | 19% |
+| ActionDiT single | fp16 | 7.84 | 82 | 36% | 1284 | 84% |
+| ActionDiT single | fp8 | 4.53 | 142 | 24% | 1111 | 73% |
+| ActionDiT single | nvfp4 | 7.47 | 86 | 7% | 379 | 25% |
 
 ## Bottleneck per part
 
 | part | share of fp16 / fp8 / nvfp4 time | bottleneck | evidence |
 |---|---|---|---|
-| backbone single-stream GEMM | 30% / 14% / 8% | **compute** | fp16 87% and fp8 ≈100% of the measured GEMM peak at M = 416 |
-| backbone double-stream GEMM | 10% / 6% / 4% | compute, diluted by the M = 24 text stream | 60–65% of peak; the text-stream GEMMs at M = 24 run far below it |
-| backbone NVFP4 overhead | – / – / 6% | **FP16↔BF16 casts + activation quantization** | 1.71 ms quant/cast on 3.44 ms of NVFP4 GEMM; the NVFP4 GEMM itself reaches 73% of its peak |
-| ActionDiT GEMM (M = 64, 10 steps) | 28% / 24% / 32% | **DRAM bandwidth (weight streaming)** for fp16/fp8; **kernel efficiency** for nvfp4 | fp16 reads its 1.26 GB of weights per step at 75–86% of DRAM bandwidth, fp8 at 58–72%; nvfp4 reaches only 19–25% (128-row tiles at M = 64, under-filled N = 1024 shapes) |
-| ActionDiT NVFP4 overhead | – / – / 14% | casts + quantization, launch-dominated | 4.25 ms over 1810 launches, 1.8–2.6 µs each |
-| attention (cuBLAS chain) | 10% / 14% / 11% | **launch / latency** in ActionDiT | 750 launches per infer at 3.3 µs average; QK^T, softmax, PV as separate kernels |
-| norm | 6% / 9% / 7% | **launch / latency** | ActionDiT 810 launches at 1.8–2.0 µs: `rms_norm_fp16_vec_warp_kernel` 560 launches = 0.89 ms, `gate_res_ada_layer_norm_kernel` 300 launches = 0.71 ms |
-| elementwise | 9% / 15% / 10% | **launch / latency** | 1740 launches in ActionDiT at 1.1–1.4 µs; 1060 per infer are `at::native` copy kernels (Q/K/V slice copies) |
-| fp8 dynamic scale | – / 5% / – | latency | `absmax_kernel` + memset, 1200 launches |
-| VAE encode | 9% / 13% / 10% | conv compute in bf16, unchanged by precision | cuDNN fprop kernels 2.40 ms of 3.09 ms |
+| backbone single-stream GEMM | 31% / 15% / 8% | **compute** | fp16 87% and fp8 ≈100% of the measured GEMM peak at M = 416 |
+| backbone double-stream GEMM | 11% / 6% / 4% | compute, diluted by the M = 24 text stream | 60–65% of peak; the text-stream GEMMs at M = 24 run far below it |
+| backbone NVFP4 overhead | – / – / 6% | **FP16↔BF16 casts + activation quantization** | 1.71 ms quant/cast on 3.45 ms of NVFP4 GEMM; the NVFP4 GEMM itself reaches 73% of its peak |
+| ActionDiT GEMM (M = 64, 10 steps) | 30% / 27% / 35% | **DRAM bandwidth (weight streaming)** for fp16/fp8; **kernel efficiency** for nvfp4 | fp16 reads its 1.26 GB of weights per step at 75–84% of DRAM bandwidth, fp8 at 58–73%; nvfp4 reaches only 19–25% (128-row tiles at M = 64, under-filled N = 1024 shapes) |
+| ActionDiT NVFP4 overhead | – / – / 15% | casts + quantization, launch-dominated | 4.24 ms over 1810 launches, 1.8–2.6 µs each |
+| attention (cuBLAS chain) | 10% / 15% / 12% | **launch / latency** in ActionDiT | 750 launches per infer at 3.3 µs average; QK^T, softmax, PV as separate kernels |
+| norm (incl. fused Q/K/V split + norm + RoPE) | 6% / 9% / 7% | **launch / latency** | ActionDiT 560 launches at 1.7–2.4 µs: `qkv_split_norm_rope_fp16` 280 launches per infer = 0.73–0.77 ms, `gate_res_ada_layer_norm_kernel` 300 launches = 0.71 ms |
+| elementwise | 4% / 8% / 4% | **launch / latency** | `silu_glu_merged` 280 launches = 0.58 ms; the single-stream attention-output copies 220 launches = 0.39 ms; fp8 adds `compute_scale_kernel` 680 launches = 0.54 ms |
+| fp8 dynamic scale | – / 5% / – | latency | `absmax_kernel` + memset, 1360 launches |
+| VAE encode | 9% / 14% / 11% | conv compute in bf16, unchanged by precision | cuDNN fprop kernels 2.41 ms of 3.10 ms |
 
 ## Scaling with visual-token count and denoise-step count
 
@@ -206,9 +211,11 @@ Scope: wall time only; action quality is not measured. Same deployment
 entry, machine, checkpoint, prompt (`x0` = 24) and timing method as above
 (`infer()`, prefill graph and denoise-loop graph P50 over 100 iterations,
 one process per cell). Actions are finite in every cell. These cells were
-measured at FlashRT `7ca7c99` with `vec_rms_norm` off, the frontend
-default at that commit; the absolute times are therefore about 1.3 ms
-above the `vec_rms_norm`-on tables above, and the relative changes are
+measured at FlashRT `7ca7c99` with `vec_rms_norm` and `fuse_qkv_norm_rope`
+off, the frontend defaults at that commit. At 392 tokens and 10 steps they
+read 36.10 / 27.40 / 31.79 ms (fp16 / fp8 / nvfp4) against 32.88 / 23.85 /
+28.23 ms in the tables above, so the absolute times are 3.2–3.6 ms high
+(the denoise loop by about 0.25 ms per step); the relative changes are
 what this section reports.
 
 - Visual-token count is set through the view width with the view height
@@ -267,24 +274,25 @@ The denoise loop is linear in the step count (per-step time equal at 5 and
 ## Conclusions
 
 1. Backbone (prefill) GEMMs are compute-bound and already near the
-   measured peak in fp16 and fp8; fp8 halves prefill (15.6 → 7.3 ms graph).
-   NVFP4 runs the backbone GEMM itself 1.40× faster than fp8 (3.44 vs
+   measured peak in fp16 and fp8; fp8 halves prefill (15.2 → 6.9 ms graph).
+   NVFP4 runs the backbone GEMM itself 1.40× faster than fp8 (3.45 vs
    4.82 ms), but its casts and per-call quantization (1.71 ms) cancel most
-   of that: prefill graph 6.89 ms vs 7.29 ms.
+   of that: prefill graph 6.56 ms vs 6.92 ms.
 2. ActionDiT GEMMs are weight-bandwidth-bound at M = 64: every denoise step
    re-reads 1.26 GB (fp16) of weights, more than L2 holds. fp8 cuts the
-   GEMM time 1.6×, not 2×; nvfp4 reaches only a quarter of DRAM bandwidth
-   and adds 4.25 ms of casts/quantization, so the denoise loop is slower
-   in nvfp4 (20.2 ms) than in fp16 (16.0 ms).
-3. The precision-independent part — VAE 3.1, attention 3.4, norm 2.2,
-   elementwise 3.2–3.8 ms, about 12 ms — is half of the fp8 time. In
-   ActionDiT it is launch/latency-bound: about 3,300 kernels per infer at
-   1–3 µs each, of which 1,060 are slice copies.
-4. Fastest tier on this GPU for this configuration: `fp8` (25.98 ms).
+   GEMM time 1.7×, not 2×; nvfp4 reaches only a quarter of DRAM bandwidth
+   and adds 4.24 ms of casts/quantization, so the denoise loop is slower
+   in nvfp4 (18.4 ms) than in fp16 (14.5 ms).
+3. The precision-independent part — VAE 3.1, attention 3.4, norm 2.1,
+   elementwise 1.1–1.7 ms, about 10 ms — is 46% of the fp8 time. In
+   ActionDiT it is launch/latency-bound: about 1,800 non-GEMM kernels per
+   infer at 1–3 µs each.
+4. Fastest tier on this GPU for this configuration: `fp8` (23.85 ms).
 5. In fp8, attention, norm, elementwise and the dynamic-scale kernels
-   together take 43% of inference time, about as much as all GEMMs (44%);
-   ActionDiT takes 58%, and within ActionDiT the non-GEMM kernels take
-   more time than the GEMMs.
+   together take 37% of inference time, against 48% for all GEMMs;
+   ActionDiT takes 56%, and within ActionDiT the non-GEMM kernels still
+   take more time than the GEMMs (29% against 27%).
 6. Fewer image tokens shorten only prefill: keeping 36% of the image
    tokens cuts fp8 end-to-end time by 13% at full VAE cost. The denoise
-   loop scales linearly with the step count at 1.63 ms per step (fp8).
+   loop scales linearly with the step count (1.37 ms per step in fp8 at
+   the configuration above).
