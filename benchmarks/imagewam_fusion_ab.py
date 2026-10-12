@@ -50,6 +50,14 @@ Env:
 - `ITERS` (default 50), `WARMUP` (default 10), `COUNT_KERNELS` (default 0).
 - `USE_FA4` (default 0): `use_fa4=True` for the "backbone" attention site
   (Thor only; match the production configuration being compared).
+- `X0` (optional): rows before the image tokens. Unset -> `LIBERO_REAL_DIMS`'
+  untrimmed `x0 = 513`. `X0=24` is the served shape (`load_imagewam`'s
+  default profile trims the LIBERO prompt to 24 rows: `a0 = 416`,
+  `total = 480`); `a0` and `total` shift with `x0`.
+- `HOLD` (optional): comma list of `flag=0|1` held at that value on BOTH
+  sides, e.g. `HOLD=vec_rms_norm=0`. A flag not in `AB` or `HOLD` keeps
+  the frontend default (`vec_rms_norm`, `fuse_res_norm` and
+  `merge_linear2` default on).
 
 B is built on A's `GemmRunner` (`gemm_runner=`), so the cuBLASLt
 autotune runs once and both sides replay the same algorithm for every
@@ -75,7 +83,12 @@ from flash_rt.models.imagewam.pipeline_thor import imagewam_denoise_loop, imagew
 # The served dims minus `proprio_dim`: this A/B never enables proprio
 # conditioning.
 REAL_DIMS = {key: value for key, value in LIBERO_REAL_DIMS.items() if key != "proprio_dim"}
-FLAGS = ("merge_linear2", "fuse_res_norm", "fuse_qkv_norm_rope", "last_layer_kv_only")
+if os.environ.get("X0"):
+    _img_len = REAL_DIMS["a0"] - REAL_DIMS["x0"]
+    REAL_DIMS["x0"] = int(os.environ["X0"])
+    REAL_DIMS["a0"] = REAL_DIMS["x0"] + _img_len
+    REAL_DIMS["total"] = REAL_DIMS["a0"] + REAL_DIMS["num_action"]
+FLAGS = ("merge_linear2", "fuse_res_norm", "fuse_qkv_norm_rope", "last_layer_kv_only", "vec_rms_norm")
 BF16 = torch.bfloat16
 DEV = "cuda"
 
@@ -185,6 +198,11 @@ def main() -> None:
     flags = [f for f in os.environ.get("AB", "").split(",") if f]
     if not flags or any(f not in FLAGS for f in flags):
         raise SystemExit(f"set AB to one or more (comma-separated) of {FLAGS}")
+    for item in [i for i in os.environ.get("HOLD", "").split(",") if i]:
+        flag, value = item.split("=")
+        if flag not in FLAGS or flag in flags or value not in ("0", "1"):
+            raise SystemExit(f"HOLD entry {item!r}: expects flag=0|1, flag in {FLAGS} and not in AB")
+        REAL_DIMS[flag] = value == "1"
     precisions = os.environ.get("PRECISIONS", "nvfp4,fp16").split(",")
     for p in precisions:
         if p not in _PRECISIONS:
@@ -194,7 +212,9 @@ def main() -> None:
     warmup = int(os.environ.get("WARMUP", "10"))
     count_kernels = os.environ.get("COUNT_KERNELS", "0") == "1"
     use_fa4 = os.environ.get("USE_FA4", "0") == "1"
-    print(f"torch {torch.__version__}, device {torch.cuda.get_device_name()}, AB={flags}, "
+    held = {f: REAL_DIMS[f] for f in FLAGS if f in REAL_DIMS}
+    print(f"torch {torch.__version__}, device {torch.cuda.get_device_name()}, AB={flags}, held={held}, "
+          f"x0={REAL_DIMS['x0']} a0={REAL_DIMS['a0']} total={REAL_DIMS['total']}, "
           f"precisions={precisions}, iters={iters}")
     for p in precisions:
         run(p, flags, ckpt, iters, warmup, count_kernels, use_fa4)

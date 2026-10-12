@@ -694,6 +694,29 @@ Kernel-level correctness on 5090 at ImageWAM's real shapes (720-26424 rows, dim=
 
 **A real methodology limit found while trying to validate end to end on 5090 with synthetic weights**: a random-weight ImageWAM network amplifies any perturbation wildly and is not a usable bar for "is this numerically safe" at the whole-model level. Control measurement, same random weights, same inputs: `fp8` (default) vs `fp16` (default) -- i.e. two configurations that are SUPPOSED to differ -- already lands at only 0.81/0.16 cosine (backbone/actions, median of 6 observations); `vec_rms_norm` vs default at `fp16` is 0.99981/0.81, at `fp8` is 0.974/0.43. Two runs of the identical configuration (no code difference) also only agreed 0.992-0.999, showing the random-weight construction itself is not fully deterministic. End-to-end correctness for this candidate (and likely for any future candidate validated this way) needs a real checkpoint, not this project's synthetic-weight cross-hardware benchmark construction -- Thor's own real-checkpoint numbers above are the ones to trust; the 5090 numbers above are a speed-only result.
 
+### Candidate 1, end-to-end on RTX 5090 with `vec_rms_norm` on
+
+Measured with `benchmarks/imagewam_fusion_ab.py` on RTX 5090. Conditions: real LIBERO checkpoint; served shape `X0=24` (a0 = 416, total = 480); cuBLAS attention. Each side ran 100 iterations, interleaved ABBA in the same process. B replays A's autotuned GEMM algorithms. Times are the A/B frontend's `infer()` P50, which excludes the VAE encode.
+
+| comparison | precision | A ms | B ms | A − B | kernels / pass | actions cos / rel_l2 | backbone cos | bit-exact |
+|---|---|---:|---:|---:|---|---|---:|---|
+| `AB=fuse_qkv_norm_rope` (vec on, default) | fp8 | 22.71 | 21.71 | +1.01 | 6769 → 5099 | 0.999980 / 6.3e-3 | 0.998926 | no |
+| | nvfp4 | 29.66 | 28.13 | +1.53 | 6434 → 4764 | 0.999811 / 2.0e-2 | 0.990500 | no |
+| | fp16 | 33.74 | 32.05 | +1.69 | 4729 → 3059 | 1.000000 / 6.8e-4 | 0.999989 | no |
+| `AB=fuse_qkv_norm_rope HOLD=vec_rms_norm=0` | fp8 | 24.19 | 21.76 | +2.43 | – | 1 / 0 | 1 | yes |
+| | nvfp4 | 28.68 | 26.28 | +2.40 | – | 1 / 0 | 1 | yes |
+| | fp16 | 33.17 | 30.78 | +2.39 | – | 1 / 0 | 1 | yes |
+| `AB=vec_rms_norm` (fused off) | fp8 | 24.22 | 22.78 | +1.44 | – | 0.999982 / 6.1e-3 | 0.998926 | no |
+| | nvfp4 | 28.66 | 27.27 | +1.39 | – | 0.999830 / 1.9e-2 | 0.990500 | no |
+| | fp16 | 33.25 | 31.86 | +1.39 | – | 1.000000 / 7.3e-4 | 0.999989 | no |
+
+At the untrimmed default shape (x0 = 513), the vec-on A/B gives +0.70 / +1.38 / +1.11 ms (fp8 / nvfp4 / fp16).
+
+- On this GPU the fused kernel is a net win on top of the warp-per-row norm: it saves 1.0–1.7 ms and removes 1670 kernels per pass, as counted above.
+- Its numerical difference from the default equals the `vec_rms_norm` on/off difference: backbone cosine is identical to six digits. It is bit-exact against the 256-thread norm path. So enabling it is numerically the same as returning to the old norm reduction order, with no new error.
+- The kernel keeps `rms_norm_kernel`'s 256-thread block per (row, head), with two block reductions. On RTX 5090 that structure costs about 1.4 ms per infer; on Thor it cost 20 ms (candidate 5). The 5090 result therefore does not transfer to Thor, and Thor needs its own A/B.
+- A warp-per-(row, head) reduction in the order of `rms_norm_fp16_vec_warp_kernel` would remove that structure. It would also make the kernel bit-exact against the current default.
+
 ## Already done or rejected (do not redo)
 
 Modulation / RoPE / delta precompute for all steps, NVFP4 weight prepack, AWQ fold, QKV / linear1 / linear2 merges, cross-layer gated-residual + next AdaLN, whole-pipeline graph, per-shape cuBLASLt autotune, text_trim, FA4 both sites, native VAE in graph (OPT-004, 015-017, 019, 021, 023, 030); megakernel FFN (measured negative at small M on Thor); static activation scale for nvfp4 (block scales are dynamic, ISSUE-051/052); no loop-invariant K/V exists in the ActionDiT (the mot reads the prefill's cache).
