@@ -2,45 +2,40 @@
 // FlashRT — Fused QKV column-slice split + RMSNorm(Q,K) + RoPE(Q,K)
 // + plain-copy(V), FP16.
 //
-// Standalone development kernel (not wired into the production
-// pipeline/build — see tests/test_fused_qkv_norm_rope_kernel.py for
-// how it is JIT-compiled and validated bit-exact against the existing
-// production primitives it fuses).
+// Built into flash_rt_kernels (CMakeLists.txt) and bound as
+// `qkv_split_norm_rope_fp16` (csrc/bindings.cpp); opt-in in the ImageWAM
+// pipeline via dims["fuse_qkv_norm_rope"]; validated by
+// tests/test_fused_qkv_norm_rope_kernel.py through that binding.
 //
-// Reproduces, in ONE kernel launch, the exact 5-call sequence found in
+// Reproduces, in ONE kernel launch, the exact 7-call sequence found in
 // flash_rt/models/imagewam/pipeline_thor.py's `_single_stream_layer`
 // (and the per-stream halves of `_double_stream_layer`, and
-// `_action_double_layer`/`_action_single_layer`):
+// `_action_double_layer`/`_action_single_layer`) with the served default
+// `dims["vec_rms_norm"]` on:
 //
 //   _copy_slice(Q_O,      qkv, rows, hidden, src_row_stride=src_row_stride)  // col offset q_col_offset
 //   _copy_slice(K_cache,  qkv, rows, hidden, src_row_stride=src_row_stride)  // col offset k_col_offset
 //   _copy_slice(V_cache,  qkv, rows, hidden, src_row_stride=src_row_stride)  // col offset v_col_offset
-//   rms_norm_fp16(Q_O,     q_norm_weight, Q_O,     rows*NH, HD, eps, stream)
-//   rms_norm_fp16(K_cache, k_norm_weight, K_cache, rows*NH, HD, eps, stream)
+//   rms_norm_fp16_vec(Q_O,     q_norm_weight, Q_O,     rows*NH, HD, eps, stream)
+//   rms_norm_fp16_vec(K_cache, k_norm_weight, K_cache, rows*NH, HD, eps, stream)
 //   rope_apply_fp16_perhead(Q_O,     rope_table, rows, NH, HD, stream)
 //   rope_apply_fp16_perhead(K_cache, rope_table, rows, NH, HD, stream)
 //
-// (split ALL THREE of Q,K,V first, THEN RMSNorm Q and K [not V], THEN
-// RoPE Q and K — norm before rope, matching pipeline_thor.py exactly,
-// see its module docstring and _single_stream_layer body).
+// (split Q, K, V, then RMSNorm Q and K [not V], then RoPE Q and K --
+// norm before rope, matching pipeline_thor.py).
 //
-// Numerics are matched bit-exact against csrc/kernels/norm.cu's
-// `rms_norm_kernel<__half>` (RMSNorm: rms = rsqrtf(mean(x^2) + eps),
-// out = (x*rms)*weight, left-to-right) and csrc/kernels/rope.cu's
-// `rope_apply_fp16_perhead_kernel` (interleaved-pair RoPE: pair
-// (2d,2d+1) rotated by (cos,sin) = rope_table[seq_pos*HD+2d],
-// rope_table[seq_pos*HD+2d+1]) — see those files for the ground-truth
-// source this kernel was written against.
+// Numerics are bit-exact against csrc/kernels/vec_fp16_backbone.cu's
+// `rms_norm_fp16_vec_warp_kernel` (one warp per row; each lane sums the
+// squares of its int4 chunks left to right, then a xor-butterfly warp
+// sum; rms = rsqrtf(sum/HD + eps); out = (x*rms)*weight) and
+// csrc/kernels/rope.cu's `rope_apply_fp16_perhead_kernel`
+// (interleaved-pair RoPE: pair (2d,2d+1) rotated by (cos,sin) =
+// rope_table[seq_pos*HD+2d], rope_table[seq_pos*HD+2d+1]). It is NOT
+// bit-exact against the 256-thread `rms_norm_fp16` path
+// (`dims["vec_rms_norm"]` off): that kernel reduces in a different order.
 //
-// One CUDA block per (row, head): blockDim.x is FIXED at 256 to match
-// rms_norm_fp16's own hardcoded launch config exactly — this is not a
-// performance tuning knob, it is required for the block-reduction
-// summation order (warp_reduce_sum/block_reduce_sum tree in
-// csrc/kernels/common.cuh, reused here unmodified) to stay bit-for-bit
-// identical to the reference kernel's own reduction. Every SHAPE
-// parameter (rows, NH, HD, hidden, row strides, column offsets) is a
-// runtime argument — nothing about the model's per-call-site dims is
-// baked in as a compile-time constant.
+// One warp per (row, head), 8 warps per block. Every shape parameter is
+// a runtime argument.
 // ================================================================
 #pragma once
 
@@ -77,12 +72,12 @@
 //                    GEMM output).
 // `eps`             RMSNorm epsilon.
 //
-// Precondition: `HD` must be even (Q/K/V are read/written via __half2
-// vectorized loads at per-head byte offset head*HD*sizeof(__half),
-// which needs 4-byte alignment). Real ImageWAM shapes (backbone and
-// ActionDiT) always use HD=128 — this is not a limitation in
-// practice, just an unchecked precondition an odd HD would violate.
-void qkv_split_norm_rope_fp16(
+// Preconditions (checked; returns -1 and launches nothing if unmet):
+// HD, both row strides and all three column offsets are multiples of 8
+// elements, and every pointer is 16-byte aligned (int4 loads and
+// stores). Real ImageWAM shapes (HD=128, widths 3072/9216) satisfy
+// them. Returns 0 on success, or -cudaError_t on a launch error.
+int qkv_split_norm_rope_fp16(
     const __half* qkv,
     const __half* q_norm_weight,
     const __half* k_norm_weight,

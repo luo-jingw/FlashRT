@@ -2,9 +2,8 @@
 QKV-split + RMSNorm(Q,K) + RoPE(Q,K) + V-copy kernel
 (csrc/kernels/fused_qkv_norm_rope/qkv_split_norm_rope_fp16.cu).
 
-This kernel is NOT wired into the production pipeline or the main
-CMake build (see that directory's own header comment) -- it is
-JIT-compiled here via `torch.utils.cpp_extension.load` and checked
+Tested through the production binding (`flash_rt_kernels`, used by
+`dims["fuse_qkv_norm_rope"]`), checked
 `torch.equal` (bit-exact, fp16) against the exact 7-call production
 sequence it fuses, reproduced verbatim from
 `flash_rt/models/imagewam/pipeline_thor.py`'s `_single_stream_layer`
@@ -14,12 +13,13 @@ txt/img halves and `_action_double_layer`/`_action_single_layer`):
     _copy_slice(Q_O, qkv, rows, hidden, src_row_stride=...)      # col q_col_offset
     _copy_slice(K_cache, qkv, rows, hidden, src_row_stride=...)  # col k_col_offset
     _copy_slice(V_cache, qkv, rows, hidden, src_row_stride=...)  # col v_col_offset
-    rms_norm_fp16(Q_O, q_norm, Q_O, rows*NH, HD, eps, stream)
-    rms_norm_fp16(K_cache, k_norm, K_cache, rows*NH, HD, eps, stream)
+    rms_norm_fp16_vec(Q_O, q_norm, Q_O, rows*NH, HD, eps, stream)
+    rms_norm_fp16_vec(K_cache, k_norm, K_cache, rows*NH, HD, eps, stream)
     rope_apply_fp16_perhead(Q_O, rope_table, rows, NH, HD, stream)
     rope_apply_fp16_perhead(K_cache, rope_table, rows, NH, HD, stream)
 
-using the project's own production `rms_norm_fp16`/`rope_apply_fp16_perhead`
+with the served default `vec_rms_norm` on, using the project's own production
+`rms_norm_fp16_vec`/`rope_apply_fp16_perhead`
 (via `flash_rt.flash_rt_kernels`) as the reference implementation --
 these are the numerical ground truth, not reimplemented here.
 
@@ -30,51 +30,28 @@ Real ImageWAM shapes (flash_rt/frontends/torch/_imagewam_thor_spec.py):
   backbone_mlp_hidden = int(3072*3.0) = 9216 (used for the merged
   `linear1` src_row_stride variant, `merge_qkv_mlp=True` call sites)
 """
-import os
 import time
 
 import pytest
 import torch
-from torch.utils.cpp_extension import load
 
 import flash_rt.flash_rt_kernels as fvk
 
 DEV = "cuda"
 EPS = 1e-6
 
-_KERNEL_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..",
-    "csrc", "kernels", "fused_qkv_norm_rope")
+pytestmark = pytest.mark.skipif(not hasattr(fvk, "rms_norm_fp16_vec"),
+                                reason="rms_norm_fp16_vec (the reference) is built on SM100-class and SM120/121 only")
 
-# Same precision-affecting flags CMakeLists.txt uses for the
-# flash_rt_kernels target that builds csrc/kernels/norm.cu and
-# csrc/kernels/rope.cu (the reference kernels this must match
-# bit-exact) -- see CMakeLists.txt's `target_compile_options(flash_rt_kernels ...)`.
-# NOT the --use_fast_math flags some OTHER targets in that file use.
-_CUDA_FLAGS = [
-    "-O3",
-    "--expt-relaxed-constexpr",
-    "--ftz=true",
-    "--prec-div=false",
-    "--prec-sqrt=false",
-]
 
-_ext = None
-
+def _rms_ref(x_ptr: int, w_ptr: int, rows: int, HD: int) -> None:
+    rc = fvk.rms_norm_fp16_vec(x_ptr, w_ptr, x_ptr, rows, HD, EPS, 0)
+    assert rc == 0, f"rms_norm_fp16_vec returned {rc}"
 
 def _get_ext():
-    global _ext
-    if _ext is None:
-        _ext = load(
-            name="fused_qkv_norm_rope_test_ext",
-            sources=[
-                os.path.join(_KERNEL_DIR, "binding.cpp"),
-                os.path.join(_KERNEL_DIR, "qkv_split_norm_rope_fp16.cu"),
-            ],
-            extra_cuda_cflags=_CUDA_FLAGS,
-            verbose=False,
-        )
-    return _ext
+    """The production binding (`flash_rt_kernels`, csrc/bindings.cpp) of
+    csrc/kernels/fused_qkv_norm_rope/qkv_split_norm_rope_fp16.cu."""
+    return fvk
 
 
 def _make_rope_table(rows: int, HD: int, device: str) -> torch.Tensor:
@@ -103,12 +80,12 @@ def _make_inputs(rows: int, NH: int, HD: int, hidden: int, src_row_stride: int, 
 def _reference(qkv, q_norm, k_norm, rope_table, rows, NH, HD, hidden,
                 q_off, k_off, v_off, stream=0):
     """Reproduces the exact production 7-call sequence, using the
-    project's own rms_norm_fp16/rope_apply_fp16_perhead as ground truth."""
+    project's own rms_norm_fp16_vec/rope_apply_fp16_perhead as ground truth."""
     Q = qkv[:, q_off:q_off + hidden].clone().contiguous()
     K = qkv[:, k_off:k_off + hidden].clone().contiguous()
     V = qkv[:, v_off:v_off + hidden].clone().contiguous()
-    fvk.rms_norm_fp16(Q.data_ptr(), q_norm.data_ptr(), Q.data_ptr(), rows * NH, HD, EPS, stream)
-    fvk.rms_norm_fp16(K.data_ptr(), k_norm.data_ptr(), K.data_ptr(), rows * NH, HD, EPS, stream)
+    _rms_ref(Q.data_ptr(), q_norm.data_ptr(), rows * NH, HD)
+    _rms_ref(K.data_ptr(), k_norm.data_ptr(), rows * NH, HD)
     fvk.rope_apply_fp16_perhead(Q.data_ptr(), rope_table.data_ptr(), rows, NH, HD, stream)
     fvk.rope_apply_fp16_perhead(K.data_ptr(), rope_table.data_ptr(), rows, NH, HD, stream)
     torch.cuda.synchronize()
@@ -121,12 +98,13 @@ def _fused(qkv, q_norm, k_norm, rope_table, rows, NH, HD, hidden,
     Q = torch.empty(rows, hidden, dtype=torch.float16, device=DEV)
     K = torch.empty(rows, hidden, dtype=torch.float16, device=DEV)
     V = torch.empty(rows, hidden, dtype=torch.float16, device=DEV)
-    ext.qkv_split_norm_rope_fp16(
+    rc = ext.qkv_split_norm_rope_fp16(
         qkv.data_ptr(), q_norm.data_ptr(), k_norm.data_ptr(), rope_table.data_ptr(),
         Q.data_ptr(), K.data_ptr(), V.data_ptr(),
         rows, NH, HD, hidden, src_row_stride,
         q_off, k_off, v_off, hidden, EPS, stream)
     torch.cuda.synchronize()
+    assert rc == 0, f"qkv_split_norm_rope_fp16 returned {rc}"
     return Q, K, V
 
 
@@ -186,19 +164,28 @@ def test_bit_exact_merged_linear1_qkv():
     assert torch.equal(V_ref, V_f), "merged-linear1: V mismatch"
 
 
-def test_even_head_dim_is_a_documented_precondition():
-    """The kernel reads/writes Q/K/V via __half2 (4-byte) vectorized
-    loads at per-head byte offset head*HD*sizeof(half); that offset is
-    only guaranteed 4-byte aligned when HD is even. Real ImageWAM
-    shapes (backbone and ActionDiT) always use HD=128 (divisible by
-    8), so this is a documented precondition, not a limitation this
-    project needs to design around (see this project's convention of
-    validating kernels at real, fixed production shapes rather than
-    arbitrary N -- confirmed by construction here, not by trying an
-    odd HD, which segfaults/misaligns rather than merely producing a
-    numerically different result)."""
-    assert BACKBONE_HD % 2 == 0
-    assert ACTION_HD % 2 == 0
+def test_unmet_alignment_precondition_returns_minus_one():
+    """int4 loads/stores need 16-byte-aligned pointers and dims, strides and
+    column offsets that are multiples of 8 elements. An unmet precondition
+    returns -1 and launches nothing (the destination keeps its contents)."""
+    hidden, NH, HD, rows = BACKBONE_HIDDEN, BACKBONE_NH, BACKBONE_HD, 25
+    qkv, q_norm, k_norm, rope_table = _make_inputs(rows, NH, HD, hidden, 3 * hidden, seed=3)
+    ext = _get_ext()
+    Q = torch.zeros(rows, hidden, dtype=torch.float16, device=DEV)
+    K = torch.zeros_like(Q)
+    V = torch.zeros_like(Q)
+    rc_ptr = ext.qkv_split_norm_rope_fp16(
+        qkv.data_ptr() + 2, q_norm.data_ptr(), k_norm.data_ptr(), rope_table.data_ptr(),
+        Q.data_ptr(), K.data_ptr(), V.data_ptr(), rows, NH, HD, hidden, 3 * hidden,
+        0, hidden, 2 * hidden, hidden, EPS, 0)
+    rc_off = ext.qkv_split_norm_rope_fp16(
+        qkv.data_ptr(), q_norm.data_ptr(), k_norm.data_ptr(), rope_table.data_ptr(),
+        Q.data_ptr(), K.data_ptr(), V.data_ptr(), rows, NH, HD, hidden, 3 * hidden,
+        4, hidden, 2 * hidden, hidden, EPS, 0)
+    torch.cuda.synchronize()
+    print(f"misaligned pointer rc={rc_ptr}, column offset 4 rc={rc_off}")
+    assert rc_ptr == -1 and rc_off == -1
+    assert not Q.any() and not K.any() and not V.any()
 
 
 def test_double_stream_split_call_matches_joint_rope():
@@ -234,12 +221,12 @@ def test_double_stream_split_call_matches_joint_rope():
     K_ref[:x0] = txt_qkv[:, k_off:k_off + hidden]
     Q_ref[x0:] = img_qkv[:, q_off:q_off + hidden]
     K_ref[x0:] = img_qkv[:, k_off:k_off + hidden]
-    fvk.rms_norm_fp16(Q_ref[:x0].data_ptr(), q_norm.data_ptr(), Q_ref[:x0].data_ptr(), x0 * NH, HD, EPS, 0)
-    fvk.rms_norm_fp16(K_ref[:x0].data_ptr(), k_norm.data_ptr(), K_ref[:x0].data_ptr(), x0 * NH, HD, EPS, 0)
+    _rms_ref(Q_ref[:x0].data_ptr(), q_norm.data_ptr(), x0 * NH, HD)
+    _rms_ref(K_ref[:x0].data_ptr(), k_norm.data_ptr(), x0 * NH, HD)
     img_Q_ptr = Q_ref.data_ptr() + x0 * hidden * 2
     img_K_ptr = K_ref.data_ptr() + x0 * hidden * 2
-    fvk.rms_norm_fp16(img_Q_ptr, q_norm.data_ptr(), img_Q_ptr, img_len * NH, HD, EPS, 0)
-    fvk.rms_norm_fp16(img_K_ptr, k_norm.data_ptr(), img_K_ptr, img_len * NH, HD, EPS, 0)
+    _rms_ref(img_Q_ptr, q_norm.data_ptr(), img_len * NH, HD)
+    _rms_ref(img_K_ptr, k_norm.data_ptr(), img_len * NH, HD)
     fvk.rope_apply_fp16_perhead(Q_ref.data_ptr(), rope_table.data_ptr(), a0, NH, HD, 0)
     fvk.rope_apply_fp16_perhead(K_ref.data_ptr(), rope_table.data_ptr(), a0, NH, HD, 0)
     torch.cuda.synchronize()
@@ -268,9 +255,9 @@ def test_double_stream_split_call_matches_joint_rope():
 
 
 # ──────────────────────────────────────────────────────────────────
-# Informal timing (Ada, informative only, does not predict Thor).
+# Informal timing on the local GPU (informative only, does not predict Thor).
 # ──────────────────────────────────────────────────────────────────
-def test_informal_timing_ada_only():
+def test_informal_timing_local_gpu():
     hidden, NH, HD, rows = BACKBONE_HIDDEN, BACKBONE_NH, BACKBONE_HD, 905
     src_row_stride = 3 * hidden
     q_off, k_off, v_off = 0, hidden, 2 * hidden
@@ -286,8 +273,8 @@ def test_informal_timing_ada_only():
     def run_reference():
         Q_r.copy_(qkv[:, q_off:q_off + hidden])
         K_r.copy_(qkv[:, k_off:k_off + hidden])
-        fvk.rms_norm_fp16(Q_r.data_ptr(), q_norm.data_ptr(), Q_r.data_ptr(), rows * NH, HD, EPS, 0)
-        fvk.rms_norm_fp16(K_r.data_ptr(), k_norm.data_ptr(), K_r.data_ptr(), rows * NH, HD, EPS, 0)
+        _rms_ref(Q_r.data_ptr(), q_norm.data_ptr(), rows * NH, HD)
+        _rms_ref(K_r.data_ptr(), k_norm.data_ptr(), rows * NH, HD)
         fvk.rope_apply_fp16_perhead(Q_r.data_ptr(), rope_table.data_ptr(), rows, NH, HD, 0)
         fvk.rope_apply_fp16_perhead(K_r.data_ptr(), rope_table.data_ptr(), rows, NH, HD, 0)
 
@@ -319,8 +306,8 @@ def test_informal_timing_ada_only():
     fused_ms = start.elapsed_time(end) / n_iter
 
     ratio = ref_ms / fused_ms if fused_ms > 0 else float("inf")
-    print(f"\n[Ada RTX 4060 Laptop, informative only, does NOT predict Thor]")
+    print(f"\n[{torch.cuda.get_device_name()}, informative only, does NOT predict Thor]")
     print(f"  rows={rows} hidden={hidden} NH={NH} HD={HD}")
-    print(f"  reference (7 launches): {ref_ms:.4f} ms/iter")
+    print(f"  reference (6 launches): {ref_ms:.4f} ms/iter")
     print(f"  fused (1 launch):       {fused_ms:.4f} ms/iter")
     print(f"  ratio (reference/fused): {ratio:.2f}x")

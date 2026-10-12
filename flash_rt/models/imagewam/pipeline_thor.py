@@ -426,6 +426,29 @@ def _rms_norm_qk(fvk, dims: dict, x_ptr: int, w_ptr: int, out_ptr: int, rows: in
         fvk.rms_norm_fp16(x_ptr, w_ptr, out_ptr, rows, dim, eps, stream)
 
 
+def _qkv_split_norm_rope(fvk, qkv: int, q_norm_w: int, k_norm_w: int, rope_table: int, q_out: int,
+                         k_out: int, v_out: int, rows: int, NH: int, HD: int, hidden: int,
+                         src_row_stride: int, q_col_offset: int, k_col_offset: int, v_col_offset: int,
+                         dst_row_stride: int, eps: float, stream) -> None:
+    """`dims["fuse_qkv_norm_rope"]` (opportunities.md OPT-032 candidate 1):
+    the Q/K/V column split, per-head Q/K RMSNorm and Q/K RoPE as one
+    kernel, one warp per (row, head). Bit-exact against the unfused
+    sequence with `dims["vec_rms_norm"]` on (the served default), not
+    against the 256-thread `rms_norm_fp16` path. The kernel returns -1
+    without launching on an unmet precondition (a dimension, stride or
+    offset not a multiple of 8, or a pointer not 16-byte aligned), so
+    the return code is checked here."""
+    rc = fvk.qkv_split_norm_rope_fp16(qkv, q_norm_w, k_norm_w, rope_table, q_out, k_out, v_out, rows, NH, HD,
+                                      hidden, src_row_stride, q_col_offset, k_col_offset, v_col_offset,
+                                      dst_row_stride, eps, stream)
+    if rc != 0:
+        raise RuntimeError(
+            f"qkv_split_norm_rope_fp16 returned {rc} (expects 0): -1 is an unmet precondition (HD, row "
+            f"strides and column offsets multiples of 8, pointers 16-byte aligned). HD={HD}, "
+            f"src_row_stride={src_row_stride}, dst_row_stride={dst_row_stride}, offsets="
+            f"({q_col_offset}, {k_col_offset}, {v_col_offset}), qkv={qkv:#x}, rope_table={rope_table:#x}.")
+
+
 def _merge_linear2(dims: dict) -> bool:
     """`dims["merge_linear2"]` (roadmap item 4): single-stream blocks run
     the real `linear2` as ONE GEMM over `[attn_out | mlp_act]`. Only the
@@ -700,8 +723,8 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     txt_qkv_merged = bufs["txt_qkv_merged"]  # (x0, 3*hidden)
     key("txt_qkv.weight")(modded, txt_qkv_merged, x0, stream)
     if fused_qkv:
-        fvk.qkv_split_norm_rope_fp16(
-            txt_qkv_merged, key("txt_query_norm"), key("txt_key_norm"), rope_table,
+        _qkv_split_norm_rope(
+            fvk, txt_qkv_merged, key("txt_query_norm"), key("txt_key_norm"), rope_table,
             Q_O, K_cache, V_cache, x0, NH, HD, hidden, 3 * hidden,
             0, hidden, 2 * hidden, hidden, eps, stream)
     else:
@@ -729,8 +752,8 @@ def _double_stream_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, stream,
     key("img_qkv.weight")(img_modded_ptr, img_qkv_merged, img_len, stream)
     if fused_qkv:
         img_rope_ptr = _ptr_offset(rope_table, x0, HD)  # row-offset into the shared [txt|img] table
-        fvk.qkv_split_norm_rope_fp16(
-            img_qkv_merged, key("img_query_norm"), key("img_key_norm"), img_rope_ptr,
+        _qkv_split_norm_rope(
+            fvk, img_qkv_merged, key("img_query_norm"), key("img_key_norm"), img_rope_ptr,
             img_Q_ptr, img_K_ptr, img_V_ptr, img_len, NH, HD, hidden, 3 * hidden,
             0, hidden, 2 * hidden, hidden, eps, stream)
     else:
@@ -837,10 +860,10 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     merge_linear2 = _merge_linear2(dims)
     linear2_width = hidden + mlp_hidden
     # OPT-032 candidate 1: one kernel for the Q/K/V split + QK-RMSNorm + RoPE
-    # sequence below, in place of 3 strided copies + 2 rms_norm_fp16 + 2
-    # rope_apply_fp16_perhead. Opt-in, not yet a default (Thor A/B pending);
-    # bit-exact against the unfused sequence on Ada and on Thor
-    # (csrc/kernels/fused_qkv_norm_rope/, opportunities.md OPT-032).
+    # sequence below, in place of 3 strided copies + 2 per-head RMSNorms + 2
+    # rope_apply_fp16_perhead. Opt-in, not a default; bit-exact against the
+    # unfused sequence with dims["vec_rms_norm"] on (`_qkv_split_norm_rope`,
+    # csrc/kernels/fused_qkv_norm_rope/, opportunities.md OPT-032).
     fused_qkv = bool(dims.get("fuse_qkv_norm_rope"))
     # OPT-032 candidate 3, opt-in, Round 1 scope: only this layer's own
     # `merge_qkv_mlp=True` -> `linear1.weight` consumer (the real
@@ -877,8 +900,8 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         else:
             linear1(modded, linear1_out, a0, stream)
         if fused_qkv:
-            fvk.qkv_split_norm_rope_fp16(
-                linear1_out, key("query_norm"), key("key_norm"), rope_table,
+            _qkv_split_norm_rope(
+                fvk, linear1_out, key("query_norm"), key("key_norm"), rope_table,
                 Q_O, K_cache, V_cache, a0, NH, HD, hidden, linear1_width,
                 0, hidden, 2 * hidden, hidden, eps, stream)
         else:
@@ -899,8 +922,8 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         qkv_merged = bufs["single_qkv_merged"]  # (a0, 3*hidden)
         key("qkv.weight")(modded, qkv_merged, a0, stream)
         if fused_qkv:
-            fvk.qkv_split_norm_rope_fp16(
-                qkv_merged, key("query_norm"), key("key_norm"), rope_table,
+            _qkv_split_norm_rope(
+                fvk, qkv_merged, key("query_norm"), key("key_norm"), rope_table,
                 Q_O, K_cache, V_cache, a0, NH, HD, hidden, 3 * hidden,
                 0, hidden, 2 * hidden, hidden, eps, stream)
         else:
@@ -1209,8 +1232,8 @@ def _action_double_layer(ctx, fvk, gemm, bufs, weights, dims, layer_idx, site_la
     qkv_merged = bufs["action_qkv_merged"]  # (num_action, 3*action_attn_width)
     key("qkv.weight")(modded, qkv_merged, num_action, stream)
     if fused_qkv:
-        fvk.qkv_split_norm_rope_fp16(
-            qkv_merged, key("query_norm"), key("key_norm"), action_rope_table,
+        _qkv_split_norm_rope(
+            fvk, qkv_merged, key("query_norm"), key("key_norm"), action_rope_table,
             action_Q_ptr, action_K_ptr, action_V_ptr, num_action, NH, HD, action_attn_width,
             3 * action_attn_width, 0, action_attn_width, 2 * action_attn_width, action_attn_width, eps, stream)
     else:
@@ -1316,8 +1339,8 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         else:
             linear1(modded, linear1_out, num_action, stream)
         if fused_qkv:
-            fvk.qkv_split_norm_rope_fp16(
-                linear1_out, key("query_norm"), key("key_norm"), action_rope_table,
+            _qkv_split_norm_rope(
+                fvk, linear1_out, key("query_norm"), key("key_norm"), action_rope_table,
                 action_Q_ptr, action_K_ptr, action_V_ptr, num_action, NH, HD, action_attn_width,
                 linear1_width, 0, action_attn_width, 2 * action_attn_width, action_attn_width, eps, stream)
         else:
@@ -1341,8 +1364,8 @@ def _action_single_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
         qkv_merged = bufs["action_qkv_merged"]  # (num_action, 3*action_attn_width)
         key("qkv.weight")(modded, qkv_merged, num_action, stream)
         if fused_qkv:
-            fvk.qkv_split_norm_rope_fp16(
-                qkv_merged, key("query_norm"), key("key_norm"), action_rope_table,
+            _qkv_split_norm_rope(
+                fvk, qkv_merged, key("query_norm"), key("key_norm"), action_rope_table,
                 action_Q_ptr, action_K_ptr, action_V_ptr, num_action, NH, HD, action_attn_width,
                 3 * action_attn_width, 0, action_attn_width, 2 * action_attn_width, action_attn_width, eps, stream)
         else:

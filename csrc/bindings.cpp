@@ -1093,17 +1093,17 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
 
     // Fused QKV column-slice split + RMSNorm(Q,K) + RoPE(Q,K) + plain-copy(V),
     // one launch (opportunities.md OPT-032 candidate 1). Bit-exact with the
-    // separate rms_norm_fp16 + rope_apply_fp16_perhead + 3 strided copies it
-    // replaces (csrc/kernels/fused_qkv_norm_rope/qkv_split_norm_rope_fp16.cuh
-    // has the full numerics account; validated on Ada and on Thor,
-    // opportunities.md OPT-032). Opt-in via dims["fuse_qkv_norm_rope"]
-    // (flash_rt/models/imagewam/pipeline_thor.py), not yet a default.
+    // separate rms_norm_fp16_vec + rope_apply_fp16_perhead + 3 strided copies
+    // it replaces (csrc/kernels/fused_qkv_norm_rope/qkv_split_norm_rope_fp16.cuh
+    // has the full numerics account). Returns 0, -1 on an unmet shape or
+    // alignment precondition (nothing launched), or -cudaError_t. Opt-in via
+    // dims["fuse_qkv_norm_rope"] (flash_rt/models/imagewam/pipeline_thor.py).
     m.def("qkv_split_norm_rope_fp16", [](uintptr_t qkv, uintptr_t q_norm_weight, uintptr_t k_norm_weight,
                                           uintptr_t rope_table, uintptr_t Q_out, uintptr_t K_out, uintptr_t V_out,
                                           int rows, int NH, int HD, int hidden, int src_row_stride,
                                           int q_col_offset, int k_col_offset, int v_col_offset,
                                           int dst_row_stride, float eps, uintptr_t stream) {
-        qkv_split_norm_rope_fp16(
+        return qkv_split_norm_rope_fp16(
             reinterpret_cast<const __half*>(qkv),
             reinterpret_cast<const __half*>(q_norm_weight),
             reinterpret_cast<const __half*>(k_norm_weight),
