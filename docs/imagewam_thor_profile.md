@@ -21,17 +21,17 @@ one, and a same-cell comparison to the RTX 5090 profile
   `flashrt_fa4` / `FlashAttentionForwardSm100` is in the kernel dump).
   `vec_rms_norm` on (frontend `setdefault`; the QK RMSNorm kernel is
   `rms_norm_fp16_vec`, not the 256-thread `rms_norm_kernel`).
-  `fuse_qkv_norm_rope` off (its default at the measured commit; it is
-  default on from the commit after `a2ac9c2`, measured in
-  opportunities.md OPT-032 candidate 1).
+  `fuse_qkv_norm_rope` on (frontend `setdefault`; the Q/K/V split,
+  per-head Q/K RMSNorm and RoPE run as one `qkv_split_norm_rope_fp16`
+  kernel per layer site).
 - GEMM M: backbone text stream 24, image stream 392, single-stream 416;
   ActionDiT 64.
 - Precisions: `fp16`, `fp8` (dynamic-scale `Fp8Linear`), `nvfp4`. ImageWAM
   has no `bf16` precision. Each precision ran in its own process.
 - Machine: Jetson AGX Thor Developer Kit, SM 11.0, torch 2.9.1+cu130,
-  CUDA 13.0, FlashRT `acc0b10` plus the `vec_rms_norm` default-on change
-  measured here. Power mode MAXN (`nvpmodel -q`). GPU clocks pinned
-  (read-only): GPC 1.575 GHz, NVD 1.692 GHz, `emc_locked` unknown. No
+  CUDA 13.0, FlashRT `a21507e`. Power mode MAXN (`nvpmodel -q`). GPU
+  clocks pinned (read-only): GPC 1.575 GHz, NVD 1.692 GHz; the EMC
+  frequency is not readable without root (nvpmodel EMC cap 4266 MHz). No
   `nvpmodel -m` / `jetson_clocks` / sysfs write. GPU exclusive during the
   timed runs. Environment: `FlashRT/env.sh` + in-tree `.venv`.
 
@@ -50,7 +50,9 @@ else fixed as above.
   `imagewam_prefill`, `imagewam_denoise_loop`), the attention backend's
   `run` and the VAE stage's `run` wrapped in a profiler range with a device
   sync at entry and exit. Operator class by kernel name; kernels inside
-  `attn.run` are "attention".
+  `attn.run` are "attention". The fused `qkv_split_norm_rope_fp16` kernel
+  counts as "norm", so the Q/K/V split copies and RoPE it absorbs are in
+  "norm", not "elementwise".
 - OPS regex (Thor-only fixes vs the 5090 dump, same script): `preprocess`
   → elementwise (`imagewam_vae_preprocess_kernel` was "other");
   `quant/cast` matched before attention, and `flash` was narrowed to
@@ -69,77 +71,82 @@ else fixed as above.
 
   | precision | kernels per iteration | eager | `infer()` P50 | graph-replay | eager − P50 | graph − P50 |
   |---|---|---:|---:|---:|---:|---:|
-  | fp16 | [4504, 4504, 4504] (equal) | 139.49 | 149.38 | 153.03 | −6.6% | +2.4% |
-  | fp8 | [6974, 6974, 6974] (equal) | 112.39 | 118.81 | 120.62 | −5.4% | +1.5% |
-  | nvfp4 | [4929, 4929, 4929] (equal) | 88.47 | 87.34 | 90.00 | +1.3% | +3.0% |
+  | fp16 | [2834, 2834, 2834] (equal) | 131.28 | 139.17 | 141.84 | −5.7% | +1.9% |
+  | fp8 | [5304, 5304, 5304] (equal) | 104.97 | 111.86 | 113.04 | −6.2% | +1.1% |
+  | nvfp4 | [3259, 3259, 3259] (equal) | 80.53 | 80.22 | 81.75 | +0.4% | +1.9% |
 
-  Launch counts are integers. Structural floors hold. The same LIBERO
-  shape with `vec_rms_norm` off on this machine was nvfp4 106.65 ms
-  (norm 28.5 ms); with the flag on, nvfp4 is 87.34 ms (norm 8.2 ms),
-  matching the earlier real-checkpoint confirmation (86.4 ms) within
-  1 ms. The 98.0 ms number is a different shape (3-view, horizon 30,
-  `action_dim` 32, random weights, flag on).
+  Launch counts are integers, and 1670 below the `fuse_qkv_norm_rope`-off
+  counts (4504 / 6974 / 4929), the 1670 launches the fused kernel removes.
+  `qkv_split_norm_rope_fp16_kernel` is the only Q/K norm and RoPE kernel
+  in all three dumps (280 launches, 3.64 ms per `infer()`);
+  `rms_norm_fp16_vec` and `rope_apply_fp16_perhead` do not appear.
 - No GEMM-peak or DRAM-ceiling measurement on this Thor in this run.
   Achieved TFLOPS and weight GB/s below reuse the 5090 doc's layer-shape
   inventory. No compute-bound vs bandwidth-bound call is made from those
   rates.
 - Scripts: `benchmarks/imagewam_module_operator_profile.py`,
   `benchmarks/imagewam_module_operator_share.py`. Raw JSON is local
-  (`logs/1011_thor_profile_vecrms/`, not in the repository).
+  (`logs/1011_thor_profile_fused_default/`, not in the repository).
 
 ## Wall time (ms)
 
-| precision | `infer()` P50 | prefill graph | denoise-loop graph |
-|---|---:|---:|---:|
-| fp16 | 149.38 | 49.32 | 90.78 |
-| fp8 | 118.81 | 40.66 | 69.05 |
-| nvfp4 | 87.34 | 31.17 | 47.25 |
+| precision | `infer()` P50 | prefill graph | denoise-loop graph | `infer()` P50, `fuse_qkv_norm_rope` off |
+|---|---:|---:|---:|---:|
+| fp16 | 139.17 | 46.63 | 83.46 | 149.38 |
+| fp8 | 111.86 | 38.31 | 64.57 | 118.81 |
+| nvfp4 | 80.22 | 28.23 | 43.10 | 87.34 |
 
-Remainder (`infer()` − prefill − denoise) is 9.28 / 9.10 / 8.92 ms.
-`vae_stage_p50` from the script is ~0.08–0.09 ms because the VAE runs
-inside the full infer graph, not in `stage_images` alone.
+Remainder (`infer()` − prefill − denoise) is 9.08 / 8.98 / 8.89 ms. The
+last column is the same configuration at `74b5efe`, where the flag was
+off (separate processes). The flag saves 7.1–10.2 ms per `infer()`. The
+within-process A/B, 7.3–8.3 ms over three processes, is in
+opportunities.md OPT-032 candidate 1. `vae_stage_p50` from the script is
+near zero because the VAE runs inside the full infer graph, not in
+`stage_images` alone.
 
 ## GPU ms per `infer()` by module and operator (launches)
 
 Attention = FA4 (`FlashAttentionForwardSm100`) + the memcpy that
-`attn.run` issues around it. ActionDiT rows are summed over 10 denoise
-steps. Totals are the eager kernel total.
+`attn.run` issues around it. "norm" includes the fused
+`qkv_split_norm_rope_fp16` kernel. ActionDiT rows are summed over 10
+denoise steps. Totals are the eager kernel total (input staging, 0.01 ms,
+not shown).
 
 ### fp16
 
 | module | GEMM | quant/cast | attention | conv | norm | elementwise | total |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| VAE encode | 0.15 (5) | - | 0.33 (1) | 3.97 (25) | 2.36 (68) | 1.93 (29) | 8.73 |
-| backbone double (5 blocks) | 11.25 (45) | - | 0.21 (10) | - | 0.76 (42) | 1.25 (54) | 13.48 |
-| backbone single (20 blocks) + entry | 26.68 (43) | - | 0.83 (40) | - | 1.66 (60) | 6.58 (140) | 35.75 |
-| ActionDiT double (5 blocks × 10 steps) | 11.48 (250) | - | 1.57 (100) | - | 0.93 (210) | 1.60 (320) | 15.58 |
-| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 50.16 (630) | 0.01 (10) | 6.13 (400) | - | 2.51 (600) | 7.13 (1420) | 65.94 |
-| **total** | **99.72** | **0.01** | **9.07** | **3.97** | **8.21** | **18.49** | **139.49** |
+| VAE encode | 0.15 (5) | - | 0.33 (1) | 3.93 (25) | 2.36 (68) | 1.94 (29) | 8.70 |
+| backbone double (5 blocks) | 11.44 (45) | - | 0.23 (10) | - | 0.80 (32) | 0.68 (14) | 13.16 |
+| backbone single (20 blocks) + entry | 26.48 (43) | - | 0.95 (40) | - | 2.25 (40) | 3.41 (40) | 33.09 |
+| ActionDiT double (5 blocks × 10 steps) | 11.22 (250) | - | 1.68 (100) | - | 0.97 (160) | 0.46 (70) | 14.33 |
+| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 50.17 (630) | 0.01 (10) | 6.49 (400) | - | 2.67 (400) | 2.65 (420) | 61.99 |
+| **total** | **99.45** | **0.01** | **9.69** | **3.93** | **9.05** | **9.14** | **131.28** |
 
 ### fp8
 
 | module | GEMM | quant/cast | absmax | attention | conv | norm | elementwise | total |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| VAE encode | 0.14 (5) | - | - | 0.33 (1) | 3.97 (25) | 2.37 (68) | 1.95 (29) | 8.76 |
-| backbone double (5 blocks) | 9.32 (45) | 0.43 (40) | 0.33 (40) | 0.21 (10) | - | 0.76 (42) | 1.25 (94) | 12.33 |
-| backbone single (20 blocks) + entry | 16.51 (43) | 1.34 (40) | 0.68 (40) | 0.85 (40) | - | 1.67 (60) | 6.56 (180) | 27.63 |
-| ActionDiT double (5 blocks × 10 steps) | 6.19 (200) | 0.53 (200) | 0.96 (200) | 1.53 (100) | - | 0.92 (210) | 1.82 (520) | 12.02 |
-| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 31.72 (430) | 1.55 (410) | 2.20 (400) | 5.98 (400) | - | 2.54 (600) | 7.52 (1820) | 51.64 |
-| **total** | **63.89** | **3.85** | **4.17** | **8.90** | **3.97** | **8.26** | **19.09** | **112.39** |
+| VAE encode | 0.14 (5) | - | - | 0.33 (1) | 3.95 (25) | 2.35 (68) | 1.91 (29) | 8.69 |
+| backbone double (5 blocks) | 9.40 (45) | 0.43 (40) | 0.33 (40) | 0.23 (10) | - | 0.80 (32) | 0.68 (54) | 11.90 |
+| backbone single (20 blocks) + entry | 16.64 (43) | 1.34 (40) | 0.68 (40) | 0.99 (40) | - | 2.32 (40) | 3.38 (80) | 25.37 |
+| ActionDiT double (5 blocks × 10 steps) | 6.21 (200) | 0.53 (200) | 0.96 (200) | 1.68 (100) | - | 0.97 (160) | 0.67 (270) | 11.10 |
+| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 31.91 (430) | 1.52 (410) | 2.19 (400) | 6.41 (400) | - | 2.64 (400) | 3.06 (820) | 47.89 |
+| **total** | **64.30** | **3.82** | **4.17** | **9.64** | **3.95** | **9.09** | **9.71** | **104.97** |
 
-"absmax" is `absmax_kernel`. Memset around it is 0.26 ms and is omitted
-from the cells above.
+"absmax" is `absmax_kernel`. The memsets around it (0.28 ms) are not in
+the cells but are in the row totals.
 
 ### nvfp4
 
 | module | GEMM | quant/cast | attention | conv | norm | elementwise | total |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| VAE encode | 0.15 (5) | - | 0.33 (1) | 3.98 (25) | 2.36 (68) | 1.96 (29) | 8.76 |
-| backbone double (5 blocks) | 6.08 (40) | 0.51 (40) | 0.21 (10) | - | 0.73 (42) | 1.15 (54) | 8.68 |
-| backbone single (20 blocks) + entry | 12.27 (43) | 1.36 (40) | 0.83 (40) | - | 1.67 (60) | 6.53 (140) | 22.65 |
-| ActionDiT double (5 blocks × 10 steps) | 6.20 (200) | 0.83 (200) | 1.54 (100) | - | 0.91 (210) | 1.58 (320) | 11.06 |
-| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 19.29 (430) | 2.28 (410) | 6.09 (400) | - | 2.57 (600) | 7.07 (1420) | 37.30 |
-| **total** | **43.98** | **4.98** | **9.00** | **3.98** | **8.23** | **18.29** | **88.47** |
+| VAE encode | 0.15 (5) | - | 0.33 (1) | 3.93 (25) | 2.36 (68) | 1.96 (29) | 8.73 |
+| backbone double (5 blocks) | 6.11 (40) | 0.51 (40) | 0.23 (10) | - | 0.79 (32) | 0.59 (14) | 8.24 |
+| backbone single (20 blocks) + entry | 12.20 (43) | 1.36 (40) | 0.97 (40) | - | 2.26 (40) | 3.31 (40) | 20.10 |
+| ActionDiT double (5 blocks × 10 steps) | 6.01 (200) | 0.82 (200) | 1.72 (100) | - | 0.92 (160) | 0.46 (70) | 9.93 |
+| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 19.44 (430) | 2.25 (410) | 6.54 (400) | - | 2.61 (400) | 2.68 (420) | 33.52 |
+| **total** | **43.91** | **4.95** | **9.80** | **3.93** | **8.93** | **8.99** | **80.53** |
 
 "quant/cast" in nvfp4 is `kernel_quantize_fp4_sfa_vec` plus the ActionDiT
 `cast_fp32_fp16` on the Euler path.
@@ -147,40 +154,40 @@ from the cells above.
 ## Share of eager kernel total by module and operator (%)
 
 Same runs. Each cell is the cell's eager GPU time divided by that
-precision's eager kernel total (fp16 139.49, fp8 112.39, nvfp4 88.47 ms).
+precision's eager kernel total (fp16 131.28, fp8 104.97, nvfp4 80.53 ms).
 
 ### fp16
 
-| module | GEMM | attention | conv | norm | elementwise | total |
-|---|---:|---:|---:|---:|---:|---:|
-| VAE encode | 0.1 | 0.2 | 2.8 | 1.7 | 1.4 | 6.3 |
-| backbone double (5 blocks) | 8.1 | 0.2 | - | 0.5 | 0.9 | 9.7 |
-| backbone single (20 blocks) + entry | 19.1 | 0.6 | - | 1.2 | 4.7 | 25.6 |
-| ActionDiT double (5 blocks × 10 steps) | 8.2 | 1.1 | - | 0.7 | 1.1 | 11.2 |
-| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 36.0 | 4.4 | - | 1.8 | 5.1 | 47.3 |
-| **total** | **71.5** | **6.5** | **2.8** | **5.9** | **13.3** | **100** |
+| module | GEMM | quant/cast | attention | conv | norm | elementwise | total |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| VAE encode | 0.1 | - | 0.3 | 3.0 | 1.8 | 1.5 | 6.6 |
+| backbone double (5 blocks) | 8.7 | - | 0.2 | - | 0.6 | 0.5 | 10.0 |
+| backbone single (20 blocks) + entry | 20.2 | - | 0.7 | - | 1.7 | 2.6 | 25.2 |
+| ActionDiT double (5 blocks × 10 steps) | 8.5 | - | 1.3 | - | 0.7 | 0.4 | 10.9 |
+| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 38.2 | 0.0 | 4.9 | - | 2.0 | 2.0 | 47.2 |
+| **total** | **75.8** | **0.0** | **7.4** | **3.0** | **6.9** | **7.0** | **100** |
 
 ### fp8
 
 | module | GEMM | quant/cast | absmax | attention | conv | norm | elementwise | total |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| VAE encode | 0.1 | - | - | 0.3 | 3.5 | 2.1 | 1.7 | 7.8 |
-| backbone double (5 blocks) | 8.3 | 0.4 | 0.3 | 0.2 | - | 0.7 | 1.1 | 11.0 |
-| backbone single (20 blocks) + entry | 14.7 | 1.2 | 0.6 | 0.8 | - | 1.5 | 5.8 | 24.6 |
-| ActionDiT double (5 blocks × 10 steps) | 5.5 | 0.5 | 0.9 | 1.4 | - | 0.8 | 1.6 | 10.7 |
-| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 28.2 | 1.4 | 2.0 | 5.3 | - | 2.3 | 6.7 | 45.9 |
-| **total** | **56.8** | **3.4** | **3.7** | **7.9** | **3.5** | **7.4** | **17.0** | **100** |
+| VAE encode | 0.1 | - | - | 0.3 | 3.8 | 2.2 | 1.8 | 8.3 |
+| backbone double (5 blocks) | 9.0 | 0.4 | 0.3 | 0.2 | - | 0.8 | 0.6 | 11.3 |
+| backbone single (20 blocks) + entry | 15.9 | 1.3 | 0.6 | 0.9 | - | 2.2 | 3.2 | 24.2 |
+| ActionDiT double (5 blocks × 10 steps) | 5.9 | 0.5 | 0.9 | 1.6 | - | 0.9 | 0.6 | 10.6 |
+| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 30.4 | 1.4 | 2.1 | 6.1 | - | 2.5 | 2.9 | 45.6 |
+| **total** | **61.3** | **3.6** | **4.0** | **9.2** | **3.8** | **8.7** | **9.3** | **100** |
 
 ### nvfp4
 
 | module | GEMM | quant/cast | attention | conv | norm | elementwise | total |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| VAE encode | 0.2 | - | 0.4 | 4.5 | 2.7 | 2.2 | 9.9 |
-| backbone double (5 blocks) | 6.9 | 0.6 | 0.2 | - | 0.8 | 1.3 | 9.8 |
-| backbone single (20 blocks) + entry | 13.9 | 1.5 | 0.9 | - | 1.9 | 7.4 | 25.6 |
-| ActionDiT double (5 blocks × 10 steps) | 7.0 | 0.9 | 1.7 | - | 1.0 | 1.8 | 12.5 |
-| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 21.8 | 2.6 | 6.9 | - | 2.9 | 8.0 | 42.2 |
-| **total** | **49.7** | **5.6** | **10.2** | **4.5** | **9.3** | **20.7** | **100** |
+| VAE encode | 0.2 | - | 0.4 | 4.9 | 2.9 | 2.4 | 10.8 |
+| backbone double (5 blocks) | 7.6 | 0.6 | 0.3 | - | 1.0 | 0.7 | 10.2 |
+| backbone single (20 blocks) + entry | 15.1 | 1.7 | 1.2 | - | 2.8 | 4.1 | 25.0 |
+| ActionDiT double (5 blocks × 10 steps) | 7.5 | 1.0 | 2.1 | - | 1.1 | 0.6 | 12.3 |
+| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 24.1 | 2.8 | 8.1 | - | 3.2 | 3.3 | 41.6 |
+| **total** | **54.5** | **6.1** | **12.2** | **4.9** | **11.1** | **11.2** | **100** |
 
 ## GEMM achieved rates
 
@@ -192,18 +199,18 @@ column.
 
 | module | precision | GEMM ms | TFLOPS | weight GB/s |
 |---|---|---:|---:|---:|
-| backbone double | fp16 | 11.25 | 45 | 218 |
-| backbone double | fp8 | 9.32 | 55 | 132 |
-| backbone double | nvfp4 | 6.08 | 84 | 113 |
-| backbone single | fp16 | 26.68 | 77 | 184 |
-| backbone single | fp8 | 16.51 | 124 | 149 |
-| backbone single | nvfp4 | 12.27 | 167 | 113 |
-| ActionDiT double | fp16 | 11.48 | 14 | 219 |
-| ActionDiT double | fp8 | 6.19 | 26 | 203 |
-| ActionDiT double | nvfp4 | 6.20 | 26 | 114 |
-| ActionDiT single | fp16 | 50.16 | 13 | 201 |
-| ActionDiT single | fp8 | 31.72 | 20 | 159 |
-| ActionDiT single | nvfp4 | 19.29 | 33 | 147 |
+| backbone double | fp16 | 11.44 | 45 | 214 |
+| backbone double | fp8 | 9.40 | 54 | 131 |
+| backbone double | nvfp4 | 6.11 | 84 | 113 |
+| backbone single | fp16 | 26.48 | 77 | 185 |
+| backbone single | fp8 | 16.64 | 123 | 147 |
+| backbone single | nvfp4 | 12.20 | 167 | 113 |
+| ActionDiT double | fp16 | 11.22 | 14 | 224 |
+| ActionDiT double | fp8 | 6.21 | 26 | 203 |
+| ActionDiT double | nvfp4 | 6.01 | 27 | 118 |
+| ActionDiT single | fp16 | 50.17 | 13 | 201 |
+| ActionDiT single | fp8 | 31.91 | 20 | 158 |
+| ActionDiT single | nvfp4 | 19.44 | 33 | 146 |
 
 ## Bottleneck per part
 
@@ -211,36 +218,36 @@ Only claims that the tables themselves support. No Thor roofline.
 
 | part | share of eager fp16 / fp8 / nvfp4 | what the tables show |
 |---|---|---|
-| ActionDiT single-stream GEMM | 36% / 28% / 22% | Largest GEMM cell in every precision; M = 64, 10 steps |
-| backbone single-stream GEMM | 19% / 15% / 14% | Second GEMM cell; M = 416 |
-| elementwise | 13% / 17% / 21% | Launch-heavy: 1,400+ `at::native` copies plus SiLU-GLU / RoPE |
-| attention (FA4) | 7% / 8% / 10% | 9.0 ms in every precision; FA4, not the 5090 cuBLAS chain |
-| VAE encode | 6% / 8% / 10% | 8.73–8.76 ms, 25 conv; precision-independent |
-| norm | 6% / 7% / 9% | 8.2 ms; VAE group-norm ~2.4 ms plus `rms_norm_fp16_vec` |
-| nvfp4 quant/cast | – / – / 5.6% | 4.98 ms, mostly `kernel_quantize_fp4_sfa_vec` |
-| fp8 absmax | – / 3.7% / – | `absmax_kernel`, 680 launches |
+| ActionDiT single-stream GEMM | 38% / 30% / 24% | Largest GEMM cell in every precision; M = 64, 10 steps |
+| backbone single-stream GEMM | 20% / 16% / 15% | Second GEMM cell; M = 416 |
+| attention (FA4) | 7% / 9% / 12% | 9.6–9.8 ms in every precision; FA4, not the 5090 cuBLAS chain |
+| elementwise | 7% / 9% / 11% | 9.0–9.7 ms: `silu_glu_merged` 5.7 ms over 280 launches (backbone single 3.4 ms over 40), the single-stream attention-output copies 1.3 ms over 220, VAE `bias_residual` 0.9 ms; fp8 adds `compute_scale` |
+| norm | 7% / 9% / 11% | 8.9–9.1 ms: `qkv_split_norm_rope_fp16` 3.64 ms over 280 launches, VAE `gn_apply` 1.76 ms, `gate_res_ada_layer_norm` 1.5 ms over 300 |
+| VAE encode | 7% / 8% / 11% | 8.69–8.73 ms, 25 conv; precision-independent |
+| nvfp4 quant/cast | – / – / 6.1% | 4.95 ms, mostly `kernel_quantize_fp4_sfa_vec` |
+| fp8 absmax | – / 4.0% / – | `absmax_kernel`, 680 launches |
 
 Fastest served tier on this GPU for this configuration: `nvfp4`
-(`infer()` P50 87.34 ms).
+(`infer()` P50 80.22 ms).
 
 ## Same-cell comparison to RTX 5090
 
-5090 numbers from `docs/imagewam_rtx5090_profile.md` at `74b5efe` (eager
-ms and % of that machine's eager total), the version measured in the same
-configuration as these Thor tables: both machines run `vec_rms_norm` on
-and `fuse_qkv_norm_rope` off. Thor
-numbers from the tables above. Wall time is
-`infer()` P50. Configuration also differs where the default profile
-does: Thor FA4 on, 5090 cuBLAS attention; both have VAE in graph,
-`text_trim`, `x0` = 24.
+5090 numbers from `docs/imagewam_rtx5090_profile.md` (eager ms, and % of
+that machine's eager total), measured at the same commit and served
+defaults: `vec_rms_norm` on, `fuse_qkv_norm_rope` on. Thor numbers are from
+the tables above. Wall time is `infer()` P50. GEMM ms are the module
+cells, so "backbone single" includes the entry projection and "ActionDiT
+single" the ActionDiT enc/head GEMMs on both machines. Configuration
+differs where the default profile does: Thor FA4 on, 5090 cuBLAS
+attention. Both have VAE in graph, `text_trim` and `x0` = 24.
 
 ### Wall time (ms)
 
 | precision | Thor `infer()` | 5090 `infer()` | Thor / 5090 |
 |---|---:|---:|---:|
-| fp16 | 149.38 | 34.80 | 4.3× |
-| fp8 | 118.81 | 25.98 | 4.6× |
-| nvfp4 | 87.34 | 30.35 | 2.9× |
+| fp16 | 139.17 | 32.88 | 4.2× |
+| fp8 | 111.86 | 23.85 | 4.7× |
+| nvfp4 | 80.22 | 28.23 | 2.8× |
 
 5090's fastest tier is fp8; Thor's is nvfp4.
 
@@ -248,52 +255,57 @@ does: Thor FA4 on, 5090 cuBLAS attention; both have VAE in graph,
 
 | module | fp16 Thor | fp16 5090 | fp8 Thor | fp8 5090 | nvfp4 Thor | nvfp4 5090 |
 |---|---:|---:|---:|---:|---:|---:|
-| backbone double | 11.25 | 3.49 | 9.32 | 1.40 | 6.08 | 1.10 |
-| backbone single | 26.68 | 10.35 | 16.51 | 3.38 | 12.27 | 2.30 |
-| ActionDiT double | 11.48 | 2.18 | 6.19 | 1.42 | 6.20 | 2.38 |
-| ActionDiT single | 50.16 | 7.67 | 31.72 | 4.55 | 19.29 | 7.44 |
+| backbone double | 11.44 | 3.50 | 9.40 | 1.40 | 6.11 | 1.10 |
+| backbone single | 26.48 | 10.43 | 16.64 | 3.42 | 12.20 | 2.35 |
+| ActionDiT double | 11.22 | 2.19 | 6.21 | 1.42 | 6.01 | 2.38 |
+| ActionDiT single | 50.17 | 7.90 | 31.91 | 4.59 | 19.44 | 7.52 |
 
-### Eager norm, attention and VAE ms
+### Eager norm, elementwise, attention and VAE ms
 
 | part | fp16 Thor | fp16 5090 | fp8 Thor | fp8 5090 | nvfp4 Thor | nvfp4 5090 |
 |---|---:|---:|---:|---:|---:|---:|
-| norm total | 8.21 | 2.24 | 8.26 | 2.24 | 8.23 | 2.24 |
-| attention total | 9.07 | 3.38 | 8.90 | 3.40 | 9.00 | 3.40 |
-| VAE encode total | 8.73 | 3.09 | 8.76 | 3.09 | 8.76 | 3.09 |
+| norm total | 9.05 | 2.11 | 9.09 | 2.08 | 8.93 | 2.08 |
+| elementwise total | 9.14 | 1.17 | 9.71 | 1.70 | 8.99 | 1.14 |
+| attention total | 9.69 | 3.38 | 9.64 | 3.41 | 9.80 | 3.39 |
+| VAE encode total | 8.70 | 3.10 | 8.69 | 3.09 | 8.73 | 3.09 |
 
-Thor QK RMSNorm is now `rms_norm_fp16_vec`; the remaining ~8.2 ms of
-"norm" is mostly VAE group-norm plus the cheap warp-per-row QK path
-(with the flag off the same cell was 28.5 ms); on 5090 the same flag
-leaves 2.24 ms. Attention is FA4 vs cuBLAS. VAE is precision-independent on both machines.
+The same fused kernel takes 3.64 ms on Thor and 0.73–0.77 ms on 5090
+(280 launches each). Elementwise differs most: `silu_glu_merged` alone
+is 5.7 ms on Thor against 0.58 ms on 5090. Attention is FA4 vs cuBLAS.
+VAE is precision-independent on both machines.
 
 ### Share of eager total, GEMM and norm (%)
 
 | cell | fp16 Thor | fp16 5090 | fp8 Thor | fp8 5090 | nvfp4 Thor | nvfp4 5090 |
 |---|---:|---:|---:|---:|---:|---:|
-| GEMM total | 71.5 | 67.8 | 56.8 | 44.1 | 49.7 | 43.7 |
-| norm total | 5.9 | 6.4 | 7.4 | 9.1 | 9.3 | 7.3 |
-| ActionDiT single GEMM | 36.0 | 21.8 | 28.2 | 18.4 | 21.8 | 24.4 |
-| backbone single GEMM | 19.1 | 29.4 | 14.7 | 13.7 | 13.9 | 7.5 |
+| GEMM total | 75.8 | 72.6 | 61.3 | 48.3 | 54.5 | 47.2 |
+| norm total | 6.9 | 6.4 | 8.7 | 9.2 | 11.1 | 7.3 |
+| ActionDiT single GEMM | 38.2 | 23.8 | 30.4 | 20.4 | 24.1 | 26.5 |
+| backbone single GEMM | 20.2 | 31.5 | 15.9 | 15.2 | 15.1 | 8.3 |
 
 ## Conclusions
 
-1. Served wall time on Thor, LIBERO config, default profile with
-   `vec_rms_norm` on: nvfp4 87.34 ms, fp8 118.81 ms, fp16 149.38 ms.
-   nvfp4 is the fastest of the three (5090's fastest was fp8). 87.34 ms
-   matches the earlier real-checkpoint `vec_rms_norm=True` number
-   (86.4 ms) within 1 ms. The 98.0 ms figure is the 3-view / horizon-30
-   target shape, not this LIBERO row.
-2. Kernels per iteration are equal in every cell (4504 / 6974 / 4929),
+1. Served wall time on Thor, LIBERO config, default profile
+   (`vec_rms_norm` and `fuse_qkv_norm_rope` on): nvfp4 80.22 ms, fp8
+   111.86 ms, fp16 139.17 ms. nvfp4 is the fastest of the three (5090's
+   fastest is fp8). The 98.0 ms figure elsewhere is the 3-view /
+   horizon-30 target shape, not this LIBERO row.
+2. Kernels per iteration are equal in every cell (2834 / 5304 / 3259),
    and eager totals track `infer()` P50 and graph-replay kernel time to a
    few percent.
-3. `vec_rms_norm` is the served default (`setdefault` on the frontend).
-   Norm is 8.2 ms / 6–9% of eager time, vs 28.5 ms / 18–26% with the
-   flag off on the same machine.
-4. FA4 is on by default on Thor and was left on. Attention is 9.0 ms
+3. GEMM is 55–76% of eager time; the ActionDiT single-stream GEMM (M = 64,
+   10 steps) is the largest cell in every precision.
+4. The precision-independent part is about 37 ms: VAE 8.7, attention
+   9.7, norm 9.0, elementwise 9.0–9.7 ms. On 5090 the same part is about
+   10 ms.
+   - With the fused Q/K/V kernel, the largest elementwise item is
+     `silu_glu_merged` (5.7 ms).
+   - The largest norm item is the fused kernel itself (3.64 ms).
+5. FA4 is on by default on Thor and was left on. Attention is 9.7 ms
    eager vs 3.4 ms cuBLAS on 5090 — a different operator, not a slower
    instance of the same one.
-5. NVFP4 activation quantization on Thor is `kernel_quantize_fp4_sfa_vec`
-   (4.98 ms), not the 5090 `cast_fp16_to_bf16` + `quantize_bf16_to_nvfp4`
-   + `cast_bf16_to_fp16` sequence (5.98 ms).
-6. Defaults that match 5090: `text_trim`, VAE in graph, `x0` = 24,
-   `vec_rms_norm` on. Default that does not: FA4.
+6. NVFP4 activation quantization on Thor is `kernel_quantize_fp4_sfa_vec`
+   (4.95 ms), not the 5090 `cast_fp16_to_bf16` + `quantize_bf16_to_nvfp4`
+   + `cast_bf16_to_fp16` sequence (5.96 ms).
+7. Defaults that match 5090: `text_trim`, VAE in graph, `x0` = 24,
+   `vec_rms_norm` on, `fuse_qkv_norm_rope` on. Default that does not: FA4.
