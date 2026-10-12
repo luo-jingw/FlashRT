@@ -525,6 +525,14 @@ class ImageWAMTorchFrontendThor:
         # 256-thread kernel is 23 ms of the infer. Override with
         # dims_override={"vec_rms_norm": False} for A/B.
         self.dims.setdefault("vec_rms_norm", True)
+        # OPT-032 candidate 1: the Q/K/V split + per-head Q/K RMSNorm + RoPE
+        # as one kernel per layer site (one warp per (row, head)), bit-exact
+        # against the unfused path with vec_rms_norm on. Default on --
+        # Thor's served LIBERO nvfp4/fp8/fp16 are 7.3-8.3 ms faster, 1670
+        # fewer kernels per infer. The fused sites bypass `_rms_norm_qk`, so
+        # an A/B of the old 256-thread norm also needs
+        # dims_override={"fuse_qkv_norm_rope": False}.
+        self.dims.setdefault("fuse_qkv_norm_rope", True)
         d = self.dims
         if d["action_attn_width"] != d["hidden"]:
             raise ValueError(

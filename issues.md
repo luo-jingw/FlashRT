@@ -995,13 +995,23 @@ In the Thor A/B of `fuse_qkv_norm_rope` at `989547d` (opportunities.md OPT-032, 
 
 R1 fp16's A side also spread from P10 124.57 to P50 144.80.
 
+The warp-kernel round at `a2ac9c2` ran the same A/B (`X0=24 USE_FA4=1 AB=fuse_qkv_norm_rope`) in three separate processes:
+
+| precision | A ms, process 1 / 2 / 3 | B ms, process 1 / 2 / 3 |
+|---|---|---|
+| nvfp4 | 81.09 / 66.64 / 66.36 | 72.84 / 59.01 / 59.09 |
+| fp8 | 114.19 / 93.52 / 93.59 | 106.15 / 86.27 / 85.95 |
+| fp16 | 125.10 / 124.68 / 125.03 | 117.18 / 116.99 / 117.08 |
+
+Process 1 is 14–21 ms slower on both sides for nvfp4 and fp8. fp16 is stable. A − B stayed within +7.25 to +8.25 ms in all nine cells.
+
 ## Impact
 
 Absolute Thor latencies from one process cannot be compared with another process's. The within-process ABBA differences remain the comparable quantity. In R1, their sign agrees with the cross-run fp8/fp16 comparison of fused-on against vec-on (R2 B against R3 B: −8.3 / −8.5 ms). The magnitude of a few-ms effect is not reliable to better than the spread above.
 
 ## Evidence
 
-Thor logs `logs/1011_thor_opt032_c1/{R1_fused_vec_on,R2_fused_vec_off,R3_vec}.log`.
+Thor logs `logs/1011_thor_opt032_c1/{R1_fused_vec_on,R2_fused_vec_off,R3_vec}.log` and `logs/1011_thor_opt032_warp/{W1a,W1b,W1c,clocks}.log`. GPC stayed at 1.575 GHz in all six snapshots of the second round.
 
 ## Hypotheses
 
@@ -1010,7 +1020,7 @@ Thor logs `logs/1011_thor_opt032_c1/{R1_fused_vec_on,R2_fused_vec_off,R3_vec}.lo
 
 ## Next Experiment
 
-Repeat one configuration pair (vec on fused off, fused on) in 3 separate processes in alternating order. Record the EMC frequency read-only (tegrastats) at the start and end of each process, and report the spread per configuration.
+The current EMC frequency cannot be read without root: tegrastats prints no `EMC_FREQ`, and debugfs is not readable. Testing the EMC hypothesis needs a readable memory-clock source on that machine, or an owner-run `tegrastats` with EMC reporting. Without one, the observable next step is to repeat one configuration in 5+ processes and check whether the slow state is bimodal and tied to the first process after idle.
 
 ## Resolution
 

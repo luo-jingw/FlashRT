@@ -167,7 +167,7 @@ svg text{fill:var(--muted);font-size:11px}
     <h3 class="h3">优化方向</h3>
     <div class="tablewrap"><table>
       <tr><th>方向</th><th style="text-align:left">去掉什么</th><th style="text-align:left">状态</th></tr>
-      <tr><td><code>fuse_qkv_norm_rope</code>（OPT-032 #1）</td><td style="text-align:left;white-space:normal">每层的 3 次拷贝 + 2 次 QK norm + 2 次 RoPE 合成 1 个 kernel：每次推理少 1670 次启动；Q/K/V 的读写量从约 14S 降到 6S（S 为一个 Q 张量的大小）</td><td style="text-align:left;white-space:normal">已接入，默认关闭；256 线程版本在 5090 上省 1.0–1.7 ms、在 Thor 上慢 7–9.6 ms；warp 版在 5090 上省 2.0–2.7 ms，且与默认路径逐位一致，Thor 待测（见下）</td></tr>
+      <tr><td><code>fuse_qkv_norm_rope</code>（OPT-032 #1）</td><td style="text-align:left;white-space:normal">每层的 3 次拷贝 + 2 次 QK norm + 2 次 RoPE 合成 1 个 kernel：每次推理少 1670 次启动；Q/K/V 的读写量从约 14S 降到 6S（S 为一个 Q 张量的大小）</td><td style="text-align:left;white-space:normal">现为默认。256 线程版本在 5090 上省 1.0–1.7 ms、在 Thor 上慢 7–9.6 ms；warp 版与 vec norm 路径逐位一致，在 Thor 上省 7.3–8.3 ms、在 5090 上省 2.0–2.7 ms（见下）</td></tr>
       <tr><td>attention 输出直接写入 <code>linear2</code> 输入（OPT-032 #2）</td><td style="text-align:left;white-space:normal">单流层的 attention 输出拷贝（220 次）。5090 走 cuBLAS 链，可以让 PV GEMM 通过 <code>ldc</code> 直接写到 <code>linear2_in</code> 的列切片；Thor 要改 FA4 的输出指针</td><td style="text-align:left;white-space:normal">未做</td></tr>
       <tr><td>SiLU-GLU 并进 GEMM epilogue（#11）</td><td style="text-align:left;white-space:normal">280 次 GLU，以及 backbone 每层约 23 MB 的中间张量往返</td><td style="text-align:left;white-space:normal">需要改 CUTLASS；两个 GEMM 的版本试过，已回退（OPT-015）</td></tr>
       <tr><td>fp8 静态 scale</td><td style="text-align:left;white-space:normal">680 次 <code>compute_scale</code> 和 680 次 absmax</td><td style="text-align:left;white-space:normal">会改变数值，需要校准</td></tr>
@@ -226,7 +226,12 @@ svg text{fill:var(--muted);font-size:11px}
       <li><b>数值差全部来自归约顺序。</b>② 证明 fused 和旧 norm 路径逐位一致；① 的偏差与 ③（vec 开/关）几乎相同（backbone cos 都是 0.998926 / 0.990500 / 0.999989）。也就是说，打开 fused 在数值上等于退回旧 norm，并没有引入新的误差。nvfp4 的 backbone cos 0.9905 看着偏低，但这个偏差在 <code>vec_rms_norm</code> 变成默认时已经接受过了（Thor 用真实 checkpoint 验证的 actions cos ≥ 0.99995）。</li>
       <li><b>Thor 上是净亏，不能设为默认。</b>在 vec on 的默认配置上打开 fused，三档分别慢 7.2 / 7.0 / 9.6 ms，虽然同样少了 1670 个 kernel。② 逐位一致，说明 FA4 路径上的接线没问题；数值偏差和 ③ 相同，和 5090 一样。</li>
       <li><b>原因在 block 结构，不在字节量。</b>Thor 上每个 256 线程的 (row, head) block 固定花约 30 ns：prefill 每次约 8,300 个 block、283 µs，denoise 每次 1,536 个 block、44.7 µs。vec norm 处理同样的行只要每行约 2 ns。融合 kernel 本身就有 19.7 ms，已经超过它替换掉的拷贝 + norm + RoPE（≤18.8 ms）。相对旧的 256 线程 norm 它仍然省 11 ms（②），但相对 warp 版 norm 就亏了。</li>
-      <li><b>已改成每个 (row, head) 一个 warp：</b>照抄 <code>rms_norm_fp16_vec_warp_kernel</code> 的 int4 加载和 <code>warp_sum</code> 顺序。改完后，它和当前默认路径（vec norm）在 kernel 级、5 处层接线以及端到端输出上都逐位一致。5090 上（vec on，served shape）三档分别省 2.03 / 2.47 / 2.71 ms，旧的 256 线程版本只省 1.0 / 1.5 / 1.7 ms。开关在 Thor 实测之前仍保持关闭。</li>
+      <li><b>已改成每个 (row, head) 一个 warp，并设为默认：</b>照抄 <code>rms_norm_fp16_vec_warp_kernel</code> 的 int4 加载和 <code>warp_sum</code> 顺序。改完后在 kernel 级、5 处层接线以及端到端输出上，都和 vec norm 默认路径逐位一致。
+        <ul>
+          <li>Thor：3 个独立进程、三档精度，共 9 个 A − B，全部在 +7.25 到 +8.25 ms 之间。融合 kernel 每次调用 prefill 50 µs、denoise 7.8 µs（256 线程版本是 283 / 44.7 µs）。</li>
+          <li>5090：省 2.0–2.7 ms。</li>
+          <li>现在由 frontend 的 <code>setdefault</code> 默认打开，上方各表是打开之前测的。</li>
+        </ul></li>
     </ol>
   </div>
 
@@ -261,7 +266,7 @@ svg text{fill:var(--muted);font-size:11px}
       <h2>范围与条件</h2>
       <ul class="cond">
         <li>工作负载 <code>ImageWAMWorkload.libero()</code>：2 视角 224×224，horizon 64，10 步去噪；真实 LIBERO checkpoint 与 FLUX.2 AE；prompt 裁短后文本 24 token，图像 392 token，ActionDiT M=64。</li>
-        <li>部署入口 <code>load_imagewam</code> 默认 profile，VAE 在 CUDA graph 内，<code>vec_rms_norm</code> 打开（两台设备的当前默认值）。attention：5090 为 cuBLAS QKᵀ/softmax/PV 链，Thor 默认 FA4（不是同一种算子）。</li>
+        <li>部署入口 <code>load_imagewam</code> 默认 profile，VAE 在 CUDA graph 内，<code>vec_rms_norm</code> 打开，<code>fuse_qkv_norm_rope</code> 关闭（测量时的默认值；之后已改为默认打开，5090 上 fp8 / nvfp4 / fp16 变为 23.85 / 28.23 / 32.88 ms）。attention：5090 为 cuBLAS QKᵀ/softmax/PV 链，Thor 默认 FA4（不是同一种算子）。</li>
         <li>ImageWAM 没有 bf16 精度，16 位档是 fp16；fp8 为动态 scale。</li>
         <li>占比的分母是 eager kernel 合计（5090: 35.15 / 24.67 / 30.52 ms；Thor: 139.49 / 112.39 / 88.47 ms），与 <code>infer()</code> 实测相差在约 7% 以内。</li>
         <li>backbone 入口投影并入"backbone 单流"，ActionDiT 输入输出投影与 Euler 并入"ActionDiT 单流"。"absmax"列：fp8 动态 scale 的 absmax（5090 含 memset，Thor 不含 0.26 ms memset）。</li>

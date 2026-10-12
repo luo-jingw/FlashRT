@@ -23,8 +23,8 @@ Flags (`AB=`, one or a comma list toggled together):
 - `fuse_qkv_norm_rope` (OPT-032 candidate 1, plan.md Phase 1/2): one
   kernel for the Q/K/V split + QK-RMSNorm + RoPE sequence, in place of
   3 copies + 2 rms_norm + 2 rope, wired into every layer type (backbone
-  single/double-stream, ActionDiT single/double). Thor-confirmed
-  bit-exact; safe to A/B end-to-end with any `CKPT_PATH` state (real or
+  single/double-stream, ActionDiT single/double). Frontend default
+  on. Bit-exact against the unfused path with `vec_rms_norm` on; safe to A/B end-to-end with any `CKPT_PATH` state (real or
   random weights -- this flag only changes HOW the same weight's Q/K/V
   columns are split and normed, not which weight values exist).
 - `last_layer_kv_only` (OPT-032 candidate 8, plan.md Phase 3): the last

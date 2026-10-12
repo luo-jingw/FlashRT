@@ -861,7 +861,7 @@ def _single_stream_layer(ctx, fvk, gemm, bufs, weights, dims, weight_layer_idx,
     linear2_width = hidden + mlp_hidden
     # OPT-032 candidate 1: one kernel for the Q/K/V split + QK-RMSNorm + RoPE
     # sequence below, in place of 3 strided copies + 2 per-head RMSNorms + 2
-    # rope_apply_fp16_perhead. Opt-in, not a default; bit-exact against the
+    # rope_apply_fp16_perhead. Default on at the frontend; bit-exact against the
     # unfused sequence with dims["vec_rms_norm"] on (`_qkv_split_norm_rope`,
     # csrc/kernels/fused_qkv_norm_rope/, opportunities.md OPT-032).
     fused_qkv = bool(dims.get("fuse_qkv_norm_rope"))

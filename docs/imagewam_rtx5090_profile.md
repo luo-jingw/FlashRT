@@ -15,7 +15,9 @@ loop scale with the visual-token count and the denoise-step count.
   and place it in the tray" → `x0` = 24), VAE inside the CUDA graph
   (`vae_graph_input=(2,224,224)`), cuBLAS attention chain (no FA4 on SM120),
   `vec_rms_norm` on (frontend default: warp-per-row QK RMSNorm
-  `rms_norm_fp16_vec`).
+  `rms_norm_fp16_vec`), `fuse_qkv_norm_rope` off (its default at the
+  measured commit; it is default on from the commit after `a2ac9c2`,
+  measured in opportunities.md OPT-032 candidate 1).
 - GEMM M: backbone text stream 24, image stream 392, single-stream 416;
   ActionDiT 64.
 - Precisions: ImageWAM has no `bf16` precision; the 16-bit tier is `fp16`
