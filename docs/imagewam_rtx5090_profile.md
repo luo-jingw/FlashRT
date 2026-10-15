@@ -271,6 +271,36 @@ The denoise loop is linear in the step count (per-step time equal at 5 and
 10 steps to within 0.02 ms); halving the steps cuts `infer()` by 23% (fp16),
 30% (fp8), 33% (nvfp4).
 
+## Latency over time and across processes
+
+`benchmarks/imagewam_5090_clock_state_probe.py`: one process per
+precision, LIBERO-10 frame with the official prompt (`x0` = 40), started
+from the idle P-state (P8), 240 s of back-to-back 1 s windows (20 `infer()`
+calls, 5 prefill-graph and 5 denoise-graph replays each), `nvidia-smi`
+sampled every 100 ms; FlashRT `62ae246`, driver 595.91.07, power limit
+575 W, clocks not locked.
+
+| precision | `infer()` P50 0–10 s | 10–60 s | 60–120 s | 120–180 s | 180–240 s | GPU temperature (°C) | SM clock (MHz) |
+|---|---:|---:|---:|---:|---:|---|---|
+| fp16 | 33.26 | 33.38 | 33.46 | 33.46 | 33.46 | 61 → 75 | 2880 → 2857 |
+| fp8 | 24.20 | 24.22 | 24.34 | 24.42 | 24.40 | 45 → 73 | 2850 → 2805 |
+| nvfp4 | 28.74 | 28.81 | 28.85 | 28.85 | 28.85 | 57 → 70 | 2872 → 2858 |
+
+- Memory clock stays at 13801 MHz (P1) for the whole run in every
+  precision; device-to-device copy bandwidth is 1517–1519 GB/s both before
+  the idle wait and after the run.
+- Latency rises by 0.3–0.9% over the first two minutes and then holds,
+  following GPU temperature (window correlation 0.77 / 0.95 / 0.91 for
+  fp8 / fp16 / nvfp4) while the SM clock drops by 0.8–1.6% under the
+  software power cap (`clocks_event_reasons` 0x4). Prefill and denoise
+  graphs move by the same fraction.
+- After 1, 5, 30 and 120 s idle (the GPU back at P8 after 30 s), only the
+  first `infer()` is 0.4–0.6 ms slower; the following calls match the
+  pre-idle median.
+- Three independent processes of `imagewam_module_operator_profile.py`
+  (fp8, `x0` = 24, 60 s idle between them): `infer()` P50 24.26, 24.01,
+  24.01 ms.
+
 ## Conclusions
 
 1. Backbone (prefill) GEMMs are compute-bound and already near the
