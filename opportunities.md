@@ -826,6 +826,24 @@ Kernel split, eager, nvfp4, vec on. The fused-off rows are in the 256-thread tab
 
 RTX 5090 served `infer()` P50 with the default on: fp8 23.85 ms, nvfp4 28.23 ms, fp16 32.88 ms. The kernels per iteration are 5915 / 4900 / 3195, 1670 fewer than `docs/imagewam_rtx5090_profile.md`'s 7585 / 6570 / 4865. That profile measured 25.98 / 30.35 / 34.80 ms in a different process, with SM clock unlocked.
 
+#### Thor, soaked state, current default (`a21507e`)
+
+Same script and flags as above (`X0=24 USE_FA4=1 ITERS=100 WARMUP=20`, MAXN, GPC 1.575 GHz). The GPU was first soaked for 332 s with a synthetic load. Then six processes ran back to back. The 512 MiB copy probe before and after each process read 251.5–257.2 GB/s (`docs/imagewam_thor_profile.md`, "Cold and soaked memory states"), and P10 and P50 differ by 0.04–0.2 ms on both sides. Kernel counts were taken after one CUPTI warmup session.
+
+| comparison | precision | A P10 / P50 | B P10 / P50 | A − B | kernels / pass | actions cos / rel_l2 | backbone cos | bit-exact |
+|---|---|---|---|---:|---|---|---:|---|
+| `AB=fuse_qkv_norm_rope` (vec on) | nvfp4 | 65.58 / 65.62 | 58.08 / 58.19 | +7.44 | 5024 → 3354 | 1 / 0 | 1 | yes |
+| | fp8 | 93.31 / 93.40 | 85.61 / 85.72 | +7.68 | 6389 → 4719 | 1 / 0 | 1 | yes |
+| | fp16 | 123.21 / 123.34 | 115.18 / 115.38 | +7.96 | 4599 → 2929 | 1 / 0 | 1 | yes |
+| `AB=vec_rms_norm` (fused off) | nvfp4 | 84.87 / 84.94 | 65.59 / 65.64 | +19.29 | 5024 → 5024 | 0.999225 / 3.94e-2 | 0.990435 | no |
+| | fp8 | 111.90 / 112.05 | 92.77 / 92.93 | +19.12 | 6389 → 6389 | 0.999906 / 1.37e-2 | 0.999152 | no |
+| | fp16 | 142.43 / 142.58 | 123.47 / 123.65 | +18.93 | 4599 → 4599 | 1.000000 / 6e-4 | 0.999992 | no |
+
+- The shared configuration (vec on, fused off) reads 65.64 / 65.62, 92.93 / 93.40 and 123.65 / 123.34 ms in the two processes.
+- Both savings barely depend on the memory state. Cold, same process, the warp-kernel `fuse_qkv_norm_rope` saved +7.9 to +8.3 ms and `vec_rms_norm` saved +18.6 to +19.7 ms. The cold–soaked difference is in GEMM.
+- Soaked kernel time for the fused kernel, fp8: 3.52–3.55 ms per infer.
+- nvfp4's `vec_rms_norm` cosines (0.999225 / 0.990435) differ from the `989547d` round (0.999797 / 0.986896); fp8 and fp16 match. Cause unknown (issues.md ISSUE-096).
+
 ## Already done or rejected (do not redo)
 
 Modulation / RoPE / delta precompute for all steps, NVFP4 weight prepack, AWQ fold, QKV / linear1 / linear2 merges, cross-layer gated-residual + next AdaLN, whole-pipeline graph, per-shape cuBLASLt autotune, text_trim, FA4 both sites, native VAE in graph (OPT-004, 015-017, 019, 021, 023, 030); megakernel FFN (measured negative at small M on Thor); static activation scale for nvfp4 (block scales are dynamic, ISSUE-051/052); no loop-invariant K/V exists in the ActionDiT (the mot reads the prefill's cache).
