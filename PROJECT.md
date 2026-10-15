@@ -118,6 +118,15 @@ this fork covers Jetson AGX Thor (sm_110).
   once `flash_rt_kernels` itself is built once. Clean up scratch build
   logs and any redundant build directories promptly; disk itself has
   headroom (729GB free) but is not a reason to be careless about it.
+- The LTO link of `flash_rt_kernels` and `flash_rt_fa2` fails under a
+  parallel `cmake --build ... -jN` with `make: internal error: invalid
+  --jobserver-auth string 'fifo:...'` (lto-wrapper). Compile with
+  `-jN`, then relink the failed target with `-j1`. A failed link
+  leaves no `.so` in `flash_rt/`, so after any rebuild check that both
+  `flash_rt/flash_rt_kernels*.so` and `flash_rt/flash_rt_fa2*.so`
+  exist: `pi05_rtx.py`'s `RtxFlashAttnBackend` (used by the UR3 π0.5
+  server through the editable install) needs `flash_rt_fa2` and raises
+  at frontend construction without it.
 - CPU-only work on this WSL2 machine (confirmed 2026-09-18): the GPU is
   not reachable from a session here — `nvidia-smi` reports "Failed to
   initialize NVML: GPU access blocked by the operating system" and
@@ -267,6 +276,73 @@ this fork covers Jetson AGX Thor (sm_110).
 - The Pi0.5 synthetic checkpoint (`scripts/gen_synthetic_pi05_checkpoint.py`,
   3 views / chunk 30) is not kept on disk; regenerating it takes about
   11 seconds (6.3 GiB).
+- ImageWAM LIBERO assets are local under `tmp/checkpoints` (set by
+  `tmp/env_5090.sh`):
+  - `imagewam_release/libero/flux2_klein_4b/{model.pt,config.yaml,dataset_stats.json}`;
+  - FLUX.2 klein base and AE;
+  - Qwen3-4B;
+  - `libero_fastwam` (LeRobot datasets).
+- LIBERO simulator: `tmp/libero_venv`, a venv created with
+  `--system-site-packages` on the flashrt conda env, so the flashrt env
+  keeps its own mujoco 3.8.1.
+  - The venv adds the ImageWAM setup script's pins: mujoco 3.3.2,
+    robosuite 1.4.0, bddl 1.0.1, gym 0.25.2, plus easydict, thop, future,
+    cloudpickle, opencv-python-headless and matplotlib.
+  - LIBERO itself is installed editable, `--no-deps`, from
+    `tmp/ImageWAM/third_party/LIBERO` (`8f1084e`, with the `torch.load(...,
+    weights_only=False)` patch).
+  - The LIBERO config lives in `tmp/libero_config/config.yaml` through
+    `LIBERO_CONFIG_PATH`, not `~/.libero`. Rendering uses EGL: no apt
+    packages, and no osmesa or glfw on this machine.
+  - Usage: `source tmp/env_5090.sh; source tmp/libero_env.sh`, then run
+    `$LIBERO_PY`.
+- The pip installs into that venv pulled `nvidia-cublas` 13.1.1.3 and
+  `nvidia-cuda-nvrtc` 13.0.88, which shadow the flashrt env's 13.6.1.10 /
+  13.3.33. With the shadowing cuBLAS, `set_prompt` of a 47-row text
+  context failed in the fp8 GEMM: `cublasLtMatmulAlgoGetHeuristic` returned
+  status 15 for `[47,3072,9216]`. Both wheels were removed from the venv,
+  and the base cuBLAS loads there now. Check
+  `ls tmp/libero_venv/lib/python3.12/site-packages | grep nvidia` after
+  any further pip install into it.
+- ImageWAM RoboTwin checkpoint: `tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/{model.pt,config.yaml,dataset_stats.json}`
+  (`yuyangalin/ImageWAM-FLUX.2-4B-RoboTwin`). FlashRT has no RoboTwin
+  workload (3 cameras, `compact_288x256`, 14-dim joint action), so RoboTwin
+  runs use the official torch ImageWAM policy
+  (`tmp/ImageWAM/experiments/robotwin/imagewam_policy`).
+- RoboTwin 2.0 simulator: `tmp/robotwin_venv`, a venv with
+  `--system-site-packages` on the flashrt conda env (torch 2.14 cu130; the
+  official setup's torch 2.7.1 cu118 has no sm_120).
+  - Added: sapien 3.0.0b1, mplib 0.2.1, open3d 0.19.0 (0.18 has no cp312
+    wheel), transforms3d, gymnasium 0.29.1, trimesh 4.4.3, warp-lang 1.12.0,
+    hydra-core 1.3.2, gitpython, boto3, and accelerate / peft / timm /
+    torchdiffeq installed `--no-deps`.
+  - numpy 1.26.4 inside the venv (over the base env's 2.5.3): the mplib
+    0.2.1 wheel segfaults in `convert_physx_component` under numpy 2. The
+    venv is used for the simulator and the official torch policy; FlashRT
+    frontends have not been run from it.
+  - curobo v0.7.8 built from `tmp/ImageWAM/third_party/RoboTwin/envs/curobo`
+    for sm_120 (`TORCH_CUDA_ARCH_LIST=12.0`, conda compilers on PATH,
+    `CPATH=$CONDA_PREFIX/targets/x86_64-linux/include`), with the scalar
+    `lerp(float, float, float)` in `helper_math.h` removed (conflicts with
+    C++20 `std::lerp`). The aloha-agilex embodiment plans with curobo.
+  - pip resolution against torch's metadata asks for `cuda-toolkit`
+    13.0.3 / `nvidia-cublas` 13.1.1.3; installs into this venv use a
+    constraints file pinning torch / torchvision / triton / nvidia-* to the
+    base env's versions, or `--no-deps`.
+  - RoboTwin assets (`TianxingChen/RoboTwin2.0`: background_texture,
+    embodiments, objects, 16 GB extracted) are under
+    `tmp/ImageWAM/third_party/RoboTwin/assets`; `script/update_embodiment_config_path.py`
+    was run; the sapien `urdf_loader.py` and mplib `planner.py` patches of
+    RoboTwin's `_install_uv.sh` are applied in the venv.
+  - Local changes in `tmp/ImageWAM`: `policy/imagewam_policy` symlink
+    re-pointed to the local `experiments/robotwin/imagewam_policy`;
+    `task_config/demo_clean.yml` has `eval_video_log: false` (no ffmpeg
+    binary on this machine); `deploy_policy.py` reads
+    `IMAGEWAM_ACTION_STEP_SUBSET` (grid indices of the action expert's
+    evaluations; unset = unchanged schedule).
+  - Usage: `source tmp/env_5090.sh; source tmp/robotwin_env.sh`, then
+    `experiments/robotwin/eval_robotwin_single.py` with `$ROBOTWIN_PY` from
+    `tmp/ImageWAM`, overrides as in `scripts/flux2/run_eval_flux2_robotwin.sh`.
 
 ## Credentials
 
