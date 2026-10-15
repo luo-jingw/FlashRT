@@ -283,11 +283,58 @@ VAE is precision-independent on both machines.
 | ActionDiT single GEMM | 38.2 | 23.8 | 30.4 | 20.4 | 24.1 | 26.5 |
 | backbone single GEMM | 20.2 | 31.5 | 15.9 | 15.2 | 15.1 | 8.3 |
 
+## Cold and soaked memory states
+
+Thor runs the same workload in two steady states. The tables above were
+measured in the cold one: a process of about one minute does not reach
+the faster state. Same commit (`a21507e`), script, checkpoint and night;
+MAXN, GPC locked at 1.575 GHz, EMC not locked, GPU idle. Cold runs start
+after 60 s idle with a 512 MiB device-to-device copy below 245 GB/s
+(230.8–233.6 GB/s before, 232.0–233.7 GB/s right after each run); the
+soaked state copies at about 256 GB/s. P10 and P50 differ by 0.1–0.3 ms
+in every cold run, so no run mixes the two states.
+
+| precision | state | `infer()` P50 | P10 / P90 | prefill graph | denoise graph | remainder | kernels |
+|---|---|---:|---|---:|---:|---:|---:|
+| nvfp4 | cold | 81.57 | 81.47 / 81.70 | 28.68 | 43.83 | 9.06 | 3259 |
+| nvfp4 | soaked | 65.51 | 65.45 / 65.71 | 22.12 | 34.88 | 8.51 | 3259 |
+| fp8 | cold | 114.59 | 114.42 / 115.05 | 38.20 | 67.32 | 9.07 | 5304 |
+| fp8 | soaked | 91.39 | 91.26 / 91.64 | 33.13 | 49.67 | 8.59 | 5304 |
+| fp16 | cold | 142.39 | 142.12 / 142.89 | 46.58 | 86.76 | 9.06 | 2834 |
+| fp16 | soaked | 120.99 | 120.81 / 121.21 | 42.33 | 70.13 | 8.53 | 2834 |
+
+Cold minus soaked, eager kernel time by operator class (ms):
+
+| precision | total | GEMM | attention | conv | norm | elementwise |
+|---|---:|---:|---:|---:|---:|---:|
+| nvfp4 | 15.23 | 13.53 (−30%) | 0.80 (−9%) | 0.31 (−8%) | 0.32 (−3%) | 0.21 (−2%) |
+| fp8 | 19.08 | 17.52 (−27%) | 0.86 (−10%) | 0.27 (−7%) | 0.23 (−3%) | 0.19 (−2%) |
+| fp16 | 15.75 | 14.13 (−14%) | 0.84 (−10%) | 0.32 (−8%) | 0.15 (−2%) | 0.29 (−3%) |
+
+- The soaked state is 15–20% faster (16.06 / 23.20 / 21.40 ms); the
+  `infer()` remainder outside the two graphs changes by about 0.5 ms, so
+  the difference is GPU kernel time.
+- About 90% of it is GEMM; the GEMM gain falls with precision width
+  (nvfp4 30%, fp8 27%, fp16 14%). fp8 and fp16 gain mostly in the
+  denoise single-stream blocks, nvfp4 in both prefill and denoise.
+- DRAM copy bandwidth rises by about 10% while GEMM gains up to 30% and
+  elementwise / norm only 2–3%.
+- In cold runs of 60–70 s, the VDD_CPU_SOC_MSS rail stays at 16–19 W and
+  does not reach the soaked state's 21 W plateau.
+- Two steady states are what this workload shows; the memory controller's
+  frequency points are not readable without root.
+- An independent set of measurements gives cold 80.9 / 113.1 / 145.0 ms
+  and soaked 65.7 / 91.1 / 123.4 ms (nvfp4 / fp8 / fp16).
+- Comparisons inside one process are unaffected; comparisons across
+  processes can carry up to about 21 ms of state difference
+  (`issues.md` ISSUE-095).
+
 ## Conclusions
 
 1. Served wall time on Thor, LIBERO config, default profile
    (`vec_rms_norm` and `fuse_qkv_norm_rope` on): nvfp4 80.22 ms, fp8
-   111.86 ms, fp16 139.17 ms. nvfp4 is the fastest of the three (5090's
+   111.86 ms, fp16 139.17 ms. These are cold-state numbers; the soaked state
+   measures 65.51 / 91.39 / 120.99 ms (see "Cold and soaked memory states"). nvfp4 is the fastest of the three (5090's
    fastest is fp8). The 98.0 ms figure elsewhere is the 3-view /
    horizon-30 target shape, not this LIBERO row.
 2. Kernels per iteration are equal in every cell (2834 / 5304 / 3259),

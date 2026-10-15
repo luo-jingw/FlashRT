@@ -973,7 +973,7 @@ without the `strict=False` workaround.
 
 # ISSUE-095
 
-Status: open, non-blocking
+Status: explained by two memory states (attribution indirect), non-blocking. Same-night cold and soaked runs at `a21507e` (`docs/imagewam_thor_profile.md`, "Cold and soaked memory states"): the soaked state is 15–20% faster, about 90% of it in GEMM, with device copy bandwidth about 233 vs 256 GB/s; processes of about one minute stay cold. Open: which clocks change (not readable without root), and what triggers and releases the soaked state.
 
 Area: `benchmarks/imagewam_fusion_ab.py` on Thor (cross-process latency)
 
