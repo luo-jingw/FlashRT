@@ -1024,6 +1024,42 @@ The current EMC frequency cannot be read without root: tegrastats prints no `EMC
 
 ## Resolution
 
+# ISSUE-096
+
+Status: open, non-blocking
+
+Area: `benchmarks/imagewam_fusion_ab.py` on Thor, nvfp4 `vec_rms_norm` numerics
+
+## Observation
+
+`AB=vec_rms_norm` (fused off) on Thor, nvfp4, compares `vec_rms_norm` off against on. The two rounds give different deviations:
+
+| round | commit | actions cos / rel_l2 | backbone cos |
+|---|---|---|---:|
+| R3 | `989547d` | 0.999797 / 2.0e-2 | 0.986896 |
+| soaked A/B | `a21507e` | 0.999225 / 3.94e-2 | 0.990435 |
+
+fp8 (backbone 0.999152) and fp16 (0.999992) are equal in both rounds. The commits between them (`0c33b52`, `a2ac9c2`, `a21507e`) change only `qkv_split_norm_rope_fp16` and its default. That kernel is off on both sides of this A/B.
+
+## Impact
+
+The latency savings are unaffected. The size of the nvfp4 deviation `vec_rms_norm` introduces is not established to better than a factor of about 2 in action rel_l2.
+
+## Evidence
+
+Thor logs `logs/1011_thor_opt032_c1/R3_vec.log` and `logs/1015_thor_soak_ab/`. opportunities.md OPT-032, "Thor, soaked state, current default".
+
+## Hypotheses
+
+- The nvfp4 GEMM algorithms autotuned per process differ between the two runs. B replays A's choice inside one process, but the choice can change across processes, which would move the non-bit-exact difference.
+- The seeded observations or noise differ between the two runs.
+
+## Next Experiment
+
+Run `AB=vec_rms_norm` nvfp4 in three processes at one commit and compare the cosines. If they spread, pin the GEMM algorithm and repeat.
+
+## Resolution
+
 ## Index: resolved entries and where their conclusions are recorded
 
 
