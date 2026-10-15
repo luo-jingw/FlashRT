@@ -248,6 +248,51 @@ svg text{fill:var(--muted);font-size:11px}
     </div>
   </div>
 
+  <div class="panel" id="statePanel">
+    <h2>设备状态：冷态 / 热态与长时间运行</h2>
+    <h3 class="h3">Jetson AGX Thor：同一会话的冷态与热态</h3>
+    <div class="tablewrap"><table>
+<tr><th>精度</th><th>状态</th><th><code>infer()</code> P50</th><th>P10 / P90</th><th>prefill graph</th><th>denoise graph</th><th>其余</th><th>kernel 数</th></tr>
+<tr><td>nvfp4</td><td>冷态</td><td>81.57</td><td>81.47 / 81.70</td><td>28.68</td><td>43.83</td><td>9.06</td><td>3259</td></tr>
+<tr><td></td><td>热态</td><td>65.51</td><td>65.45 / 65.71</td><td>22.12</td><td>34.88</td><td>8.51</td><td>3259</td></tr>
+<tr><td></td><td><b>差值</b></td><td><b>16.06（−19.7%）</b></td><td></td><td>6.56</td><td>8.95</td><td>0.55</td><td></td></tr>
+<tr><td>fp8</td><td>冷态</td><td>114.59</td><td>114.42 / 115.05</td><td>38.20</td><td>67.32</td><td>9.07</td><td>5304</td></tr>
+<tr><td></td><td>热态</td><td>91.39</td><td>91.26 / 91.64</td><td>33.13</td><td>49.67</td><td>8.59</td><td>5304</td></tr>
+<tr><td></td><td><b>差值</b></td><td><b>23.20（−20.2%）</b></td><td></td><td>5.07</td><td>17.65</td><td>0.48</td><td></td></tr>
+<tr><td>fp16</td><td>冷态</td><td>142.39</td><td>142.12 / 142.89</td><td>46.58</td><td>86.76</td><td>9.06</td><td>2834</td></tr>
+<tr><td></td><td>热态</td><td>120.99</td><td>120.81 / 121.21</td><td>42.33</td><td>70.13</td><td>8.53</td><td>2834</td></tr>
+<tr><td></td><td><b>差值</b></td><td><b>21.40（−15.0%）</b></td><td></td><td>4.25</td><td>16.63</td><td>0.53</td><td></td></tr>
+    </table></div>
+    <div class="hint">Thor，FlashRT a21507e，MAXN，GPC 锁在 1.575 GHz，EMC 未锁，GPU 空闲，同一脚本和 checkpoint，同一晚测完冷热两态（ms）。冷态：每档开跑前空闲 60 秒，512 MiB 设备内拷贝的带宽在开跑前为 230.8–233.6 GB/s、跑完为 232.0–233.7 GB/s（判据 &lt; 245 GB/s），P10 与 P50 只差 0.1–0.3 ms，期间没有状态切换。热态带宽约 256 GB/s。另一组独立测量的冷态 80.9 / 113.1 / 145.0 ms、热态 65.7 / 91.1 / 123.4 ms，nvfp4 和 fp8 与上表相差在 1.3% 以内，fp16 相差约 2%。</div>
+    <div class="tablewrap" style="margin-top:8px"><table>
+<tr><th>精度</th><th>差值（eager kernel 合计）</th><th>GEMM</th><th>attention</th><th>conv</th><th>norm</th><th>逐元素</th></tr>
+<tr><td>nvfp4</td><td>15.23 ms</td><td><b>13.53（−30%）</b></td><td>0.80（−9%）</td><td>0.31（−8%）</td><td>0.32（−3%）</td><td>0.21（−2%）</td></tr>
+<tr><td>fp8</td><td>19.08 ms</td><td><b>17.52（−27%）</b></td><td>0.86（−10%）</td><td>0.27（−7%）</td><td>0.23（−3%）</td><td>0.19（−2%）</td></tr>
+<tr><td>fp16</td><td>15.75 ms</td><td><b>14.13（−14%）</b></td><td>0.84（−10%）</td><td>0.32（−8%）</td><td>0.15（−2%）</td><td>0.29（−3%）</td></tr>
+    </table></div>
+    <ol class="findings" style="margin:8px 0 0;padding-left:20px">
+      <li><b>热态快 15–20%，差值全在 GPU kernel 上。</b><code>infer()</code> 减去两个 graph 的其余部分只差约 0.5 ms，所以不是 CPU 侧开销。</li>
+      <li><b>约九成是 GEMM。</b>GEMM 变快的比例按精度递减：nvfp4 30%、fp8 27%、fp16 14%。fp16 的 GEMM 更偏算力受限，比例低，但它的 GEMM 总量大，三档的绝对差值因此接近。fp8 和 fp16 的差值主要在去噪的单流层，nvfp4 在 prefill 和去噪都有。</li>
+      <li><b>不只是 DRAM 带宽。</b>带宽只涨约 10%，GEMM 却快了最多 30%，而逐元素和 norm 只变了 2–3%。更像是内存子系统或片上互连整体升频；Thor 上读不到这些时钟，这一点仍是推测。</li>
+      <li><b>约 1 分钟的负载触发不了热态。</b>冷态一个进程跑 60–70 秒，VDD_CPU_SOC_MSS 只到 16–19 W，没有出现热态时约 21 W 的平台。本负载下观测到两个稳定状态，不代表 EMC 只有两档。</li>
+      <li><b>本页的 Thor 数字是冷态</b>（80.22 / 111.86 / 139.17 ms，与上表冷态一致）。同一进程内的 A − B 不受影响；跨进程比较可能混入最多约 21 ms 的状态差。</li>
+    </ol>
+    <h3 class="h3">RTX 5090：冷启动后连续 240 秒</h3>
+    <div class="tablewrap"><table>
+<tr><th>精度</th><th>0–10 s</th><th>10–60 s</th><th>60–120 s</th><th>120–180 s</th><th>180–240 s</th><th>GPU 温度 (°C)</th><th>SM 时钟 (MHz)</th></tr>
+<tr><td>fp16</td><td>33.26</td><td>33.38</td><td>33.46</td><td>33.46</td><td>33.46</td><td>61 → 75</td><td>2880 → 2857</td></tr>
+<tr><td>fp8</td><td>24.20</td><td>24.22</td><td>24.34</td><td>24.42</td><td>24.40</td><td>45 → 73</td><td>2850 → 2805</td></tr>
+<tr><td>nvfp4</td><td>28.74</td><td>28.81</td><td>28.85</td><td>28.85</td><td>28.85</td><td>57 → 70</td><td>2872 → 2858</td></tr>
+    </table></div>
+    <div class="hint"><code>infer()</code> P50（ms），每秒一个窗口（20 次 <code>infer()</code>，另有 5 次 prefill graph 和 5 次 denoise graph），从空闲 P-state（P8）开始，<code>nvidia-smi</code> 每 100 ms 采样。LIBERO-10 帧，官方 prompt（x0 = 40）。FlashRT 62ae246，driver 595.91.07，功耗上限 575 W，时钟未锁。脚本 <code>benchmarks/imagewam_5090_clock_state_probe.py</code>。</div>
+    <ol class="findings" start="6" style="margin:8px 0 0;padding-left:20px">
+      <li><b>5090 没有两个状态。</b>三档全程显存时钟都在 13801 MHz（P1），设备内拷贝带宽在空闲等待前和运行后都是 1517–1519 GB/s。</li>
+      <li><b>只有随温度的缓慢漂移，方向与 Thor 相反。</b>前两分钟延迟上升 0.3–0.9% 后稳定，与 GPU 温度的窗口相关系数为 0.77 / 0.95 / 0.91（fp8 / fp16 / nvfp4）；同时 SM 时钟在软件功耗上限下（<code>clocks_event_reasons</code> 0x4）降低 0.8–1.6%。prefill 和 denoise 按相同比例变慢。</li>
+      <li><b>空闲后立刻恢复。</b>空闲 1 / 5 / 30 / 120 秒后（30 秒起已回到 P8），只有第一次 <code>infer()</code> 慢 0.4–0.6 ms，之后与空闲前一致。</li>
+      <li><b>跨进程差约 1%。</b>3 个独立进程（fp8，x0 = 24，间隔空闲 60 秒）的 <code>infer()</code> P50 为 24.26 / 24.01 / 24.01 ms。本页 5090 的数字约 1 分钟测完，比持续运行的稳态快约 0.5–1%。</li>
+    </ol>
+  </div>
+
   <div class="grid2">
     <div class="panel findings">
       <h2>要点</h2>
@@ -258,6 +303,7 @@ svg text{fill:var(--muted);font-size:11px}
         <li><b>Thor fp8：</b>GEMM 只比 fp16 快 1.55 倍，另有约 8 ms 花在 quant 和 absmax 上。</li>
         <li><b>和精度无关的部分</b>（VAE、attention、norm、逐元素）：5090 约 10 ms，Thor 约 37 ms。</li>
         <li><b>5090 nvfp4：</b>quant/cast 占 21.0%，是它比 fp8 慢的直接原因。</li>
+        <li><b>设备状态：</b>Thor 在持续负载下进入热态，三档都快 15–20%（nvfp4 65.51 ms），本页 Thor 数字是冷态；5090 只有随温度 0.3–0.9% 的漂移，跨进程约 1%。</li>
         <li><b>两个默认打开的融合：</b><code>vec_rms_norm</code> 在 Thor 上省约 19 ms、在 5090 上省 1.3–1.4 ms；<code>fuse_qkv_norm_rope</code>（warp 版）在 Thor 上省 7.1–10.2 ms、在 5090 上省 1.9–2.1 ms，每次推理少 1670 个 kernel。</li>
       </ul>
     </div>
@@ -269,7 +315,7 @@ svg text{fill:var(--muted);font-size:11px}
         <li>ImageWAM 没有 bf16 精度，16 位档是 fp16；fp8 为动态 scale。</li>
         <li>占比的分母是 eager kernel 合计（5090: 33.13 / 22.47 / 28.35 ms；Thor: 131.28 / 104.97 / 80.53 ms），与 <code>infer()</code> 实测相差在约 6% 以内。融合后的 <code>qkv_split_norm_rope_fp16</code> 归入 norm。</li>
         <li>backbone 入口投影并入"backbone 单流"，ActionDiT 输入输出投影与 Euler 并入"ActionDiT 单流"。"absmax"列：fp8 动态 scale 的 absmax（5090 含 memset，Thor 不含 0.28 ms memset）。</li>
-        <li>两台设备都是 FlashRT a21507e。5090：driver 595.91.07，torch 2.14.0+cu130，SM 时钟未锁定。Thor：MAXN，GPC 1.575 GHz，torch 2.9.1+cu130。</li>
+        <li>两台设备都是 FlashRT a21507e。5090：driver 595.91.07，torch 2.14.0+cu130，SM 时钟未锁定。Thor：MAXN，GPC 1.575 GHz，EMC 未锁，torch 2.9.1+cu130；Thor 的模块表是冷态（约 1 分钟的进程，见“设备状态”）。</li>
         <li>来源：<code>docs/imagewam_rtx5090_profile.md</code>、<code>docs/imagewam_thor_profile.md</code>，脚本 <code>benchmarks/imagewam_module_operator_profile.py</code>。</li>
       </ul>
     </div>
