@@ -1617,3 +1617,46 @@ Status: RESOLVED. The table has been extended past the entry's own "37 slot rows
 Evidence, recorded only here: on the H100 box with the real extension importable, 54 passed (~16 s); with `CUDA_VISIBLE_DEVICES=""` and `flash_rt_kernels` unimportable, 53 passed and 1 skipped (the stub-signature check needs the real module, ~14 s); two mutations produce five failures each — removing the `nvfp4` K/N%16 fallback names both the K=7 and the N=7 slot, and making `fp8_static` lose the `linear1` merge fails five. Maintenance rule: a stream that changes routing edits the table rows in the same commit.
 
 → `tests/test_imagewam_thor_precision_routing.py`.
+
+# OPT-038: ImageWAM ActionDiT — parallel-in-time denoising (Picard / ParaDiGMS) and the small-M NVFP4 path on RTX 5090
+
+Status: proposed, not started.
+
+Area: ActionDiT denoise loop (`flash_rt/models/imagewam/pipeline_thor.py`: `imagewam_denoise_loop`, `imagewam_denoise_step`, `_action_double_layer`, `_action_single_layer`); `Nvfp4LinearSm120` (`flash_rt/models/imagewam/quant_linear.py`) and the SM120 CUTLASS NVFP4 GEMM (`csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm120.cu`). Related: OPT-033, OPT-036, OPT-037.
+
+## Observation (RTX 5090, `docs/imagewam_rtx5090_profile.md`)
+
+- The 10 denoise steps run serially; per-step time is 1.68 ms (fp16), 1.63 ms (fp8), 2.11 ms (nvfp4), linear in the step count.
+- ActionDiT GEMMs run at M = 64 (64 action tokens) and are weight-bandwidth-bound: every step re-reads 1.26 GB of fp16 weights, at 75–84% of DRAM bandwidth (fp16) and 58–73% (fp8). NVFP4 reaches 19–25%: the 128-row tile is half empty at M = 64, and N = 1024 shapes give too few tiles to fill the SMs. The nvfp4 denoise loop (21.1 ms) is slower than fp16 (16.8 ms).
+- NVFP4 overhead in ActionDiT: `cast_fp16_to_bf16` + `quantize_bf16_to_nvfp4_swizzled` + `cast_bf16_to_fp16` around every GEMM, 4.24 ms over 1810 launches (1.8–2.6 µs each), about 20% of the nvfp4 denoise loop.
+- Non-GEMM kernels in ActionDiT (attention chain, norm, AdaLN, elementwise) take more time than its GEMMs in fp8 (29% vs 27% of `infer()`) and are launch/latency-bound.
+- GEMM-only M sweep (`m_sweep_5090.json`, M = 16…905, standalone GEMMs at ImageWAM (N, K) shapes): NVFP4 GEMM time is flat up to M = 256 (9–30 µs per shape); FP8 cuBLASLt grows 2.5–4× from M = 64 to M = 512. These are single GEMMs, partly backbone shapes, not a full ActionDiT step.
+
+## Candidate 1: parallel-in-time denoising (Picard iteration, ParaDiGMS)
+
+Mechanism: initialize all 10 step latents (e.g. to the initial noise), evaluate the velocity at all 10 timesteps in one batched forward, update the whole trajectory by a cumulative sum, and repeat (one sweep per iteration) until the trajectory stops changing. Cost ≈ sweeps × cost of one batched forward at M = 64k (k timesteps per batch, k = 10 → M = 640). Because the M = 64 step is bandwidth- and launch-bound, a batched forward at M = 640 may cost close to one step; the scheme wins when the sweep count is well below 10. Published ParaDiGMS results on Diffusion Policy use 25–1000 steps on datacenter GPUs; 10-step flow-matching action heads on an edge-class GPU are not covered.
+
+Batched-forward structure: AdaLN modulation differs per timestep (applied per 64-row group); all timesteps share the prefill KV; each timestep's action tokens attend only to their own group plus the shared context (block-diagonal mask, or k as a batch dimension). `num_action = 64k` with one shared timestep is a cost proxy only (attention shape differs).
+
+Experiments:
+1. Batched-M cost curve: one ActionDiT step at M = 64k, k = 1…10, fp16 / fp8 / nvfp4, CUDA-graph time, GEMM vs non-GEMM split. Gate: ratio t(M = 640) / t(M = 64).
+2. Picard convergence offline (fp16, LIBERO-10 dataset frames): sweeps to convergence at tolerances, final action deviation from the serial sampler, and the implied speedup = 10 / (sweeps × cost ratio from 1).
+3. Only if 1 and 2 are favorable: a batched ActionDiT step in the pipeline with per-group modulation and the block-diagonal attention.
+
+Experiment 1 result (`docs/imagewam_rtx5090_batched_m_step.md`, `benchmarks/imagewam_batched_m_step_bench.py`): t(M = 640) / t(M = 64) = 4.60 (fp16), 3.48 (fp8), 2.79 (nvfp4); a full 10-step window breaks even with the serial sampler of the same precision at 2.2 / 2.9 / 3.6 sweeps, and at 2.1 / 2.9 / 2.6 sweeps against serial fp8 (13.75 ms). Attention (0.27 → 2.1 ms, cuBLAS chain over all 64k action rows) and, in nvfp4, quantization and casts (0.43 → 1.27 ms) are the parts that grow; the NVFP4 GEMM itself grows 1.25×. Open: the sweep count for 10-step flow matching (experiment 2), and the step time with an attention that sees only the prefix plus each 64-row group.
+
+## Candidate 2: small-M NVFP4 GEMM
+
+- swap-AB: compute Cᵀ = Wᵀ·Aᵀ so the weight's N (1024–9216) fills the 128-row tile dimension and the 64 tokens take the narrow dimension.
+- Narrow-N tiles (128×8 / 128×16) for token-few GEMMs: support in the vendored CUTLASS for SM120 block-scaled MMA is not yet checked.
+- Interaction with candidate 1: at M = 640 the 128-row tile is no longer under-filled; report both in the same M sweep.
+
+## Candidate 3: fold NVFP4 quantization and casts into neighboring kernels
+
+- The AdaLN-modulate / norm kernel that feeds each GEMM writes NVFP4 (packed + swizzled scale factors) directly; reference: Pi0.5's `rms_norm_to_nvfp4_swizzled_bf16` / `residual_add_rms_norm_to_nvfp4_swizzled_bf16` (bf16, RMSNorm). ImageWAM needs an fp16 + AdaLN-modulate variant.
+- The GEMM epilogue writes fp16 directly, removing `cast_bf16_to_fp16`.
+- Observation: launches and ms removed per `infer()`, bit-exactness against the unfused quantize path.
+
+## Order
+
+Candidate 1 experiment 1 → candidate 1 experiment 2 → candidates 2 and 3.
