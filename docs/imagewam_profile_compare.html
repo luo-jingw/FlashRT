@@ -158,8 +158,8 @@ svg text{fill:var(--muted);font-size:11px}
     <h3 class="h3">两台设备的瓶颈为什么不同</h3>
     <ul class="findings" style="margin:0;padding-left:20px">
       <li><b>RTX 5090：受启动次数限制。</b>剩下的逐元素 kernel 每次 1–2 µs。backbone 单流（M=416）的 GLU 每层读写约 23 MB，加上 attention 输出拷贝约 5 MB，20 层合计约 0.56 GB，只用 0.27 ms，说明这些中间张量大多命中 L2。</li>
-      <li><b>Thor：受字节量限制。</b>同样的 0.56 GB，backbone 单流用了 3.4 ms（fp16，40 次，85 µs/次），约 165 GB/s，接近 Thor 实际能达到的带宽。<code>silu_glu_merged</code> 一项就有 5.7 ms，是 5090 的 10 倍。</li>
-      <li><b>融合前后对比：</b>融合前 Thor 的逐元素是 18.3–19.1 ms，现在是 9.0–9.7 ms。原因是 Q/K/V 切片拷贝和 RoPE 被并进了一个 kernel，中间张量少了一次写回和再读。融合 kernel 本身在 Thor 上是 3.64 ms，它替换掉的部分约 11.9 ms。</li>
+      <li><b>Thor：受字节量限制。</b>同样的 0.56 GB，backbone 单流在热态用了 3.3 ms（fp16，40 次，83 µs/次），约 170 GB/s，接近 Thor 实际能达到的带宽。<code>silu_glu_merged</code> 一项在冷态就有 5.7 ms，是 5090 的 10 倍。</li>
+      <li><b>融合前后对比：</b>融合前 Thor 的逐元素是 18.3–19.1 ms，融合后是 9.0–9.7 ms（均为冷态；热态为 8.8–9.6 ms）。原因是 Q/K/V 切片拷贝和 RoPE 被并进了一个 kernel，中间张量少了一次写回和再读。融合 kernel 本身在 Thor 上是 3.64 ms，它替换掉的部分约 11.9 ms。</li>
       <li><b>下一个目标是 SiLU-GLU：</b>在 Thor 上要省掉 GLU 的中间张量往返（把 GLU 并进 GEMM 的 epilogue，或者并进下一层 GEMM 的输入），5090 上收益很小。</li>
     </ul>
 
@@ -167,8 +167,8 @@ svg text{fill:var(--muted);font-size:11px}
     <div class="tablewrap"><table>
       <tr><th>方向</th><th style="text-align:left">去掉什么</th><th style="text-align:left">状态</th></tr>
       <tr><td><code>fuse_qkv_norm_rope</code>（OPT-032 #1）</td><td style="text-align:left;white-space:normal">每层的 3 次拷贝 + 2 次 QK norm + 2 次 RoPE 合成 1 个 kernel：每次推理少 1670 次启动；Q/K/V 的读写量从约 14S 降到 6S（S 为一个 Q 张量的大小）</td><td style="text-align:left;white-space:normal"><b>已完成，现为默认</b>。256 线程版本在 5090 上省 1.0–1.7 ms、在 Thor 上慢 7–9.6 ms；warp 版与 vec norm 路径逐位一致，在 Thor 上省 7.3–8.3 ms、在 5090 上省 2.0–2.7 ms（见下）</td></tr>
-      <tr><td>attention 输出直接写入 <code>linear2</code> 输入（OPT-032 #2）</td><td style="text-align:left;white-space:normal">单流层的 attention 输出拷贝（220 次；Thor 上 1.3 ms）。5090 走 cuBLAS 链，可以让 PV GEMM 通过 <code>ldc</code> 直接写到 <code>linear2_in</code> 的列切片；Thor 要改 FA4 的输出指针</td><td style="text-align:left;white-space:normal">未做</td></tr>
-      <tr><td>SiLU-GLU 并进 GEMM epilogue（#11）</td><td style="text-align:left;white-space:normal">280 次 GLU，以及 backbone 每层约 23 MB 的中间张量往返（Thor 上 5.7 ms）</td><td style="text-align:left;white-space:normal">需要改 CUTLASS；两个 GEMM 的版本试过，已回退（OPT-015）</td></tr>
+      <tr><td>attention 输出直接写入 <code>linear2</code> 输入（OPT-032 #2）</td><td style="text-align:left;white-space:normal">单流层的 attention 输出拷贝（220 次；Thor 冷态 1.3 ms）。5090 走 cuBLAS 链，可以让 PV GEMM 通过 <code>ldc</code> 直接写到 <code>linear2_in</code> 的列切片；Thor 要改 FA4 的输出指针</td><td style="text-align:left;white-space:normal">未做</td></tr>
+      <tr><td>SiLU-GLU 并进 GEMM epilogue（#11）</td><td style="text-align:left;white-space:normal">280 次 GLU，以及 backbone 每层约 23 MB 的中间张量往返（Thor 冷态 5.7 ms）</td><td style="text-align:left;white-space:normal">需要改 CUTLASS；两个 GEMM 的版本试过，已回退（OPT-015）</td></tr>
       <tr><td>fp8 静态 scale</td><td style="text-align:left;white-space:normal">680 次 <code>compute_scale</code> 和 680 次 absmax</td><td style="text-align:left;white-space:normal">会改变数值，需要校准</td></tr>
       <tr><td>PDL（#10）</td><td style="text-align:left;white-space:normal">不减少 kernel 个数，但让相邻小 kernel 的启动重叠</td><td style="text-align:left;white-space:normal">未测</td></tr>
     </table></div>
@@ -198,7 +198,7 @@ svg text{fill:var(--muted);font-size:11px}
       <tr><td></td><td>fp16</td><td>33.25</td><td>31.86</td><td><b>+1.39</b></td><td></td><td>1.000000</td><td>0.07%</td><td>0.999989</td><td>否</td></tr>
     </table></div>
     <div class="hint">RTX 5090 实测，真实 LIBERO checkpoint，部署形状（x0=24，a0=416，total=480），cuBLAS attention。时间是 A/B 前端的 <code>infer()</code> P50（不含 VAE 编码）；A、B 两侧在同一进程内按 ABBA 顺序交替测，各 100 次。B 复用 A 自动调优得到的 GEMM 算法。命令：<code>X0=24 AB=fuse_qkv_norm_rope benchmarks/imagewam_fusion_ab.py</code>（② 加 <code>HOLD=vec_rms_norm=0</code>，③ 用 <code>AB=vec_rms_norm</code>）；不设 <code>X0</code> 时是未裁剪的 x0=513 形状，那里 fp8 / nvfp4 / fp16 分别省 0.70 / 1.38 / 1.11 ms。</div>
-    <h3 class="h3">Jetson AGX Thor 实测</h3>
+    <h3 class="h3">Jetson AGX Thor 实测（冷态，同进程 A/B）</h3>
     <div class="tablewrap"><table>
 <tr><th>对比</th><th>精度</th><th>A ms</th><th>B ms</th><th>A − B</th><th>kernel 数</th><th>actions cos</th><th>actions rel_l2</th><th>backbone cos</th><th>逐位一致</th></tr>
 <tr><td>① 当前默认（vec on）：fused 关 → 开</td><td>nvfp4</td><td>80.34</td><td>87.53</td><td><b>-7.19</b></td><td>5024 → 3354</td><td>0.999838</td><td>1.80%</td><td>0.986896</td><td>否</td></tr>
@@ -304,7 +304,7 @@ svg text{fill:var(--muted);font-size:11px}
         <li><b>和精度无关的部分</b>（VAE、attention、norm、逐元素）：5090 约 10 ms，Thor 约 35 ms。</li>
         <li><b>5090 nvfp4：</b>quant/cast 占 21.0%，是它比 fp8 慢的直接原因。</li>
         <li><b>设备状态：</b>Thor 在持续负载下进入热态，三档都快 15–20%，本页 Thor 的 profiling 用热态；5090 只有随温度 0.3–0.9% 的漂移，跨进程约 1%。</li>
-        <li><b>两个默认打开的融合：</b><code>vec_rms_norm</code> 在 Thor 上省约 19 ms、在 5090 上省 1.3–1.4 ms；<code>fuse_qkv_norm_rope</code>（warp 版）在 Thor 上省 7.1–10.2 ms、在 5090 上省 1.9–2.1 ms，每次推理少 1670 个 kernel。</li>
+        <li><b>两个默认打开的融合</b>（Thor 为冷态下的同进程 A/B）<b>：</b><code>vec_rms_norm</code> 在 Thor 上省约 19 ms、在 5090 上省 1.3–1.4 ms；<code>fuse_qkv_norm_rope</code>（warp 版）在 Thor 上省 7.1–10.2 ms、在 5090 上省 1.9–2.1 ms，每次推理少 1670 个 kernel。</li>
       </ul>
     </div>
     <div class="panel">
@@ -570,7 +570,7 @@ const NOTE = {
   "thor|fp8|bb_double|gemm": ["文本那一路 M=24，加上 fp8 动态量化，效率很低（约 70 TFLOPS）", ["换成 nvfp4", "用 grouped GEMM 合并文本和图像两路"]],
   "thor|nvfp4|ad_single|gemm": ["主要花在读权重上，但带宽只有约 195 GB/s，比 fp16 时的约 244 GB/s 低，小 M 的 FP4 kernel 还有提升空间", ["先实测 Thor 的带宽上限和 FP4 峰值，再判断 kernel 效率", "把去噪蒸馏到 1–2 步，收益最大", "调小 M 时 FP4 kernel 的 tile（之前做过 small-M tile 扫描）"]],
   "thor|nvfp4|bb_single|gemm": ["每个 GEMM 约 205 µs，约 232 TFLOPS，没有峰值可以对比", ["减少视觉 token，或跨帧复用 KV", "实测 FP4 峰值后再决定要不要优化 kernel"]],
-  "thor|nvfp4|ad_single|attention": ["FA4，200 次层执行，每次一个 FA4 加一次拷贝，共 400 次 5.9 ms；q_seq=64 对 kv_seq=480，每次只有几个 tile，SM 喂不满", ["让 attention 直接写进 linear2_in，顺带省掉 220 次拷贝（1.3 ms）", "试 split-KV / flash-decoding 式的切分，用更多 SM 处理短 q 序列", "减少去噪步数"]],
+  "thor|nvfp4|ad_single|attention": ["FA4，200 次层执行，每次一个 FA4 加一次拷贝，共 400 次 5.9 ms；q_seq=64 对 kv_seq=480，每次只有几个 tile，SM 喂不满", ["让 attention 直接写进 linear2_in，顺带省掉 220 次拷贝（冷态 1.3 ms）", "试 split-KV / flash-decoding 式的切分，用更多 SM 处理短 q 序列", "减少去噪步数"]],
 };
 function top3() {
   const el = document.getElementById("top3");
