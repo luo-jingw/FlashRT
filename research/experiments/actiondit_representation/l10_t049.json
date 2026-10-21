@@ -1,0 +1,68 @@
+{
+ "precision": "fp16",
+ "suite": "libero_10",
+ "tasks": [
+  0,
+  4,
+  9
+ ],
+ "picks": {
+  "0": [
+   11,
+   13,
+   20,
+   25,
+   33
+  ],
+  "4": [
+   165,
+   170,
+   176,
+   182,
+   187
+  ],
+  "9": [
+   357,
+   367,
+   374,
+   379,
+   382
+  ]
+ },
+ "stride": 10,
+ "steps": [
+  0,
+  5,
+  9
+ ],
+ "n_samples": 366,
+ "layers": [
+  "encoder",
+  "double0",
+  "double1",
+  "double2",
+  "double3",
+  "double4",
+  "single0",
+  "single1",
+  "single2",
+  "single3",
+  "single4",
+  "single5",
+  "single6",
+  "single7",
+  "single8",
+  "single9",
+  "single10",
+  "single11",
+  "single12",
+  "single13",
+  "single14",
+  "single15",
+  "single16",
+  "single17",
+  "single18",
+  "single19"
+ ],
+ "eager_vs_graph_max_abs": 0.0
+}

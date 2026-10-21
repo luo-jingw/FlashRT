@@ -1,0 +1,292 @@
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 13446.86it/s]
+  autotune: tested 8 algos, best=3 (110.739 us)
+  autotune: tested 8 algos, best=2 (4.8 us)
+  autotune: tested 8 algos, best=0 (9.6768 us)
+  autotune: tested 8 algos, best=0 (245.085 us)
+  autotune: tested 8 algos, best=2 (237.482 us)
+  autotune: tested 8 algos, best=0 (120.557 us)
+  autotune: tested 8 algos, best=0 (145.267 us)
+  autotune: tested 8 algos, best=0 (2.7488 us)
+  autotune: tested 8 algos, best=0 (115.469 us)
+  autotune: tested 8 algos, best=0 (5.7408 us)
+  autotune: tested 8 algos, best=1 (46.7072 us)
+  autotune: tested 8 algos, best=0 (9.6896 us)
+  autotune: tested 8 algos, best=0 (80.0992 us)
+  autotune: tested 8 algos, best=0 (290.256 us)
+  autotune: tested 8 algos, best=3 (4.5312 us)
+  autotune: tested 8 algos, best=3 (132.125 us)
+  autotune: tested 8 algos, best=2 (472.886 us)
+  autotune: tested 8 algos, best=0 (9.3536 us)
+  autotune: tested 8 algos, best=0 (233.466 us)
+  autotune: tested 8 algos, best=5 (37.6992 us)
+  autotune: tested 8 algos, best=2 (6.64 us)
+  autotune: tested 8 algos, best=1 (310.25 us)
+  autotune: tested 8 algos, best=0 (15.072 us)
+USDT:2026-10-13 22:41:33 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:41:33 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-13 22:41:33 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:41:33 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+{"k": 1, "M": 64, "x0": 40, "a0": 432, "total": 496, "actions_finite": true, "step_graph_ms": {"p50": 1.8764, "p10": 1.8745, "p90": 1.8784}, "attn_graph_ms_layer0": 0.0111, "loop10_graph_ms": 18.7552, "eager_split_ms": {"gemm": 0.9983, "quant/cast": 0.4255, "attention": 0.2688, "norm": 0.1323, "elementwise": 0.0714}, "eager_launches": {"quant/cast": 181, "gemm": 63, "elementwise": 49, "norm": 56, "attention": 75}, "eager_kernel_total_ms": 1.8963, "kernels_per_iter": [424, 424, 424, 424, 424]}
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 14296.89it/s]
+  autotune: tested 8 algos, best=3 (110.915 us)
+  autotune: tested 8 algos, best=0 (4.8288 us)
+  autotune: tested 8 algos, best=0 (245.299 us)
+  autotune: tested 8 algos, best=0 (246.435 us)
+  autotune: tested 8 algos, best=0 (120.608 us)
+  autotune: tested 8 algos, best=0 (145.302 us)
+  autotune: tested 8 algos, best=3 (8.464 us)
+  autotune: tested 8 algos, best=2 (14.3776 us)
+  autotune: tested 8 algos, best=0 (115.517 us)
+  autotune: tested 8 algos, best=3 (5.4272 us)
+  autotune: tested 8 algos, best=4 (10.1888 us)
+  autotune: tested 8 algos, best=3 (14.64 us)
+  autotune: tested 8 algos, best=0 (14.3392 us)
+  autotune: tested 8 algos, best=1 (46.6432 us)
+  autotune: tested 8 algos, best=0 (80.2432 us)
+  autotune: tested 8 algos, best=0 (290.074 us)
+  autotune: tested 8 algos, best=3 (132.125 us)
+  autotune: tested 8 algos, best=5 (3.4656 us)
+  autotune: tested 8 algos, best=2 (473.062 us)
+  autotune: tested 8 algos, best=0 (233.37 us)
+  autotune: tested 8 algos, best=5 (37.8976 us)
+  autotune: tested 8 algos, best=1 (310.32 us)
+  autotune: tested 8 algos, best=0 (15.2448 us)
+USDT:2026-10-13 22:41:42 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:41:42 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-13 22:41:42 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:41:42 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+{"k": 2, "M": 128, "x0": 40, "a0": 432, "total": 560, "actions_finite": true, "step_graph_ms": {"p50": 2.2252, "p10": 2.2227, "p90": 2.2282}, "attn_graph_ms_layer0": 0.0194, "loop10_graph_ms": null, "eager_split_ms": {"gemm": 0.9863, "quant/cast": 0.504, "attention": 0.3876, "norm": 0.1442, "elementwise": 0.0871}, "eager_launches": {"quant/cast": 181, "gemm": 63, "elementwise": 49, "norm": 56, "attention": 75}, "eager_kernel_total_ms": 2.1092, "kernels_per_iter": [424, 424, 424, 424, 424]}
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 14462.99it/s]
+  autotune: tested 8 algos, best=3 (110.95 us)
+  autotune: tested 8 algos, best=0 (4.8736 us)
+  autotune: tested 8 algos, best=0 (245.21 us)
+  autotune: tested 8 algos, best=2 (237.459 us)
+  autotune: tested 8 algos, best=0 (120.541 us)
+  autotune: tested 8 algos, best=0 (145.315 us)
+  autotune: tested 8 algos, best=0 (13.8432 us)
+  autotune: tested 8 algos, best=7 (5.6064 us)
+  autotune: tested 8 algos, best=0 (20.016 us)
+  autotune: tested 8 algos, best=0 (19.9136 us)
+  autotune: tested 8 algos, best=0 (19.7984 us)
+  autotune: tested 8 algos, best=0 (115.632 us)
+  autotune: tested 8 algos, best=4 (3.5616 us)
+  autotune: tested 8 algos, best=1 (46.8544 us)
+  autotune: tested 8 algos, best=0 (80.4128 us)
+  autotune: tested 8 algos, best=0 (290.118 us)
+  autotune: tested 8 algos, best=0 (11.7952 us)
+  autotune: tested 8 algos, best=3 (132.051 us)
+  autotune: tested 8 algos, best=2 (473.155 us)
+  autotune: tested 8 algos, best=0 (234.234 us)
+  autotune: tested 8 algos, best=5 (37.968 us)
+  autotune: tested 8 algos, best=1 (311.363 us)
+  autotune: tested 8 algos, best=0 (15.44 us)
+USDT:2026-10-13 22:41:51 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:41:51 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-13 22:41:51 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:41:51 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+{"k": 3, "M": 192, "x0": 40, "a0": 432, "total": 624, "actions_finite": true, "step_graph_ms": {"p50": 2.534, "p10": 2.5313, "p90": 2.5377}, "attn_graph_ms_layer0": 0.0236, "loop10_graph_ms": null, "eager_split_ms": {"gemm": 1.0705, "quant/cast": 0.6079, "attention": 0.4934, "norm": 0.1569, "elementwise": 0.1046}, "eager_launches": {"quant/cast": 181, "gemm": 63, "elementwise": 49, "norm": 56, "attention": 75}, "eager_kernel_total_ms": 2.4334, "kernels_per_iter": [424, 424, 424, 424, 424]}
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 13147.05it/s]
+  autotune: tested 8 algos, best=3 (110.883 us)
+  autotune: tested 8 algos, best=0 (4.7584 us)
+  autotune: tested 8 algos, best=0 (245.283 us)
+  autotune: tested 8 algos, best=2 (237.629 us)
+  autotune: tested 8 algos, best=0 (120.518 us)
+  autotune: tested 8 algos, best=0 (145.325 us)
+  autotune: tested 8 algos, best=4 (16.1856 us)
+  autotune: tested 8 algos, best=0 (26.1472 us)
+  autotune: tested 8 algos, best=0 (23.4816 us)
+  autotune: tested 8 algos, best=5 (5.5424 us)
+  autotune: tested 8 algos, best=0 (115.587 us)
+  autotune: tested 8 algos, best=1 (26.1056 us)
+  autotune: tested 8 algos, best=5 (3.5712 us)
+  autotune: tested 8 algos, best=1 (46.9056 us)
+  autotune: tested 8 algos, best=0 (80.5152 us)
+  autotune: tested 8 algos, best=0 (290.141 us)
+  autotune: tested 8 algos, best=3 (132.192 us)
+  autotune: tested 8 algos, best=4 (13.5872 us)
+  autotune: tested 8 algos, best=2 (474.768 us)
+  autotune: tested 8 algos, best=0 (234.17 us)
+  autotune: tested 8 algos, best=5 (37.9296 us)
+  autotune: tested 8 algos, best=1 (311.45 us)
+  autotune: tested 8 algos, best=0 (15.5136 us)
+USDT:2026-10-13 22:42:01 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:01 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-13 22:42:01 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:01 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+{"k": 4, "M": 256, "x0": 40, "a0": 432, "total": 688, "actions_finite": true, "step_graph_ms": {"p50": 2.7867, "p10": 2.7824, "p90": 2.7911}, "attn_graph_ms_layer0": 0.0299, "loop10_graph_ms": null, "eager_split_ms": {"gemm": 1.0336, "quant/cast": 0.6878, "attention": 0.67, "norm": 0.1746, "elementwise": 0.1221}, "eager_launches": {"quant/cast": 181, "gemm": 63, "elementwise": 49, "norm": 56, "attention": 75}, "eager_kernel_total_ms": 2.6881, "kernels_per_iter": [424, 424, 424, 424, 424]}
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 16644.89it/s]
+  autotune: tested 8 algos, best=3 (110.752 us)
+  autotune: tested 8 algos, best=2 (4.8064 us)
+  autotune: tested 8 algos, best=0 (31.8944 us)
+  autotune: tested 8 algos, best=0 (245.277 us)
+  autotune: tested 8 algos, best=2 (237.536 us)
+  autotune: tested 8 algos, best=0 (120.589 us)
+  autotune: tested 8 algos, best=0 (145.472 us)
+  autotune: tested 8 algos, best=4 (3.632 us)
+  autotune: tested 8 algos, best=0 (115.293 us)
+  autotune: tested 8 algos, best=0 (15.872 us)
+  autotune: tested 8 algos, best=1 (46.8672 us)
+  autotune: tested 8 algos, best=0 (80.1984 us)
+  autotune: tested 8 algos, best=0 (290.109 us)
+  autotune: tested 8 algos, best=3 (132.195 us)
+  autotune: tested 8 algos, best=0 (31.9872 us)
+  autotune: tested 8 algos, best=2 (473.043 us)
+  autotune: tested 8 algos, best=0 (234.336 us)
+  autotune: tested 8 algos, best=1 (19.2192 us)
+  autotune: tested 8 algos, best=6 (5.8112 us)
+  autotune: tested 8 algos, best=5 (37.9936 us)
+  autotune: tested 8 algos, best=1 (311.277 us)
+  autotune: tested 8 algos, best=4 (29.2256 us)
+  autotune: tested 8 algos, best=0 (15.2 us)
+USDT:2026-10-13 22:42:10 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:10 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-13 22:42:10 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:10 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+{"k": 5, "M": 320, "x0": 40, "a0": 432, "total": 752, "actions_finite": true, "step_graph_ms": {"p50": 3.0938, "p10": 3.0901, "p90": 3.0972}, "attn_graph_ms_layer0": 0.0339, "loop10_graph_ms": null, "eager_split_ms": {"gemm": 1.1223, "quant/cast": 0.771, "attention": 0.7513, "norm": 0.2026, "elementwise": 0.1405}, "eager_launches": {"quant/cast": 181, "gemm": 63, "elementwise": 49, "norm": 56, "attention": 75}, "eager_kernel_total_ms": 2.9876, "kernels_per_iter": [424, 424, 424, 424, 424]}
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 13496.43it/s]
+  autotune: tested 8 algos, best=3 (110.842 us)
+  autotune: tested 8 algos, best=6 (4.8704 us)
+  autotune: tested 8 algos, best=0 (245.408 us)
+  autotune: tested 8 algos, best=2 (237.619 us)
+  autotune: tested 8 algos, best=0 (120.598 us)
+  autotune: tested 8 algos, best=0 (145.466 us)
+  autotune: tested 8 algos, best=3 (17.392 us)
+  autotune: tested 8 algos, best=0 (115.597 us)
+  autotune: tested 8 algos, best=0 (38.0064 us)
+  autotune: tested 8 algos, best=1 (46.6816 us)
+  autotune: tested 8 algos, best=0 (5.4624 us)
+  autotune: tested 8 algos, best=3 (21.0752 us)
+  autotune: tested 8 algos, best=0 (80.3648 us)
+  autotune: tested 8 algos, best=3 (31.5712 us)
+  autotune: tested 8 algos, best=0 (290.131 us)
+  autotune: tested 8 algos, best=3 (131.965 us)
+  autotune: tested 8 algos, best=0 (32.2368 us)
+  autotune: tested 8 algos, best=2 (473.293 us)
+  autotune: tested 8 algos, best=0 (234.41 us)
+  autotune: tested 8 algos, best=5 (38.0832 us)
+  autotune: tested 8 algos, best=0 (3.5648 us)
+  autotune: tested 8 algos, best=1 (311.373 us)
+  autotune: tested 8 algos, best=0 (15.264 us)
+USDT:2026-10-13 22:42:19 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:19 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-13 22:42:19 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:19 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+{"k": 6, "M": 384, "x0": 40, "a0": 432, "total": 816, "actions_finite": true, "step_graph_ms": {"p50": 3.4429, "p10": 3.4396, "p90": 3.4472}, "attn_graph_ms_layer0": 0.0423, "loop10_graph_ms": null, "eager_split_ms": {"gemm": 1.125, "attention": 0.9596, "quant/cast": 0.8891, "norm": 0.2132, "elementwise": 0.1593}, "eager_launches": {"quant/cast": 181, "gemm": 63, "elementwise": 49, "norm": 56, "attention": 75}, "eager_kernel_total_ms": 3.3462, "kernels_per_iter": [424, 424, 424, 424, 424]}
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 17846.38it/s]
+  autotune: tested 8 algos, best=3 (110.698 us)
+  autotune: tested 8 algos, best=0 (4.8576 us)
+  autotune: tested 8 algos, best=3 (3.6192 us)
+  autotune: tested 8 algos, best=0 (245.072 us)
+  autotune: tested 8 algos, best=2 (237.568 us)
+  autotune: tested 8 algos, best=0 (120.518 us)
+  autotune: tested 8 algos, best=0 (145.389 us)
+  autotune: tested 8 algos, best=0 (115.466 us)
+  autotune: tested 8 algos, best=4 (19.9168 us)
+  autotune: tested 8 algos, best=1 (46.096 us)
+  autotune: tested 8 algos, best=1 (46.7648 us)
+  autotune: tested 8 algos, best=0 (23.1488 us)
+  autotune: tested 8 algos, best=0 (80.208 us)
+  autotune: tested 8 algos, best=0 (290.23 us)
+  autotune: tested 8 algos, best=3 (132.39 us)
+  autotune: tested 8 algos, best=0 (35.3952 us)
+  autotune: tested 8 algos, best=0 (38.288 us)
+  autotune: tested 8 algos, best=0 (5.4944 us)
+  autotune: tested 8 algos, best=2 (474.573 us)
+  autotune: tested 8 algos, best=0 (234.278 us)
+  autotune: tested 8 algos, best=5 (37.9328 us)
+  autotune: tested 8 algos, best=1 (311.165 us)
+  autotune: tested 8 algos, best=0 (15.1456 us)
+USDT:2026-10-13 22:42:29 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:29 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-13 22:42:29 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:29 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+{"k": 7, "M": 448, "x0": 40, "a0": 432, "total": 880, "actions_finite": true, "step_graph_ms": {"p50": 4.0934, "p10": 4.0906, "p90": 4.097}, "attn_graph_ms_layer0": 0.0606, "loop10_graph_ms": null, "eager_split_ms": {"attention": 1.4212, "gemm": 1.2024, "quant/cast": 0.9676, "norm": 0.2339, "elementwise": 0.1788}, "eager_launches": {"quant/cast": 181, "gemm": 63, "elementwise": 49, "norm": 56, "attention": 75}, "eager_kernel_total_ms": 4.004, "kernels_per_iter": [424, 424, 424, 424, 424]}
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 22775.85it/s]
+  autotune: tested 8 algos, best=3 (110.874 us)
+  autotune: tested 8 algos, best=0 (4.8224 us)
+  autotune: tested 8 algos, best=0 (245.248 us)
+  autotune: tested 8 algos, best=2 (237.488 us)
+  autotune: tested 8 algos, best=0 (120.531 us)
+  autotune: tested 8 algos, best=0 (145.341 us)
+  autotune: tested 8 algos, best=0 (26.8064 us)
+  autotune: tested 8 algos, best=1 (46.1984 us)
+  autotune: tested 8 algos, best=0 (41.5808 us)
+  autotune: tested 8 algos, best=0 (115.869 us)
+  autotune: tested 8 algos, best=1 (45.4368 us)
+  autotune: tested 8 algos, best=5 (5.4752 us)
+  autotune: tested 8 algos, best=5 (3.4432 us)
+  autotune: tested 8 algos, best=1 (46.8608 us)
+  autotune: tested 8 algos, best=0 (80.4448 us)
+  autotune: tested 8 algos, best=0 (291.107 us)
+  autotune: tested 8 algos, best=3 (132.595 us)
+  autotune: tested 8 algos, best=2 (474.691 us)
+  autotune: tested 8 algos, best=0 (234.211 us)
+  autotune: tested 8 algos, best=5 (37.952 us)
+  autotune: tested 8 algos, best=1 (311.299 us)
+  autotune: tested 8 algos, best=0 (22.096 us)
+  autotune: tested 8 algos, best=0 (15.1264 us)
+USDT:2026-10-13 22:42:38 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:38 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-13 22:42:38 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:38 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+{"k": 8, "M": 512, "x0": 40, "a0": 432, "total": 944, "actions_finite": true, "step_graph_ms": {"p50": 4.3712, "p10": 4.368, "p90": 4.3751}, "attn_graph_ms_layer0": 0.0647, "loop10_graph_ms": null, "eager_split_ms": {"attention": 1.5271, "gemm": 1.2081, "quant/cast": 1.0973, "norm": 0.2571, "elementwise": 0.1969}, "eager_launches": {"quant/cast": 181, "gemm": 63, "elementwise": 49, "norm": 56, "attention": 75}, "eager_kernel_total_ms": 4.2866, "kernels_per_iter": [424, 424, 424, 424, 424]}
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 12786.24it/s]
+  autotune: tested 8 algos, best=3 (110.829 us)
+  autotune: tested 8 algos, best=0 (4.8896 us)
+  autotune: tested 8 algos, best=0 (245.411 us)
+  autotune: tested 7 algos, best=1 (28.576 us)
+  autotune: tested 8 algos, best=2 (237.376 us)
+  autotune: tested 8 algos, best=0 (120.682 us)
+  autotune: tested 8 algos, best=6 (5.3184 us)
+  autotune: tested 8 algos, best=0 (146.157 us)
+  autotune: tested 8 algos, best=0 (47.3408 us)
+  autotune: tested 8 algos, best=0 (50.8768 us)
+  autotune: tested 8 algos, best=7 (3.4432 us)
+  autotune: tested 8 algos, best=0 (115.846 us)
+  autotune: tested 8 algos, best=1 (46.6848 us)
+  autotune: tested 7 algos, best=1 (23.4048 us)
+  autotune: tested 8 algos, best=0 (80.608 us)
+  autotune: tested 8 algos, best=0 (291.142 us)
+  autotune: tested 8 algos, best=3 (132.518 us)
+  autotune: tested 8 algos, best=2 (474.64 us)
+  autotune: tested 8 algos, best=0 (234.227 us)
+  autotune: tested 8 algos, best=5 (37.9136 us)
+  autotune: tested 8 algos, best=0 (57.4624 us)
+  autotune: tested 8 algos, best=1 (311.296 us)
+  autotune: tested 8 algos, best=0 (15.1616 us)
+USDT:2026-10-13 22:42:48 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:48 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-13 22:42:48 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:48 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+{"k": 9, "M": 576, "x0": 40, "a0": 432, "total": 1008, "actions_finite": true, "step_graph_ms": {"p50": 4.667, "p10": 4.6636, "p90": 4.6716}, "attn_graph_ms_layer0": 0.0687, "loop10_graph_ms": null, "eager_split_ms": {"attention": 1.6293, "gemm": 1.2429, "quant/cast": 1.1861, "norm": 0.2821, "elementwise": 0.2146}, "eager_launches": {"quant/cast": 181, "gemm": 63, "elementwise": 49, "norm": 56, "attention": 75}, "eager_kernel_total_ms": 4.5551, "kernels_per_iter": [424, 424, 424, 424, 424]}
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 15998.82it/s]
+  autotune: tested 8 algos, best=3 (110.714 us)
+  autotune: tested 8 algos, best=0 (4.8576 us)
+  autotune: tested 8 algos, best=2 (58.6912 us)
+  autotune: tested 8 algos, best=0 (245.341 us)
+  autotune: tested 8 algos, best=2 (238.256 us)
+  autotune: tested 8 algos, best=0 (121.098 us)
+  autotune: tested 8 algos, best=0 (145.946 us)
+  autotune: tested 8 algos, best=5 (5.5072 us)
+  autotune: tested 8 algos, best=0 (51.3792 us)
+  autotune: tested 8 algos, best=1 (33.3152 us)
+  autotune: tested 8 algos, best=1 (53.4272 us)
+  autotune: tested 8 algos, best=0 (115.901 us)
+  autotune: tested 8 algos, best=6 (3.4656 us)
+  autotune: tested 8 algos, best=1 (46.9056 us)
+  autotune: tested 8 algos, best=0 (80.7776 us)
+  autotune: tested 8 algos, best=0 (291.136 us)
+  autotune: tested 8 algos, best=3 (132.387 us)
+  autotune: tested 8 algos, best=2 (474.547 us)
+  autotune: tested 8 algos, best=0 (234.224 us)
+  autotune: tested 8 algos, best=5 (37.984 us)
+  autotune: tested 8 algos, best=0 (26.8192 us)
+  autotune: tested 8 algos, best=1 (311.309 us)
+  autotune: tested 8 algos, best=0 (15.216 us)
+USDT:2026-10-13 22:42:57 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:57 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-10-13 22:42:57 2326568:2326568 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-10-13 22:42:57 2326568:2326568 SyncActivityProfilerHandler.cpp:46] profiler_stop
+{"k": 10, "M": 640, "x0": 40, "a0": 432, "total": 1072, "actions_finite": true, "step_graph_ms": {"p50": 5.2389, "p10": 5.2352, "p90": 5.2421}, "attn_graph_ms_layer0": 0.0871, "loop10_graph_ms": null, "eager_split_ms": {"attention": 2.0878, "quant/cast": 1.2668, "gemm": 1.2501, "norm": 0.292, "elementwise": 0.235}, "eager_launches": {"quant/cast": 181, "gemm": 63, "elementwise": 49, "norm": 56, "attention": 75}, "eager_kernel_total_ms": 5.1317, "kernels_per_iter": [424, 424, 424, 424, 424]}
+saved /tmp/claude-1002/-home-jingwu-workspace-FlashRT/e155a298-9075-4dfe-b5eb-6856aec7a685/scratchpad/bm/bm_nvfp4.json

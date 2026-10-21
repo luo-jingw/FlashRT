@@ -1,0 +1,161 @@
+[robosuite WARNING] No private macro file found! (__init__.py:7)
+[robosuite WARNING] It is recommended to use a private macro file (__init__.py:8)
+[robosuite WARNING] To setup, run: python /home/jingwu/workspace/FlashRT/tmp/libero_venv/lib/python3.12/site-packages/robosuite/scripts/setup_macros.py (__init__.py:9)
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 15088.52it/s]
+  autotune: tested 8 algos, best=3 (110.08 us)
+  autotune: tested 8 algos, best=2 (4.7584 us)
+  autotune: tested 8 algos, best=2 (9.7184 us)
+  autotune: tested 8 algos, best=0 (244.339 us)
+  autotune: tested 8 algos, best=2 (237.501 us)
+  autotune: tested 8 algos, best=0 (120.611 us)
+  autotune: tested 8 algos, best=0 (145.472 us)
+  autotune: tested 8 algos, best=0 (2.7776 us)
+  autotune: tested 8 algos, best=0 (115.382 us)
+  autotune: tested 8 algos, best=0 (5.872 us)
+  autotune: tested 8 algos, best=1 (46.72 us)
+  autotune: tested 8 algos, best=0 (9.8592 us)
+  autotune: tested 8 algos, best=0 (80.1344 us)
+  autotune: tested 8 algos, best=0 (290.33 us)
+  autotune: tested 8 algos, best=7 (4.288 us)
+  autotune: tested 8 algos, best=3 (132.067 us)
+  autotune: tested 8 algos, best=2 (473.158 us)
+  autotune: tested 8 algos, best=0 (9.6512 us)
+  autotune: tested 8 algos, best=0 (233.667 us)
+  autotune: tested 8 algos, best=5 (37.7248 us)
+  autotune: tested 8 algos, best=1 (6.7104 us)
+  autotune: tested 8 algos, best=1 (310.16 us)
+  autotune: tested 8 algos, best=0 (15.1424 us)
+[info] using task orders [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+task 0 ep 0: serial10=S sub_0_7_9=S sub_0_9=S  14s
+task 0 ep 1: serial10=S sub_0_7_9=S sub_0_9=S  24s
+task 0 ep 2: serial10=S sub_0_7_9=S sub_0_9=S  35s
+task 0 ep 3: serial10=S sub_0_7_9=S sub_0_9=S  46s
+task 0 ep 4: serial10=S sub_0_7_9=S sub_0_9=S  59s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+task 1 ep 0: serial10=S sub_0_7_9=S sub_0_9=S  70s
+task 1 ep 1: serial10=S sub_0_7_9=S sub_0_9=S  80s
+task 1 ep 2: serial10=S sub_0_7_9=S sub_0_9=S  90s
+task 1 ep 3: serial10=S sub_0_7_9=S sub_0_9=S  100s
+task 1 ep 4: serial10=S sub_0_7_9=S sub_0_9=S  111s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+task 2 ep 0: serial10=S sub_0_7_9=S sub_0_9=S  120s
+task 2 ep 1: serial10=S sub_0_7_9=S sub_0_9=S  127s
+task 2 ep 2: serial10=F sub_0_7_9=S sub_0_9=F  143s
+task 2 ep 3: serial10=S sub_0_7_9=S sub_0_9=S  151s
+task 2 ep 4: serial10=S sub_0_7_9=S sub_0_9=S  159s
+  autotune: tested 8 algos, best=0 (15.1776 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+task 3 ep 0: serial10=S sub_0_7_9=S sub_0_9=S  170s
+task 3 ep 1: serial10=S sub_0_7_9=S sub_0_9=S  179s
+task 3 ep 2: serial10=S sub_0_7_9=S sub_0_9=S  189s
+task 3 ep 3: serial10=S sub_0_7_9=S sub_0_9=S  197s
+task 3 ep 4: serial10=S sub_0_7_9=S sub_0_9=S  206s
+  autotune: tested 8 algos, best=0 (15.3856 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+task 4 ep 0: serial10=S sub_0_7_9=S sub_0_9=S  223s
+task 4 ep 1: serial10=S sub_0_7_9=S sub_0_9=S  237s
+task 4 ep 2: serial10=S sub_0_7_9=S sub_0_9=S  252s
+task 4 ep 3: serial10=S sub_0_7_9=S sub_0_9=S  266s
+task 4 ep 4: serial10=S sub_0_7_9=S sub_0_9=S  280s
+  autotune: tested 8 algos, best=0 (15.7888 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+task 5 ep 0: serial10=S sub_0_7_9=S sub_0_9=S  289s
+task 5 ep 1: serial10=S sub_0_7_9=S sub_0_9=S  298s
+task 5 ep 2: serial10=S sub_0_7_9=S sub_0_9=S  306s
+task 5 ep 3: serial10=S sub_0_7_9=S sub_0_9=S  314s
+task 5 ep 4: serial10=S sub_0_7_9=S sub_0_9=S  322s
+  autotune: tested 8 algos, best=0 (15.312 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+task 6 ep 0: serial10=S sub_0_7_9=S sub_0_9=S  335s
+task 6 ep 1: serial10=S sub_0_7_9=S sub_0_9=S  346s
+task 6 ep 2: serial10=S sub_0_7_9=S sub_0_9=S  357s
+task 6 ep 3: serial10=S sub_0_7_9=S sub_0_9=S  368s
+task 6 ep 4: serial10=S sub_0_7_9=S sub_0_9=S  379s
+  autotune: tested 8 algos, best=0 (15.1904 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+task 7 ep 0: serial10=S sub_0_7_9=S sub_0_9=S  389s
+task 7 ep 1: serial10=S sub_0_7_9=S sub_0_9=S  398s
+task 7 ep 2: serial10=S sub_0_7_9=S sub_0_9=S  407s
+task 7 ep 3: serial10=S sub_0_7_9=S sub_0_9=S  416s
+task 7 ep 4: serial10=S sub_0_7_9=S sub_0_9=S  428s
+  autotune: tested 8 algos, best=0 (15.1232 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+task 8 ep 0: serial10=F sub_0_7_9=F sub_0_9=S  447s
+task 8 ep 1: serial10=S sub_0_7_9=S sub_0_9=S  459s
+task 8 ep 2: serial10=S sub_0_7_9=F sub_0_9=S  474s
+task 8 ep 3: serial10=S sub_0_7_9=S sub_0_9=S  487s
+task 8 ep 4: serial10=S sub_0_7_9=F sub_0_9=F  505s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+task 9 ep 0: serial10=S sub_0_7_9=S sub_0_9=S  517s
+task 9 ep 1: serial10=S sub_0_7_9=S sub_0_9=S  527s
+task 9 ep 2: serial10=S sub_0_7_9=S sub_0_9=S  538s
+task 9 ep 3: serial10=S sub_0_7_9=S sub_0_9=S  549s
+task 9 ep 4: serial10=S sub_0_7_9=S sub_0_9=S  560s
+{
+ "serial10": {
+  "successes": 48,
+  "episodes": 50,
+  "per_task": [
+   5,
+   5,
+   4,
+   5,
+   5,
+   5,
+   5,
+   5,
+   4,
+   5
+  ],
+  "mean_env_steps_success": 247.0625
+ },
+ "sub_0_7_9": {
+  "successes": 47,
+  "episodes": 50,
+  "per_task": [
+   5,
+   5,
+   5,
+   5,
+   5,
+   5,
+   5,
+   5,
+   2,
+   5
+  ],
+  "mean_env_steps_success": 237.08510638297872
+ },
+ "sub_0_9": {
+  "successes": 48,
+  "episodes": 50,
+  "per_task": [
+   5,
+   5,
+   4,
+   5,
+   5,
+   5,
+   5,
+   5,
+   4,
+   5
+  ],
+  "mean_env_steps_success": 247.1875
+ }
+}

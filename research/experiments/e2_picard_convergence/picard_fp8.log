@@ -1,0 +1,87 @@
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 12625.32it/s]
+  autotune: tested 8 algos, best=3 (109.93 us)
+  autotune: tested 8 algos, best=2 (4.8064 us)
+  autotune: tested 8 algos, best=0 (9.6192 us)
+  autotune: tested 8 algos, best=0 (243.664 us)
+  autotune: tested 8 algos, best=2 (235.85 us)
+  autotune: tested 8 algos, best=0 (120.246 us)
+  autotune: tested 8 algos, best=0 (144.867 us)
+  autotune: tested 8 algos, best=0 (2.7936 us)
+  autotune: tested 8 algos, best=0 (115.021 us)
+  autotune: tested 8 algos, best=0 (5.8944 us)
+  autotune: tested 8 algos, best=1 (46.4224 us)
+  autotune: tested 8 algos, best=0 (9.8464 us)
+  autotune: tested 8 algos, best=0 (79.7184 us)
+  autotune: tested 8 algos, best=0 (288.39 us)
+  autotune: tested 8 algos, best=7 (4.1632 us)
+  autotune: tested 8 algos, best=3 (131.488 us)
+  autotune: tested 8 algos, best=2 (471.21 us)
+  autotune: tested 8 algos, best=0 (9.472 us)
+  autotune: tested 8 algos, best=0 (232.707 us)
+  autotune: tested 8 algos, best=5 (37.68 us)
+  autotune: tested 8 algos, best=0 (6.608 us)
+  autotune: tested 8 algos, best=1 (309.142 us)
+  autotune: tested 8 algos, best=0 (15.1712 us)
+task 0 ep 27: 13 samples, 14s
+task 0 ep 35: 27 samples, 29s
+  autotune: tested 8 algos, best=0 (15.0496 us)
+task 1 ep 52: 37 samples, 40s
+task 1 ep 53: 49 samples, 52s
+task 2 ep 78: 62 samples, 66s
+task 2 ep 80: 78 samples, 83s
+  autotune: tested 8 algos, best=0 (15.1584 us)
+task 3 ep 131: 99 samples, 105s
+task 3 ep 136: 122 samples, 130s
+  autotune: tested 8 algos, best=0 (15.456 us)
+task 4 ep 165: 137 samples, 146s
+task 4 ep 170: 152 samples, 162s
+task 5 ep 212: 166 samples, 177s
+task 5 ep 214: 180 samples, 192s
+task 6 ep 251: 194 samples, 207s
+task 6 ep 269: 207 samples, 221s
+  autotune: tested 8 algos, best=0 (15.5552 us)
+task 7 ep 296: 220 samples, 238s
+task 7 ep 301: 233 samples, 253s
+  autotune: tested 8 algos, best=0 (15.504 us)
+task 8 ep 323: 246 samples, 267s
+task 8 ep 341: 260 samples, 281s
+  autotune: tested 8 algos, best=0 (15.2384 us)
+task 9 ep 348: 269 samples, 291s
+task 9 ep 378: 282 samples, 305s
+{"n_samples": 282, "eager_vs_serial_mae": {"mean": 7e-05, "p50": 0.0, "p90": 0.00041, "max": 0.0007}, "seed_spread_mae": {"mean": 0.00081, "p50": 0.0008, "p90": 0.0009, "max": 0.001}, "serial_vs_gt_mae": {"mean": 0.02334, "p50": 0.02133, "p90": 0.03599, "max": 0.06793}}
+full sweeps 1 mae {'mean': 0.11213, 'p50': 0.1105, 'p90': 0.17492, 'max': 0.22947} grip 0.99717
+full sweeps 2 mae {'mean': 0.03998, 'p50': 0.03957, 'p90': 0.06248, 'max': 0.08416} grip 0.99906
+full sweeps 3 mae {'mean': 0.00752, 'p50': 0.00733, 'p90': 0.01152, 'max': 0.01533} grip 0.99989
+full sweeps 4 mae {'mean': 0.00115, 'p50': 0.00113, 'p90': 0.00149, 'max': 0.00183} grip 0.99994
+full sweeps 5 mae {'mean': 0.00055, 'p50': 0.00055, 'p90': 0.00065, 'max': 0.00088} grip 0.99989
+full sweeps 6 mae {'mean': 0.00054, 'p50': 0.00053, 'p90': 0.00064, 'max': 0.00084} grip 0.99994
+full sweeps 7 mae {'mean': 0.00053, 'p50': 0.00052, 'p90': 0.00062, 'max': 0.00081} grip 0.99983
+full sweeps 8 mae {'mean': 0.00052, 'p50': 0.00051, 'p90': 0.00062, 'max': 0.00081} grip 0.99994
+full sweeps 9 mae {'mean': 0.0005, 'p50': 0.0005, 'p90': 0.0006, 'max': 0.00096} grip 0.99989
+full sweeps 10 mae {'mean': 0.0, 'p50': 0.0, 'p90': 0.0, 'max': 0.0} grip 1.0
+sliding 2/0.1 sweeps {'mean': 6.00355, 'p50': 6.0, 'p90': 6.0, 'max': 7.0} mae 0.00074 0.00089 grip 0.99989
+sliding 2/0.03 sweeps {'mean': 7.96809, 'p50': 8.0, 'p90': 8.0, 'max': 8.0} mae 0.00047 0.00056 grip 0.99983
+sliding 2/0.01 sweeps {'mean': 9.99645, 'p50': 10.0, 'p90': 10.0, 'max': 10.0} mae 0.0 0.0 grip 1.0
+sliding 2/0.003 sweeps {'mean': 10.0, 'p50': 10.0, 'p90': 10.0, 'max': 10.0} mae 0.0 0.0 grip 1.0
+sliding 2/0.001 sweeps {'mean': 10.0, 'p50': 10.0, 'p90': 10.0, 'max': 10.0} mae 0.0 0.0 grip 1.0
+sliding 4/0.1 sweeps {'mean': 4.0, 'p50': 4.0, 'p90': 4.0, 'max': 4.0} mae 0.00077 0.00113 grip 0.99983
+sliding 4/0.03 sweeps {'mean': 5.94326, 'p50': 6.0, 'p90': 6.0, 'max': 6.0} mae 0.00047 0.00056 grip 0.99989
+sliding 4/0.01 sweeps {'mean': 6.0, 'p50': 6.0, 'p90': 6.0, 'max': 6.0} mae 0.00048 0.00057 grip 0.99994
+sliding 4/0.003 sweeps {'mean': 7.0, 'p50': 7.0, 'p90': 7.0, 'max': 7.0} mae 0.00046 0.00055 grip 0.99994
+sliding 4/0.001 sweeps {'mean': 7.31915, 'p50': 7.0, 'p90': 8.0, 'max': 8.0} mae 0.00047 0.00057 grip 0.99989
+sliding 6/0.1 sweeps {'mean': 4.0, 'p50': 4.0, 'p90': 4.0, 'max': 4.0} mae 0.00084 0.00102 grip 0.99978
+sliding 6/0.03 sweeps {'mean': 4.95745, 'p50': 5.0, 'p90': 5.0, 'max': 5.0} mae 0.00054 0.00063 grip 0.99994
+sliding 6/0.01 sweeps {'mean': 6.0, 'p50': 6.0, 'p90': 6.0, 'max': 6.0} mae 0.00047 0.00056 grip 0.99983
+sliding 6/0.003 sweeps {'mean': 6.0, 'p50': 6.0, 'p90': 6.0, 'max': 6.0} mae 0.00046 0.00057 grip 0.99989
+sliding 6/0.001 sweeps {'mean': 6.0, 'p50': 6.0, 'p90': 6.0, 'max': 6.0} mae 0.00046 0.00056 grip 0.99989
+sliding 8/0.1 sweeps {'mean': 3.0, 'p50': 3.0, 'p90': 3.0, 'max': 3.0} mae 0.00129 0.00157 grip 0.99978
+sliding 8/0.03 sweeps {'mean': 3.08156, 'p50': 3.0, 'p90': 3.0, 'max': 4.0} mae 0.0066 0.01071 grip 0.99983
+sliding 8/0.01 sweeps {'mean': 5.0, 'p50': 5.0, 'p90': 5.0, 'max': 5.0} mae 0.00047 0.00056 grip 1.0
+sliding 8/0.003 sweeps {'mean': 5.21277, 'p50': 5.0, 'p90': 6.0, 'max': 6.0} mae 0.00047 0.00057 grip 0.99989
+sliding 8/0.001 sweeps {'mean': 6.0, 'p50': 6.0, 'p90': 6.0, 'max': 6.0} mae 0.00046 0.00056 grip 0.99989
+sliding 10/0.1 sweeps {'mean': 3.96099, 'p50': 4.0, 'p90': 4.0, 'max': 4.0} mae 0.00056 0.00073 grip 0.99983
+sliding 10/0.03 sweeps {'mean': 4.0, 'p50': 4.0, 'p90': 4.0, 'max': 4.0} mae 0.00055 0.00064 grip 0.99983
+sliding 10/0.01 sweeps {'mean': 5.0, 'p50': 5.0, 'p90': 5.0, 'max': 5.0} mae 0.00047 0.00056 grip 1.0
+sliding 10/0.003 sweeps {'mean': 5.21277, 'p50': 5.0, 'p90': 6.0, 'max': 6.0} mae 0.00047 0.00057 grip 0.99989
+sliding 10/0.001 sweeps {'mean': 6.0, 'p50': 6.0, 'p90': 6.0, 'max': 6.0} mae 0.00046 0.00056 grip 0.99989

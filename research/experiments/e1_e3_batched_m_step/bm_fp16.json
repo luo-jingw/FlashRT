@@ -1,0 +1,383 @@
+{
+ "precision": "fp16",
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "commit": "3d3c1f5",
+ "prompt": "A video recorded from a robot's point of view executing the following instruction: turn on the stove and put the moka pot on it",
+ "episode": 11,
+ "frame": 0,
+ "warmup": 20,
+ "iters": 200,
+ "prof_iters": 5,
+ "rows": [
+  {
+   "k": 1,
+   "M": 64,
+   "x0": 40,
+   "a0": 432,
+   "total": 496,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 1.4561,
+    "p10": 1.4543,
+    "p90": 1.4574
+   },
+   "attn_graph_ms_layer0": 0.0111,
+   "loop10_graph_ms": 14.5466,
+   "eager_split_ms": {
+    "gemm": 0.9915,
+    "attention": 0.2674,
+    "norm": 0.131,
+    "elementwise": 0.0713,
+    "quant/cast": 0.0008
+   },
+   "eager_launches": {
+    "quant/cast": 1,
+    "gemm": 93,
+    "elementwise": 49,
+    "norm": 56,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 1.462,
+   "kernels_per_iter": [
+    274,
+    274,
+    274,
+    274,
+    274
+   ]
+  },
+  {
+   "k": 2,
+   "M": 128,
+   "x0": 40,
+   "a0": 432,
+   "total": 560,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 1.8058,
+    "p10": 1.8035,
+    "p90": 1.809
+   },
+   "attn_graph_ms_layer0": 0.0194,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 1.1056,
+    "attention": 0.391,
+    "norm": 0.1438,
+    "elementwise": 0.0875,
+    "quant/cast": 0.0008
+   },
+   "eager_launches": {
+    "quant/cast": 1,
+    "gemm": 93,
+    "elementwise": 49,
+    "norm": 56,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 1.7287,
+   "kernels_per_iter": [
+    274,
+    274,
+    274,
+    274,
+    274
+   ]
+  },
+  {
+   "k": 3,
+   "M": 192,
+   "x0": 40,
+   "a0": 432,
+   "total": 624,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 2.3441,
+    "p10": 2.3422,
+    "p90": 2.3465
+   },
+   "attn_graph_ms_layer0": 0.0236,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 1.5504,
+    "attention": 0.4897,
+    "norm": 0.1598,
+    "elementwise": 0.1043,
+    "quant/cast": 0.0008
+   },
+   "eager_launches": {
+    "quant/cast": 1,
+    "gemm": 93,
+    "elementwise": 49,
+    "norm": 56,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 2.305,
+   "kernels_per_iter": [
+    274,
+    274,
+    274,
+    274,
+    274
+   ]
+  },
+  {
+   "k": 4,
+   "M": 256,
+   "x0": 40,
+   "a0": 432,
+   "total": 688,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 2.9574,
+    "p10": 2.9529,
+    "p90": 2.9631
+   },
+   "attn_graph_ms_layer0": 0.0298,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 1.9563,
+    "attention": 0.6694,
+    "norm": 0.1833,
+    "elementwise": 0.1216,
+    "quant/cast": 0.0008
+   },
+   "eager_launches": {
+    "quant/cast": 1,
+    "gemm": 93,
+    "elementwise": 49,
+    "norm": 56,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 2.9313,
+   "kernels_per_iter": [
+    274,
+    274,
+    274,
+    274,
+    274
+   ]
+  },
+  {
+   "k": 5,
+   "M": 320,
+   "x0": 40,
+   "a0": 432,
+   "total": 752,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 3.5516,
+    "p10": 3.5487,
+    "p90": 3.5547
+   },
+   "attn_graph_ms_layer0": 0.0339,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 2.3865,
+    "attention": 0.7494,
+    "norm": 0.2095,
+    "elementwise": 0.1398,
+    "quant/cast": 0.0008
+   },
+   "eager_launches": {
+    "quant/cast": 1,
+    "gemm": 93,
+    "elementwise": 49,
+    "norm": 56,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 3.4859,
+   "kernels_per_iter": [
+    274,
+    274,
+    274,
+    274,
+    274
+   ]
+  },
+  {
+   "k": 6,
+   "M": 384,
+   "x0": 40,
+   "a0": 432,
+   "total": 816,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 3.9499,
+    "p10": 3.9275,
+    "p90": 3.9617
+   },
+   "attn_graph_ms_layer0": 0.0424,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 2.5249,
+    "attention": 0.9573,
+    "norm": 0.236,
+    "elementwise": 0.1608,
+    "quant/cast": 0.0008
+   },
+   "eager_launches": {
+    "quant/cast": 1,
+    "gemm": 93,
+    "elementwise": 49,
+    "norm": 56,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 3.8798,
+   "kernels_per_iter": [
+    274,
+    274,
+    274,
+    274,
+    274
+   ]
+  },
+  {
+   "k": 7,
+   "M": 448,
+   "x0": 40,
+   "a0": 432,
+   "total": 880,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 4.8231,
+    "p10": 4.8195,
+    "p90": 4.8279
+   },
+   "attn_graph_ms_layer0": 0.0605,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 2.9615,
+    "attention": 1.4205,
+    "norm": 0.2421,
+    "elementwise": 0.1783,
+    "quant/cast": 0.0008
+   },
+   "eager_launches": {
+    "quant/cast": 1,
+    "gemm": 88,
+    "elementwise": 49,
+    "norm": 56,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 4.8032,
+   "kernels_per_iter": [
+    269,
+    269,
+    269,
+    269,
+    269
+   ]
+  },
+  {
+   "k": 8,
+   "M": 512,
+   "x0": 40,
+   "a0": 432,
+   "total": 944,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 5.6158,
+    "p10": 5.6126,
+    "p90": 5.6202
+   },
+   "attn_graph_ms_layer0": 0.0647,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 3.6092,
+    "attention": 1.5257,
+    "norm": 0.2575,
+    "elementwise": 0.1976,
+    "quant/cast": 0.0008
+   },
+   "eager_launches": {
+    "quant/cast": 1,
+    "gemm": 93,
+    "elementwise": 49,
+    "norm": 56,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 5.5908,
+   "kernels_per_iter": [
+    274,
+    274,
+    274,
+    274,
+    274
+   ]
+  },
+  {
+   "k": 9,
+   "M": 576,
+   "x0": 40,
+   "a0": 432,
+   "total": 1008,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 6.0576,
+    "p10": 6.0349,
+    "p90": 6.0649
+   },
+   "attn_graph_ms_layer0": 0.0687,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 3.8444,
+    "attention": 1.6271,
+    "norm": 0.2871,
+    "elementwise": 0.2164,
+    "quant/cast": 0.0008
+   },
+   "eager_launches": {
+    "quant/cast": 1,
+    "gemm": 93,
+    "elementwise": 49,
+    "norm": 56,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 5.9758,
+   "kernels_per_iter": [
+    274,
+    274,
+    274,
+    274,
+    274
+   ]
+  },
+  {
+   "k": 10,
+   "M": 640,
+   "x0": 40,
+   "a0": 432,
+   "total": 1072,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 6.6958,
+    "p10": 6.6839,
+    "p90": 6.7034
+   },
+   "attn_graph_ms_layer0": 0.0869,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 4.0265,
+    "attention": 2.0812,
+    "norm": 0.3031,
+    "elementwise": 0.2368,
+    "quant/cast": 0.0008
+   },
+   "eager_launches": {
+    "quant/cast": 1,
+    "gemm": 93,
+    "elementwise": 49,
+    "norm": 56,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 6.6484,
+   "kernels_per_iter": [
+    274,
+    274,
+    274,
+    274,
+    274
+   ]
+  }
+ ]
+}

@@ -1,0 +1,70 @@
+[robosuite WARNING] No private macro file found! (__init__.py:7)
+[robosuite WARNING] It is recommended to use a private macro file (__init__.py:8)
+[robosuite WARNING] To setup, run: python /home/jingwu/workspace/FlashRT/tmp/libero_venv/lib/python3.12/site-packages/robosuite/scripts/setup_macros.py (__init__.py:9)
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights:  36%|███▌      | 143/398 [00:00<00:00, 1367.41it/s]Loading weights:  70%|███████   | 280/398 [00:00<00:00, 1058.84it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 1538.31it/s]
+  autotune: tested 8 algos, best=3 (109.77 us)
+  autotune: tested 8 algos, best=2 (4.7616 us)
+  autotune: tested 8 algos, best=2 (9.6448 us)
+  autotune: tested 8 algos, best=0 (243.597 us)
+  autotune: tested 8 algos, best=2 (235.885 us)
+  autotune: tested 8 algos, best=0 (119.827 us)
+  autotune: tested 8 algos, best=0 (144.285 us)
+  autotune: tested 8 algos, best=0 (2.688 us)
+  autotune: tested 8 algos, best=0 (114.976 us)
+  autotune: tested 8 algos, best=0 (5.9456 us)
+  autotune: tested 8 algos, best=1 (46.2816 us)
+  autotune: tested 8 algos, best=0 (9.7888 us)
+  autotune: tested 8 algos, best=0 (79.6544 us)
+  autotune: tested 8 algos, best=0 (288.259 us)
+  autotune: tested 8 algos, best=7 (4.2848 us)
+  autotune: tested 8 algos, best=3 (131.488 us)
+  autotune: tested 8 algos, best=2 (470.944 us)
+  autotune: tested 8 algos, best=0 (9.3536 us)
+  autotune: tested 8 algos, best=0 (232.602 us)
+  autotune: tested 8 algos, best=5 (37.6832 us)
+  autotune: tested 8 algos, best=1 (6.6784 us)
+  autotune: tested 8 algos, best=1 (308.954 us)
+built fp8 in 14s text_trim=True use_fa4=False vec_rms_norm=True fuse_qkv_norm_rope=True
+  autotune: tested 8 algos, best=0 (14.9408 us)
+[info] using task orders [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+{"task_id": 0, "task": "put both the alphabet soup and the tomato sauce in the basket", "x0": 40, "set_prompt_ms": 853.9, "first_call_ms": [1.15, 30.03, 0.05, 31.22], "calls": 50, "successes": 2, "episodes": 2}
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+{"task_id": 1, "task": "put both the cream cheese box and the butter in the basket", "x0": 40, "set_prompt_ms": 30.5, "first_call_ms": [1.05, 24.51, 0.01, 25.58], "calls": 51, "successes": 2, "episodes": 2}
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+{"task_id": 2, "task": "turn on the stove and put the moka pot on it", "x0": 40, "set_prompt_ms": 30.2, "first_call_ms": [1.11, 24.54, 0.03, 25.69], "calls": 49, "successes": 2, "episodes": 2}
+  autotune: tested 8 algos, best=0 (14.9536 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+{"task_id": 3, "task": "put the black bowl in the bottom drawer of the cabinet and close it", "x0": 42, "set_prompt_ms": 225.6, "first_call_ms": [1.05, 25.27, 0.01, 26.33], "calls": 51, "successes": 2, "episodes": 2}
+  autotune: tested 8 algos, best=0 (15.216 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+{"task_id": 4, "task": "put the white mug on the left plate and put the yellow and white mug on the right plate", "x0": 47, "set_prompt_ms": 225.5, "first_call_ms": [1.07, 26.6, 0.02, 27.68], "calls": 45, "successes": 2, "episodes": 2}
+  autotune: tested 8 algos, best=0 (15.1168 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+{"task_id": 5, "task": "pick up the book and place it in the back compartment of the caddy", "x0": 43, "set_prompt_ms": 222.8, "first_call_ms": [1.07, 26.57, 0.02, 27.66], "calls": 35, "successes": 2, "episodes": 2}
+  autotune: tested 8 algos, best=0 (15.1136 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+{"task_id": 6, "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate", "x0": 46, "set_prompt_ms": 218.3, "first_call_ms": [1.09, 25.27, 0.02, 26.38], "calls": 58, "successes": 2, "episodes": 2}
+  autotune: tested 8 algos, best=0 (15.1072 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+{"task_id": 7, "task": "put both the alphabet soup and the cream cheese box in the basket", "x0": 41, "set_prompt_ms": 231.4, "first_call_ms": [1.07, 26.61, 0.03, 27.71], "calls": 48, "successes": 2, "episodes": 2}
+  autotune: tested 8 algos, best=0 (14.9984 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+{"task_id": 8, "task": "put both moka pots on the stove", "x0": 36, "set_prompt_ms": 220.6, "first_call_ms": [1.1, 25.28, 0.02, 26.39], "calls": 107, "successes": 1, "episodes": 2}
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+{"task_id": 9, "task": "put the yellow and white mug in the microwave and close it", "x0": 40, "set_prompt_ms": 30.5, "first_call_ms": [1.09, 24.58, 0.01, 25.68], "calls": 53, "successes": 2, "episodes": 2}
+{"pre": {"n": 537, "mean": 1.03, "p50": 1.02, "p90": 1.088, "p99": 1.193, "max": 1.297}, "infer": {"n": 537, "mean": 24.893, "p50": 24.663, "p90": 26.032, "p99": 26.174, "max": 26.216}, "post": {"n": 537, "mean": 0.016, "p50": 0.014, "p90": 0.021, "p99": 0.042, "max": 0.046}, "e2e": {"n": 537, "mean": 25.939, "p50": 25.694, "p90": 27.085, "p99": 27.279, "max": 27.405}, "env_step": {"n": 5399, "mean": 6.071, "p50": 5.874, "p90": 7.308, "p99": 8.959, "max": 10.944}} success 19/20

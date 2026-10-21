@@ -1,0 +1,120 @@
+picks {0: [0, 1, 5, 6, 9, 15, 16, 17, 18, 20, 22, 24, 25, 28, 30, 32, 33, 38, 40, 41], 4: [144, 146, 147, 148, 149, 155, 158, 161, 162, 167, 168, 169, 170, 176, 178, 180, 181, 184, 185, 187], 9: [348, 350, 352, 353, 356, 359, 361, 364, 367, 368, 369, 370, 372, 373, 375, 376, 381, 383, 385, 386]}
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 11954.55it/s]
+  autotune: tested 8 algos, best=3 (110.557 us)
+  autotune: tested 8 algos, best=2 (4.816 us)
+  autotune: tested 8 algos, best=2 (9.6512 us)
+  autotune: tested 8 algos, best=0 (245.946 us)
+  autotune: tested 8 algos, best=2 (238.166 us)
+  autotune: tested 8 algos, best=0 (121.142 us)
+  autotune: tested 8 algos, best=0 (146.022 us)
+  autotune: tested 8 algos, best=0 (2.7584 us)
+  autotune: tested 8 algos, best=0 (116.211 us)
+  autotune: tested 8 algos, best=0 (6.08 us)
+  autotune: tested 8 algos, best=1 (46.6016 us)
+  autotune: tested 8 algos, best=0 (9.8112 us)
+  autotune: tested 8 algos, best=0 (80.5632 us)
+  autotune: tested 8 algos, best=0 (290.973 us)
+  autotune: tested 8 algos, best=1 (4.272 us)
+  autotune: tested 8 algos, best=3 (132.24 us)
+  autotune: tested 8 algos, best=2 (474.55 us)
+  autotune: tested 8 algos, best=0 (9.5104 us)
+  autotune: tested 8 algos, best=0 (234.31 us)
+  autotune: tested 8 algos, best=5 (37.632 us)
+  autotune: tested 8 algos, best=2 (6.7072 us)
+  autotune: tested 8 algos, best=1 (311.366 us)
+ActionDiT 5+20 layers, 10 steps, tokens 64x1024, attn 24x128
+  autotune: tested 8 algos, best=0 (15.1104 us)
+  autotune: tested 8 algos, best=0 (246.352 us)
+  autotune: tested 8 algos, best=3 (126.566 us)
+  autotune: tested 7 algos, best=0 (24.9312 us)
+  autotune: tested 8 algos, best=3 (165.299 us)
+  autotune: tested 8 algos, best=2 (120.518 us)
+  autotune: tested 8 algos, best=0 (8.5632 us)
+  autotune: tested 8 algos, best=0 (72.4608 us)
+  autotune: tested 8 algos, best=0 (17.3088 us)
+  autotune: tested 8 algos, best=3 (47.1584 us)
+task 0 ep 0: frames 28 3s
+task 0 ep 1: frames 56 5s
+task 0 ep 5: frames 78 6s
+task 0 ep 6: frames 101 7s
+task 0 ep 9: frames 131 9s
+task 0 ep 15: frames 159 11s
+task 0 ep 16: frames 190 13s
+task 0 ep 17: frames 223 15s
+task 0 ep 18: frames 246 17s
+task 0 ep 20: frames 273 19s
+task 0 ep 22: frames 298 20s
+task 0 ep 24: frames 327 22s
+task 0 ep 25: frames 359 24s
+task 0 ep 28: frames 388 26s
+task 0 ep 30: frames 415 28s
+task 0 ep 32: frames 439 29s
+task 0 ep 33: frames 463 31s
+task 0 ep 38: frames 491 33s
+task 0 ep 40: frames 522 35s
+task 0 ep 41: frames 550 37s
+task 0 done: 550 frames, 103s
+  autotune: tested 8 algos, best=0 (15.2288 us)
+  autotune: tested 8 algos, best=0 (247.53 us)
+  autotune: tested 8 algos, best=0 (131.094 us)
+  autotune: tested 8 algos, best=0 (171.238 us)
+  autotune: tested 8 algos, best=0 (125.421 us)
+  autotune: tested 8 algos, best=0 (8.768 us)
+  autotune: tested 8 algos, best=0 (17.312 us)
+  autotune: tested 8 algos, best=1 (73.3632 us)
+  autotune: tested 8 algos, best=3 (47.2704 us)
+  autotune: tested 7 algos, best=0 (25.2032 us)
+task 4 ep 144: frames 29 105s
+task 4 ep 146: frames 54 107s
+task 4 ep 147: frames 85 109s
+task 4 ep 148: frames 112 111s
+task 4 ep 149: frames 138 113s
+task 4 ep 155: frames 167 115s
+task 4 ep 158: frames 195 117s
+task 4 ep 161: frames 224 118s
+task 4 ep 162: frames 249 120s
+task 4 ep 167: frames 276 122s
+task 4 ep 168: frames 303 124s
+task 4 ep 169: frames 330 126s
+task 4 ep 170: frames 359 128s
+task 4 ep 176: frames 385 129s
+task 4 ep 178: frames 416 131s
+task 4 ep 180: frames 441 133s
+task 4 ep 181: frames 468 135s
+task 4 ep 184: frames 491 136s
+task 4 ep 185: frames 519 138s
+task 4 ep 187: frames 546 140s
+task 4 done: 546 frames, 206s
+  autotune: tested 8 algos, best=0 (15.3184 us)
+  autotune: tested 8 algos, best=3 (47.2864 us)
+  autotune: tested 8 algos, best=0 (130.992 us)
+  autotune: tested 8 algos, best=0 (171.261 us)
+  autotune: tested 8 algos, best=0 (247.661 us)
+  autotune: tested 8 algos, best=0 (125.347 us)
+  autotune: tested 8 algos, best=0 (8.7104 us)
+  autotune: tested 8 algos, best=1 (72.432 us)
+  autotune: tested 8 algos, best=0 (17.5136 us)
+  autotune: tested 7 algos, best=0 (25.0048 us)
+task 9 ep 348: frames 18 208s
+task 9 ep 350: frames 39 209s
+task 9 ep 352: frames 56 211s
+task 9 ep 353: frames 76 212s
+task 9 ep 356: frames 95 213s
+task 9 ep 359: frames 115 215s
+task 9 ep 361: frames 132 216s
+task 9 ep 364: frames 150 217s
+task 9 ep 367: frames 168 218s
+task 9 ep 368: frames 186 219s
+task 9 ep 369: frames 205 221s
+task 9 ep 370: frames 224 222s
+task 9 ep 372: frames 242 223s
+task 9 ep 373: frames 263 225s
+task 9 ep 375: frames 278 226s
+task 9 ep 376: frames 295 227s
+task 9 ep 381: frames 312 228s
+task 9 ep 383: frames 331 229s
+task 9 ep 385: frames 350 230s
+task 9 ep 386: frames 372 232s
+task 9 done: 372 frames, 298s
+saved /tmp/claude-1002/-home-jingwu-workspace-FlashRT/e155a298-9075-4dfe-b5eb-6856aec7a685/scratchpad/qkv/l10_t049.json

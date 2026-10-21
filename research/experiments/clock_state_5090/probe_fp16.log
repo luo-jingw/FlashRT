@@ -1,0 +1,39 @@
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights:  61%|██████    | 243/398 [00:00<00:00, 2368.47it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 2729.54it/s]
+  autotune: tested 8 algos, best=3 (110.608 us)
+  autotune: tested 8 algos, best=2 (4.736 us)
+  autotune: tested 8 algos, best=0 (9.6832 us)
+  autotune: tested 8 algos, best=0 (245.382 us)
+  autotune: tested 8 algos, best=2 (237.488 us)
+  autotune: tested 8 algos, best=0 (120.675 us)
+  autotune: tested 8 algos, best=0 (145.29 us)
+  autotune: tested 8 algos, best=1 (2.8448 us)
+  autotune: tested 8 algos, best=0 (115.488 us)
+  autotune: tested 8 algos, best=2 (5.9232 us)
+  autotune: tested 8 algos, best=1 (46.6752 us)
+  autotune: tested 8 algos, best=0 (10.0832 us)
+  autotune: tested 8 algos, best=0 (80.2368 us)
+  autotune: tested 8 algos, best=0 (290.262 us)
+  autotune: tested 8 algos, best=7 (4.1984 us)
+  autotune: tested 8 algos, best=3 (132.09 us)
+  autotune: tested 8 algos, best=2 (472.915 us)
+  autotune: tested 8 algos, best=0 (9.6576 us)
+  autotune: tested 8 algos, best=0 (233.261 us)
+  autotune: tested 8 algos, best=5 (37.7344 us)
+  autotune: tested 8 algos, best=2 (6.7104 us)
+  autotune: tested 8 algos, best=1 (310.288 us)
+  autotune: tested 8 algos, best=0 (15.248 us)
+  autotune: tested 8 algos, best=0 (246.291 us)
+  autotune: tested 8 algos, best=3 (125.818 us)
+  autotune: tested 7 algos, best=0 (24.6496 us)
+  autotune: tested 8 algos, best=3 (164.205 us)
+  autotune: tested 8 algos, best=2 (120.202 us)
+  autotune: tested 8 algos, best=0 (8.5856 us)
+  autotune: tested 8 algos, best=1 (72.816 us)
+  autotune: tested 8 algos, best=0 (17.2704 us)
+  autotune: tested 8 algos, best=3 (46.9248 us)
+fp16: idle at start {'pstate': 'P8', 'mem': 810, 'sm': 217} after 19.5s; infer P50 first 5 windows 33.246 ms, last 5 windows 33.454 ms; bandwidth cold 1519 / warm 1519 GB/s
+  after 1s idle ({'pstate': 'P1', 'mem': 13801, 'sm': 2880}): first infer [34.0664, 33.4983, 33.4281, 33.474] ... median 33.458
+  after 5s idle ({'pstate': 'P1', 'mem': 13801, 'sm': 2400}): first infer [34.0012, 33.4551, 33.3981, 33.3708] ... median 33.370
+  after 30s idle ({'pstate': 'P8', 'mem': 405, 'sm': 180}): first infer [33.9867, 33.4229, 33.4168, 33.4156] ... median 33.382
+  after 120s idle ({'pstate': 'P8', 'mem': 405, 'sm': 180}): first infer [33.9908, 33.377, 33.2816, 33.2626] ... median 33.262

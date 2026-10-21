@@ -1,0 +1,29 @@
+A: fold 0 done, 82 test episodes
+A: fold 1 done, 162 test episodes
+A: fold 2 done, 240 test episodes
+A: fold 3 done, 314 test episodes
+A: fold 4 done, 388 test episodes
+B: split 0 done
+B: split 1 done
+B: split 2 done
+B: split 3 done
+B: split 4 done
+B: split 5 done
+B: split 6 done
+B: split 7 done
+B: split 8 done
+B: split 9 done
+B: split 10 done
+B: split 11 done
+B: split 12 done
+B: split 13 done
+B: split 14 done
+B: split 15 done
+B: split 16 done
+B: split 17 done
+B: split 18 done
+B: split 19 done
+C: libero_spatial_20 done
+C: libero_object_20 done
+C: libero_goal_20 done
+done

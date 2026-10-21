@@ -1,0 +1,87 @@
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights:  51%|█████     | 202/398 [00:00<00:00, 2002.15it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 2121.19it/s]
+  autotune: tested 8 algos, best=3 (110.272 us)
+  autotune: tested 8 algos, best=0 (4.8064 us)
+  autotune: tested 8 algos, best=2 (9.648 us)
+  autotune: tested 8 algos, best=0 (244.214 us)
+  autotune: tested 8 algos, best=2 (236.582 us)
+  autotune: tested 8 algos, best=0 (120.317 us)
+  autotune: tested 8 algos, best=0 (144.982 us)
+  autotune: tested 8 algos, best=1 (2.8928 us)
+  autotune: tested 8 algos, best=0 (115.136 us)
+  autotune: tested 8 algos, best=0 (5.904 us)
+  autotune: tested 8 algos, best=1 (46.608 us)
+  autotune: tested 8 algos, best=0 (10.0512 us)
+  autotune: tested 8 algos, best=0 (80.0128 us)
+  autotune: tested 8 algos, best=0 (289.28 us)
+  autotune: tested 8 algos, best=7 (4.4064 us)
+  autotune: tested 8 algos, best=3 (131.539 us)
+  autotune: tested 8 algos, best=2 (471.03 us)
+  autotune: tested 8 algos, best=0 (9.4528 us)
+  autotune: tested 8 algos, best=0 (232.646 us)
+  autotune: tested 8 algos, best=5 (37.6736 us)
+  autotune: tested 8 algos, best=0 (6.7904 us)
+  autotune: tested 8 algos, best=1 (309.056 us)
+  autotune: tested 8 algos, best=0 (15.0976 us)
+task 0 ep 27: 13 samples, 18s
+task 0 ep 35: 27 samples, 37s
+  autotune: tested 8 algos, best=0 (15.36 us)
+task 1 ep 52: 37 samples, 51s
+task 1 ep 53: 49 samples, 67s
+task 2 ep 78: 62 samples, 85s
+task 2 ep 80: 78 samples, 107s
+  autotune: tested 8 algos, best=0 (15.12 us)
+task 3 ep 131: 99 samples, 135s
+task 3 ep 136: 122 samples, 167s
+  autotune: tested 8 algos, best=0 (15.1136 us)
+task 4 ep 165: 137 samples, 189s
+task 4 ep 170: 152 samples, 210s
+task 5 ep 212: 166 samples, 229s
+task 5 ep 214: 180 samples, 248s
+task 6 ep 251: 194 samples, 267s
+task 6 ep 269: 207 samples, 284s
+  autotune: tested 8 algos, best=0 (15.472 us)
+task 7 ep 296: 220 samples, 303s
+task 7 ep 301: 233 samples, 322s
+  autotune: tested 8 algos, best=0 (15.3984 us)
+task 8 ep 323: 246 samples, 340s
+task 8 ep 341: 260 samples, 359s
+  autotune: tested 8 algos, best=0 (15.392 us)
+task 9 ep 348: 269 samples, 372s
+task 9 ep 378: 282 samples, 391s
+{"n_samples": 282, "eager_vs_serial_mae": {"mean": 9e-05, "p50": 0.0, "p90": 0.0, "max": 0.00184}, "seed_spread_mae": {"mean": 0.00236, "p50": 0.00234, "p90": 0.00257, "max": 0.00298}, "serial_vs_gt_mae": {"mean": 0.02493, "p50": 0.02299, "p90": 0.03793, "max": 0.06622}}
+full sweeps 1 mae {'mean': 0.10407, 'p50': 0.10242, 'p90': 0.15938, 'max': 0.21074} grip 0.99712
+full sweeps 2 mae {'mean': 0.03427, 'p50': 0.03309, 'p90': 0.05161, 'max': 0.07063} grip 0.999
+full sweeps 3 mae {'mean': 0.00688, 'p50': 0.00666, 'p90': 0.00928, 'max': 0.01352} grip 0.99994
+full sweeps 4 mae {'mean': 0.00211, 'p50': 0.00209, 'p90': 0.0024, 'max': 0.00275} grip 0.99994
+full sweeps 5 mae {'mean': 0.0017, 'p50': 0.00169, 'p90': 0.0019, 'max': 0.00217} grip 1.0
+full sweeps 6 mae {'mean': 0.00168, 'p50': 0.00167, 'p90': 0.00188, 'max': 0.00214} grip 0.99983
+full sweeps 7 mae {'mean': 0.00167, 'p50': 0.00166, 'p90': 0.00188, 'max': 0.00215} grip 0.99989
+full sweeps 8 mae {'mean': 0.00163, 'p50': 0.00162, 'p90': 0.00181, 'max': 0.00215} grip 0.99989
+full sweeps 9 mae {'mean': 0.00156, 'p50': 0.00156, 'p90': 0.00175, 'max': 0.00209} grip 0.99989
+full sweeps 10 mae {'mean': 0.0, 'p50': 0.0, 'p90': 0.0, 'max': 0.0} grip 1.0
+sliding 2/0.1 sweeps {'mean': 6.00709, 'p50': 6.0, 'p90': 6.0, 'max': 7.0} mae 0.00204 0.00241 grip 0.99983
+sliding 2/0.03 sweeps {'mean': 7.98582, 'p50': 8.0, 'p90': 8.0, 'max': 8.0} mae 0.00152 0.0017 grip 0.99989
+sliding 2/0.01 sweeps {'mean': 9.98936, 'p50': 10.0, 'p90': 10.0, 'max': 10.0} mae 1e-05 0.0 grip 1.0
+sliding 2/0.003 sweeps {'mean': 10.0, 'p50': 10.0, 'p90': 10.0, 'max': 10.0} mae 0.0 0.0 grip 1.0
+sliding 2/0.001 sweeps {'mean': 10.0, 'p50': 10.0, 'p90': 10.0, 'max': 10.0} mae 0.0 0.0 grip 1.0
+sliding 4/0.1 sweeps {'mean': 4.0, 'p50': 4.0, 'p90': 4.0, 'max': 4.0} mae 0.00209 0.00272 grip 0.99989
+sliding 4/0.03 sweeps {'mean': 5.91489, 'p50': 6.0, 'p90': 6.0, 'max': 6.0} mae 0.00151 0.0017 grip 0.99994
+sliding 4/0.01 sweeps {'mean': 6.0, 'p50': 6.0, 'p90': 6.0, 'max': 6.0} mae 0.00153 0.00173 grip 0.99983
+sliding 4/0.003 sweeps {'mean': 7.0, 'p50': 7.0, 'p90': 7.0, 'max': 7.0} mae 0.00152 0.0017 grip 0.99994
+sliding 4/0.001 sweeps {'mean': 7.47163, 'p50': 7.0, 'p90': 8.0, 'max': 8.0} mae 0.00151 0.00169 grip 0.99994
+sliding 6/0.1 sweeps {'mean': 4.0, 'p50': 4.0, 'p90': 4.0, 'max': 4.0} mae 0.00228 0.00269 grip 0.99983
+sliding 6/0.03 sweeps {'mean': 4.91489, 'p50': 5.0, 'p90': 5.0, 'max': 5.0} mae 0.00157 0.00176 grip 0.99983
+sliding 6/0.01 sweeps {'mean': 6.0, 'p50': 6.0, 'p90': 6.0, 'max': 6.0} mae 0.00152 0.00171 grip 0.99989
+sliding 6/0.003 sweeps {'mean': 6.0, 'p50': 6.0, 'p90': 6.0, 'max': 6.0} mae 0.00152 0.00173 grip 0.99989
+sliding 6/0.001 sweeps {'mean': 6.0461, 'p50': 6.0, 'p90': 6.0, 'max': 7.0} mae 0.00152 0.0017 grip 0.99994
+sliding 8/0.1 sweeps {'mean': 3.0, 'p50': 3.0, 'p90': 3.0, 'max': 3.0} mae 0.00311 0.0037 grip 1.0
+sliding 8/0.03 sweeps {'mean': 3.10284, 'p50': 3.0, 'p90': 3.9, 'max': 4.0} mae 0.00617 0.00866 grip 0.99994
+sliding 8/0.01 sweeps {'mean': 5.0, 'p50': 5.0, 'p90': 5.0, 'max': 5.0} mae 0.00154 0.00171 grip 1.0
+sliding 8/0.003 sweeps {'mean': 5.07092, 'p50': 5.0, 'p90': 5.0, 'max': 6.0} mae 0.00153 0.00172 grip 1.0
+sliding 8/0.001 sweeps {'mean': 6.0461, 'p50': 6.0, 'p90': 6.0, 'max': 7.0} mae 0.00152 0.0017 grip 0.99994
+sliding 10/0.1 sweeps {'mean': 3.81206, 'p50': 4.0, 'p90': 4.0, 'max': 4.0} mae 0.00181 0.00239 grip 0.99994
+sliding 10/0.03 sweeps {'mean': 4.0, 'p50': 4.0, 'p90': 4.0, 'max': 4.0} mae 0.00166 0.00185 grip 0.99989
+sliding 10/0.01 sweeps {'mean': 5.0, 'p50': 5.0, 'p90': 5.0, 'max': 5.0} mae 0.00154 0.00171 grip 1.0
+sliding 10/0.003 sweeps {'mean': 5.07092, 'p50': 5.0, 'p90': 5.0, 'max': 6.0} mae 0.00153 0.00172 grip 1.0
+sliding 10/0.001 sweeps {'mean': 6.0461, 'p50': 6.0, 'p90': 6.0, 'max': 7.0} mae 0.00152 0.0017 grip 0.99994

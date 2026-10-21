@@ -1,0 +1,339 @@
+output_dir: ./runs/train/${now:%Y-%m-%d}_${now:%H-%M-%S}
+batch_size: 12
+num_workers: 24
+prefetch_factor: 2
+persistent_workers: true
+lr_scheduler_type: cosine
+learning_rate: 0.0001
+warmup_steps: null
+num_epochs: 50
+max_steps: null
+log_every: 10
+save_every: 2500
+keep_latest_state_only: true
+eval_every: 500
+eval_num_inference_steps: 10
+eval_num_samples: 1
+rank_timer_every: 10
+rank_timer_sync_cuda: true
+qwen_cache_batch_size: 32
+qwen_cache_overwrite: false
+qwen_cache_save_workers: 8
+flux2_qwen3_model_spec: null
+precache_arrow: true
+precache_num_workers: 4
+build_lerobot_meta_cache: true
+build_norm_stats: true
+precache_fuse_norm_stats: true
+force_rebuild_norm_stats: false
+norm_stats_use_arrow_cache: true
+norm_stats_bulk_read_arrow: true
+norm_stats_cache_enabled: true
+norm_stats_cache_dir: null
+precache_profile: false
+precache_profile_min_sec: 0.0
+gradient_accumulation_steps: 4
+mixed_precision: bf16
+seed: 42
+max_grad_norm: 1.0
+weight_decay: 0.01
+resume: null
+wandb:
+  enabled: true
+  workspace: arisilin
+  project: imagewam
+  name: robotwin_flux2_klein_4b_base_clean_imagewam
+  group: null
+  mode: online
+data:
+  train:
+    _target_: imagewam.datasets.lerobot.robot_video_dataset.RobotVideoDataset
+    dataset_dirs: ???
+    shape_meta:
+      images:
+      - key: cam_high
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      - key: cam_left_wrist
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      - key: cam_right_wrist
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      action:
+      - key: default
+        raw_shape: 14
+        shape: 14
+      state:
+      - key: default
+        raw_shape: 14
+        shape: 14
+    num_frames: 17
+    global_sample_stride: 1
+    action_video_freq_ratio: 1
+    video_size:
+    - 288
+    - 256
+    camera_key: null
+    val_set_proportion: 0.01
+    is_training_set: true
+    pretrained_norm_stats: ./data/robotwin2.0/dataset_stats.json
+    skip_padding_as_possible: false
+    concat_multi_camera: robotwin
+    robotwin_camera_layout: compact_288x256
+    video_augmentation:
+      _target_: imagewam.datasets.lerobot.transforms.image.VideoAugmentation
+      p: 0.5
+      augment_types:
+      - corrupt_only
+      - color_only
+      - both
+      color_jitter:
+        brightness: 0.2
+        contrast: 0.2
+        saturation: 0.2
+        hue: 0.03
+      gamma:
+        range:
+        - 0.9
+        - 1.1
+      gaussian_noise:
+        std: 0.01
+      random_resized_crop:
+        scale:
+        - 0.95
+        - 1.0
+        ratio: preserve
+      rotate:
+        degrees: 5.0
+        fill: mean
+    require_text_cache: false
+    endpoint_frames_only: true
+    nonidle_filter_path: null
+    qwen_text_cache_dir: ???
+    qwen_context_len: 512
+    processor:
+      _target_: imagewam.datasets.lerobot.processors.imagewam_processor.ImageWAMProcessor
+      shape_meta: ${data.train.shape_meta}
+      num_obs_steps: ${data.train.num_frames}
+      image_obs_steps: 2
+      num_output_cameras: 3
+      action_output_dim: 14
+      proprio_output_dim: 14
+      action_state_transforms: null
+      use_stepwise_action_norm: false
+      norm_default_mode: z-score
+      norm_exception_mode: null
+      action_state_merger:
+        _target_: imagewam.datasets.lerobot.transforms.action_state_merger.ConcatLeftAlign
+      train_transforms:
+      - _target_: imagewam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size:
+        - 240
+        - 320
+      val_transforms:
+      - _target_: imagewam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size:
+        - 240
+        - 320
+    text_embedding_cache_dir: null
+    context_len: 128
+    episode_index_filter:
+      mode: periodic_prefix
+      period: 550
+      keep_first: 50
+    qwen_text_cache_format: qwen3_flux2
+  val:
+    _target_: imagewam.datasets.lerobot.robot_video_dataset.RobotVideoDataset
+    dataset_dirs: ???
+    shape_meta:
+      images:
+      - key: cam_high
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      - key: cam_left_wrist
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      - key: cam_right_wrist
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      action:
+      - key: default
+        raw_shape: 14
+        shape: 14
+      state:
+      - key: default
+        raw_shape: 14
+        shape: 14
+    num_frames: 17
+    global_sample_stride: 1
+    action_video_freq_ratio: 1
+    video_size:
+    - 288
+    - 256
+    camera_key: null
+    val_set_proportion: 0.01
+    is_training_set: false
+    pretrained_norm_stats: null
+    skip_padding_as_possible: false
+    concat_multi_camera: robotwin
+    robotwin_camera_layout: compact_288x256
+    video_augmentation: null
+    require_text_cache: false
+    endpoint_frames_only: true
+    nonidle_filter_path: null
+    qwen_text_cache_dir: ???
+    qwen_context_len: 512
+    processor:
+      _target_: imagewam.datasets.lerobot.processors.imagewam_processor.ImageWAMProcessor
+      shape_meta: ${data.train.shape_meta}
+      num_obs_steps: ${data.train.num_frames}
+      image_obs_steps: 2
+      num_output_cameras: 3
+      action_output_dim: 14
+      proprio_output_dim: 14
+      action_state_transforms: null
+      use_stepwise_action_norm: false
+      norm_default_mode: z-score
+      norm_exception_mode: null
+      action_state_merger:
+        _target_: imagewam.datasets.lerobot.transforms.action_state_merger.ConcatLeftAlign
+      train_transforms:
+      - _target_: imagewam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size:
+        - 240
+        - 320
+      val_transforms:
+      - _target_: imagewam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size:
+        - 240
+        - 320
+    text_embedding_cache_dir: null
+    context_len: 128
+    episode_index_filter: ${data.train.episode_index_filter}
+    qwen_text_cache_format: qwen3_flux2
+model:
+  _target_: imagewam.runtime.create_imagewam_flux2_klein
+  flux2_src_path: /home/jingwu/workspace/FlashRT/third_party/flux2
+  flux2_model_path: /home/jingwu/workspace/FlashRT/tmp/checkpoints/flux2/FLUX.2-klein-base-4B/flux-2-klein-base-4b.safetensors
+  ae_model_path: /home/jingwu/workspace/FlashRT/tmp/checkpoints/flux2/FLUX.2-dev/ae.safetensors
+  variant: klein-base-4b
+  qwen3_model_spec: /home/jingwu/workspace/FlashRT/tmp/checkpoints/Qwen3-4B
+  qwen_context_len: 512
+  load_text_encoder: true
+  proprio_dim: 14
+  mot_checkpoint_mixed_attn: true
+  mot_gqa_implementation: repeat
+  mot_force_flash_attention: false
+  pack_proprio_after_text: true
+  action_dit_pretrained_path: null
+  flux2_lora_config:
+    enabled: false
+    rank: 16
+    alpha: 16.0
+    dropout: 0.0
+    save_lora_merged: false
+    save_trainable_only: false
+    target_suffixes:
+    - qkv
+    - proj
+    - linear1
+    - linear2
+    - img_mlp.0
+    - img_mlp.2
+    - txt_mlp.0
+    - txt_mlp.2
+  action_dit_config:
+    action_dim: ${data.train.processor.action_output_dim}
+    hidden_dim: 1024
+    num_heads: 24
+    attn_head_dim: 128
+    num_layers_double: 5
+    num_layers_single: 20
+    mlp_ratio: 4.0
+    max_action_horizon: 64
+    use_gradient_checkpointing: ${model.mot_checkpoint_mixed_attn}
+  video_scheduler:
+    train_shift: 5.0
+    infer_shift: 5.0
+    num_train_timesteps: 1000
+  action_scheduler:
+    train_shift: 5.0
+    infer_shift: 5.0
+    num_train_timesteps: 1000
+  loss:
+    lambda_video: 0.5
+    lambda_action: 1.0
+  skip_dit_load_from_pretrain: true
+ckpt: /home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/model.pt
+gpu_id: 0
+EVALUATION:
+  robotwin_root: third_party/RoboTwin
+  policy_name: imagewam_policy
+  task_name: click_alarmclock
+  task_config: demo_clean
+  instruction_type: unseen
+  eval_num_episodes: 10
+  output_dir: ./evaluate_results/robotwin/fewstep/sub_0_9/click_alarmclock
+  action_horizon: 16
+  replan_steps: 16
+  num_inference_steps: ${eval_num_inference_steps}
+  sigma_shift: null
+  text_cfg_scale: 1.0
+  negative_prompt: ''
+  rand_device: cpu
+  tiled: false
+  timing_enabled: false
+  skip_get_obs_within_replan: true
+  robotwin_camera_layout: compact_288x256
+  apply_action_transform_backward: false
+  dataset_stats_path: /home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/dataset_stats.json
+  device: cuda
+MULTIRUN:
+  enabled: false
+  num_gpus: 8
+  gpu_ids: null
+  max_tasks_per_gpu: 2
+  phases:
+  - clean
+  - random

@@ -1,0 +1,4 @@
+# Paper PDFs and their text extractions stay local; papers/README.md lists the sources.
+papers/*/
+# Discussion notes stay local.
+Literature Review for the Discussion.md
