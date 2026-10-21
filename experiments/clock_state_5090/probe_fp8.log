@@ -1,0 +1,30 @@
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 24607.64it/s]
+  autotune: tested 8 algos, best=3 (109.862 us)
+  autotune: tested 8 algos, best=0 (4.8352 us)
+  autotune: tested 8 algos, best=0 (9.664 us)
+  autotune: tested 8 algos, best=0 (243.798 us)
+  autotune: tested 8 algos, best=2 (235.99 us)
+  autotune: tested 8 algos, best=0 (119.738 us)
+  autotune: tested 8 algos, best=0 (144.339 us)
+  autotune: tested 8 algos, best=6 (2.7968 us)
+  autotune: tested 8 algos, best=0 (114.515 us)
+  autotune: tested 8 algos, best=2 (5.9328 us)
+  autotune: tested 8 algos, best=1 (46.4064 us)
+  autotune: tested 8 algos, best=0 (9.8208 us)
+  autotune: tested 8 algos, best=0 (79.648 us)
+  autotune: tested 8 algos, best=0 (288.186 us)
+  autotune: tested 8 algos, best=1 (4.2848 us)
+  autotune: tested 8 algos, best=3 (131.386 us)
+  autotune: tested 8 algos, best=2 (471.12 us)
+  autotune: tested 8 algos, best=0 (9.3792 us)
+  autotune: tested 8 algos, best=0 (232.493 us)
+  autotune: tested 8 algos, best=5 (37.6928 us)
+  autotune: tested 8 algos, best=0 (6.6816 us)
+  autotune: tested 8 algos, best=1 (309.142 us)
+  autotune: tested 8 algos, best=0 (14.9376 us)
+fp8: idle at start {'pstate': 'P8', 'mem': 810, 'sm': 352} after 18.5s; infer P50 first 5 windows 24.183 ms, last 5 windows 24.390 ms; bandwidth cold 1518 / warm 1519 GB/s
+  after 1s idle ({'pstate': 'P1', 'mem': 13801, 'sm': 2880}): first infer [25.0951, 24.5749, 24.5696, 24.5518] ... median 24.379
+  after 5s idle ({'pstate': 'P1', 'mem': 13801, 'sm': 2400}): first infer [24.8668, 24.4656, 24.3556, 24.3704] ... median 24.349
+  after 30s idle ({'pstate': 'P8', 'mem': 405, 'sm': 180}): first infer [24.7173, 24.3333, 24.247, 24.238] ... median 24.270
+  after 120s idle ({'pstate': 'P8', 'mem': 405, 'sm': 180}): first infer [24.6383, 24.2292, 24.1841, 24.1963] ... median 24.224

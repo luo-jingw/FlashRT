@@ -1,0 +1,442 @@
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 13485.75it/s]
+  autotune: tested 8 algos, best=3 (109.907 us)
+  autotune: tested 8 algos, best=0 (4.7488 us)
+  autotune: tested 8 algos, best=2 (9.6128 us)
+  autotune: tested 8 algos, best=0 (243.61 us)
+  autotune: tested 8 algos, best=2 (235.885 us)
+  autotune: tested 8 algos, best=0 (120.31 us)
+  autotune: tested 8 algos, best=0 (144.602 us)
+  autotune: tested 8 algos, best=1 (2.9664 us)
+  autotune: tested 8 algos, best=0 (114.97 us)
+  autotune: tested 8 algos, best=0 (5.888 us)
+  autotune: tested 8 algos, best=1 (46.4224 us)
+  autotune: tested 8 algos, best=0 (9.9424 us)
+  autotune: tested 8 algos, best=0 (80.2688 us)
+  autotune: tested 8 algos, best=0 (289.274 us)
+  autotune: tested 8 algos, best=3 (4.3296 us)
+  autotune: tested 8 algos, best=3 (131.402 us)
+  autotune: tested 8 algos, best=2 (471.139 us)
+  autotune: tested 8 algos, best=0 (9.52 us)
+  autotune: tested 8 algos, best=0 (232.669 us)
+  autotune: tested 8 algos, best=5 (37.7216 us)
+  autotune: tested 8 algos, best=2 (6.5824 us)
+  autotune: tested 8 algos, best=1 (309.171 us)
+  autotune: tested 8 algos, best=0 (15.1392 us)
+  autotune: tested 8 algos, best=0 (244.79 us)
+  autotune: tested 8 algos, best=3 (125.571 us)
+  autotune: tested 7 algos, best=0 (24.6912 us)
+  autotune: tested 8 algos, best=3 (163.776 us)
+  autotune: tested 8 algos, best=2 (119.725 us)
+  autotune: tested 8 algos, best=0 (8.5856 us)
+  autotune: tested 8 algos, best=1 (72.5984 us)
+  autotune: tested 8 algos, best=0 (17.1808 us)
+  autotune: tested 8 algos, best=3 (46.7648 us)
+J-train task 0 ep 21 fr 0: erank [447.5, 447.6, 447.6, 447.6, 447.6, 447.6, 447.7, 447.6, 447.4, 444.9] c [0.99, 0.98, 1.0, 1.04, 1.09, 1.16, 1.26, 1.44, 1.78, 2.76] offscalar [0.07, 0.06, 0.06, 0.06, 0.06, 0.06, 0.05, 0.05, 0.06, 0.11] 22s
+J-train task 0 ep 21 fr 60: erank [447.3, 447.4, 447.5, 447.5, 447.6, 447.5, 447.6, 447.6, 447.6, 446.7] c [1.0, 0.98, 1.01, 1.04, 1.1, 1.17, 1.27, 1.45, 1.79, 2.81] offscalar [0.08, 0.07, 0.07, 0.06, 0.06, 0.06, 0.06, 0.05, 0.05, 0.08] 44s
+  autotune: tested 8 algos, best=0 (15.472 us)
+  autotune: tested 8 algos, best=1 (73.0112 us)
+  autotune: tested 8 algos, best=3 (47.0112 us)
+  autotune: tested 8 algos, best=0 (8.544 us)
+  autotune: tested 8 algos, best=0 (245.184 us)
+  autotune: tested 8 algos, best=0 (129.904 us)
+  autotune: tested 8 algos, best=0 (17.1488 us)
+  autotune: tested 8 algos, best=2 (169.558 us)
+  autotune: tested 7 algos, best=0 (24.4544 us)
+  autotune: tested 8 algos, best=0 (124.342 us)
+J-train task 1 ep 70 fr 0: erank [447.5, 447.6, 447.6, 447.6, 447.6, 447.7, 447.7, 447.7, 447.6, 446.4] c [1.0, 0.98, 1.0, 1.04, 1.09, 1.16, 1.27, 1.44, 1.79, 2.8] offscalar [0.07, 0.06, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.05, 0.08] 66s
+J-train task 1 ep 70 fr 60: erank [447.4, 447.4, 447.4, 447.5, 447.4, 447.4, 447.2, 445.9, 445.6, 438.3] c [0.99, 0.97, 1.0, 1.03, 1.09, 1.15, 1.25, 1.42, 1.76, 2.75] offscalar [0.07, 0.07, 0.07, 0.07, 0.07, 0.07, 0.07, 0.09, 0.14, 0.42] 88s
+J-train task 2 ep 91 fr 0: erank [447.5, 447.6, 447.5, 447.5, 447.5, 447.6, 447.7, 447.6, 447.6, 446.7] c [0.99, 0.97, 1.0, 1.04, 1.09, 1.16, 1.26, 1.44, 1.79, 2.79] offscalar [0.07, 0.06, 0.06, 0.07, 0.06, 0.06, 0.05, 0.05, 0.05, 0.08] 110s
+J-train task 2 ep 91 fr 60: erank [447.6, 447.6, 447.6, 447.6, 447.7, 447.7, 447.7, 447.7, 447.8, 447.8] c [1.0, 0.98, 1.0, 1.04, 1.09, 1.16, 1.27, 1.45, 1.8, 2.84] offscalar [0.06, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.05, 0.04, 0.04] 131s
+  autotune: tested 8 algos, best=0 (15.1872 us)
+  autotune: tested 8 algos, best=1 (72.8672 us)
+  autotune: tested 8 algos, best=0 (8.7328 us)
+  autotune: tested 8 algos, best=0 (17.2896 us)
+  autotune: tested 7 algos, best=0 (25.0432 us)
+  autotune: tested 8 algos, best=3 (47.3792 us)
+  autotune: tested 8 algos, best=0 (247.466 us)
+  autotune: tested 8 algos, best=3 (127.027 us)
+  autotune: tested 8 algos, best=3 (165.667 us)
+  autotune: tested 8 algos, best=2 (121.222 us)
+J-train task 3 ep 130 fr 0: erank [447.5, 447.6, 447.6, 447.6, 447.7, 447.7, 447.7, 447.7, 447.7, 447.3] c [0.99, 0.98, 1.0, 1.04, 1.09, 1.16, 1.26, 1.44, 1.79, 2.81] offscalar [0.06, 0.06, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.05, 0.06] 154s
+J-train task 3 ep 130 fr 60: erank [447.5, 447.6, 447.6, 447.6, 447.6, 447.7, 447.7, 447.7, 447.8, 447.8] c [1.0, 0.98, 1.0, 1.04, 1.09, 1.16, 1.27, 1.45, 1.8, 2.85] offscalar [0.07, 0.06, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.04, 0.04] 176s
+  autotune: tested 8 algos, best=0 (15.36 us)
+  autotune: tested 8 algos, best=0 (248.045 us)
+  autotune: tested 8 algos, best=2 (131.459 us)
+  autotune: tested 8 algos, best=2 (171.84 us)
+  autotune: tested 8 algos, best=0 (125.376 us)
+  autotune: tested 8 algos, best=0 (8.7424 us)
+  autotune: tested 8 algos, best=0 (17.2256 us)
+  autotune: tested 8 algos, best=0 (71.7856 us)
+  autotune: tested 8 algos, best=3 (47.392 us)
+  autotune: tested 7 algos, best=0 (25.7184 us)
+J-train task 4 ep 180 fr 0: erank [447.5, 447.6, 447.6, 447.6, 447.6, 447.6, 447.7, 447.6, 447.5, 446.1] c [0.99, 0.98, 1.0, 1.04, 1.09, 1.16, 1.26, 1.44, 1.79, 2.79] offscalar [0.06, 0.06, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.06, 0.09] 200s
+J-train task 4 ep 180 fr 60: erank [447.3, 447.3, 447.3, 447.4, 447.4, 447.5, 447.6, 447.6, 447.7, 447.7] c [1.0, 0.98, 1.0, 1.04, 1.09, 1.16, 1.27, 1.45, 1.81, 2.88] offscalar [0.08, 0.08, 0.08, 0.07, 0.07, 0.07, 0.06, 0.06, 0.05, 0.05] 223s
+J-train task 5 ep 204 fr 0: erank [447.5, 447.6, 447.6, 447.6, 447.6, 447.6, 447.7, 447.7, 447.6, 446.3] c [0.99, 0.98, 1.0, 1.04, 1.09, 1.16, 1.26, 1.44, 1.79, 2.81] offscalar [0.06, 0.06, 0.06, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.08] 245s
+J-train task 5 ep 204 fr 60: erank [447.3, 447.4, 447.4, 447.4, 447.4, 447.4, 447.2, 445.9, 444.6, 444.5] c [0.99, 0.97, 1.0, 1.03, 1.09, 1.15, 1.25, 1.43, 1.76, 2.78] offscalar [0.08, 0.07, 0.07, 0.07, 0.07, 0.07, 0.07, 0.1, 0.15, 0.29] 267s
+J-train task 6 ep 246 fr 0: erank [447.4, 447.5, 447.5, 447.5, 447.6, 447.6, 447.6, 447.6, 447.6, 446.4] c [1.0, 0.98, 1.0, 1.04, 1.09, 1.16, 1.27, 1.45, 1.8, 2.81] offscalar [0.07, 0.07, 0.07, 0.07, 0.06, 0.06, 0.06, 0.05, 0.06, 0.09] 288s
+J-train task 6 ep 246 fr 60: erank [447.3, 447.3, 447.4, 447.4, 447.3, 447.1, 446.7, 445.8, 445.3, 446.4] c [0.99, 0.97, 1.0, 1.03, 1.09, 1.15, 1.25, 1.42, 1.76, 2.8] offscalar [0.08, 0.08, 0.07, 0.07, 0.07, 0.08, 0.09, 0.11, 0.15, 0.15] 310s
+  autotune: tested 8 algos, best=0 (15.3824 us)
+  autotune: tested 8 algos, best=3 (47.3984 us)
+  autotune: tested 8 algos, best=0 (248.314 us)
+  autotune: tested 8 algos, best=0 (131.037 us)
+  autotune: tested 8 algos, best=2 (171.414 us)
+  autotune: tested 8 algos, best=0 (125.405 us)
+  autotune: tested 8 algos, best=0 (71.5456 us)
+  autotune: tested 8 algos, best=0 (8.7904 us)
+  autotune: tested 8 algos, best=0 (17.4272 us)
+  autotune: tested 7 algos, best=0 (26.1088 us)
+J-train task 7 ep 279 fr 0: erank [447.4, 447.6, 447.6, 447.5, 447.6, 447.7, 447.7, 447.7, 447.6, 446.3] c [0.99, 0.98, 1.0, 1.04, 1.09, 1.16, 1.26, 1.44, 1.79, 2.79] offscalar [0.07, 0.06, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.05, 0.09] 334s
+J-train task 7 ep 279 fr 60: erank [447.4, 447.4, 447.4, 447.5, 447.6, 447.6, 447.6, 447.7, 447.6, 447.0] c [0.99, 0.97, 1.0, 1.03, 1.09, 1.15, 1.26, 1.43, 1.78, 2.81] offscalar [0.07, 0.07, 0.07, 0.06, 0.06, 0.06, 0.06, 0.05, 0.05, 0.07] 357s
+  autotune: tested 8 algos, best=0 (15.5456 us)
+  autotune: tested 8 algos, best=0 (17.504 us)
+  autotune: tested 8 algos, best=1 (72.8 us)
+  autotune: tested 8 algos, best=3 (47.4592 us)
+  autotune: tested 7 algos, best=0 (25.6608 us)
+  autotune: tested 8 algos, best=0 (248.538 us)
+  autotune: tested 8 algos, best=0 (131.008 us)
+  autotune: tested 8 algos, best=0 (171.51 us)
+  autotune: tested 8 algos, best=0 (125.469 us)
+  autotune: tested 8 algos, best=0 (8.8448 us)
+J-train task 8 ep 336 fr 0: erank [447.5, 447.6, 447.6, 447.6, 447.6, 447.7, 447.7, 447.7, 447.7, 447.0] c [0.99, 0.98, 1.0, 1.04, 1.09, 1.16, 1.26, 1.44, 1.79, 2.8] offscalar [0.07, 0.06, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.05, 0.07] 380s
+J-train task 8 ep 336 fr 60: erank [447.4, 447.4, 447.5, 447.6, 447.6, 447.6, 447.7, 447.7, 447.7, 447.5] c [0.99, 0.97, 1.0, 1.03, 1.09, 1.16, 1.26, 1.44, 1.8, 2.84] offscalar [0.07, 0.07, 0.07, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.05] 402s
+  autotune: tested 8 algos, best=0 (15.6 us)
+  autotune: tested 8 algos, best=3 (47.3856 us)
+  autotune: tested 8 algos, best=0 (131.424 us)
+  autotune: tested 8 algos, best=0 (171.61 us)
+  autotune: tested 8 algos, best=0 (248.32 us)
+  autotune: tested 8 algos, best=0 (125.219 us)
+  autotune: tested 8 algos, best=0 (8.8256 us)
+  autotune: tested 8 algos, best=0 (71.6736 us)
+  autotune: tested 8 algos, best=0 (17.3056 us)
+  autotune: tested 7 algos, best=0 (25.216 us)
+J-train task 9 ep 365 fr 0: erank [447.5, 447.6, 447.5, 447.6, 447.6, 447.7, 447.7, 447.7, 447.8, 447.5] c [0.99, 0.98, 1.0, 1.04, 1.09, 1.16, 1.26, 1.44, 1.79, 2.82] offscalar [0.07, 0.06, 0.06, 0.06, 0.06, 0.05, 0.05, 0.05, 0.04, 0.05] 426s
+J-train task 9 ep 365 fr 60: erank [447.5, 447.4, 447.5, 447.5, 447.6, 447.6, 447.5, 447.1, 446.0, 443.1] c [1.0, 0.98, 1.0, 1.04, 1.09, 1.16, 1.26, 1.44, 1.78, 2.81] offscalar [0.07, 0.07, 0.06, 0.07, 0.06, 0.06, 0.06, 0.07, 0.11, 0.32] 449s
+test 1 task 0 ep 19 fr 0: v0 spread 0.0208/1.706 action pair MAE 0.00027/0.0245 | sweep3 picard 0.0041 scalar 0.0000 meanJ 0.0000 own 0.0000 464s
+test 2 task 0 ep 19 fr 60: v0 spread 0.0234/1.805 action pair MAE 0.00011/0.0080 | sweep3 picard 0.0030 scalar 0.0000 meanJ 0.0000 own 0.0000 479s
+test 3 task 0 ep 19 fr 120: v0 spread 0.0181/1.567 action pair MAE 0.00013/0.0111 | sweep3 picard 0.0147 scalar 0.0001 meanJ 0.0001 own 0.0001 493s
+test 4 task 0 ep 19 fr 180: v0 spread 0.0241/1.662 action pair MAE 0.00009/0.0078 | sweep3 picard 0.0031 scalar 0.0000 meanJ 0.0000 own 0.0000 508s
+test 5 task 0 ep 19 fr 240: v0 spread 0.0222/1.769 action pair MAE 0.00010/0.0062 | sweep3 picard 0.0068 scalar 0.0000 meanJ 0.0000 own 0.0000 522s
+test 6 task 0 ep 32 fr 0: v0 spread 0.0211/1.667 action pair MAE 0.00026/0.0218 | sweep3 picard 0.0035 scalar 0.0001 meanJ 0.0000 own 0.0000 537s
+test 7 task 0 ep 32 fr 60: v0 spread 0.0183/1.569 action pair MAE 0.00018/0.0119 | sweep3 picard 0.0069 scalar 0.0001 meanJ 0.0001 own 0.0001 551s
+test 8 task 0 ep 32 fr 120: v0 spread 0.0189/1.572 action pair MAE 0.00011/0.0082 | sweep3 picard 0.0106 scalar 0.0001 meanJ 0.0001 own 0.0001 566s
+test 9 task 0 ep 32 fr 180: v0 spread 0.0195/1.534 action pair MAE 0.00012/0.0079 | sweep3 picard 0.0103 scalar 0.0001 meanJ 0.0001 own 0.0001 580s
+test 10 task 1 ep 47 fr 0: v0 spread 0.0204/1.636 action pair MAE 0.00028/0.0254 | sweep3 picard 0.0044 scalar 0.0001 meanJ 0.0001 own 0.0001 596s
+test 11 task 1 ep 47 fr 60: v0 spread 0.0219/1.727 action pair MAE 0.00010/0.0058 | sweep3 picard 0.0059 scalar 0.0001 meanJ 0.0001 own 0.0000 611s
+test 12 task 1 ep 47 fr 120: v0 spread 0.0216/1.718 action pair MAE 0.00010/0.0058 | sweep3 picard 0.0080 scalar 0.0000 meanJ 0.0000 own 0.0000 625s
+test 13 task 1 ep 47 fr 180: v0 spread 0.0190/1.561 action pair MAE 0.00014/0.0115 | sweep3 picard 0.0116 scalar 0.0001 meanJ 0.0001 own 0.0001 641s
+test 14 task 1 ep 47 fr 240: v0 spread 0.0186/1.553 action pair MAE 0.00018/0.0167 | sweep3 picard 0.0067 scalar 0.0001 meanJ 0.0001 own 0.0001 655s
+test 15 task 1 ep 76 fr 0: v0 spread 0.0209/1.705 action pair MAE 0.00026/0.0258 | sweep3 picard 0.0038 scalar 0.0001 meanJ 0.0001 own 0.0000 670s
+test 16 task 1 ep 76 fr 60: v0 spread 0.0222/1.730 action pair MAE 0.00010/0.0053 | sweep3 picard 0.0062 scalar 0.0000 meanJ 0.0000 own 0.0000 685s
+test 17 task 1 ep 76 fr 120: v0 spread 0.0204/1.556 action pair MAE 0.00010/0.0066 | sweep3 picard 0.0084 scalar 0.0000 meanJ 0.0000 own 0.0000 700s
+test 18 task 1 ep 76 fr 180: v0 spread 0.0205/1.583 action pair MAE 0.00016/0.0129 | sweep3 picard 0.0086 scalar 0.0000 meanJ 0.0001 own 0.0001 715s
+test 19 task 1 ep 76 fr 240: v0 spread 0.0196/1.605 action pair MAE 0.00015/0.0125 | sweep3 picard 0.0074 scalar 0.0001 meanJ 0.0001 own 0.0001 730s
+test 20 task 2 ep 86 fr 0: v0 spread 0.0210/1.613 action pair MAE 0.00022/0.0194 | sweep3 picard 0.0044 scalar 0.0001 meanJ 0.0001 own 0.0000 745s
+test 21 task 2 ep 86 fr 60: v0 spread 0.0202/1.688 action pair MAE 0.00012/0.0074 | sweep3 picard 0.0088 scalar 0.0000 meanJ 0.0001 own -1.0000 746s
+test 22 task 2 ep 86 fr 120: v0 spread 0.0215/1.638 action pair MAE 0.00010/0.0051 | sweep3 picard 0.0075 scalar 0.0000 meanJ 0.0001 own -1.0000 747s
+test 23 task 2 ep 86 fr 180: v0 spread 0.0191/1.534 action pair MAE 0.00014/0.0101 | sweep3 picard 0.0111 scalar 0.0001 meanJ 0.0001 own -1.0000 748s
+test 24 task 2 ep 86 fr 240: v0 spread 0.0180/1.573 action pair MAE 0.00015/0.0115 | sweep3 picard 0.0119 scalar 0.0001 meanJ 0.0001 own -1.0000 748s
+test 25 task 2 ep 104 fr 0: v0 spread 0.0207/1.625 action pair MAE 0.00016/0.0133 | sweep3 picard 0.0057 scalar 0.0000 meanJ 0.0000 own -1.0000 749s
+test 26 task 2 ep 104 fr 60: v0 spread 0.0222/1.637 action pair MAE 0.00011/0.0090 | sweep3 picard 0.0069 scalar 0.0000 meanJ 0.0000 own -1.0000 750s
+test 27 task 2 ep 104 fr 120: v0 spread 0.0202/1.589 action pair MAE 0.00010/0.0054 | sweep3 picard 0.0087 scalar 0.0000 meanJ 0.0000 own -1.0000 751s
+test 28 task 2 ep 104 fr 180: v0 spread 0.0179/1.514 action pair MAE 0.00011/0.0063 | sweep3 picard 0.0111 scalar 0.0001 meanJ 0.0001 own -1.0000 752s
+test 29 task 2 ep 104 fr 240: v0 spread 0.0194/1.570 action pair MAE 0.00013/0.0091 | sweep3 picard 0.0089 scalar 0.0001 meanJ 0.0001 own -1.0000 752s
+test 30 task 3 ep 122 fr 0: v0 spread 0.0206/1.637 action pair MAE 0.00020/0.0164 | sweep3 picard 0.0057 scalar 0.0000 meanJ 0.0000 own -1.0000 754s
+test 31 task 3 ep 122 fr 60: v0 spread 0.0221/1.694 action pair MAE 0.00010/0.0063 | sweep3 picard 0.0070 scalar 0.0000 meanJ 0.0000 own -1.0000 755s
+test 32 task 3 ep 122 fr 120: v0 spread 0.0202/1.561 action pair MAE 0.00014/0.0100 | sweep3 picard 0.0091 scalar 0.0000 meanJ 0.0000 own -1.0000 756s
+test 33 task 3 ep 122 fr 180: v0 spread 0.0258/1.894 action pair MAE 0.00016/0.0103 | sweep3 picard 0.0048 scalar 0.0001 meanJ 0.0001 own -1.0000 756s
+test 34 task 3 ep 122 fr 240: v0 spread 0.0195/1.531 action pair MAE 0.00010/0.0050 | sweep3 picard 0.0093 scalar 0.0000 meanJ 0.0000 own -1.0000 757s
+test 35 task 3 ep 122 fr 300: v0 spread 0.0232/1.860 action pair MAE 0.00013/0.0086 | sweep3 picard 0.0035 scalar 0.0000 meanJ 0.0000 own -1.0000 758s
+test 36 task 3 ep 122 fr 360: v0 spread 0.0226/1.697 action pair MAE 0.00012/0.0065 | sweep3 picard 0.0060 scalar 0.0000 meanJ 0.0000 own -1.0000 759s
+test 37 task 3 ep 128 fr 0: v0 spread 0.0216/1.558 action pair MAE 0.00015/0.0118 | sweep3 picard 0.0053 scalar 0.0000 meanJ 0.0000 own -1.0000 760s
+test 38 task 3 ep 128 fr 60: v0 spread 0.0230/1.634 action pair MAE 0.00009/0.0051 | sweep3 picard 0.0035 scalar 0.0000 meanJ 0.0000 own -1.0000 760s
+test 39 task 3 ep 128 fr 120: v0 spread 0.0264/1.869 action pair MAE 0.00014/0.0094 | sweep3 picard 0.0036 scalar 0.0003 meanJ 0.0003 own -1.0000 761s
+test 40 task 3 ep 128 fr 180: v0 spread 0.0220/1.728 action pair MAE 0.00010/0.0054 | sweep3 picard 0.0062 scalar 0.0000 meanJ 0.0001 own -1.0000 762s
+test 41 task 3 ep 128 fr 240: v0 spread 0.0183/1.598 action pair MAE 0.00010/0.0055 | sweep3 picard 0.0101 scalar 0.0000 meanJ 0.0000 own -1.0000 763s
+test 42 task 3 ep 128 fr 300: v0 spread 0.0232/1.811 action pair MAE 0.00011/0.0093 | sweep3 picard 0.0022 scalar 0.0000 meanJ 0.0000 own -1.0000 763s
+test 43 task 3 ep 128 fr 360: v0 spread 0.0195/1.561 action pair MAE 0.00013/0.0077 | sweep3 picard 0.0094 scalar 0.0001 meanJ 0.0001 own -1.0000 764s
+test 44 task 3 ep 128 fr 420: v0 spread 0.0194/1.546 action pair MAE 0.00011/0.0065 | sweep3 picard 0.0092 scalar 0.0001 meanJ 0.0001 own -1.0000 765s
+test 45 task 3 ep 128 fr 480: v0 spread 0.0217/1.658 action pair MAE 0.00013/0.0114 | sweep3 picard 0.0059 scalar 0.0001 meanJ 0.0001 own -1.0000 766s
+test 46 task 4 ep 176 fr 0: v0 spread 0.0193/1.585 action pair MAE 0.00027/0.0236 | sweep3 picard 0.0065 scalar 0.0001 meanJ 0.0001 own -1.0000 767s
+test 47 task 4 ep 176 fr 60: v0 spread 0.0173/1.473 action pair MAE 0.00012/0.0074 | sweep3 picard 0.0123 scalar 0.0001 meanJ 0.0001 own -1.0000 768s
+test 48 task 4 ep 176 fr 120: v0 spread 0.0202/1.595 action pair MAE 0.00012/0.0083 | sweep3 picard 0.0077 scalar 0.0001 meanJ 0.0001 own -1.0000 769s
+test 49 task 4 ep 176 fr 180: v0 spread 0.0186/1.489 action pair MAE 0.00018/0.0153 | sweep3 picard 0.0087 scalar 0.0001 meanJ 0.0001 own -1.0000 770s
+test 50 task 4 ep 176 fr 240: v0 spread 0.0239/1.833 action pair MAE 0.00008/0.0047 | sweep3 picard 0.0023 scalar 0.0000 meanJ 0.0000 own -1.0000 771s
+test 51 task 4 ep 187 fr 0: v0 spread 0.0211/1.644 action pair MAE 0.00025/0.0223 | sweep3 picard 0.0043 scalar 0.0001 meanJ 0.0001 own -1.0000 771s
+test 52 task 4 ep 187 fr 60: v0 spread 0.0228/1.753 action pair MAE 0.00018/0.0151 | sweep3 picard 0.0052 scalar 0.0001 meanJ 0.0001 own -1.0000 772s
+test 53 task 4 ep 187 fr 120: v0 spread 0.0233/1.734 action pair MAE 0.00014/0.0133 | sweep3 picard 0.0036 scalar 0.0001 meanJ 0.0000 own -1.0000 773s
+test 54 task 4 ep 187 fr 180: v0 spread 0.0233/1.809 action pair MAE 0.00014/0.0122 | sweep3 picard 0.0042 scalar 0.0001 meanJ 0.0001 own -1.0000 774s
+test 55 task 4 ep 187 fr 240: v0 spread 0.0252/1.840 action pair MAE 0.00020/0.0188 | sweep3 picard 0.0042 scalar 0.0001 meanJ 0.0001 own -1.0000 775s
+test 56 task 5 ep 199 fr 0: v0 spread 0.0222/1.733 action pair MAE 0.00016/0.0141 | sweep3 picard 0.0052 scalar 0.0000 meanJ 0.0000 own -1.0000 776s
+test 57 task 5 ep 199 fr 60: v0 spread 0.0167/1.463 action pair MAE 0.00015/0.0102 | sweep3 picard 0.0150 scalar 0.0001 meanJ 0.0001 own -1.0000 777s
+test 58 task 5 ep 199 fr 120: v0 spread 0.0233/1.737 action pair MAE 0.00016/0.0133 | sweep3 picard 0.0049 scalar 0.0000 meanJ 0.0000 own -1.0000 778s
+test 59 task 5 ep 199 fr 180: v0 spread 0.0221/1.737 action pair MAE 0.00025/0.0212 | sweep3 picard 0.0043 scalar 0.0001 meanJ 0.0001 own -1.0000 779s
+test 60 task 5 ep 199 fr 240: v0 spread 0.0203/1.641 action pair MAE 0.00016/0.0140 | sweep3 picard 0.0084 scalar 0.0001 meanJ 0.0001 own -1.0000 779s
+test 61 task 5 ep 217 fr 0: v0 spread 0.0229/1.746 action pair MAE 0.00019/0.0181 | sweep3 picard 0.0027 scalar 0.0000 meanJ 0.0000 own -1.0000 780s
+test 62 task 5 ep 217 fr 60: v0 spread 0.0245/1.924 action pair MAE 0.00015/0.0107 | sweep3 picard 0.0039 scalar 0.0001 meanJ 0.0001 own -1.0000 781s
+test 63 task 5 ep 217 fr 120: v0 spread 0.0179/1.469 action pair MAE 0.00015/0.0092 | sweep3 picard 0.0112 scalar 0.0001 meanJ 0.0001 own -1.0000 782s
+test 64 task 5 ep 217 fr 180: v0 spread 0.0220/1.748 action pair MAE 0.00011/0.0077 | sweep3 picard 0.0060 scalar 0.0000 meanJ 0.0000 own -1.0000 782s
+test 65 task 5 ep 217 fr 240: v0 spread 0.0213/1.705 action pair MAE 0.00009/0.0059 | sweep3 picard 0.0083 scalar 0.0000 meanJ 0.0000 own -1.0000 783s
+test 66 task 5 ep 217 fr 300: v0 spread 0.0193/1.591 action pair MAE 0.00011/0.0060 | sweep3 picard 0.0100 scalar 0.0001 meanJ 0.0000 own -1.0000 784s
+test 67 task 6 ep 231 fr 0: v0 spread 0.0203/1.637 action pair MAE 0.00027/0.0205 | sweep3 picard 0.0054 scalar 0.0001 meanJ 0.0001 own -1.0000 785s
+test 68 task 6 ep 231 fr 60: v0 spread 0.0220/1.663 action pair MAE 0.00027/0.0240 | sweep3 picard 0.0055 scalar 0.0002 meanJ 0.0001 own -1.0000 786s
+test 69 task 6 ep 231 fr 120: v0 spread 0.0223/1.757 action pair MAE 0.00020/0.0165 | sweep3 picard 0.0076 scalar 0.0001 meanJ 0.0001 own -1.0000 787s
+test 70 task 6 ep 231 fr 180: v0 spread 0.0216/1.729 action pair MAE 0.00015/0.0124 | sweep3 picard 0.0075 scalar 0.0001 meanJ 0.0001 own -1.0000 788s
+test 71 task 6 ep 231 fr 240: v0 spread 0.0229/1.831 action pair MAE 0.00015/0.0112 | sweep3 picard 0.0056 scalar 0.0001 meanJ 0.0001 own -1.0000 788s
+test 72 task 6 ep 270 fr 0: v0 spread 0.0196/1.642 action pair MAE 0.00025/0.0244 | sweep3 picard 0.0051 scalar 0.0001 meanJ 0.0001 own -1.0000 789s
+test 73 task 6 ep 270 fr 60: v0 spread 0.0178/1.447 action pair MAE 0.00018/0.0139 | sweep3 picard 0.0116 scalar 0.0001 meanJ 0.0001 own -1.0000 790s
+test 74 task 6 ep 270 fr 120: v0 spread 0.0237/1.834 action pair MAE 0.00017/0.0152 | sweep3 picard 0.0048 scalar 0.0001 meanJ 0.0001 own -1.0000 791s
+test 75 task 6 ep 270 fr 180: v0 spread 0.0179/1.523 action pair MAE 0.00020/0.0168 | sweep3 picard 0.0098 scalar 0.0001 meanJ 0.0001 own -1.0000 791s
+test 76 task 7 ep 286 fr 0: v0 spread 0.0219/1.799 action pair MAE 0.00021/0.0209 | sweep3 picard 0.0040 scalar 0.0001 meanJ 0.0000 own -1.0000 793s
+test 77 task 7 ep 286 fr 60: v0 spread 0.0194/1.609 action pair MAE 0.00012/0.0092 | sweep3 picard 0.0101 scalar 0.0001 meanJ 0.0001 own -1.0000 794s
+test 78 task 7 ep 286 fr 120: v0 spread 0.0186/1.598 action pair MAE 0.00011/0.0070 | sweep3 picard 0.0100 scalar 0.0000 meanJ 0.0000 own -1.0000 795s
+test 79 task 7 ep 286 fr 180: v0 spread 0.0209/1.585 action pair MAE 0.00012/0.0095 | sweep3 picard 0.0061 scalar 0.0000 meanJ 0.0000 own -1.0000 795s
+test 80 task 7 ep 304 fr 0: v0 spread 0.0225/1.780 action pair MAE 0.00025/0.0226 | sweep3 picard 0.0033 scalar 0.0000 meanJ 0.0000 own -1.0000 796s
+test 81 task 7 ep 304 fr 60: v0 spread 0.0191/1.604 action pair MAE 0.00013/0.0101 | sweep3 picard 0.0105 scalar 0.0001 meanJ 0.0001 own -1.0000 797s
+test 82 task 7 ep 304 fr 120: v0 spread 0.0260/1.935 action pair MAE 0.00016/0.0088 | sweep3 picard 0.0023 scalar 0.0002 meanJ 0.0002 own -1.0000 798s
+test 83 task 7 ep 304 fr 180: v0 spread 0.0191/1.528 action pair MAE 0.00010/0.0064 | sweep3 picard 0.0096 scalar 0.0000 meanJ 0.0000 own -1.0000 799s
+test 84 task 7 ep 304 fr 240: v0 spread 0.0213/1.673 action pair MAE 0.00012/0.0089 | sweep3 picard 0.0077 scalar 0.0000 meanJ 0.0000 own -1.0000 800s
+test 85 task 8 ep 309 fr 0: v0 spread 0.0226/1.678 action pair MAE 0.00015/0.0134 | sweep3 picard 0.0042 scalar 0.0000 meanJ 0.0000 own -1.0000 801s
+test 86 task 8 ep 309 fr 60: v0 spread 0.0181/1.500 action pair MAE 0.00012/0.0065 | sweep3 picard 0.0135 scalar 0.0001 meanJ 0.0001 own -1.0000 802s
+test 87 task 8 ep 309 fr 120: v0 spread 0.0205/1.556 action pair MAE 0.00011/0.0068 | sweep3 picard 0.0083 scalar 0.0000 meanJ 0.0000 own -1.0000 802s
+test 88 task 8 ep 309 fr 180: v0 spread 0.0206/1.576 action pair MAE 0.00012/0.0078 | sweep3 picard 0.0071 scalar 0.0000 meanJ 0.0000 own -1.0000 803s
+test 89 task 8 ep 311 fr 0: v0 spread 0.0222/1.603 action pair MAE 0.00015/0.0136 | sweep3 picard 0.0033 scalar 0.0000 meanJ 0.0000 own -1.0000 804s
+test 90 task 8 ep 311 fr 60: v0 spread 0.0183/1.555 action pair MAE 0.00013/0.0080 | sweep3 picard 0.0126 scalar 0.0001 meanJ 0.0001 own -1.0000 805s
+test 91 task 8 ep 311 fr 120: v0 spread 0.0232/1.794 action pair MAE 0.00011/0.0082 | sweep3 picard 0.0035 scalar 0.0000 meanJ 0.0000 own -1.0000 806s
+test 92 task 8 ep 311 fr 180: v0 spread 0.0218/1.723 action pair MAE 0.00009/0.0047 | sweep3 picard 0.0067 scalar 0.0000 meanJ 0.0000 own -1.0000 806s
+test 93 task 8 ep 311 fr 240: v0 spread 0.0225/1.807 action pair MAE 0.00012/0.0089 | sweep3 picard 0.0067 scalar 0.0001 meanJ 0.0001 own -1.0000 807s
+test 94 task 9 ep 351 fr 0: v0 spread 0.0209/1.676 action pair MAE 0.00015/0.0104 | sweep3 picard 0.0062 scalar 0.0000 meanJ 0.0000 own -1.0000 809s
+test 95 task 9 ep 351 fr 60: v0 spread 0.0214/1.691 action pair MAE 0.00012/0.0092 | sweep3 picard 0.0044 scalar 0.0000 meanJ 0.0000 own -1.0000 809s
+test 96 task 9 ep 351 fr 120: v0 spread 0.0210/1.648 action pair MAE 0.00010/0.0061 | sweep3 picard 0.0080 scalar 0.0000 meanJ 0.0000 own -1.0000 810s
+test 97 task 9 ep 351 fr 180: v0 spread 0.0230/1.698 action pair MAE 0.00022/0.0179 | sweep3 picard 0.0038 scalar 0.0000 meanJ 0.0000 own -1.0000 811s
+test 98 task 9 ep 387 fr 0: v0 spread 0.0204/1.700 action pair MAE 0.00013/0.0113 | sweep3 picard 0.0071 scalar 0.0000 meanJ 0.0000 own -1.0000 812s
+test 99 task 9 ep 387 fr 60: v0 spread 0.0220/1.731 action pair MAE 0.00021/0.0112 | sweep3 picard 0.0060 scalar 0.0001 meanJ 0.0001 own -1.0000 813s
+test 100 task 9 ep 387 fr 120: v0 spread 0.0216/1.787 action pair MAE 0.00011/0.0066 | sweep3 picard 0.0063 scalar 0.0000 meanJ 0.0000 own -1.0000 814s
+{
+ "precision": "fp16",
+ "n_jtrain": 20,
+ "n_test": 100,
+ "eps": 0.03,
+ "deltas_schedule": [
+  -0.02173912525177002,
+  -0.025879859924316406,
+  -0.03132838010787964,
+  -0.03869974613189697,
+  -0.049019575119018555,
+  -0.06410253047943115,
+  -0.08741259574890137,
+  -0.1262626051902771,
+  -0.1984127163887024,
+  -0.3571428656578064
+ ],
+ "c_mean": [
+  0.9951,
+  0.9757,
+  1.0009,
+  1.0374,
+  1.091,
+  1.1597,
+  1.2614,
+  1.4395,
+  1.7882,
+  2.8078
+ ],
+ "J_train_rel_spread_from_mean": [
+  0.0673,
+  0.0637,
+  0.0628,
+  0.0608,
+  0.0597,
+  0.0571,
+  0.0559,
+  0.0593,
+  0.0673,
+  0.1111
+ ],
+ "J": {
+  "0": {
+   "erank": 447.442427,
+   "k90": 395.35,
+   "k99": 442.55,
+   "offscalar_rel": 0.069425,
+   "J_minus_cI_erank": 289.516772,
+   "J_minus_cI_k99": 294.55
+  },
+  "1": {
+   "erank": 447.497369,
+   "k90": 395.85,
+   "k99": 442.7,
+   "offscalar_rel": 0.065715,
+   "J_minus_cI_erank": 302.591057,
+   "J_minus_cI_k99": 303.75
+  },
+  "2": {
+   "erank": 447.513316,
+   "k90": 395.8,
+   "k99": 442.75,
+   "offscalar_rel": 0.064776,
+   "J_minus_cI_erank": 302.875958,
+   "J_minus_cI_k99": 303.8
+  },
+  "3": {
+   "erank": 447.544578,
+   "k90": 396.15,
+   "k99": 442.85,
+   "offscalar_rel": 0.062714,
+   "J_minus_cI_erank": 303.856769,
+   "J_minus_cI_k99": 304.0
+  },
+  "4": {
+   "erank": 447.557162,
+   "k90": 396.3,
+   "k99": 442.85,
+   "offscalar_rel": 0.061504,
+   "J_minus_cI_erank": 302.888397,
+   "J_minus_cI_k99": 303.7
+  },
+  "5": {
+   "erank": 447.581428,
+   "k90": 396.45,
+   "k99": 442.65,
+   "offscalar_rel": 0.058768,
+   "J_minus_cI_erank": 304.394216,
+   "J_minus_cI_k99": 305.0
+  },
+  "6": {
+   "erank": 447.561866,
+   "k90": 396.45,
+   "k99": 442.45,
+   "offscalar_rel": 0.057519,
+   "J_minus_cI_erank": 303.306687,
+   "J_minus_cI_k99": 303.9
+  },
+  "7": {
+   "erank": 447.370052,
+   "k90": 396.1,
+   "k99": 441.95,
+   "offscalar_rel": 0.061006,
+   "J_minus_cI_erank": 292.862413,
+   "J_minus_cI_k99": 296.25
+  },
+  "8": {
+   "erank": 447.183341,
+   "k90": 395.5,
+   "k99": 441.05,
+   "offscalar_rel": 0.069274,
+   "J_minus_cI_erank": 282.553304,
+   "J_minus_cI_k99": 287.05
+  },
+  "9": {
+   "erank": 446.084175,
+   "k90": 392.2,
+   "k99": 439.2,
+   "offscalar_rel": 0.11546,
+   "J_minus_cI_erank": 248.49727,
+   "J_minus_cI_k99": 255.4
+  }
+ },
+ "eps_noise_rel": {
+  "0": 0.069976,
+  "4": 0.061337,
+  "9": 0.039117
+ },
+ "linear_pred_rel_err": {
+  "0": {
+   "0.003": 0.106462,
+   "0.01": 0.073188,
+   "0.03": 0.069397,
+   "0.1": 0.068105,
+   "0.3": 0.069901,
+   "1.0": 0.070826,
+   "init_difference_sigma1": 0.070916
+  },
+  "4": {
+   "0.003": 0.091779,
+   "0.01": 0.064616,
+   "0.03": 0.060175,
+   "0.1": 0.060092,
+   "0.3": 0.062064,
+   "1.0": 0.064106
+  },
+  "9": {
+   "0.003": 0.064667,
+   "0.01": 0.040097,
+   "0.03": 0.039293,
+   "0.1": 0.048498,
+   "0.3": 0.089699,
+   "1.0": 0.19982
+  }
+ },
+ "init_spread": {
+  "0.01": {
+   "v0_rel_spread": 0.021052,
+   "action_pair_mae": 0.00015
+  },
+  "1.0": {
+   "v0_rel_spread": 1.661858,
+   "action_pair_mae": 0.011476
+  }
+ },
+ "newton_picard_mae_per_sweep": {
+  "picard": [
+   0.106796,
+   0.038106,
+   0.006929,
+   0.000734,
+   7.7e-05,
+   5.2e-05,
+   5.2e-05,
+   4.9e-05,
+   4.4e-05,
+   0.0
+  ],
+  "scalar": [
+   0.014963,
+   0.000616,
+   6.1e-05,
+   4.5e-05,
+   4.5e-05,
+   4.5e-05,
+   4.5e-05,
+   4.5e-05,
+   4.3e-05,
+   0.0
+  ],
+  "mean_J": [
+   0.015333,
+   0.000595,
+   6e-05,
+   4.6e-05,
+   4.5e-05,
+   4.5e-05,
+   4.5e-05,
+   4.5e-05,
+   4.4e-05,
+   0.0
+  ],
+  "own_J": [
+   0.015168,
+   0.000183,
+   4.8e-05,
+   4.5e-05,
+   4.5e-05,
+   4.4e-05,
+   4.4e-05,
+   4.4e-05,
+   4.2e-05,
+   0.0
+  ]
+ },
+ "mean_J_rel_err_vs_own": [
+  0.07125,
+  0.067118,
+  0.065064,
+  0.06301,
+  0.061935,
+  0.05951,
+  0.056332,
+  0.055099,
+  0.055677,
+  0.079462
+ ]
+}

@@ -1,0 +1,95 @@
+{
+ "precision": "fp8",
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "commit": "3d3c1f5",
+ "prompt": "A video recorded from a robot's point of view executing the following instruction: turn on the stove and put the moka pot on it",
+ "episode": 11,
+ "frame": 0,
+ "warmup": 20,
+ "iters": 200,
+ "prof_iters": 5,
+ "rows": [
+  {
+   "k": 1,
+   "M": 64,
+   "x0": 40,
+   "a0": 432,
+   "total": 496,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 1.3755,
+    "p10": 1.3714,
+    "p90": 1.3796
+   },
+   "attn_graph_ms_layer0": 0.0111,
+   "loop10_graph_ms": 13.8213,
+   "eager_split_ms": {
+    "gemm": 0.6029,
+    "attention": 0.2684,
+    "norm": 0.1342,
+    "elementwise": 0.1188,
+    "other": 0.0704,
+    "quant/cast": 0.0584,
+    "memcpy/set": 0.0254
+   },
+   "eager_launches": {
+    "quant/cast": 61,
+    "gemm": 93,
+    "elementwise": 109,
+    "norm": 56,
+    "memcpy/set": 60,
+    "other": 60,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 1.2785,
+   "kernels_per_iter": [
+    514,
+    514,
+    514,
+    514,
+    514
+   ]
+  },
+  {
+   "k": 10,
+   "M": 640,
+   "x0": 40,
+   "a0": 432,
+   "total": 1072,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 4.7621,
+    "p10": 4.7442,
+    "p90": 4.7813
+   },
+   "attn_graph_ms_layer0": 0.0861,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "attention": 2.0897,
+    "gemm": 1.6819,
+    "norm": 0.2873,
+    "elementwise": 0.2823,
+    "quant/cast": 0.1751,
+    "other": 0.1508,
+    "memcpy/set": 0.0266
+   },
+   "eager_launches": {
+    "quant/cast": 61,
+    "gemm": 93,
+    "elementwise": 109,
+    "norm": 56,
+    "memcpy/set": 60,
+    "other": 60,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 4.6937,
+   "kernels_per_iter": [
+    514,
+    514,
+    514,
+    514,
+    514
+   ]
+  }
+ ]
+}

@@ -1,0 +1,73 @@
+picks {0: [11, 13, 20, 25, 33], 4: [165, 170, 176, 182, 187], 9: [357, 367, 374, 379, 382]}
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights:  46%|████▌     | 182/398 [00:00<00:00, 1717.30it/s]Loading weights:  89%|████████▉ | 354/398 [00:00<00:00, 1692.31it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 1898.69it/s]
+  autotune: tested 8 algos, best=3 (110.275 us)
+  autotune: tested 8 algos, best=6 (5.2288 us)
+  autotune: tested 8 algos, best=0 (9.8496 us)
+  autotune: tested 8 algos, best=0 (244.618 us)
+  autotune: tested 8 algos, best=2 (236.752 us)
+  autotune: tested 8 algos, best=0 (120.47 us)
+  autotune: tested 8 algos, best=0 (145.078 us)
+  autotune: tested 8 algos, best=0 (4.3008 us)
+  autotune: tested 8 algos, best=0 (115.29 us)
+  autotune: tested 8 algos, best=2 (7.0112 us)
+  autotune: tested 8 algos, best=1 (46.7904 us)
+  autotune: tested 8 algos, best=0 (10.0064 us)
+  autotune: tested 8 algos, best=0 (80.3072 us)
+  autotune: tested 8 algos, best=0 (289.318 us)
+  autotune: tested 8 algos, best=2 (6.0224 us)
+  autotune: tested 8 algos, best=3 (131.875 us)
+  autotune: tested 8 algos, best=2 (471.315 us)
+  autotune: tested 8 algos, best=0 (9.6416 us)
+  autotune: tested 8 algos, best=0 (232.963 us)
+  autotune: tested 8 algos, best=5 (37.8016 us)
+  autotune: tested 8 algos, best=2 (6.976 us)
+  autotune: tested 8 algos, best=1 (309.197 us)
+ActionDiT: 5 double + 20 single layers, 10 steps, tokens 64x1024
+  autotune: tested 8 algos, best=0 (15.4624 us)
+  autotune: tested 8 algos, best=0 (244.909 us)
+  autotune: tested 8 algos, best=3 (125.651 us)
+  autotune: tested 7 algos, best=0 (24.9664 us)
+  autotune: tested 8 algos, best=3 (163.933 us)
+  autotune: tested 8 algos, best=2 (119.853 us)
+  autotune: tested 8 algos, best=0 (8.6624 us)
+  autotune: tested 8 algos, best=2 (72.7264 us)
+  autotune: tested 8 algos, best=0 (17.3088 us)
+  autotune: tested 8 algos, best=3 (47.0208 us)
+eager vs graph max |action diff| = 0.000e+00
+task 0 ep 11: samples 24/366 3s
+task 0 ep 13: samples 50/366 4s
+task 0 ep 20: samples 77/366 6s
+task 0 ep 25: samples 109/366 8s
+task 0 ep 33: samples 133/366 9s
+  autotune: tested 8 algos, best=0 (15.712 us)
+  autotune: tested 8 algos, best=0 (245.606 us)
+  autotune: tested 8 algos, best=0 (130.141 us)
+  autotune: tested 8 algos, best=2 (169.926 us)
+  autotune: tested 8 algos, best=0 (125.008 us)
+  autotune: tested 8 algos, best=0 (8.9408 us)
+  autotune: tested 8 algos, best=0 (17.4592 us)
+  autotune: tested 8 algos, best=0 (72.2304 us)
+  autotune: tested 8 algos, best=3 (47.52 us)
+  autotune: tested 7 algos, best=0 (25.6672 us)
+task 4 ep 165: samples 162/366 11s
+task 4 ep 170: samples 191/366 13s
+task 4 ep 176: samples 217/366 15s
+task 4 ep 182: samples 247/366 17s
+task 4 ep 187: samples 274/366 18s
+  autotune: tested 8 algos, best=0 (15.0656 us)
+  autotune: tested 8 algos, best=3 (46.9024 us)
+  autotune: tested 8 algos, best=2 (129.802 us)
+  autotune: tested 8 algos, best=0 (169.546 us)
+  autotune: tested 8 algos, best=0 (245.565 us)
+  autotune: tested 8 algos, best=0 (124.298 us)
+  autotune: tested 8 algos, best=0 (8.704 us)
+  autotune: tested 8 algos, best=1 (72.6944 us)
+  autotune: tested 8 algos, best=0 (17.1712 us)
+  autotune: tested 7 algos, best=0 (24.6624 us)
+task 9 ep 357: samples 293/366 20s
+task 9 ep 367: samples 311/366 21s
+task 9 ep 374: samples 328/366 22s
+task 9 ep 379: samples 346/366 24s
+task 9 ep 382: samples 366/366 25s
+saved layers/l10_t049.npz: 366 samples x 26 layers x steps [0, 5, 9], 35s

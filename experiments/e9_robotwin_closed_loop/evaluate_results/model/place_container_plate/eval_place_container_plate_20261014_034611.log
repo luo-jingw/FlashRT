@@ -1,0 +1,461 @@
+/home/jingwu/workspace/FlashRT/tmp/robotwin_venv/lib/python3.12/site-packages/sapien/__init__.py:2: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+[32mRender Well[0m
+============= Config =============
+
+[95mMessy Table:[0m False
+[95mRandom Background:[0m False
+[95mRandom Light:[0m False
+[95mRandom Table Height:[0m 0
+[95mRandom Head Camera Distance:[0m 0
+[94mHead Camera Config:[0m D435, True
+[94mWrist Camera Config:[0m D435, True
+[94mEmbodiment Config:[0m aloha-agilex
+
+==================================
+missing pytorch3d
+[INFO] [imagewam.models.backbones.action_dit_flux2] Initializing ActionDiTFlux2 without pretrained action weights.
+[INFO] [imagewam.models.backbones.mot] Using gradient checkpointing for mixture attention.
+[INFO] [imagewam.models.backbones.mot] Initialized MoT with experts=['video', 'action'] protocol=flux2 layers=25 heads=24 kv_heads=24 head_dim=128
+[INFO] [imagewam.models.backbones.mot] MoT attention config: gqa_implementation=repeat force_flash_attention=False
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 398/398 [00:00<00:00, 11316.36it/s]
+[INFO] [imagewam.models.backbones.imagewam] Loading ImageWAM checkpoint from /home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/model.pt with payload keys=['mot', 'proprio_encoder', 'step', 'torch_dtype'] step=69900
+[INFO] [imagewam.models.backbones.imagewam] Loaded MoT weights from checkpoint: missing_keys=0 unexpected_keys=0
+[INFO] [imagewam.models.backbones.imagewam] Loaded proprio_encoder weights from checkpoint.
+[34mTask Name: place_container_plate[0m
+[34mPolicy Name: imagewam_policy[0m
+Warp DeprecationWarning: The symbol `warp.torch.device_from_torch` will soon be removed from the public API. Use `warp.device_from_torch` instead.
+[2026-10-14 03:46:37.836] [svulkan2] [error] OIDN Error: unsupported device type: CUDA
+[2026-10-14 03:46:37.847] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:37.859] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:37.872] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:38.800] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:38.801] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:38.801] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:38.801] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:39.335] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:39.335] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:39.336] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:39.336] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:39.837] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:39.837] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:39.838] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:39.838] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:40.257] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:40.257] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:40.257] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:40.257] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:40.877] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:40.877] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:40.877] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:40.877] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:41.499] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:41.499] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:41.499] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:41.499] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:42.056] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:42.056] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:42.056] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:42.056] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:42.466] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:42.467] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:42.467] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:42.467] [svulkan2] [error] OIDN Error: invalid handle
+[92mSuccess![0m
+[93mplace_container_plate[0m | [94mimagewam_policy[0m | [92mdemo_clean[0m | [91m/home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/model.pt[0m
+Success rate: [96m1/1[0m => [95m100.0%[0m, current seed: [90m4300000[0m
+
+ -------------
+Error:  target_pose cannot be None for move action.
+Stack Trace:  Traceback (most recent call last):
+  File "/home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/RoboTwin/script/eval_policy.py", line 331, in eval_policy
+    episode_info = TASK_ENV.play_once()
+                   ^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/RoboTwin/envs/place_container_plate.py", line 63, in play_once
+    self.grasp_actor(
+  File "/home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/RoboTwin/envs/_base_task.py", line 1227, in grasp_actor
+    Action(arm_tag, "move", target_pose=pre_grasp_pose),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/RoboTwin/envs/utils/action.py", line 76, in __init__
+    assert (target_pose is not None), "target_pose cannot be None for move action."
+            ^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: target_pose cannot be None for move action.
+
+ -------------
+error occurs !
+[2026-10-14 03:46:43.699] [svulkan2] [error] OIDN Error: unsupported device type: CUDA
+[2026-10-14 03:46:43.710] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:43.724] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:43.737] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:44.337] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:44.337] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:44.337] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:44.337] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:44.897] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:44.898] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:44.898] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:44.898] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:45.395] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:45.395] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:45.395] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:45.395] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:45.825] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:45.825] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:45.825] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:45.825] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:46.411] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:46.411] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:46.411] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:46.412] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:47.047] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:47.047] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:47.047] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:47.047] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:47.578] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:47.578] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:47.579] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:47.579] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:48.022] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:48.022] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:48.022] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:48.022] [svulkan2] [error] OIDN Error: invalid handle
+[92mSuccess![0m
+[93mplace_container_plate[0m | [94mimagewam_policy[0m | [92mdemo_clean[0m | [91m/home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/model.pt[0m
+Success rate: [96m2/2[0m => [95m100.0%[0m, current seed: [90m4300002[0m
+
+[2026-10-14 03:46:49.140] [svulkan2] [error] OIDN Error: unsupported device type: CUDA
+[2026-10-14 03:46:49.153] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:49.164] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:49.176] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:49.775] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:49.775] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:49.775] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:49.775] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:50.350] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:50.350] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:50.351] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:50.351] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:50.860] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:50.860] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:50.860] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:50.860] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:51.332] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:51.333] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:51.333] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:51.333] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:51.886] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:51.886] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:51.886] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:51.886] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:52.507] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:52.507] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:52.507] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:52.507] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:53.043] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:53.043] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:53.043] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:53.043] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:53.450] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:53.450] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:53.450] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:53.450] [svulkan2] [error] OIDN Error: invalid handle
+[92mSuccess![0m
+[93mplace_container_plate[0m | [94mimagewam_policy[0m | [92mdemo_clean[0m | [91m/home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/model.pt[0m
+Success rate: [96m3/3[0m => [95m100.0%[0m, current seed: [90m4300003[0m
+
+[2026-10-14 03:46:54.537] [svulkan2] [error] OIDN Error: unsupported device type: CUDA
+[2026-10-14 03:46:54.549] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:54.562] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:54.575] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:55.166] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:55.166] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:55.166] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:55.169] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:55.697] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:55.697] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:55.697] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:55.697] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:56.170] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:56.170] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:56.170] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:56.170] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:56.590] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:56.590] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:56.590] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:56.590] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:57.159] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:57.159] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:57.159] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:57.159] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:57.770] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:57.770] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:57.770] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:57.770] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:58.307] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:58.307] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:58.307] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:58.307] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:58.692] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:58.692] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:58.692] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:46:58.692] [svulkan2] [error] OIDN Error: invalid handle
+[92mSuccess![0m
+[93mplace_container_plate[0m | [94mimagewam_policy[0m | [92mdemo_clean[0m | [91m/home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/model.pt[0m
+Success rate: [96m4/4[0m => [95m100.0%[0m, current seed: [90m4300004[0m
+
+[2026-10-14 03:47:02.927] [svulkan2] [error] OIDN Error: unsupported device type: CUDA
+[2026-10-14 03:47:02.940] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:02.953] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:02.968] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:03.541] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:03.541] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:03.541] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:03.541] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:04.208] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:04.208] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:04.208] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:04.209] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:04.669] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:04.669] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:04.669] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:04.669] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:05.106] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:05.107] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:05.107] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:05.107] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:05.688] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:05.688] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:05.688] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:05.689] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:06.292] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:06.292] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:06.292] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:06.292] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:06.892] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:06.892] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:06.892] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:06.892] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:07.426] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:07.426] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:07.426] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:07.426] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:07.830] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:07.830] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:07.830] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:07.830] [svulkan2] [error] OIDN Error: invalid handle
+[92mSuccess![0m
+[93mplace_container_plate[0m | [94mimagewam_policy[0m | [92mdemo_clean[0m | [91m/home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/model.pt[0m
+Success rate: [96m5/5[0m => [95m100.0%[0m, current seed: [90m4300005[0m
+
+[2026-10-14 03:47:09.813] [svulkan2] [error] OIDN Error: unsupported device type: CUDA
+[2026-10-14 03:47:09.824] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:09.837] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:09.852] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:10.428] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:10.428] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:10.428] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:10.428] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:11.095] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:11.095] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:11.095] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:11.095] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:11.573] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:11.573] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:11.573] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:11.573] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:12.011] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:12.012] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:12.012] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:12.012] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:12.552] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:12.552] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:12.552] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:12.552] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:13.137] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:13.137] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:13.137] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:13.137] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:13.711] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:13.712] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:13.712] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:13.712] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:14.224] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:14.224] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:14.224] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:14.224] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:14.585] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:14.585] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:14.585] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:14.585] [svulkan2] [error] OIDN Error: invalid handle
+[92mSuccess![0m
+[93mplace_container_plate[0m | [94mimagewam_policy[0m | [92mdemo_clean[0m | [91m/home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/model.pt[0m
+Success rate: [96m6/6[0m => [95m100.0%[0m, current seed: [90m4300007[0m
+
+[2026-10-14 03:47:15.710] [svulkan2] [error] OIDN Error: unsupported device type: CUDA
+[2026-10-14 03:47:15.721] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:15.732] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:15.746] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:16.373] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:16.373] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:16.374] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:16.374] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:16.961] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:16.961] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:16.961] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:16.961] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:17.439] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:17.439] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:17.439] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:17.439] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:17.842] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:17.842] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:17.842] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:17.842] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:18.395] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:18.395] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:18.395] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:18.398] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:18.965] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:18.965] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:18.965] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:18.965] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:19.471] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:19.471] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:19.471] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:19.471] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:19.919] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:19.919] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:19.919] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:19.919] [svulkan2] [error] OIDN Error: invalid handle
+[92mSuccess![0m
+[93mplace_container_plate[0m | [94mimagewam_policy[0m | [92mdemo_clean[0m | [91m/home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/model.pt[0m
+Success rate: [96m7/7[0m => [95m100.0%[0m, current seed: [90m4300008[0m
+
+[2026-10-14 03:47:20.996] [svulkan2] [error] OIDN Error: unsupported device type: CUDA
+[2026-10-14 03:47:21.008] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:21.018] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:21.031] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:21.632] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:21.632] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:21.632] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:21.632] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:22.200] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:22.200] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:22.200] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:22.200] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:22.667] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:22.667] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:22.667] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:22.667] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:23.076] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:23.076] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:23.076] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:23.076] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:23.612] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:23.612] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:23.612] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:23.612] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:24.211] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:24.211] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:24.211] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:24.211] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:24.709] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:24.709] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:24.709] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:24.709] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:25.202] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:25.202] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:25.202] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:25.202] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:25.440] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:25.440] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:25.440] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:25.440] [svulkan2] [error] OIDN Error: invalid handle
+[92mSuccess![0m
+[93mplace_container_plate[0m | [94mimagewam_policy[0m | [92mdemo_clean[0m | [91m/home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/model.pt[0m
+Success rate: [96m8/8[0m => [95m100.0%[0m, current seed: [90m4300009[0m
+
+[2026-10-14 03:47:26.545] [svulkan2] [error] OIDN Error: unsupported device type: CUDA
+[2026-10-14 03:47:26.556] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:26.571] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:26.586] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:27.205] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:27.205] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:27.205] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:27.205] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:27.745] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:27.745] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:27.745] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:27.745] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:28.249] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:28.249] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:28.249] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:28.249] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:28.671] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:28.671] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:28.671] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:28.671] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:29.229] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:29.229] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:29.229] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:29.229] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:29.865] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:29.865] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:29.865] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:29.865] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:30.400] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:30.400] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:30.400] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:30.400] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:30.799] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:30.799] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:30.799] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:30.799] [svulkan2] [error] OIDN Error: invalid handle
+[92mSuccess![0m
+[93mplace_container_plate[0m | [94mimagewam_policy[0m | [92mdemo_clean[0m | [91m/home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/model.pt[0m
+Success rate: [96m9/9[0m => [95m100.0%[0m, current seed: [90m4300010[0m
+
+[2026-10-14 03:47:34.816] [svulkan2] [error] OIDN Error: unsupported device type: CUDA
+[2026-10-14 03:47:34.828] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:34.839] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:34.854] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:35.441] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:35.441] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:35.442] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:35.442] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:36.032] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:36.032] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:36.032] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:36.032] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:36.497] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:36.497] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:36.497] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:36.497] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:36.946] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:36.946] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:36.946] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:36.946] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:37.472] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:37.472] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:37.472] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:37.472] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:37.992] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:37.992] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:37.992] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:37.992] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:38.524] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:38.524] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:38.524] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:38.524] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:39.012] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:39.012] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:39.012] [svulkan2] [error] OIDN Error: invalid handle
+[2026-10-14 03:47:39.012] [svulkan2] [error] OIDN Error: invalid handle
+[92mSuccess![0m
+[93mplace_container_plate[0m | [94mimagewam_policy[0m | [92mdemo_clean[0m | [91m/home/jingwu/workspace/FlashRT/tmp/checkpoints/imagewam_release/robotwin/flux2_klein_4b/model.pt[0m
+Success rate: [96m10/10[0m => [95m100.0%[0m, current seed: [90m4300011[0m
+
+Data has been saved to /home/jingwu/workspace/FlashRT/tmp/ImageWAM/evaluate_results/robotwin/model/place_container_plate/place_container_plate/_result_clean.txt

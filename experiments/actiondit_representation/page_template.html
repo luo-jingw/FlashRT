@@ -1,0 +1,638 @@
+<title>ActionDiT 逐层低秩结构</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+/* Layout: one reading column; each finding is a short paragraph followed by its chart; controls sit above the chart they drive. */
+:root {
+  --bg: #f7f8f9;
+  --surface: #ffffff;
+  --ink: #15181c;
+  --ink-2: #4d5561;
+  --ink-3: #7c8591;
+  --rule: #dfe3e8;
+  --grid: #eceff2;
+  --accent: #6250d6;
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --chip: #eef0f4;
+  --ramp-lo: #cfd4dc;
+  --font-body: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-head: "Noto Sans SC", "IBM Plex Sans", "PingFang SC", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141619; --surface: #1b1e22; --ink: #eef0f2; --ink-2: #b9c0c9; --ink-3: #8a929d;
+    --rule: #30353c; --grid: #262a30; --accent: #9085e9; --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+    --chip: #262a30; --ramp-lo: #3a4048; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141619; --surface: #1b1e22; --ink: #eef0f2; --ink-2: #b9c0c9; --ink-3: #8a929d;
+  --rule: #30353c; --grid: #262a30; --accent: #9085e9; --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+  --chip: #262a30; --ramp-lo: #3a4048; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 980px; margin: 0 auto; padding-inline: 20px; padding-block: 32px 64px; display: flex; flex-direction: column; gap: 36px; }
+header { display: flex; flex-direction: column; gap: 10px; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; color: var(--ink-3); text-transform: uppercase; }
+h1 { font-family: var(--font-head); font-size: 30px; line-height: 1.25; margin: 0; font-weight: 700; text-wrap: balance; }
+h2 { font-family: var(--font-head); font-size: 20px; margin: 0; font-weight: 700; text-wrap: balance; }
+p { margin: 0; max-width: 68ch; }
+.muted { color: var(--ink-2); }
+.small { font-size: 13px; color: var(--ink-3); }
+code, .mono { font-family: var(--font-mono); font-size: 0.92em; }
+section { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.setup { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 24px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); padding-block: 14px; }
+.setup div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.setup .k { font-size: 12px; color: var(--ink-3); letter-spacing: 0.04em; }
+.setup .v { font-size: 14px; }
+.findings { display: flex; flex-direction: column; gap: 10px; padding: 0; margin: 0; list-style: none; counter-reset: f; }
+.findings li { display: grid; grid-template-columns: 28px 1fr; gap: 8px; max-width: 76ch; }
+.findings li::before { counter-increment: f; content: counter(f); font-family: var(--font-mono); font-size: 13px; color: var(--accent); padding-top: 2px; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; font-size: 13px; padding: 4px 12px; background: transparent; color: var(--ink-2); border: 0; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button[aria-pressed="true"] { background: var(--chip); color: var(--ink); font-weight: 600; }
+.seg button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ctl-label { font-size: 12px; color: var(--ink-3); }
+.resetbtn { font: inherit; font-size: 13px; padding: 4px 12px; border: 1px solid var(--rule); border-radius: 8px; background: transparent; color: var(--ink-2); cursor: pointer; }
+.resetbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); color: var(--ink); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend svg { flex: none; }
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { fill: var(--ink-3); font-family: var(--font-mono); font-size: 11px; }
+.chart .axis-title { fill: var(--ink-2); font-family: var(--font-body); font-size: 12px; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.5; color: var(--ink); box-shadow: 0 4px 14px rgba(0,0,0,0.12); min-width: 150px; z-index: 2; }
+.tip .t { font-weight: 600; margin-bottom: 2px; }
+.tip .row { display: flex; justify-content: space-between; gap: 14px; font-variant-numeric: tabular-nums; }
+.tip .sw { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.tbl-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+th, td { padding: 6px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--ink-2); font-weight: 500; position: sticky; top: 0; background: var(--surface); }
+details summary { cursor: pointer; color: var(--ink-2); font-size: 14px; }
+.caveats { display: flex; flex-direction: column; gap: 6px; padding-left: 18px; margin: 0; max-width: 76ch; }
+@media (max-width: 520px) { h1 { font-size: 24px; } .wrap { padding-inline: 16px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">ImageWAM-FLUX.2-4B-LIBERO · ActionDiT 残差流</div>
+  <h1>ActionDiT 逐层低秩结构</h1>
+  <p class="muted">每层的 64 个 action token 各是一个 1024 维向量。这里看这些向量在单个任务和三个任务合起来时是不是集中在一个低维子空间里，以及用均值 + 协方差前 k 个主方向构成的椭球能不能盖住没见过的 episode。</p>
+</header>
+
+<div class="setup">
+  <div><span class="k">数据</span><span class="v">LIBERO-10 任务 0 / 4 / 9，每个任务随机 5 个 episode，每 10 帧取 1 帧，开环（数据集帧）</span></div>
+  <div><span class="k">样本</span><span class="v" id="nsamples"></span></div>
+  <div><span class="k">采集点</span><span class="v">action encoder 输出 + 5 个 double 层 + 20 个 single 层之后的残差流，去噪步 0 / 5 / 9</span></div>
+  <div><span class="k">推理</span><span class="v">fp16，RTX 5090，eager 与 CUDA graph 的 action 完全一致</span></div>
+</div>
+
+<section>
+  <h2>结论</h2>
+  <ol class="findings" id="findings"></ol>
+</section>
+
+<section>
+  <h2>有效秩随层的变化</h2>
+  <p class="muted">有效秩 = exp(熵)，熵取自中心化后 token 矩阵奇异值的归一化分布。"三任务合并（同样本数）"从三个任务里各抽三分之一，使 token 数等于一个任务，用来和单任务直接比较。</p>
+  <div class="card">
+    <div class="controls"><span class="ctl-label">去噪步</span><div class="seg" id="seg-erank"></div></div>
+    <div class="legend" id="leg-erank"></div>
+    <div class="chart" id="ch-erank"></div>
+  </div>
+  <div class="card">
+    <p class="small">k99：达到 99% 方差需要的主方向数（三任务合并）。纵轴是维数，满维是 1024。</p>
+    <div class="legend" id="leg-k99"></div>
+    <div class="chart" id="ch-k99"></div>
+  </div>
+</section>
+
+<section>
+  <h2>低秩有多少来自少数大幅值通道</h2>
+  <p class="muted">single 层的第一主方向主要落在约 8 个方差特别大的通道上。去掉第一主方向，或者先把每个通道标准化到单位方差再算，有效秩会变大。按方差算时空间很低维；按"每个通道同等重要"算时，后面的 single 层就不算很低维了。</p>
+  <div class="card">
+    <div class="controls"><span class="ctl-label">去噪步</span><div class="seg" id="seg-rob"></div></div>
+    <div class="legend" id="leg-rob"></div>
+    <div class="chart" id="ch-rob"></div>
+  </div>
+</section>
+
+<section>
+  <h2>协方差低秩椭球</h2>
+  <p class="muted">椭球 = 均值 μ + 协方差前 k 个主方向 U<sub>k</sub>、方差 Λ<sub>k</sub>；半径 r 取训练 token 在子空间内马氏距离的 95 分位。按 episode 留一：每次拿出一个 episode，用其余数据拟合。覆盖率 0.95 说明椭球能推广到新 episode。三种拟合方式：本任务的另外 4 个 episode；三任务合并（同样留出这个 episode）；另一个任务的全部 episode。</p>
+  <div class="card">
+    <div class="controls">
+      <span class="ctl-label">去噪步</span><div class="seg" id="seg-ell-step"></div>
+      <span class="ctl-label">k</span><div class="seg" id="seg-ell-k"></div>
+    </div>
+    <div class="legend" id="leg-ell"></div>
+    <div class="two">
+      <div><p class="small">留出 token 落在椭球内的比例</p><div class="chart" id="ch-cover"></div></div>
+      <div><p class="small">留出 token 在 k 维子空间之外的方差占比</p><div class="chart" id="ch-resid"></div></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>单层的谱和二维投影</h2>
+  <p class="muted">去噪步 9。左：协方差特征值占比（对数轴，前 96 个）。右：每个任务随机 400 个 token 投到三任务合并的前两个主方向上，椭圆是各任务的 2σ 协方差椭圆。token 沿第一主方向分成两簇，对应这个 token 预测的夹爪是开还是合（去噪步 9，相关系数 |r| = 0.99，double4 / single0 / single9 / single19 都是如此），所以 2σ 椭圆会跨过两簇。</p>
+  <div class="card">
+    <div class="controls"><label class="ctl-label" for="sel-layer">层</label><select id="sel-layer"></select></div>
+    <div class="legend" id="leg-layer"></div>
+    <div class="two">
+      <div class="chart" id="ch-spec"></div>
+      <div class="chart" id="ch-scatter"></div>
+    </div>
+  </div>
+  <h2>平面以外的结构</h2>
+  <p class="muted">同一层、同一批 token。左：PC2–PC3 投影，避开了编码夹爪的 PC1，椭圆是各任务的 2σ 协方差椭圆。右：PC1–PC3 三维散点，拖动可旋转；线框是各任务的 2σ 协方差椭球（画出三个主截面）。三个任务在某一层的 PC2–PC3 上重叠，说明区分任务的方向排在 PC3 之后；切到"夹爪"着色可以看到 PC1 上开、合两簇。<span id="share-note"></span></p>
+  <div class="card">
+    <div class="controls">
+      <span class="ctl-label">三维数据</span><div class="seg" id="seg-data3d"></div>
+      <span class="ctl-label">三维着色</span><div class="seg" id="seg-color"></div>
+      <span class="ctl-label">三维坐标</span><div class="seg" id="seg-scale"></div>
+      <span class="ctl-label">椭球</span><div class="seg" id="seg-ell3d"></div>
+      <button type="button" id="btn-reset" class="resetbtn">重置视角</button>
+    </div>
+    <div class="legend" id="leg-3d"></div>
+    <div class="two">
+      <div class="chart" id="ch-scatter23"></div>
+      <div class="chart"><canvas id="cv-3d" aria-label="token 三维散点，可拖动旋转" style="width:100%;aspect-ratio:440/320;display:block;touch-action:none;cursor:grab"></canvas></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>只看机械臂：去掉夹爪方向</h2>
+  <p class="muted">在每一层（每个去噪步）把夹爪方向投影掉：u = 夹爪"开"的 token 均值 − "合"的 token 均值，归一化后从每个 token 里减去它在 u 上的分量。之后前 5 个主方向和夹爪值的相关都不超过 0.006，也不再分簇。在剩下的部分上重算有效秩和椭球，并检验低维子空间能不能解释机械臂动作：按 episode 留一，用训练 token 的前 k 个主方向坐标做线性回归，预测这个 token 自己的 xyz + rpy 六维动作（模型输出），在留出 episode 上算 R²（六维平均）。</p>
+  <div class="card">
+    <div class="controls"><span class="ctl-label">去噪步</span><div class="seg" id="seg-arm"></div></div>
+    <p class="small" id="arm-removed"></p>
+    <div class="legend" id="leg-arm-erank"></div>
+    <div class="chart" id="ch-arm-erank"></div>
+  </div>
+  <div class="card">
+    <p class="small">机械臂动作的留出 R²：前 k 个主方向（去掉夹爪方向后）线性解码 xyz + rpy。"全部 1024 维"是在全部维度上做弱正则的岭回归。</p>
+    <div class="legend" id="leg-arm-r2"></div>
+    <div class="chart" id="ch-arm-r2"></div>
+  </div>
+  <div class="card">
+    <div class="controls"><span class="ctl-label">k</span><div class="seg" id="seg-arm-k"></div></div>
+    <div class="legend" id="leg-arm-ell"></div>
+    <div class="two">
+      <div><p class="small">留出 token 落在椭球内的比例</p><div class="chart" id="ch-arm-cover"></div></div>
+      <div><p class="small">留出 token 在 k 维子空间之外的方差占比</p><div class="chart" id="ch-arm-resid"></div></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <details>
+    <summary>数据表（去噪步 9）</summary>
+    <div class="tbl-wrap" style="margin-top:10px"><table id="tbl"></table></div>
+  </details>
+</section>
+
+<section>
+  <h2>局限</h2>
+  <ul class="caveats">
+    <li>3 个任务 × 5 个 episode，366 个样本；单模型、fp16、数据集帧开环推理，不是闭环轨迹。</li>
+    <li>有效秩和 k99 都按方差加权，受少数大幅值通道主导；标准化后的有效秩要另看。</li>
+    <li>每个任务只有 4 个训练 episode，k = 128 时尾部方向的方差估不准，本任务椭球的覆盖率因此下降。</li>
+    <li>样本层面（64×1024 展平）的有效秩受样本数限制（每任务 92–141 个），只作参考，见数据表。</li>
+  </ul>
+</section>
+</div>
+
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  const D = JSON.parse(document.getElementById("data").textContent);
+  const L = D.layers, T = D.task_ids;
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const taskName = { "0": "任务 0 · 炉子 + 摩卡壶", "4": "任务 4 · 汤罐 + 奶酪进篮子", "9": "任务 9 · 书放进书架" };
+  const taskVar = { [T[0]]: "--s1", [T[1]]: "--s2", [T[2]]: "--s3" };
+  const short = n => n === "encoder" ? "enc" : n.replace("double", "d").replace("single", "s");
+  const fmt = (v, d = 1) => (v == null ? "–" : Number(v).toFixed(d));
+  const ns = D.n_samples;
+  document.getElementById("nsamples").textContent =
+    `任务 0：${ns["0"]}，任务 4：${ns["4"]}，任务 9：${ns["9"]}（共 ${ns["0"] + ns["4"] + ns["9"]} 个，每个 64 个 token）`;
+
+  const S9 = D.by_step["9"], S0 = D.by_step["0"];
+  const li = n => L.indexOf(n);
+  const F = [
+    `token 层面明显低秩。去噪步 9 时三任务合并的有效秩：encoder 输出 ${fmt(S9.erank_pooled[0])}，double 层 ${fmt(S9.erank_pooled[1])}–${fmt(S9.erank_pooled[5])}，single 层从 ${fmt(S9.erank_pooled[6])} 升到 ${fmt(S9.erank_pooled[25])}。99% 的方差只需 ${Math.min(...S9.k99)}–${Math.max(...S9.k99)} 个方向（满维 1024）。`,
+    `秩随深度先降后升：double 层之后进入 single 层时掉一次，然后在 20 个 single 层里一路升高。去噪早期（步 0）double 层的 token 方差几乎全是位置结构（64 个位置的均值占 ${fmt(S0.pos_share[1] * 100, 0)}%），到步 9 降到 ${fmt(S9.pos_share[1] * 100, 1)}%。`,
+    `三个任务共用大体同一个子空间。样本数相同时，三任务合并的有效秩和单个任务相当（single19，步 9：合并 ${fmt(S9.erank_pooled_sub[25])}，单任务 ${fmt(S9.erank_task[T[0]][25])} / ${fmt(S9.erank_task[T[1]][25])} / ${fmt(S9.erank_task[T[2]][25])}）；用别的任务拟合的 32 维子空间，子空间外方差也只有 ${fmt(Math.max(...S9.ell["32"].other.resid) * 100, 1)}% 以内。`,
+    `可以得到一个推广到新 episode 的低秩椭球。k = 32、步 9 时，本任务椭球盖住留出 episode ${fmt(Math.min(...S9.ell["32"].own.cover.slice(1)) * 100, 0)}–${fmt(Math.max(...S9.ell["32"].own.cover.slice(1)) * 100, 0)}% 的 token，三任务合并椭球 ${fmt(Math.min(...S9.ell["32"].pooled.cover.slice(1)) * 100, 0)}–${fmt(Math.max(...S9.ell["32"].pooled.cover.slice(1)) * 100, 0)}%（目标 95%）。k 取到 128 时本任务椭球降到 ${fmt(Math.min(...S9.ell["128"].own.cover.slice(1)) * 100, 0)}% 左右：多出的尾部方向用 4 个 episode 估不准。`,
+    `但每个任务的椭球位置和形状不同。用另一个任务的椭球去盖，k = 32 时只盖住 ${fmt(Math.min(...S9.ell["32"].other.cover.slice(1)) * 100, 0)}–${fmt(Math.max(...S9.ell["32"].other.cover.slice(1)) * 100, 0)}%：任务之间共享子空间，但在子空间里占据不同区域。一个三任务合并的椭球可以同时盖住三个任务。`,
+    `低秩的一大部分来自少数大幅值通道。single 层方差最大的 8 个通道占总方差 ${fmt(Math.min(...S9.top8_var.slice(6)) * 100, 0)}–${fmt(Math.max(...S9.top8_var.slice(6)) * 100, 0)}%（步 9）。通道标准化后，single19 的有效秩从 ${fmt(S9.erank_pooled[25])} 变成 ${fmt(S9.erank_std[25])}；encoder 和 double 层在标准化后仍然很低（${fmt(S9.erank_std[0])}–${fmt(Math.max(...S9.erank_std.slice(1, 6)))}）。`,
+    `去掉夹爪方向后仍然低秩，而且这个低维子空间就是机械臂怎么动。去噪步 9，合并有效秩：double 层 ${fmt(S9.arm.erank_pooled[1])}–${fmt(S9.arm.erank_pooled[5])}，single 层 ${fmt(Math.min(...S9.arm.erank_pooled.slice(6)))}–${fmt(Math.max(...S9.arm.erank_pooled.slice(6)))}（满维 1024）。前 32 个主方向线性解码 xyz + rpy，留出 episode 的 R² 在每一层都有 ${fmt(Math.min(...S9.arm.r2["32"]), 2)}–${fmt(Math.max(...S9.arm.r2["32"]), 2)}；在全部 1024 维上回归反而只有 ${fmt(Math.min(...S9.arm.r2.full.slice(6)), 2)}–${fmt(Math.max(...S9.arm.r2.full.slice(6)), 2)}（single 层），换个 episode 就不成立。k = 32 的椭球覆盖本任务留出 episode ${fmt(Math.min(...S9.arm.ell["32"].own.cover.slice(1)) * 100, 0)}–${fmt(Math.max(...S9.arm.ell["32"].own.cover.slice(1)) * 100, 0)}%，另一个任务 ${fmt(Math.min(...S9.arm.ell["32"].other.cover.slice(1)) * 100, 0)}–${fmt(Math.max(...S9.arm.ell["32"].other.cover.slice(1)) * 100, 0)}%。`,
+    `第一主方向编码夹爪开合。去噪步 9 时，token 在第一主方向上的坐标和它预测的夹爪值相关系数达 0.99（double4 −0.986，single0 −0.996，single9 +0.987，single19 +0.997），token 因此沿这个方向分成开、合两簇。`
+  ];
+  const fl = document.getElementById("findings");
+  F.forEach(t => { const li_ = document.createElement("li"); const s = document.createElement("span"); s.textContent = t; li_.appendChild(s); fl.appendChild(li_); });
+
+  // ---------- helpers ----------
+  const NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, parent) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function seg(id, values, labels, init, onChange) {
+    const box = document.getElementById(id);
+    let cur = init;
+    values.forEach((v, i) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.id = `${id}-${v}`; b.textContent = labels[i];
+      b.setAttribute("aria-pressed", String(v === init));
+      b.addEventListener("click", () => {
+        cur = v;
+        box.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+        onChange(v);
+      });
+      box.appendChild(b);
+    });
+    return () => cur;
+  }
+  function legend(id, items) {
+    const box = document.getElementById(id); box.innerHTML = "";
+    items.forEach(it => {
+      const s = document.createElement("span");
+      const sv = el("svg", { width: 22, height: 10, viewBox: "0 0 22 10" });
+      if (it.dot) el("circle", { cx: 11, cy: 5, r: 4, style: `fill:var(${it.color})` }, sv);
+      else el("line", { x1: 1, y1: 5, x2: 21, y2: 5, style: `stroke:var(${it.color})`, "stroke-width": 2.5, "stroke-linecap": "round", "stroke-dasharray": it.dash || "" }, sv);
+      s.appendChild(sv); s.appendChild(document.createTextNode(it.name)); box.appendChild(s);
+    });
+  }
+  function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p; return 10 * p; }
+
+  function lineChart(id, opt) {
+    const box = document.getElementById(id); box.innerHTML = "";
+    const W = opt.w || 900, H = opt.h || 300, m = { l: 48, r: 16, t: 12, b: 40 };
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": opt.label });
+    box.appendChild(svg);
+    const n = opt.x.length;
+    const all = opt.series.flatMap(s => s.v);
+    const yMin = opt.yMin != null ? opt.yMin : 0;
+    const yMax = opt.yMax != null ? opt.yMax : niceMax(Math.max(...all) * 1.05);
+    const X = i => m.l + (W - m.l - m.r) * (i / (n - 1));
+    const Y = v => m.t + (H - m.t - m.b) * (1 - (v - yMin) / (yMax - yMin));
+    const ticks = opt.ticks || 5;
+    for (let k = 0; k <= ticks; k++) {
+      const v = yMin + (yMax - yMin) * k / ticks;
+      el("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: css("--grid"), "stroke-width": 1 }, svg);
+      const t = el("text", { x: m.l - 8, y: Y(v) + 4, "text-anchor": "end" }, svg);
+      t.textContent = opt.yFmt ? opt.yFmt(v) : (Math.round(v * 100) / 100);
+    }
+    opt.x.forEach((lab, i) => {
+      if (opt.xEvery && i % opt.xEvery && i !== n - 1 && !(opt.xKeep || []).includes(i)) return;
+      const t = el("text", { x: X(i), y: H - m.b + 16, "text-anchor": "middle" }, svg); t.textContent = lab;
+    });
+    if (opt.bands) opt.bands.forEach(b => {
+      el("line", { x1: X(b.i) , x2: X(b.i), y1: m.t, y2: H - m.b, stroke: css("--rule"), "stroke-width": 1, "stroke-dasharray": "3 3" }, svg);
+    });
+    const yt = el("text", { x: m.l, y: H - 6, class: "axis-title" }, svg); yt.textContent = opt.xTitle || "层";
+    if (opt.ref != null) {
+      el("line", { x1: m.l, x2: W - m.r, y1: Y(opt.ref), y2: Y(opt.ref), stroke: css("--ink-3"), "stroke-width": 1, "stroke-dasharray": "6 4" }, svg);
+      const rt = el("text", { x: W - m.r, y: Y(opt.ref) - 6, "text-anchor": "end" }, svg); rt.textContent = opt.refLabel || "";
+    }
+    opt.series.forEach(s => {
+      const d = s.v.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join("");
+      el("path", { d, fill: "none", stroke: css(s.color), "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round", "stroke-dasharray": s.dash || "" }, svg);
+      if (s.label) {
+        const t = el("text", { x: X(n - 1) - 4, y: Y(s.v[n - 1]) - 8, "text-anchor": "end", style: `fill:${css("--ink-2")}` }, svg);
+        t.textContent = s.label;
+      }
+    });
+    const cross = el("line", { y1: m.t, y2: H - m.b, stroke: css("--ink-3"), "stroke-width": 1, visibility: "hidden" }, svg);
+    const dots = opt.series.map(s => el("circle", { r: 4.5, fill: css(s.color), stroke: css("--surface"), "stroke-width": 2, visibility: "hidden" }, svg));
+    const tip = document.createElement("div"); tip.className = "tip"; tip.hidden = true; box.appendChild(tip);
+    const hit = el("rect", { x: m.l - 10, y: 0, width: W - m.l - m.r + 20, height: H, fill: "transparent" }, svg);
+    function show(ev) {
+      const r = svg.getBoundingClientRect();
+      const sx = (ev.clientX - r.left) * W / r.width;
+      const i = Math.max(0, Math.min(n - 1, Math.round((sx - m.l) / (W - m.l - m.r) * (n - 1))));
+      cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("visibility", "visible");
+      dots.forEach((dt, k) => { dt.setAttribute("cx", X(i)); dt.setAttribute("cy", Y(opt.series[k].v[i])); dt.setAttribute("visibility", "visible"); });
+      tip.innerHTML = `<div class="t">${opt.xFull ? opt.xFull[i] : opt.x[i]}</div>` + opt.series.map(s =>
+        `<div class="row"><span><span class="sw" style="background:${css(s.color)}"></span>${s.name}</span><span>${opt.vFmt ? opt.vFmt(s.v[i]) : fmt(s.v[i])}</span></div>`).join("");
+      tip.hidden = false;
+      const px = X(i) / W * r.width;
+      const left = px + 14 + tip.offsetWidth > r.width ? px - 14 - tip.offsetWidth : px + 14;
+      tip.style.left = `${Math.max(0, left)}px`; tip.style.top = `8px`;
+    }
+    function hide() { tip.hidden = true; cross.setAttribute("visibility", "hidden"); dots.forEach(d => d.setAttribute("visibility", "hidden")); }
+    hit.addEventListener("pointermove", show); hit.addEventListener("pointerleave", hide);
+  }
+
+  const xs = L.map(short);
+  const xFull = L.map(n => n === "encoder" ? "action encoder 输出" : n.startsWith("double") ? `double 层 ${n.slice(6)}` : `single 层 ${n.slice(6)}`);
+  const base = { x: xs, xFull, xEvery: 1, bands: [{ i: 1 }, { i: 6 }] };
+
+  // ---------- erank ----------
+  function drawErank(step) {
+    const S = D.by_step[step];
+    const series = T.map(t => ({ name: taskName[t], color: taskVar[t], v: S.erank_task[t] }))
+      .concat([{ name: "三任务合并", color: "--ink", v: S.erank_pooled, label: "合并" },
+               { name: "三任务合并（同样本数）", color: "--ink-3", dash: "6 4", v: S.erank_pooled_sub }]);
+    lineChart("ch-erank", { ...base, series, label: "有效秩随层变化", h: 300 });
+    lineChart("ch-k99", { ...base, h: 220, label: "k99 随层变化", vFmt: v => String(v),
+      series: [{ name: "k99（合并）", color: "--ink", v: S.k99 }].concat(T.map(t => ({ name: `k99 ${taskName[t].split(" · ")[0]}`, color: taskVar[t], v: S.k99_task[t] }))) });
+  }
+  legend("leg-erank", T.map(t => ({ name: taskName[t], color: taskVar[t] })).concat([{ name: "三任务合并", color: "--ink" }, { name: "三任务合并（同样本数）", color: "--ink-3", dash: "6 4" }]));
+  legend("leg-k99", [{ name: "三任务合并", color: "--ink" }].concat(T.map(t => ({ name: taskName[t].split(" · ")[0], color: taskVar[t] }))));
+  seg("seg-erank", ["0", "5", "9"], ["步 0", "步 5", "步 9"], "9", drawErank);
+  drawErank("9");
+
+  // ---------- robustness ----------
+  function drawRob(step) {
+    const S = D.by_step[step];
+    lineChart("ch-rob", { ...base, h: 280, label: "有效秩稳健性",
+      series: [{ name: "按方差（原始）", color: "--ink", v: S.erank_pooled },
+               { name: "去掉第一主方向", color: "--ink-3", dash: "6 4", v: S.erank_minus_pc1 },
+               { name: "通道标准化后", color: "--accent", v: S.erank_std }] });
+  }
+  legend("leg-rob", [{ name: "按方差（原始）", color: "--ink" }, { name: "去掉第一主方向", color: "--ink-3", dash: "6 4" }, { name: "通道标准化后", color: "--accent" }]);
+  seg("seg-rob", ["0", "5", "9"], ["步 0", "步 5", "步 9"], "9", drawRob);
+  drawRob("9");
+
+  // ---------- ellipsoid ----------
+  let ellStep = "9", ellK = "32";
+  const ellSeries = [["own", "本任务（另外 4 个 episode）", "--ink", ""], ["pooled", "三任务合并", "--ink-3", "6 4"], ["other", "另一个任务", "--accent", ""]];
+  function drawEll() {
+    const E = D.by_step[ellStep].ell[ellK];
+    lineChart("ch-cover", { ...base, w: 440, xEvery: 5, xKeep: [1, 6], h: 300, yMin: 0, yMax: 1, label: "椭球覆盖率", ref: 0.95, refLabel: "0.95",
+      vFmt: v => (v * 100).toFixed(1) + "%", yFmt: v => (v * 100).toFixed(0) + "%",
+      series: ellSeries.map(([k, n, c, d]) => ({ name: n, color: c, dash: d, v: E[k].cover })) });
+    const rmax = niceMax(Math.max(...ellSeries.flatMap(([k]) => E[k].resid)) * 1.05);
+    lineChart("ch-resid", { ...base, w: 440, xEvery: 5, xKeep: [1, 6], h: 300, yMin: 0, yMax: rmax, label: "子空间外方差",
+      vFmt: v => (v * 100).toFixed(2) + "%", yFmt: v => (v * 100).toFixed(1) + "%",
+      series: ellSeries.map(([k, n, c, d]) => ({ name: n, color: c, dash: d, v: E[k].resid })) });
+  }
+  legend("leg-ell", ellSeries.map(([, n, c, d]) => ({ name: n, color: c, dash: d })));
+  seg("seg-ell-step", ["0", "5", "9"], ["步 0", "步 5", "步 9"], "9", v => { ellStep = v; drawEll(); });
+  seg("seg-ell-k", D.ks.map(String), D.ks.map(String), "32", v => { ellK = v; drawEll(); });
+  drawEll();
+
+  // ---------- spectrum + scatter ----------
+  const sel = document.getElementById("sel-layer");
+  L.forEach((n, i) => { const o = document.createElement("option"); o.value = n; o.textContent = xFull[i]; sel.appendChild(o); });
+  sel.value = "single19";
+  legend("leg-layer", T.map(t => ({ name: taskName[t], color: taskVar[t] })).concat([{ name: "三任务合并（谱）", color: "--ink" }]));
+
+  function drawSpec(layer) {
+    const box = document.getElementById("ch-spec"); box.innerHTML = "";
+    const sp = D.by_step["9"].spectrum[layer];
+    const W = 440, H = 320, m = { l: 52, r: 12, t: 12, b: 40 };
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "特征值谱" }); box.appendChild(svg);
+    const n = sp.pooled.length, lo = -5, hi = 0;
+    const X = i => m.l + (W - m.l - m.r) * (i / (n - 1));
+    const Y = v => m.t + (H - m.t - m.b) * (1 - (Math.log10(Math.max(v, 1e-6)) - lo) / (hi - lo));
+    for (let e = lo; e <= hi; e++) {
+      el("line", { x1: m.l, x2: W - m.r, y1: Y(Math.pow(10, e)), y2: Y(Math.pow(10, e)), stroke: css("--grid") }, svg);
+      const t = el("text", { x: m.l - 6, y: Y(Math.pow(10, e)) + 4, "text-anchor": "end" }, svg); t.textContent = `1e${e}`;
+    }
+    [0, 15, 31, 47, 63, 79, 95].forEach(i => { const t = el("text", { x: X(i), y: H - m.b + 16, "text-anchor": "middle" }, svg); t.textContent = i + 1; });
+    const xt = el("text", { x: m.l, y: H - 6, class: "axis-title" }, svg); xt.textContent = "主方向序号（方差占比，对数轴）";
+    const ser = T.map(t => ({ name: taskName[t], color: taskVar[t], v: sp[t] })).concat([{ name: "三任务合并", color: "--ink", v: sp.pooled }]);
+    ser.forEach(s => {
+      el("path", { d: s.v.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(""), fill: "none", stroke: css(s.color), "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+    });
+    const cross = el("line", { y1: m.t, y2: H - m.b, stroke: css("--ink-3"), visibility: "hidden" }, svg);
+    const tip = document.createElement("div"); tip.className = "tip"; tip.hidden = true; box.appendChild(tip);
+    const hit = el("rect", { x: m.l, y: 0, width: W - m.l - m.r, height: H, fill: "transparent" }, svg);
+    hit.addEventListener("pointermove", ev => {
+      const r = svg.getBoundingClientRect(); const sx = (ev.clientX - r.left) * W / r.width;
+      const i = Math.max(0, Math.min(n - 1, Math.round((sx - m.l) / (W - m.l - m.r) * (n - 1))));
+      cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("visibility", "visible");
+      tip.innerHTML = `<div class="t">第 ${i + 1} 个主方向</div>` + ser.map(s => `<div class="row"><span><span class="sw" style="background:${css(s.color)}"></span>${s.name}</span><span>${(s.v[i] * 100).toPrecision(3)}%</span></div>`).join("");
+      tip.hidden = false; const px = X(i) / W * r.width;
+      tip.style.left = `${px + 14 + tip.offsetWidth > r.width ? px - 14 - tip.offsetWidth : px + 14}px`; tip.style.top = "8px";
+    });
+    hit.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); });
+  }
+
+  function drawScatter(boxId, layer, ax, axTitle) {
+    const box = document.getElementById(boxId); box.innerHTML = "";
+    const V = D.by_step["9"].view3d[layer], P = {};
+    T.forEach(t => { P[t] = V.pts[t].map(p => [p[ax[0]], p[ax[1]]]); });
+    const W = 440, H = 320, m = { l: 52, r: 12, t: 12, b: 40 };
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "token 二维投影" }); box.appendChild(svg);
+    const pts = T.flatMap(t => P[t]).slice();
+    T.forEach(t => {
+      const q = P[t], n = q.length, mx = q.reduce((s, p) => s + p[0], 0) / n, my = q.reduce((s, p) => s + p[1], 0) / n;
+      const sx = Math.sqrt(q.reduce((s, p) => s + (p[0] - mx) ** 2, 0) / (n - 1)), sy = Math.sqrt(q.reduce((s, p) => s + (p[1] - my) ** 2, 0) / (n - 1));
+      pts.push([mx - 2 * sx, my - 2 * sy], [mx + 2 * sx, my + 2 * sy]);
+    });
+    const ext = (k) => { const v = pts.map(p => p[k]); const a = Math.min(...v), b = Math.max(...v); const pad = (b - a) * 0.06 || 1; return [a - pad, b + pad]; };
+    const [x0, x1] = ext(0), [y0, y1] = ext(1);
+    const X = v => m.l + (W - m.l - m.r) * (v - x0) / (x1 - x0);
+    const Y = v => m.t + (H - m.t - m.b) * (1 - (v - y0) / (y1 - y0));
+    for (let k = 0; k <= 4; k++) {
+      const yv = y0 + (y1 - y0) * k / 4, xv = x0 + (x1 - x0) * k / 4;
+      el("line", { x1: m.l, x2: W - m.r, y1: Y(yv), y2: Y(yv), stroke: css("--grid") }, svg);
+      const t = el("text", { x: m.l - 6, y: Y(yv) + 4, "text-anchor": "end" }, svg); t.textContent = yv.toFixed(0);
+      const u = el("text", { x: X(xv), y: H - m.b + 16, "text-anchor": "middle" }, svg); u.textContent = xv.toFixed(0);
+    }
+    const xt = el("text", { x: m.l, y: H - 6, class: "axis-title" }, svg); xt.textContent = axTitle;
+    T.forEach(t => {
+      P[t].forEach(p => el("circle", { cx: X(p[0]).toFixed(1), cy: Y(p[1]).toFixed(1), r: 2.2, fill: css(taskVar[t]), "fill-opacity": 0.45 }, svg));
+    });
+    T.forEach(t => {
+      const q = P[t], n = q.length;
+      const mx = q.reduce((a, p) => a + p[0], 0) / n, my = q.reduce((a, p) => a + p[1], 0) / n;
+      let sxx = 0, syy = 0, sxy = 0; q.forEach(p => { sxx += (p[0] - mx) ** 2; syy += (p[1] - my) ** 2; sxy += (p[0] - mx) * (p[1] - my); });
+      sxx /= n - 1; syy /= n - 1; sxy /= n - 1;
+      const tr = sxx + syy, det = sxx * syy - sxy * sxy, l1 = tr / 2 + Math.sqrt(tr * tr / 4 - det), l2 = tr / 2 - Math.sqrt(Math.max(tr * tr / 4 - det, 0));
+      const ang = Math.atan2(l1 - sxx, sxy || 1e-12);
+      const path = [];
+      for (let k = 0; k <= 64; k++) {
+        const a = 2 * Math.PI * k / 64, ex = 2 * Math.sqrt(Math.max(l1, 0)) * Math.cos(a), ey = 2 * Math.sqrt(Math.max(l2, 0)) * Math.sin(a);
+        const px = mx + ex * Math.cos(ang) - ey * Math.sin(ang), py = my + ex * Math.sin(ang) + ey * Math.cos(ang);
+        path.push(`${k ? "L" : "M"}${X(px).toFixed(1)},${Y(py).toFixed(1)}`);
+      }
+      el("path", { d: path.join("") + "Z", fill: "none", stroke: css("--surface"), "stroke-width": 5 }, svg);
+      el("path", { d: path.join("") + "Z", fill: "none", stroke: css(taskVar[t]), "stroke-width": 2 }, svg);
+    });
+  }
+  function drawLayer() {
+    drawSpec(sel.value);
+    drawScatter("ch-scatter", sel.value, [0, 1], "PC1 → / PC2 ↑（三任务合并）");
+    drawScatter("ch-scatter23", sel.value, [1, 2], "PC2 → / PC3 ↑（三任务合并）");
+    const sh = D.by_step["9"][dataMode === "arm" ? "view3d_arm" : "view3d"][sel.value].share;
+    document.getElementById("share-note").textContent = ` 这一层 PC1 / PC2 / PC3 分别占方差 ${(sh[0] * 100).toFixed(1)}% / ${(sh[1] * 100).toFixed(1)}% / ${(sh[2] * 100).toFixed(1)}%（${dataMode === "arm" ? "去掉夹爪方向后" : "原始"}）。`;
+    draw3d();
+  }
+
+  // ---------- 3-D view ----------
+  const cv = document.getElementById("cv-3d");
+  let yaw = -0.7, pitch = 0.35, colorBy = "task", scaleMode = "std", showEll = true, dataMode = "raw";
+  function eig3(A) {  // Jacobi eigen-decomposition of a symmetric 3x3
+    const a = A.map(r => r.slice()), V = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    for (let it = 0; it < 50; it++) {
+      let p = 0, q = 1;
+      if (Math.abs(a[0][2]) > Math.abs(a[p][q])) { p = 0; q = 2; }
+      if (Math.abs(a[1][2]) > Math.abs(a[p][q])) { p = 1; q = 2; }
+      if (Math.abs(a[p][q]) < 1e-12) break;
+      const th = 0.5 * Math.atan2(2 * a[p][q], a[q][q] - a[p][p]), c = Math.cos(th), s = Math.sin(th);
+      for (let k = 0; k < 3; k++) { const x = a[k][p], y = a[k][q]; a[k][p] = c * x - s * y; a[k][q] = s * x + c * y; }
+      for (let k = 0; k < 3; k++) { const x = a[p][k], y = a[q][k]; a[p][k] = c * x - s * y; a[q][k] = s * x + c * y; }
+      for (let k = 0; k < 3; k++) { const x = V[k][p], y = V[k][q]; V[k][p] = c * x - s * y; V[k][q] = s * x + c * y; }
+    }
+    return { val: [a[0][0], a[1][1], a[2][2]], vec: [0, 1, 2].map(j => [V[0][j], V[1][j], V[2][j]]) };
+  }
+  function mix(a, b, f) {
+    const h = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
+    const x = h(a), y = h(b);
+    return "rgb(" + x.map((v, i) => Math.round(v + (y[i] - v) * Math.min(1, Math.max(0, f)))).join(",") + ")";
+  }
+  function legend3d() {
+    if (colorBy === "speed") { legend("leg-3d", [{ name: "臂速度低（|Δxyz| 小）", color: "--ramp-lo", dot: true }, { name: "臂速度高", color: "--accent", dot: true }]); return; }
+    legend("leg-3d", colorBy === "task" ? T.map(t => ({ name: taskName[t], color: taskVar[t], dot: true }))
+      : [{ name: "夹爪 开（预测值 > 0.5）", color: "--ink", dot: true }, { name: "夹爪 合", color: "--accent", dot: true }]);
+  }
+  function draw3d() {
+    const V = D.by_step["9"][dataMode === "arm" ? "view3d_arm" : "view3d"][sel.value];
+    const smax = V.speed ? Math.max(...T.flatMap(t => V.speed[t])) : 1;
+    const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight || w * 320 / 440;
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+    const all = T.flatMap(t => V.pts[t]);
+    const mean = [0, 1, 2].map(k => all.reduce((s, p) => s + p[k], 0) / all.length);
+    const sd = [0, 1, 2].map(k => Math.sqrt(all.reduce((s, p) => s + (p[k] - mean[k]) ** 2, 0) / all.length) || 1);
+    const sc = scaleMode === "std" ? sd : [0, 1, 2].map(() => Math.max(...sd));
+    const norm = p => [0, 1, 2].map(k => (p[k] - mean[k]) / sc[k]);
+    const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const R = Math.min(w, h) * 0.13;
+    const proj = q => { const x1 = cy * q[0] + sy * q[2], z1 = -sy * q[0] + cy * q[2]; const y1 = cp * q[1] - sp * z1, z2 = sp * q[1] + cp * z1; return [w / 2 + R * x1, h / 2 - R * y1, z2]; };
+    // axes
+    g.lineWidth = 1; g.font = "11px IBM Plex Mono, monospace";
+    ["PC1", "PC2", "PC3"].forEach((lab, k) => {
+      const a = [0, 0, 0], b = [0, 0, 0]; a[k] = -2.6; b[k] = 2.6;
+      const A = proj(a), B = proj(b);
+      g.strokeStyle = css("--rule"); g.beginPath(); g.moveTo(A[0], A[1]); g.lineTo(B[0], B[1]); g.stroke();
+      g.fillStyle = css("--ink-3"); g.fillText(lab, B[0] + 4, B[1] + 4);
+    });
+    const col = (t, i) => colorBy === "task" || (colorBy === "speed" && !V.speed) ? css(taskVar[t])
+      : colorBy === "speed" ? mix(css("--ramp-lo"), css("--accent"), Math.sqrt(V.speed[t][i] / smax))
+      : (V.grip[t][i] ? css("--ink") : css("--accent"));
+    const pts = [];
+    T.forEach(t => V.pts[t].forEach((p, i) => { const q = proj(norm(p)); pts.push([q, col(t, i)]); }));
+    pts.sort((a, b) => a[0][2] - b[0][2]);
+    g.globalAlpha = 0.55;
+    pts.forEach(([q, c]) => { g.fillStyle = c; g.beginPath(); g.arc(q[0], q[1], 2.1, 0, 2 * Math.PI); g.fill(); });
+    g.globalAlpha = 1;
+    // 2-sigma ellipsoid wireframes per task (normalized coordinates)
+    if (showEll) T.forEach(t => {
+      const q = V.pts[t].map(norm), n = q.length;
+      const m = [0, 1, 2].map(k => q.reduce((s, p) => s + p[k], 0) / n);
+      const C = [0, 1, 2].map(i => [0, 1, 2].map(j => q.reduce((s, p) => s + (p[i] - m[i]) * (p[j] - m[j]), 0) / (n - 1)));
+      const E = eig3(C), ax = E.vec.map((v, k) => v.map(x => x * 2 * Math.sqrt(Math.max(E.val[k], 0))));
+      [[0, 1], [0, 2], [1, 2]].forEach(([i, j]) => {
+        g.beginPath();
+        for (let s = 0; s <= 72; s++) {
+          const a = 2 * Math.PI * s / 72, c = Math.cos(a), si = Math.sin(a);
+          const P3 = [0, 1, 2].map(k => m[k] + c * ax[i][k] + si * ax[j][k]);
+          const Q = proj(P3); s ? g.lineTo(Q[0], Q[1]) : g.moveTo(Q[0], Q[1]);
+        }
+        g.strokeStyle = css("--surface"); g.lineWidth = 3; g.stroke();
+        g.strokeStyle = css(taskVar[t]); g.lineWidth = 1.2; g.stroke();
+      });
+    });
+    g.fillStyle = css("--ink-3");
+    g.fillText(scaleMode === "std" ? "各轴按标准差缩放" : "等比例（真实方差比）", 8, h - 8);
+  }
+  let drag = null;
+  cv.addEventListener("pointerdown", e => { drag = [e.clientX, e.clientY, yaw, pitch]; cv.setPointerCapture(e.pointerId); cv.style.cursor = "grabbing"; });
+  cv.addEventListener("pointermove", e => {
+    if (!drag) return;
+    yaw = drag[2] + (e.clientX - drag[0]) * 0.01;
+    pitch = Math.max(-1.5, Math.min(1.5, drag[3] + (e.clientY - drag[1]) * 0.01));
+    draw3d();
+  });
+  const endDrag = () => { drag = null; cv.style.cursor = "grab"; };
+  cv.addEventListener("pointerup", endDrag); cv.addEventListener("pointercancel", endDrag);
+  document.getElementById("btn-reset").addEventListener("click", () => { yaw = -0.7; pitch = 0.35; draw3d(); });
+  seg("seg-color", ["task", "grip", "speed"], ["任务", "夹爪", "臂速度"], "task", v => { colorBy = v; legend3d(); draw3d(); });
+  const speedBtn = document.getElementById("seg-color-speed");
+  seg("seg-data3d", ["raw", "arm"], ["原始", "去掉夹爪方向"], "raw", v => {
+    dataMode = v; speedBtn.hidden = v !== "arm";
+    if (v !== "arm" && colorBy === "speed") document.getElementById("seg-color-task").click();
+    const sh = D.by_step["9"][v === "arm" ? "view3d_arm" : "view3d"][sel.value].share;
+    document.getElementById("share-note").textContent = ` 这一层 PC1 / PC2 / PC3 分别占方差 ${(sh[0] * 100).toFixed(1)}% / ${(sh[1] * 100).toFixed(1)}% / ${(sh[2] * 100).toFixed(1)}%（${v === "arm" ? "去掉夹爪方向后" : "原始"}）。`;
+    draw3d();
+  });
+  speedBtn.hidden = true;
+  seg("seg-scale", ["std", "equal"], ["各轴标准化", "等比例"], "std", v => { scaleMode = v; draw3d(); });
+  seg("seg-ell3d", ["on", "off"], ["显示", "隐藏"], "on", v => { showEll = v === "on"; draw3d(); });
+  legend3d();
+  window.addEventListener("resize", () => draw3d());
+  sel.addEventListener("change", drawLayer);
+  drawLayer();
+
+  // ---------- arm-only ----------
+  let armStep = "9", armK = "32";
+  function drawArm() {
+    const A = D.by_step[armStep].arm, S = D.by_step[armStep];
+    document.getElementById("arm-removed").textContent =
+      `去掉的夹爪方向占原始方差：encoder ${(A.removed[0] * 100).toFixed(0)}%，double 层 ${(Math.min(...A.removed.slice(1, 6)) * 100).toFixed(0)}–${(Math.max(...A.removed.slice(1, 6)) * 100).toFixed(0)}%，single 层 ${(Math.min(...A.removed.slice(6)) * 100).toFixed(0)}–${(Math.max(...A.removed.slice(6)) * 100).toFixed(0)}%。`;
+    lineChart("ch-arm-erank", { ...base, h: 300, label: "去掉夹爪方向后的有效秩",
+      series: T.map(t => ({ name: taskName[t], color: taskVar[t], v: A.erank_task[t] }))
+        .concat([{ name: "三任务合并", color: "--ink", v: A.erank_pooled, label: "合并" },
+                 { name: "三任务合并（同样本数）", color: "--ink-3", dash: "6 4", v: A.erank_pooled_sub },
+                 { name: "对照：含夹爪方向，合并", color: "--accent", dash: "2 4", v: S.erank_pooled }]) });
+    const r2lo = Math.min(0, Math.floor(Math.min(...["8", "32", "128", "full"].flatMap(k => A.r2[k])) * 5) / 5);
+    lineChart("ch-arm-r2", { ...base, h: 260, yMin: r2lo, yMax: 1, ticks: Math.round((1 - r2lo) / 0.2), label: "机械臂动作留出 R²",
+      vFmt: v => v.toFixed(3), yFmt: v => v.toFixed(1), ref: 0, refLabel: "",
+      series: [{ name: "k = 8", color: "--ink-3", dash: "6 4", v: A.r2["8"] }, { name: "k = 32", color: "--ink", v: A.r2["32"] },
+               { name: "k = 128", color: "--accent", v: A.r2["128"] }, { name: "全部 1024 维", color: "--accent", dash: "2 4", v: A.r2.full }] });
+    const E = A.ell[armK];
+    lineChart("ch-arm-cover", { ...base, w: 440, xEvery: 5, xKeep: [1, 6], h: 300, yMin: 0, yMax: 1, label: "椭球覆盖率（去掉夹爪方向）", ref: 0.95, refLabel: "0.95",
+      vFmt: v => (v * 100).toFixed(1) + "%", yFmt: v => (v * 100).toFixed(0) + "%",
+      series: ellSeries.map(([k, n, c, d]) => ({ name: n, color: c, dash: d, v: E[k].cover })) });
+    const rm = niceMax(Math.max(...ellSeries.flatMap(([k]) => E[k].resid)) * 1.05);
+    lineChart("ch-arm-resid", { ...base, w: 440, xEvery: 5, xKeep: [1, 6], h: 300, yMin: 0, yMax: rm, label: "子空间外方差（去掉夹爪方向）",
+      vFmt: v => (v * 100).toFixed(2) + "%", yFmt: v => (v * 100).toFixed(1) + "%",
+      series: ellSeries.map(([k, n, c, d]) => ({ name: n, color: c, dash: d, v: E[k].resid })) });
+  }
+  legend("leg-arm-erank", T.map(t => ({ name: taskName[t], color: taskVar[t] })).concat([{ name: "三任务合并", color: "--ink" }, { name: "三任务合并（同样本数）", color: "--ink-3", dash: "6 4" }, { name: "对照：含夹爪方向，合并", color: "--accent", dash: "2 4" }]));
+  legend("leg-arm-r2", [{ name: "k = 8", color: "--ink-3", dash: "6 4" }, { name: "k = 32", color: "--ink" }, { name: "k = 128", color: "--accent" }, { name: "全部 1024 维", color: "--accent", dash: "2 4" }]);
+  legend("leg-arm-ell", ellSeries.map(([, n, c, d]) => ({ name: n, color: c, dash: d })));
+  seg("seg-arm", ["0", "5", "9"], ["步 0", "步 5", "步 9"], "9", v => { armStep = v; drawArm(); });
+  seg("seg-arm-k", ["8", "32", "128"], ["8", "32", "128"], "32", v => { armK = v; drawArm(); });
+  drawArm();
+
+  // ---------- table ----------
+  const tb = document.getElementById("tbl");
+  const head = ["层", "有效秩 合并", "同样本数", ...T.map(t => `任务 ${t}`), "标准化后", "k99", "top-8 通道方差", "位置均值占比", "覆盖率 本任务 k32", "合并 k32", "其他任务 k32", "样本层有效秩 合并"];
+  tb.innerHTML = `<thead><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr></thead>`;
+  const tbody = document.createElement("tbody");
+  L.forEach((n, i) => {
+    const r = [xFull[i], fmt(S9.erank_pooled[i]), fmt(S9.erank_pooled_sub[i]), ...T.map(t => fmt(S9.erank_task[t][i])), fmt(S9.erank_std[i]), S9.k99[i],
+      fmt(S9.top8_var[i] * 100, 1) + "%", fmt(S9.pos_share[i] * 100, 1) + "%", fmt(S9.ell["32"].own.cover[i] * 100, 1) + "%",
+      fmt(S9.ell["32"].pooled.cover[i] * 100, 1) + "%", fmt(S9.ell["32"].other.cover[i] * 100, 1) + "%", fmt(S9.sample_erank.pooled_sub[i])];
+    const tr = document.createElement("tr"); tr.innerHTML = r.map(c => `<td>${c}</td>`).join(""); tbody.appendChild(tr);
+  });
+  tb.appendChild(tbody);
+
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  const redraw = () => { drawErank(document.querySelector("#seg-erank [aria-pressed=true]").id.split("-").pop()); drawRob(document.querySelector("#seg-rob [aria-pressed=true]").id.split("-").pop()); drawEll(); drawLayer(); drawArm(); };
+  if (mq.addEventListener) mq.addEventListener("change", redraw);
+  new MutationObserver(redraw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+})();
+</script>

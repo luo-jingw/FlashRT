@@ -1,0 +1,61 @@
+libero_10 episodes per task: {0: 43, 1: 35, 2: 32, 3: 33, 4: 45, 5: 38, 6: 46, 7: 37, 8: 38, 9: 41}
+libero_10 task 0: 43 episodes, samples 1158/10595, 53s
+libero_10 task 1: 35 episodes, samples 2029/10595, 94s
+libero_10 task 2: 32 episodes, samples 2976/10595, 137s
+libero_10 task 3: 33 episodes, samples 4330/10595, 199s
+libero_10 task 4: 45 episodes, samples 5549/10595, 257s
+libero_10 task 5: 38 episodes, samples 6671/10595, 308s
+libero_10 task 6: 46 episodes, samples 7889/10595, 364s
+libero_10 task 7: 37 episodes, samples 8850/10595, 410s
+libero_10 task 8: 38 episodes, samples 9815/10595, 455s
+libero_10 task 9: 41 episodes, samples 10595/10595, 493s
+saved /tmp/claude-1002/-home-jingwu-workspace-FlashRT/e155a298-9075-4dfe-b5eb-6856aec7a685/scratchpad/repr2/libero_10_all.npz: head (10595, 64, 1024), 498s
+libero_spatial episodes per task: {0: 20, 1: 20, 2: 20, 3: 20, 4: 20, 5: 20, 6: 20, 7: 20, 8: 20, 9: 20}
+libero_spatial task 0: 20 episodes, samples 212/2548, 11s
+libero_spatial task 1: 20 episodes, samples 458/2548, 23s
+libero_spatial task 2: 20 episodes, samples 778/2548, 39s
+libero_spatial task 3: 20 episodes, samples 1035/2548, 51s
+libero_spatial task 4: 20 episodes, samples 1276/2548, 63s
+libero_spatial task 5: 20 episodes, samples 1540/2548, 77s
+libero_spatial task 6: 20 episodes, samples 1750/2548, 87s
+libero_spatial task 7: 20 episodes, samples 1984/2548, 98s
+libero_spatial task 8: 20 episodes, samples 2265/2548, 111s
+libero_spatial task 9: 20 episodes, samples 2548/2548, 125s
+saved /tmp/claude-1002/-home-jingwu-workspace-FlashRT/e155a298-9075-4dfe-b5eb-6856aec7a685/scratchpad/repr2/libero_spatial_20.npz: head (2548, 64, 1024), 125s
+libero_object episodes per task: {0: 20, 1: 20, 2: 20, 3: 20, 4: 20, 5: 20, 6: 20, 7: 20, 8: 20, 9: 20}
+libero_object task 0: 20 episodes, samples 326/3054, 16s
+libero_object task 1: 20 episodes, samples 632/3054, 31s
+libero_object task 2: 20 episodes, samples 962/3054, 47s
+libero_object task 3: 20 episodes, samples 1293/3054, 63s
+libero_object task 4: 20 episodes, samples 1579/3054, 77s
+libero_object task 5: 20 episodes, samples 1893/3054, 92s
+libero_object task 6: 20 episodes, samples 2192/3054, 106s
+libero_object task 7: 20 episodes, samples 2484/3054, 120s
+libero_object task 8: 20 episodes, samples 2766/3054, 133s
+libero_object task 9: 20 episodes, samples 3054/3054, 147s
+saved /tmp/claude-1002/-home-jingwu-workspace-FlashRT/e155a298-9075-4dfe-b5eb-6856aec7a685/scratchpad/repr2/libero_object_20.npz: head (3054, 64, 1024), 148s
+libero_goal episodes per task: {0: 20, 1: 20, 2: 20, 3: 20, 4: 20, 5: 20, 6: 20, 7: 20, 8: 20, 9: 20}
+libero_goal task 0: 20 episodes, samples 289/2636, 15s
+libero_goal task 1: 20 episodes, samples 715/2636, 35s
+libero_goal task 2: 20 episodes, samples 1014/2636, 49s
+libero_goal task 3: 20 episodes, samples 1209/2636, 59s
+libero_goal task 4: 20 episodes, samples 1422/2636, 69s
+libero_goal task 5: 20 episodes, samples 1631/2636, 79s
+libero_goal task 6: 20 episodes, samples 1850/2636, 90s
+libero_goal task 7: 20 episodes, samples 2221/2636, 108s
+libero_goal task 8: 20 episodes, samples 2442/2636, 119s
+libero_goal task 9: 20 episodes, samples 2636/2636, 128s
+saved /tmp/claude-1002/-home-jingwu-workspace-FlashRT/e155a298-9075-4dfe-b5eb-6856aec7a685/scratchpad/repr2/libero_goal_20.npz: head (2636, 64, 1024), 129s
+libero_10 episodes per task: {0: 9, 1: 7, 2: 7, 3: 7, 4: 9, 5: 8, 6: 10, 7: 8, 8: 8, 9: 9}
+libero_10 task 0: 9 episodes, samples 248/2247, 12s
+libero_10 task 1: 7 episodes, samples 431/2247, 21s
+libero_10 task 2: 7 episodes, samples 622/2247, 29s
+libero_10 task 3: 7 episodes, samples 918/2247, 43s
+libero_10 task 4: 9 episodes, samples 1160/2247, 55s
+libero_10 task 5: 8 episodes, samples 1406/2247, 66s
+libero_10 task 6: 10 episodes, samples 1674/2247, 78s
+libero_10 task 7: 8 episodes, samples 1878/2247, 88s
+libero_10 task 8: 8 episodes, samples 2074/2247, 97s
+libero_10 task 9: 9 episodes, samples 2247/2247, 106s
+saved /tmp/claude-1002/-home-jingwu-workspace-FlashRT/e155a298-9075-4dfe-b5eb-6856aec7a685/scratchpad/repr2/libero_10_fold0_noise2.npz: head (2247, 64, 1024), 106s
+ALL_DONE

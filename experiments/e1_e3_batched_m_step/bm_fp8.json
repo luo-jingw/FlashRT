@@ -1,0 +1,423 @@
+{
+ "precision": "fp8",
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "commit": "3d3c1f5",
+ "prompt": "A video recorded from a robot's point of view executing the following instruction: turn on the stove and put the moka pot on it",
+ "episode": 11,
+ "frame": 0,
+ "warmup": 20,
+ "iters": 200,
+ "prof_iters": 5,
+ "rows": [
+  {
+   "k": 1,
+   "M": 64,
+   "x0": 40,
+   "a0": 432,
+   "total": 496,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 1.3754,
+    "p10": 1.3715,
+    "p90": 1.3792
+   },
+   "attn_graph_ms_layer0": 0.011,
+   "loop10_graph_ms": 13.8528,
+   "eager_split_ms": {
+    "gemm": 0.6047,
+    "attention": 0.2697,
+    "norm": 0.1344,
+    "elementwise": 0.1191,
+    "other": 0.0699,
+    "quant/cast": 0.0579,
+    "memcpy/set": 0.0245
+   },
+   "eager_launches": {
+    "quant/cast": 61,
+    "gemm": 93,
+    "elementwise": 109,
+    "norm": 56,
+    "memcpy/set": 60,
+    "other": 60,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 1.2803,
+   "kernels_per_iter": [
+    514,
+    514,
+    514,
+    514,
+    514
+   ]
+  },
+  {
+   "k": 2,
+   "M": 128,
+   "x0": 40,
+   "a0": 432,
+   "total": 560,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 1.6618,
+    "p10": 1.6564,
+    "p90": 1.6674
+   },
+   "attn_graph_ms_layer0": 0.0194,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 0.7085,
+    "attention": 0.3904,
+    "norm": 0.1457,
+    "elementwise": 0.1349,
+    "other": 0.08,
+    "quant/cast": 0.071,
+    "memcpy/set": 0.0286
+   },
+   "eager_launches": {
+    "quant/cast": 61,
+    "gemm": 93,
+    "elementwise": 109,
+    "norm": 56,
+    "memcpy/set": 60,
+    "other": 60,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 1.559,
+   "kernels_per_iter": [
+    514,
+    514,
+    514,
+    514,
+    514
+   ]
+  },
+  {
+   "k": 3,
+   "M": 192,
+   "x0": 40,
+   "a0": 432,
+   "total": 624,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 1.862,
+    "p10": 1.8579,
+    "p90": 1.8673
+   },
+   "attn_graph_ms_layer0": 0.0236,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 0.7903,
+    "attention": 0.4922,
+    "norm": 0.1592,
+    "elementwise": 0.1521,
+    "other": 0.0906,
+    "quant/cast": 0.0838,
+    "memcpy/set": 0.0301
+   },
+   "eager_launches": {
+    "quant/cast": 61,
+    "gemm": 93,
+    "elementwise": 109,
+    "norm": 56,
+    "memcpy/set": 60,
+    "other": 60,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 1.7982,
+   "kernels_per_iter": [
+    514,
+    514,
+    514,
+    514,
+    514
+   ]
+  },
+  {
+   "k": 4,
+   "M": 256,
+   "x0": 40,
+   "a0": 432,
+   "total": 688,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 2.1517,
+    "p10": 2.1456,
+    "p90": 2.1584
+   },
+   "attn_graph_ms_layer0": 0.0299,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 0.8476,
+    "attention": 0.6696,
+    "norm": 0.1814,
+    "elementwise": 0.1699,
+    "other": 0.103,
+    "quant/cast": 0.0975,
+    "memcpy/set": 0.0269
+   },
+   "eager_launches": {
+    "quant/cast": 61,
+    "gemm": 93,
+    "elementwise": 109,
+    "norm": 56,
+    "memcpy/set": 60,
+    "other": 60,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 2.0959,
+   "kernels_per_iter": [
+    514,
+    514,
+    514,
+    514,
+    514
+   ]
+  },
+  {
+   "k": 5,
+   "M": 320,
+   "x0": 40,
+   "a0": 432,
+   "total": 752,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 2.5209,
+    "p10": 2.5146,
+    "p90": 2.5287
+   },
+   "attn_graph_ms_layer0": 0.0339,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 1.06,
+    "attention": 0.753,
+    "norm": 0.1964,
+    "elementwise": 0.1882,
+    "other": 0.1123,
+    "quant/cast": 0.1107,
+    "memcpy/set": 0.0273
+   },
+   "eager_launches": {
+    "quant/cast": 61,
+    "gemm": 93,
+    "elementwise": 109,
+    "norm": 56,
+    "memcpy/set": 60,
+    "other": 60,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 2.4479,
+   "kernels_per_iter": [
+    514,
+    514,
+    514,
+    514,
+    514
+   ]
+  },
+  {
+   "k": 6,
+   "M": 384,
+   "x0": 40,
+   "a0": 432,
+   "total": 816,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 2.8448,
+    "p10": 2.8039,
+    "p90": 2.8563
+   },
+   "attn_graph_ms_layer0": 0.0427,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "gemm": 1.0868,
+    "attention": 0.9618,
+    "norm": 0.2215,
+    "elementwise": 0.2078,
+    "quant/cast": 0.1242,
+    "other": 0.1231,
+    "memcpy/set": 0.0264
+   },
+   "eager_launches": {
+    "quant/cast": 61,
+    "gemm": 93,
+    "elementwise": 109,
+    "norm": 56,
+    "memcpy/set": 60,
+    "other": 60,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 2.7516,
+   "kernels_per_iter": [
+    514,
+    514,
+    514,
+    514,
+    514
+   ]
+  },
+  {
+   "k": 7,
+   "M": 448,
+   "x0": 40,
+   "a0": 432,
+   "total": 880,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 3.5305,
+    "p10": 3.5078,
+    "p90": 3.5447
+   },
+   "attn_graph_ms_layer0": 0.0605,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "attention": 1.4284,
+    "gemm": 1.285,
+    "norm": 0.2315,
+    "elementwise": 0.2255,
+    "quant/cast": 0.1367,
+    "other": 0.1278,
+    "memcpy/set": 0.0238
+   },
+   "eager_launches": {
+    "quant/cast": 61,
+    "gemm": 88,
+    "elementwise": 109,
+    "norm": 56,
+    "memcpy/set": 60,
+    "other": 60,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 3.4587,
+   "kernels_per_iter": [
+    509,
+    509,
+    509,
+    509,
+    509
+   ]
+  },
+  {
+   "k": 8,
+   "M": 512,
+   "x0": 40,
+   "a0": 432,
+   "total": 944,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 3.7723,
+    "p10": 3.7551,
+    "p90": 3.7845
+   },
+   "attn_graph_ms_layer0": 0.0646,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "attention": 1.5292,
+    "gemm": 1.349,
+    "norm": 0.2533,
+    "elementwise": 0.2447,
+    "quant/cast": 0.1498,
+    "other": 0.1417,
+    "memcpy/set": 0.0246
+   },
+   "eager_launches": {
+    "quant/cast": 61,
+    "gemm": 93,
+    "elementwise": 109,
+    "norm": 56,
+    "memcpy/set": 60,
+    "other": 60,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 3.6922,
+   "kernels_per_iter": [
+    514,
+    514,
+    514,
+    514,
+    514
+   ]
+  },
+  {
+   "k": 9,
+   "M": 576,
+   "x0": 40,
+   "a0": 432,
+   "total": 1008,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 4.0611,
+    "p10": 4.0448,
+    "p90": 4.0672
+   },
+   "attn_graph_ms_layer0": 0.0687,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "attention": 1.646,
+    "gemm": 1.4073,
+    "norm": 0.2841,
+    "elementwise": 0.2644,
+    "quant/cast": 0.1625,
+    "other": 0.1446,
+    "memcpy/set": 0.0244
+   },
+   "eager_launches": {
+    "quant/cast": 61,
+    "gemm": 88,
+    "elementwise": 109,
+    "norm": 56,
+    "memcpy/set": 60,
+    "other": 60,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 3.9332,
+   "kernels_per_iter": [
+    509,
+    509,
+    509,
+    509,
+    509
+   ]
+  },
+  {
+   "k": 10,
+   "M": 640,
+   "x0": 40,
+   "a0": 432,
+   "total": 1072,
+   "actions_finite": true,
+   "step_graph_ms": {
+    "p50": 4.7926,
+    "p10": 4.7625,
+    "p90": 4.8018
+   },
+   "attn_graph_ms_layer0": 0.087,
+   "loop10_graph_ms": null,
+   "eager_split_ms": {
+    "attention": 2.0957,
+    "gemm": 1.688,
+    "norm": 0.2882,
+    "elementwise": 0.283,
+    "quant/cast": 0.1752,
+    "other": 0.1511,
+    "memcpy/set": 0.0274
+   },
+   "eager_launches": {
+    "quant/cast": 61,
+    "gemm": 93,
+    "elementwise": 109,
+    "norm": 56,
+    "memcpy/set": 60,
+    "other": 60,
+    "attention": 75
+   },
+   "eager_kernel_total_ms": 4.7086,
+   "kernels_per_iter": [
+    514,
+    514,
+    514,
+    514,
+    514
+   ]
+  }
+ ]
+}

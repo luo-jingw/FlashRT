@@ -1,0 +1,207 @@
+{
+ "precision": "fp16",
+ "suite": "libero_10",
+ "episodes_per_task": 2,
+ "seed": 7,
+ "replan_steps": 10,
+ "num_steps_wait": 30,
+ "max_steps": 700,
+ "build_s": 9.6,
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "steady": {
+  "pre": {
+   "n": 518,
+   "mean": 0.999,
+   "p50": 0.988,
+   "p90": 1.064,
+   "p99": 1.134,
+   "max": 1.238
+  },
+  "infer": {
+   "n": 518,
+   "mean": 33.902,
+   "p50": 33.582,
+   "p90": 35.044,
+   "p99": 35.293,
+   "max": 35.703
+  },
+  "post": {
+   "n": 518,
+   "mean": 0.014,
+   "p50": 0.012,
+   "p90": 0.018,
+   "p99": 0.037,
+   "max": 0.044
+  },
+  "e2e": {
+   "n": 518,
+   "mean": 34.915,
+   "p50": 34.592,
+   "p90": 36.056,
+   "p99": 36.403,
+   "max": 36.709
+  },
+  "env_step": {
+   "n": 5198,
+   "mean": 6.134,
+   "p50": 5.961,
+   "p90": 7.374,
+   "p99": 8.938,
+   "max": 13.66
+  }
+ },
+ "successes": 19,
+ "episodes": 20,
+ "tasks": [
+  {
+   "task_id": 0,
+   "task": "put both the alphabet soup and the tomato sauce in the basket",
+   "x0": 40,
+   "set_prompt_ms": 752.5,
+   "first_call_ms": [
+    1.13,
+    37.44,
+    0.03,
+    38.59
+   ],
+   "calls": 50,
+   "successes": 2,
+   "episodes": 2
+  },
+  {
+   "task_id": 1,
+   "task": "put both the cream cheese box and the butter in the basket",
+   "x0": 40,
+   "set_prompt_ms": 30.7,
+   "first_call_ms": [
+    1.02,
+    33.65,
+    0.01,
+    34.69
+   ],
+   "calls": 52,
+   "successes": 2,
+   "episodes": 2
+  },
+  {
+   "task_id": 2,
+   "task": "turn on the stove and put the moka pot on it",
+   "x0": 40,
+   "set_prompt_ms": 30.2,
+   "first_call_ms": [
+    1.05,
+    33.64,
+    0.01,
+    34.71
+   ],
+   "calls": 48,
+   "successes": 2,
+   "episodes": 2
+  },
+  {
+   "task_id": 3,
+   "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+   "x0": 42,
+   "set_prompt_ms": 347.3,
+   "first_call_ms": [
+    1.07,
+    34.12,
+    0.02,
+    35.21
+   ],
+   "calls": 46,
+   "successes": 2,
+   "episodes": 2
+  },
+  {
+   "task_id": 4,
+   "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+   "x0": 47,
+   "set_prompt_ms": 387.3,
+   "first_call_ms": [
+    1.06,
+    35.82,
+    0.01,
+    36.89
+   ],
+   "calls": 45,
+   "successes": 2,
+   "episodes": 2
+  },
+  {
+   "task_id": 5,
+   "task": "pick up the book and place it in the back compartment of the caddy",
+   "x0": 43,
+   "set_prompt_ms": 350.3,
+   "first_call_ms": [
+    1.06,
+    35.44,
+    0.01,
+    36.52
+   ],
+   "calls": 35,
+   "successes": 2,
+   "episodes": 2
+  },
+  {
+   "task_id": 6,
+   "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+   "x0": 46,
+   "set_prompt_ms": 347.1,
+   "first_call_ms": [
+    1.06,
+    34.18,
+    0.01,
+    35.25
+   ],
+   "calls": 42,
+   "successes": 2,
+   "episodes": 2
+  },
+  {
+   "task_id": 7,
+   "task": "put both the alphabet soup and the cream cheese box in the basket",
+   "x0": 41,
+   "set_prompt_ms": 354.3,
+   "first_call_ms": [
+    1.07,
+    35.43,
+    0.01,
+    36.51
+   ],
+   "calls": 49,
+   "successes": 2,
+   "episodes": 2
+  },
+  {
+   "task_id": 8,
+   "task": "put both moka pots on the stove",
+   "x0": 36,
+   "set_prompt_ms": 341.7,
+   "first_call_ms": [
+    1.11,
+    34.06,
+    0.02,
+    35.18
+   ],
+   "calls": 108,
+   "successes": 1,
+   "episodes": 2
+  },
+  {
+   "task_id": 9,
+   "task": "put the yellow and white mug in the microwave and close it",
+   "x0": 40,
+   "set_prompt_ms": 30.6,
+   "first_call_ms": [
+    1.06,
+    33.7,
+    0.01,
+    34.78
+   ],
+   "calls": 53,
+   "successes": 2,
+   "episodes": 2
+  }
+ ]
+}
