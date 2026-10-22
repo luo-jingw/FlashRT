@@ -170,12 +170,14 @@ def test_native_profile_maps_to_the_constructor_defaults_plus_the_trim():
 
     # the served default differs from the native set in exactly the switches
     # that make the native set native: FA4 at both sites, left to the
-    # machine in the default and stated off here
+    # machine in the default and stated off here, and the ActionDiT tile
+    # autotune, on for nvfp4 in the default and off here
     served = frontend_kwargs_from_config(resolved())
     assert served["text_trim"] is True and kwargs["text_trim"] is True
     assert served["use_fa4"] is None and served["use_fa4_mot"] is None
+    assert served["gemm_variant_autotune"] is True
     differing = sorted(key for key, value in served.items() if value != kwargs[key])
-    assert differing == ["use_fa4", "use_fa4_mot"], differing
+    assert differing == ["gemm_variant_autotune", "use_fa4", "use_fa4_mot"], differing
 
 
 def test_use_fa4_none_resolves_on_the_machine(monkeypatch):

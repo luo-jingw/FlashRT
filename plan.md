@@ -494,8 +494,8 @@ The fixture copied and its checksums verified, then `nvfp4` and `fp16` run, with
 # Plan: ActionDiT small-M CUTLASS tile selection (roadmap item 1)
 
 Plan Status: completed. Phases 1-7 are completed; Phase 7 ran on Thor in the
-`1021` round (opportunities.md OPT-018). `gemm_variant_autotune` remains an
-opt-in flag until the owner decides its `nvfp4` default ("Decisions pending").
+`1021` round (opportunities.md OPT-018). `gemm_variant_autotune` is the served
+`nvfp4` default since that round (owner decision, "Decisions pending").
 
 ## Problem
 
@@ -719,7 +719,7 @@ Verified by stub tests (a raising candidate, a raising default still an error, a
 Phase Status: completed
 
 The Thor checklist in `opportunities.md` OPT-018: the tile sweep must show correct outputs for every tile, and the `infer()` A/B of heuristic vs tuned tiles must show action cosine >= 0.9999 and a P50 delta.
-Result (`1021` Thor round, THOR_STATUS_SUMMARY.md): every tile matches the heuristic tile's cosine; the tuned graph is bit-identical in actions and 1.98 ms faster for `nvfp4` (beyond the P10–P90 width), 0.46 ms for `fp8_static_cutlass` (within it). Tuned picks at N = 1024: v7, v7, v10. Whether the flag becomes the `nvfp4` default is an owner decision ("Decisions pending").
+Result (`1021` Thor round, THOR_STATUS_SUMMARY.md): every tile matches the heuristic tile's cosine; the tuned graph is bit-identical in actions and 1.98 ms faster for `nvfp4` (beyond the P10–P90 width), 0.46 ms for `fp8_static_cutlass` (within it). Tuned picks at N = 1024: v7, v7, v10. The flag is the served `nvfp4` default since this round (owner decision, "Decisions pending").
 
 # Plan: attention-chain fusion recheck at ImageWAM's real shapes (roadmap item 6)
 
@@ -1700,7 +1700,7 @@ design is recorded in `issues.md` ISSUE-080 conditions 4, 5 and 6.
 
 ## Decisions pending (owner)
 
-Open (owner): make `gemm_variant_autotune=True` the default for `precision="nvfp4"` (Thor `1021`: −1.98 ms per `infer()`, actions bit-identical; tuned tiles v7 / v7 / v10 for the three N = 1024 ActionDiT shapes), or hardcode those per-shape tiles, or keep the heuristic. `fp8_static_cutlass` shows no gain beyond noise and stays on the heuristic either way (opportunities.md OPT-018).
+Decided (owner, after the `1021` Thor round): `gemm_variant_autotune` is on by default for `precision="nvfp4"` on the Python consumers (profile field `gemm_variant_autotune=None`, auto: nvfp4 and not the native consumer; the `native` profile states it off). Thor `1021` measured −1.98 ms per `infer()` with bit-identical actions; tuned tiles v7 / v7 / v10 for the three N = 1024 ActionDiT shapes. `fp8_static_cutlass` stays on the heuristic (no gain beyond noise); the native pipeline was not measured. The frontend constructor default stays `False` for callers that pass switches by hand (opportunities.md OPT-018).
 
 Decided (owner, after the `c20f3a0` Thor round):
 

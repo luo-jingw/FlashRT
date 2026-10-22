@@ -134,15 +134,17 @@ def test_native_profile_is_the_native_consumers_set():
 def test_the_served_default_is_the_native_set_with_the_auto_switches_left_open():
     """The profiles carry what is SERVED. `default` and `native` differ only in
     the switches the native consumer cannot carry: FA4 at both sites (auto in
-    `default`, stated off in `native`) and, given an autoencoder, the VAE
+    `default`, stated off in `native`), the ActionDiT tile autotune (on for
+    nvfp4 in `default`, off in `native`) and, given an autoencoder, the VAE
     stage. Both trim. For the native consumer `default` resolves to exactly
     the `native` profile's options."""
     served, native = resolve().options, resolve_native().options
     assert served.text_trim is native.text_trim is True
     assert served.use_fa4 is None and served.use_fa4_mot is None
     assert native.use_fa4 is False and native.use_fa4_mot is False
+    assert served.gemm_variant_autotune is True and native.gemm_variant_autotune is False
     other = [f.name for f in dataclasses.fields(ImageWAMOptions)
-             if f.name not in ("use_fa4", "use_fa4_mot")
+             if f.name not in ("use_fa4", "use_fa4_mot", "gemm_variant_autotune")
              and getattr(served, f.name) != getattr(native, f.name)]
     assert other == [], f"the profiles differ in more than the FA4 sites: {other}"
     assert resolve(consumer="native").options == native
@@ -174,7 +176,8 @@ def test_the_default_is_the_fastest_configuration_the_inputs_allow():
 def test_the_profiles_diverge_from_the_constructor_defaults():
     """`ImageWAMTorchFrontendThor.__init__` keeps the historical defaults for a
     caller that passes dims and switches by hand (untrimmed, FA4 mot off, torch
-    VAE outside the graph); the profiles carry the served configuration. The
+    VAE outside the graph, heuristic ActionDiT tiles); the profiles carry the
+    served configuration. The
     divergence is deliberate, so it is pinned rather than assumed."""
     fd = _frontend_init_defaults()
     assert fd["text_trim"] is False and fd["use_fa4"] is None and fd["use_fa4_mot"] is False
@@ -182,9 +185,10 @@ def test_the_profiles_diverge_from_the_constructor_defaults():
     served = resolve().options
     assert served.text_trim is True
     assert served.use_fa4_mot is None                  # auto in the profile, off in the constructor
+    assert served.gemm_variant_autotune is True and fd["gemm_variant_autotune"] is False
     # everything else the constructor defaults to, the served profile does too
     for key in ("precision", "text_trim_cache_size", "vae_encoder", "nvfp4_awq",
-                "calibration_path", "gemm_variant_autotune", "gemm_runner", "awq_alpha", "awq_scope"):
+                "calibration_path", "gemm_runner", "awq_alpha", "awq_scope"):
         assert getattr(served, key) == fd[key], key
     assert served.vae_graph_input is fd["vae_graph_input"] is None   # no autoencoder given
     assert served.use_fa4 is fd["use_fa4"] is None    # still env-resolved, not stated
@@ -352,6 +356,14 @@ def test_R2_gemm_variant_autotune_needs_a_tiled_precision():
     assert resolve(precision="nvfp4", gemm_variant_autotune=True).options.gemm_variant_autotune
     assert resolve(precision="fp8_static_cutlass", calibration_path=CAL,
                    gemm_variant_autotune=True).options.gemm_variant_autotune
+
+
+def test_gemm_variant_autotune_default_is_on_for_nvfp4_python_consumers_only():
+    assert resolve(precision="nvfp4").options.gemm_variant_autotune is True
+    assert resolve(precision="nvfp4", gemm_variant_autotune=False).options.gemm_variant_autotune is False
+    assert resolve(precision="fp8_static_cutlass", calibration_path=CAL).options.gemm_variant_autotune is False
+    assert resolve(precision="fp16").options.gemm_variant_autotune is False
+    assert resolve_native().options.gemm_variant_autotune is False
 
 
 def test_R3_real_vae_needs_the_autoencoder():

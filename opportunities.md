@@ -569,7 +569,7 @@ Expected: every tile other than the heuristic's shows cosine vs fp16 equal to th
 
 ## Decision pending
 
-Thor (`1021`) shows a correct `infer()` win for `nvfp4` (−1.98 ms, actions bit-identical) and none for `fp8_static_cutlass`. The tuned picks are v7 for the two double-block N = 1024 shapes and v10 for single linear2, so "default the N = 1024 tile to v10" alone would cover one of the three shapes. Owner decision pending (plan.md "Decisions pending"): make `gemm_variant_autotune` the `nvfp4` default (one-line change of the constructor default), or hardcode the measured per-shape tiles; until then the flag stays opt-in. Split-K / stream-K for the `N = 1024` shapes (16 CTAs at most even with a 64-wide N tile) was not attempted.
+Thor (`1021`) shows a correct `infer()` win for `nvfp4` (−1.98 ms, actions bit-identical) and none for `fp8_static_cutlass`. The tuned picks are v7 for the two double-block N = 1024 shapes and v10 for single linear2, so "default the N = 1024 tile to v10" alone would cover one of the three shapes. Owner decision (plan.md "Decisions pending"): `gemm_variant_autotune` is on by default for `nvfp4` in the `default` and `fast` profiles (`config_resolver.py`, profile field `gemm_variant_autotune=None`: auto resolves to on for nvfp4 on the Python consumers); the `native` profile and the native consumer keep it off (not measured there), `fp8_static_cutlass` keeps the heuristic, and the frontend constructor default stays `False`. On the SM120 NVFP4 class (RTX 5090) no linear has a switchable tile, so the tuner selects nothing. Split-K / stream-K for the `N = 1024` shapes (16 CTAs at most even with a 64-wide N tile) was not attempted.
 
 # OPT-019: attention-chain fusion recheck at ImageWAM's real shapes (roadmap item 6)
 

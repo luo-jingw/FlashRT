@@ -530,7 +530,7 @@ HEAD `6526118`，未重编。`STEPS="0 3 4"` 全部 `rc=0`。MAXN，`emc_locked=
 - 日志里"两张图之间 tile 不同的 linear 数为 0"一行是脚本计数错误（在把 tile 设回默认时计数），每形状的 `chosen` / `default` 表明两张图不同（issues.md ISSUE-097）。
 - `--part infer` 的绝对值（114 ms）与 X15 的 served P50（67.94 ms）不是同一口径。
 
-结论去向：X14 → opportunities.md OPT-032；X15 → `docs/imagewam_thor_profile.md`；X16 → opportunities.md OPT-018、plan.md Phase 7、issues.md ISSUE-023。`THOR_CHECKLIST.md` 的 X14、X15、X16 已删除。是否把 `gemm_variant_autotune` 对 nvfp4 设为默认，等用户决定（plan.md "Decisions pending"）。
+结论去向：X14 → opportunities.md OPT-032；X15 → `docs/imagewam_thor_profile.md`；X16 → opportunities.md OPT-018、plan.md Phase 7、issues.md ISSUE-023。`THOR_CHECKLIST.md` 的 X14、X15、X16 已删除。用户随后决定把 `gemm_variant_autotune` 设为 nvfp4 的服务默认（`default` / `fast` profile；`native` profile 与 native consumer 保持关闭），见 plan.md "Decisions pending"。
 
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 

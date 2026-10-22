@@ -172,6 +172,13 @@ class ProfileSpec:
     otherwise the torch encoder outside the graph. `use_fa4` /
     `use_fa4_mot` `None` are resolved at construction (see
     `ImageWAMOptions`), or to off for the native consumer.
+    `gemm_variant_autotune` `None` (auto): per-shape CUTLASS tile selection
+    for the ActionDiT small-M GEMMs on for nvfp4 and off for every other
+    precision and for the native consumer (Thor round 1021: -1.98 ms per
+    nvfp4 infer(), actions bit-identical; no gain beyond noise for
+    fp8_static_cutlass; not measured on the native pipeline; opportunities.md
+    OPT-018). Where no linear has a switchable tile (the SM120 NVFP4 class) it
+    selects nothing.
     """
     name: str
     description: str
@@ -182,6 +189,7 @@ class ProfileSpec:
     vae_encoder: str
     vae_graph: bool | None
     nvfp4_awq: bool
+    gemm_variant_autotune: bool | None
 
 
 PROFILES: dict[str, ProfileSpec] = {
@@ -193,11 +201,12 @@ PROFILES: dict[str, ProfileSpec] = {
             "sites (auto: on where the machine can run FA4, the cuBLAS chain elsewhere, and a "
             "capture-time failure falls back to the chain; FLASHRT_THOR_FA4=0 forces the chain), "
             "the native VAE encoder inside the CUDA graph when an ae_model_path is given (the "
-            "torch encoder outside the graph otherwise), no AWQ. For consumer=\"native\" the "
+            "torch encoder outside the graph otherwise), no AWQ, per-shape CUTLASS tile selection "
+            "for the ActionDiT small-M GEMMs (nvfp4 only). For consumer=\"native\" the "
             "auto values resolve to off (the native pipeline has FA4 and no VAE stage). The "
             "frontend constructor's own defaults differ: text_trim off, FA4 mot off, torch VAE."),
         precision=Precision.NVFP4, text_trim=True, use_fa4=None, use_fa4_mot=None,
-        vae_encoder="auto", vae_graph=None, nvfp4_awq=False),
+        vae_encoder="auto", vae_graph=None, nvfp4_awq=False, gemm_variant_autotune=None),
     "fast": ProfileSpec(
         name="fast",
         description=(
@@ -209,7 +218,7 @@ PROFILES: dict[str, ProfileSpec] = {
             "at 93.2-106.8 ms against 202.0-225.5 ms for the untrimmed configuration "
             "(THOR_STATUS_SUMMARY.md, nvfp4)."),
         precision=Precision.NVFP4, text_trim=True, use_fa4=True, use_fa4_mot=True,
-        vae_encoder="native", vae_graph=True, nvfp4_awq=False),
+        vae_encoder="native", vae_graph=True, nvfp4_awq=False, gemm_variant_autotune=None),
     "native": ProfileSpec(
         name="native",
         description=(
@@ -221,7 +230,7 @@ PROFILES: dict[str, ProfileSpec] = {
             "pipeline carries one resource table and one captured graph per text length, so it "
             "serves the trim like the other two consumers."),
         precision=Precision.NVFP4, text_trim=True, use_fa4=False, use_fa4_mot=False,
-        vae_encoder="torch", vae_graph=False, nvfp4_awq=False),
+        vae_encoder="torch", vae_graph=False, nvfp4_awq=False, gemm_variant_autotune=False),
 }
 
 # Options an expert may override per call (`resolve_config(**expert)`).
@@ -438,7 +447,9 @@ def resolve_config(workload: "ImageWAMWorkload", structure: "ImageWAMStructure",
     use_fa4 = expert.get("use_fa4", spec.use_fa4)
     use_fa4_mot = expert.get("use_fa4_mot", spec.use_fa4_mot)
     vae_graph = expert.get("vae_graph", spec.vae_graph)
-    gemm_variant_autotune = expert.get("gemm_variant_autotune", False)
+    gemm_variant_autotune = expert.get("gemm_variant_autotune", spec.gemm_variant_autotune)
+    if gemm_variant_autotune is None:
+        gemm_variant_autotune = prec is Precision.NVFP4 and consumer != "native"
     # Auto values. FA4 stays None (decided by the machine at construction)
     # except for the native consumer, whose pipeline has no FA4: there it is
     # off, so an FLASHRT_THOR_FA4 opt-in cannot switch it on afterwards.
