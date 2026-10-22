@@ -245,7 +245,7 @@ inconsistent dims.
 
 # ISSUE-023
 
-Status: open
+Status: open for roadmap item 6 (FA4); roadmap item 1 (small-M tiles) resolved by the `1021` Thor round (opportunities.md OPT-018, THOR_STATUS_SUMMARY.md)
 
 Area: Thor confirmation of roadmap items 1 and 6 (plan.md, Phase 7 of
 "Plan: ActionDiT small-M CUTLASS tile selection" and of "Plan:
@@ -1079,3 +1079,25 @@ that is no longer open; the pointer names where its conclusion is recorded.
 - `ISSUE-085` — one real defect (the cuBLAS fallback re-captured into the pool an invalidated capture had left recording) was fixed by abandoning that capture state, and the other two symptoms were the tests' own comparisons. → `docs/imagewam_configuration.md` (the abandoned capture state before the retry), the `_abandon_capture_state` docstring in `flash_rt/frontends/torch/imagewam_thor.py`, `THOR_STATUS_SUMMARY.md`'s `0920` section (restated in `0920c`).
 - `ISSUE-086` — nothing is fixed at 224x224 any more: `VaeStageSpec.encode_hw` defaults to the staged views' own size, and the frontend resolves the served per-view size in one place (`_input_view_shape()`) for the in-graph and outside-the-graph paths alike. → `docs/imagewam_configuration.md` (the encode-geometry paragraph), `plan.md` (Phase W12).
 - `ISSUE-061` — last line because it was not fixed but satisfied: its subject, a latency baseline with no recorded clock and power state, is met by `latency_baselines.json`'s 202.2 ms `nvfp4` baseline, which carries its clock state (MAXN, GPC 1.575 GHz, `emc_locked=null`, GPU exclusive), and `plan.md` records the 231.6 -> 202.2 ms re-base as closing that item; the baseline is per configuration now (`untrimmed_reference` holds the 202.2 ms record), and the only part still open is the `served_default` entry, unseeded until a Thor gate run of the promoted default. → `tests/fixtures/imagewam_gate/latency_baselines.json` (`source`), `plan.md` ("Rounds that closed items", and "Open" item 1).
+
+# ISSUE-097
+
+Status: open, non-blocking
+
+Area: `benchmarks/imagewam_thor_small_m_tile_sweep.py --part infer`
+
+## Observation
+
+In the `1021` Thor round the log prints that 0 linears have a different tile in the two captured graphs (heuristic vs tuned), while the per-shape `chosen` and `default` columns of the same log differ for every N = 1024 shape, and the two graphs' `infer()` P50 differ by 1.98 ms (nvfp4).
+
+## Evidence
+
+Thor `$OUT=/home/jingwu/thor_val/1021/X16_infer.log` (local to the Thor), THOR_STATUS_SUMMARY.md round `1021`, opportunities.md OPT-018.
+
+## Hypotheses
+
+- The count is taken after the script switches every linear back to its default tile for the second capture, so target and current tile are equal at the moment of counting (reported by the Thor agent from reading the script; not yet checked here).
+
+## Next Experiment
+
+Read the counting code against the capture order; count the differing linears before resetting the tiles, and check the printed count against the per-shape table on the next run.

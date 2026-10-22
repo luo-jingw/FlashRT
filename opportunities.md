@@ -542,7 +542,25 @@ The SM100 CUTLASS and NVFP4 kernels do not run on sm_90, so every number below i
 
 ## Thor check
 
-`benchmarks/imagewam_thor_small_m_tile_sweep.py`, not run: the dev box has no sm_110 device.
+Round `1021` (THOR_STATUS_SUMMARY.md, HEAD `f723d53`, soaked state, copy bandwidth 254.2–257.9 GB/s, MAXN, GPC 1.575 GHz, `emc_locked=null`, GPU idle): both parts ran with rc 0 and no missing symbols. Every tile's `cos_fp16` equals the heuristic tile's on the same shape (differences far below 1e-4); NVFP4 against fp32 is about 0.990, the quantization itself.
+
+| NVFP4 shape (M = 64) | heuristic | fastest | tuner |
+|---|---|---|---|
+| double proj, N 1024, K 3072 | v6, 11.47 us | v7, 6.86 us | v7 |
+| double mlp2, N 1024, K 4096 | v6, 13.48 us | v7, 7.86 us | v7 |
+| single linear2, N 1024, K 7168 | v6, 29.43 us | v10, 21.31 us | v10 |
+
+| `--part infer`, 60 iterations, real checkpoint, alternating | heuristic P10 / P50 / P90 | tuned P10 / P50 / P90 | P50 delta | actions |
+|---|---|---|---:|---|
+| nvfp4 | 114.17 / 114.25 / 114.44 | 112.19 / 112.27 / 112.46 | −1.98 ms | cos 1.000000, max_abs 0 |
+| fp8_static_cutlass | 132.35 / 132.54 / 132.83 | 131.91 / 132.08 / 132.47 | −0.46 ms | cos 1.000000, max_abs 0 |
+
+- The nvfp4 gain is larger than either side's P10–P90 width (about 0.27 ms); the fp8 one is not (0.48 / 0.56 ms).
+- v10 is the fastest tile only for single linear2; the two double-block N = 1024 shapes are fastest on v7 (128x128x256).
+- The script's line "linears whose tile differs between the two graphs: 0" is a counting error (issues.md ISSUE-097); the per-shape `chosen` / `default` columns show the graphs differ.
+- The `--part infer` absolute times use the script's own frontend configuration and are not the served P50 (67.94 ms nvfp4 in the same round, X15).
+
+The sweep itself (unchanged since it was written):
 
 - `--part kernels`: every NVFP4 and FP8 CUTLASS tile at each real ActionDiT shape (M=64), over as many distinct weights as layers share the shape. Reports GEMM-only us/GEMM, cosine against the fp32 `x @ W`, the heuristic pick (`*`), the tuner pick (`T`), and the per-shape winner, with cuBLASLt fp16 and cuBLASLt FP8 references on the same weights.
 - `--part infer`: for `nvfp4` and `fp8_static_cutlass`, two graphs captured from one frontend (ActionDiT on heuristic vs tuned tiles), with action cosine on identical inputs and alternating `infer()` P10/P50/P90.
@@ -551,7 +569,7 @@ Expected: every tile other than the heuristic's shows cosine vs fp16 equal to th
 
 ## Decision pending
 
-If Thor shows a correct `infer()` win, `gemm_variant_autotune` should become the default for `nvfp4`: a one-line change of the constructor default. If it shows no win, the heuristic stays, and the sweep table still says which tile to hardcode, if any; until that run the flag stays opt-in (issues.md ISSUE-023; plan.md, Phase 7 `blocked`). Split-K / stream-K for the `N = 1024` shapes (16 CTAs at most even with a 64-wide N tile) was not attempted.
+Thor (`1021`) shows a correct `infer()` win for `nvfp4` (−1.98 ms, actions bit-identical) and none for `fp8_static_cutlass`. The tuned picks are v7 for the two double-block N = 1024 shapes and v10 for single linear2, so "default the N = 1024 tile to v10" alone would cover one of the three shapes. Owner decision pending (plan.md "Decisions pending"): make `gemm_variant_autotune` the `nvfp4` default (one-line change of the constructor default), or hardcode the measured per-shape tiles; until then the flag stays opt-in. Split-K / stream-K for the `N = 1024` shapes (16 CTAs at most even with a 64-wide N tile) was not attempted.
 
 # OPT-019: attention-chain fusion recheck at ImageWAM's real shapes (roadmap item 6)
 
@@ -841,6 +859,19 @@ Same script and flags as above (`X0=24 USE_FA4=1 ITERS=100 WARMUP=20`, MAXN, GPC
 
 - The shared configuration (vec on, fused off) reads 65.64 / 65.62, 92.93 / 93.40 and 123.65 / 123.34 ms in the two processes.
 - Both savings barely depend on the memory state. Cold, same process, the warp-kernel `fuse_qkv_norm_rope` saved +7.9 to +8.3 ms and `vec_rms_norm` saved +18.6 to +19.7 ms. The cold–soaked difference is in GEMM.
+
+#### Thor `1021`: candidates 1 and 8, X14 (`benchmarks/imagewam_fusion_ab.py`, nvfp4, FA4)
+
+Shape: the script's default `x0 = 513` (a0 = 905, total = 969), not the served `x0 = 24`; cold state (copy bandwidth 234–243 GB/s); 50 iterations per side, HEAD `f723d53` (THOR_STATUS_SUMMARY.md).
+
+| A/B | A P50 | B P50 | A − B (ms) | kernels A → B | actions | backbone_hidden |
+|---|---:|---:|---:|---|---|---|
+| `fuse_qkv_norm_rope` | 144.04 | 132.90 | +11.14 | 5273 → 3603 | bit-identical | bit-identical |
+| `last_layer_kv_only` | 133.22 | 130.83 | +2.39 | 3603 → 3600 | bit-identical | cos 0.8794 |
+| both | 143.50 | 130.31 | +13.19 | 5273 → 3600 | bit-identical | cos 0.8794 |
+
+- Candidate 8 measured +2.39 ms at this shape (the table's 2-3 ms (inf) above). Its `backbone_hidden` differs by design: the last backbone block computes only the K/V the ActionDiT reads and does not write its output into `backbone_hidden`, so the actions are its correctness check, and they are bit-identical.
+- Candidate 1 saves the same 1670 kernels as at `x0 = 24`; its +11.14 ms here is at the untrimmed shape and in the cold state, against +7.3 to +8.3 ms served.
 - Soaked kernel time for the fused kernel, fp8: 3.52–3.55 ms per infer.
 - nvfp4's `vec_rms_norm` cosines (0.999225 / 0.990435) differ from the `989547d` round (0.999797 / 0.986896); fp8 and fp16 match. Cause unknown (issues.md ISSUE-096).
 

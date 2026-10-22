@@ -493,10 +493,9 @@ The fixture copied and its checksums verified, then `nvfp4` and `fp16` run, with
 
 # Plan: ActionDiT small-M CUTLASS tile selection (roadmap item 1)
 
-Plan Status: approved. Phases 1-6 are completed; Phase 7 (Thor confirmation)
-is blocked: no sm_110 device on the dev box, `gemm_variant_autotune` remains
-an opt-in flag, OPT-018's Thor check is unmeasured, and `issues.md`
-ISSUE-023 tracks it.
+Plan Status: completed. Phases 1-7 are completed; Phase 7 ran on Thor in the
+`1021` round (opportunities.md OPT-018). `gemm_variant_autotune` remains an
+opt-in flag until the owner decides its `nvfp4` default ("Decisions pending").
 
 ## Problem
 
@@ -717,10 +716,10 @@ Verified by stub tests (a raising candidate, a raising default still an error, a
 
 ### Phase 7: Thor confirmation
 
-Phase Status: blocked
+Phase Status: completed
 
 The Thor checklist in `opportunities.md` OPT-018: the tile sweep must show correct outputs for every tile, and the `infer()` A/B of heuristic vs tuned tiles must show action cosine >= 0.9999 and a P50 delta.
-Blocker: no sm_110 device on the dev box; SM100 CUTLASS and NVFP4 kernels do not run on sm_90, which only compile-checks them (`sm110_check.sh`), recorded as `issues.md` ISSUE-023.
+Result (`1021` Thor round, THOR_STATUS_SUMMARY.md): every tile matches the heuristic tile's cosine; the tuned graph is bit-identical in actions and 1.98 ms faster for `nvfp4` (beyond the P10–P90 width), 0.46 ms for `fp8_static_cutlass` (within it). Tuned picks at N = 1024: v7, v7, v10. Whether the flag becomes the `nvfp4` default is an owner decision ("Decisions pending").
 
 # Plan: attention-chain fusion recheck at ImageWAM's real shapes (roadmap item 6)
 
@@ -1700,6 +1699,8 @@ last three rows cleared in `0920c`, so nothing is pending there. The S-track
 design is recorded in `issues.md` ISSUE-080 conditions 4, 5 and 6.
 
 ## Decisions pending (owner)
+
+Open (owner): make `gemm_variant_autotune=True` the default for `precision="nvfp4"` (Thor `1021`: −1.98 ms per `infer()`, actions bit-identical; tuned tiles v7 / v7 / v10 for the three N = 1024 ActionDiT shapes), or hardcode those per-shape tiles, or keep the heuristic. `fp8_static_cutlass` shows no gain beyond noise and stays on the heuristic either way (opportunities.md OPT-018).
 
 Decided (owner, after the `c20f3a0` Thor round):
 

@@ -329,6 +329,48 @@ Cold minus soaked, eager kernel time by operator class (ms):
   processes can carry up to about 21 ms of state difference
   (`issues.md` ISSUE-095).
 
+## Soaked state: module and operator (round `1021`)
+
+`benchmarks/imagewam_module_operator_profile.py PRECISION OUT --names
+--soak 360`, one process per precision, HEAD `f723d53`: the process
+replays `infer()` for 6 minutes before measuring. MAXN, GPC locked at
+1.575 GHz, `emc_locked=null`, GPU idle; copy bandwidth after the soak and
+after the measurements 256.5–258.4 GB/s in every run (soaked).
+
+| precision | `infer()` P50 | prefill graph | denoise graph | eager kernel total | graph-replay kernel total | kernels |
+|---|---:|---:|---:|---:|---:|---:|
+| nvfp4 | 67.94 | 22.40 | 37.01 | 67.83 | 68.21 | 3259 |
+| fp8 | 93.24 | 33.36 | 51.25 | 87.59 | 92.14 | 5304 |
+| fp16 | 122.06 | 42.40 | 71.10 | 117.20 | 123.74 | 2834 |
+
+GPU ms per `infer()` (launches), nvfp4:
+
+| module | gemm | quant/cast | attention | conv | norm | elementwise | total |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| VAE encode | 0.13 (5) | - | 0.33 (1) | 3.69 (25) | 2.33 (68) | 1.83 (29) | 8.31 |
+| backbone double (5 blocks) | 3.87 (40) | 0.51 (40) | 0.23 (10) | - | 0.78 (32) | 0.58 (14) | 5.97 |
+| backbone single (20 blocks) + entry | 8.98 (43) | 1.36 (40) | 0.94 (40) | - | 2.07 (40) | 3.19 (40) | 16.54 |
+| ActionDiT double (5 blocks × 10 steps) | 4.21 (200) | 0.84 (200) | 1.57 (100) | - | 0.94 (160) | 0.46 (70) | 8.02 |
+| ActionDiT single (20 blocks × 10 steps) + enc/head/Euler | 15.50 (430) | 2.27 (410) | 5.94 (400) | - | 2.63 (400) | 2.65 (420) | 28.98 |
+| **total** | **32.70** | **4.98** | **9.00** | **3.69** | **8.74** | **8.71** | **67.83** |
+
+Module totals for fp8 / fp16 (ms): VAE 8.26 / 8.30, backbone double
+9.78 / 12.09, backbone single + entry 23.21 / 30.58, ActionDiT double
+10.07 / 13.41, ActionDiT single + rest 36.26 / 52.81. The full fp8 and
+fp16 tables, including the share tables, are in the round's
+`X15_share.md` (local to the Thor, reproduced in THOR_STATUS_SUMMARY.md
+round `1021`).
+
+- **Text encoder**: every kernel of `infer()` lies in the `vae`,
+  `prefill.*`, `denoise.*` or `stage_inputs` ranges. The Qwen3-4B encode
+  runs only in `set_prompt()`, once per prompt: 98–99 ms in all three
+  precisions. The prefill graph is the FLUX.2 backbone alone.
+- **VAE encode** (precision-independent, 8.3 ms): `gn_apply` 1.74 ms ×
+  22, `gn_stats` 0.49 ms × 22, `bias_residual` 0.85 ms × 10,
+  `convolve_common_engine` 0.42 ms × 1, the mid-block attention 0.33 ms ×
+  1; the remaining convolution time is CUTLASS SM100 kernels (all
+  convolution 3.69 ms over 25 launches). GroupNorm is 2.2 ms of it.
+
 ## Conclusions
 
 1. Served wall time on Thor, LIBERO config, default profile

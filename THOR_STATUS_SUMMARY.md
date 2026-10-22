@@ -482,6 +482,56 @@ HEAD `6526118`，未重编。`STEPS="0 3 4"` 全部 `rc=0`。MAXN，`emc_locked=
 
 **结论：本轮对 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 的大量修改（Phase 1-4 各阶段接线 + Phase 3）没有影响默认路径的数字。** `THOR_CHECKLIST.md` X13 已删除。candidate 3 Round 4 怎么走（改 kernel vs 改消费端设计）等用户决定。
 
+### `1021` 轮：X14 融合开关 A/B、X15 热态 prefill / VAE 拆解、X16 小 M tile 扫描（commit `f723d53`）
+
+共同条件：HEAD `f723d53`，MAXN，GPC 锁 1.575 GHz，`emc_locked=null`（EMC 上限 4266 MHz），每阶段开始时 GPU 空闲；bundle 校验 6 个文件 OK；没有改 nvpmodel、没有跑 jetson_clocks、没有写 sysfs。
+
+**X14**（`benchmarks/imagewam_fusion_ab.py`，nvfp4，`USE_FA4=1`，`ITERS=50`）。口径：脚本默认形状 `x0=513 a0=905 total=969`，不是 served 的 `x0=24`；拷贝带宽 234–243 GB/s，冷态。计数前在进程内空跑一次（第一次 profiler 会把 A 侧 kernel 记成 0）。
+
+| 对比 | A P50 | B P50 | A−B | kernel A→B | actions | backbone_hidden |
+|---|---:|---:|---:|---|---|---|
+| `fuse_qkv_norm_rope` | 144.04 | 132.90 | +11.14 | 5273→3603 | 逐位一致 | 逐位一致 |
+| `last_layer_kv_only` | 133.22 | 130.83 | +2.39 | 3603→3600 | 逐位一致 | cos 0.8794 |
+| 两个一起 | 143.50 | 130.31 | +13.19 | 5273→3600 | 逐位一致 | cos 0.8794 |
+
+- `last_layer_kv_only` 的 backbone_hidden 偏差是设计如此：最后一层 backbone block 只算 ActionDiT 读取的 K/V，不再把该层输出写回 `backbone_hidden`（`_single_stream_layer_kv_only` 的 docstring）。它的正确性判据是 actions 逐位一致，已满足；清单里"backbone 余弦接近 1"的判据对这个开关不适用。
+- 这组数字是冷态、`x0=513`，不能和 served（`x0=24`、热态）的数字直接比较。
+
+**X15**（`benchmarks/imagewam_module_operator_profile.py --names --soak 360`，三个精度各一个进程）。三档都在热态：soak 之后与测量之后的拷贝带宽 256.5–258.4 GB/s。
+
+| 精度 | `infer()` P50 | prefill graph | denoise graph | VAE（eager kernel） | kernel 数 |
+|---|---:|---:|---:|---:|---:|
+| nvfp4 | 67.94 | 22.40 | 37.01 | 8.31 | 3259 |
+| fp8 | 93.24 | 33.36 | 51.25 | 8.26 | 5304 |
+| fp16 | 122.06 | 42.40 | 71.10 | 8.30 | 2834 |
+
+- `infer()` 的 kernel 只出现在 `vae`、`prefill.*`、`denoise.*`、`stage_inputs` 四类范围里，没有文本编码器；Qwen3 编码只在 `set_prompt()` 里跑一次，98–99 ms。
+- nvfp4 的 prefill 由 backbone 双流 5 层 5.97 ms 与单流 20 层 16.54 ms 组成（eager kernel）。
+- VAE 与精度无关：`gn_apply` 1.74 ms × 22、`gn_stats` 0.49 ms × 22、`bias_residual` 0.85 ms × 10、`convolve_common_engine` 0.42 ms × 1、注意力 0.33 ms × 1，其余是 CUTLASS SM100 卷积（卷积类共 3.69 ms × 25）。
+- 完整模块 × 算子表在 `docs/imagewam_thor_profile.md` 的热态一节。
+
+**X16**（`benchmarks/imagewam_thor_small_m_tile_sweep.py`，紧接 X15，全程热态，拷贝带宽 254.2–257.9 GB/s；两部分 rc 都是 0，没有缺符号）。同一形状上各 tile 的 `cos_fp16` 彼此相同（差远小于 1e-4）。N = 1024 的三个 nvfp4 形状：
+
+| 形状 | 默认 | 最快 | tuner 选择 |
+|---|---|---|---|
+| double proj（K = 3072） | v6，11.47 µs | v7，6.86 µs | v7 |
+| double mlp2（K = 4096） | v6，13.48 µs | v7，7.86 µs | v7 |
+| single linear2（K = 7168） | v6，29.43 µs | v10，21.31 µs | v10 |
+
+`--part infer`（60 次，真实 checkpoint，同进程交替）：
+
+| 精度 | 默认 tile P10 / P50 / P90 | tuner tile P10 / P50 / P90 | P50 差 | actions |
+|---|---|---|---:|---|
+| nvfp4 | 114.17 / 114.25 / 114.44 | 112.19 / 112.27 / 112.46 | −1.98 | cos 1.000000，max_abs 0 |
+| fp8_static_cutlass | 132.35 / 132.54 / 132.83 | 131.91 / 132.08 / 132.47 | −0.46 | cos 1.000000，max_abs 0 |
+
+- nvfp4 的 −1.98 ms 大于两侧 P10–P90 宽度（约 0.27 ms），是收益；fp8 的 −0.46 ms 没有超过两侧宽度（0.48 / 0.56 ms），不算。
+- 清单的改默认条件（N = 1024 的 tuner 选择是 v10）不满足：只有 single linear2 选 v10，另外两个形状选 v7。默认没有改。
+- 日志里"两张图之间 tile 不同的 linear 数为 0"一行是脚本计数错误（在把 tile 设回默认时计数），每形状的 `chosen` / `default` 表明两张图不同（issues.md ISSUE-097）。
+- `--part infer` 的绝对值（114 ms）与 X15 的 served P50（67.94 ms）不是同一口径。
+
+结论去向：X14 → opportunities.md OPT-032；X15 → `docs/imagewam_thor_profile.md`；X16 → opportunities.md OPT-018、plan.md Phase 7、issues.md ISSUE-023。`THOR_CHECKLIST.md` 的 X14、X15、X16 已删除。是否把 `gemm_variant_autotune` 对 nvfp4 设为默认，等用户决定（plan.md "Decisions pending"）。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |
