@@ -22,7 +22,16 @@ Measurements:
 Environment: CKPT_PATH, FLUX2_AE_MODEL_PATH, FLUX2_SRC, QWEN3_MODEL_SPEC,
 DATASET_STATS_PATH. Tables: benchmarks/imagewam_module_operator_share.py.
 
-usage: python benchmarks/imagewam_module_operator_profile.py PRECISION OUT_JSON [--names]"""
+  soak       --soak SECONDS: before any measurement, replay infer() back to
+             back for SECONDS (Thor reaches its soaked memory state after
+             about 5 minutes of continuous load, docs/imagewam_thor_profile.md);
+             a 512 MiB device-to-device copy bandwidth is printed before and
+             after the soak and after the measurements.
+  text encoder  the Qwen3 encode that set_prompt() runs once per prompt
+             (encode_prompts), timed alone (CUDA events, P50 of 5); it is not
+             part of infer().
+
+usage: python benchmarks/imagewam_module_operator_profile.py PRECISION OUT_JSON [--names] [--soak SECONDS]"""
 import collections
 import functools
 import json
@@ -42,6 +51,7 @@ import os
 
 PRECISION, OUT = sys.argv[1], sys.argv[2]
 DUMP_NAMES = "--names" in sys.argv
+SOAK_S = float(sys.argv[sys.argv.index("--soak") + 1]) if "--soak" in sys.argv else 0.0
 PROMPT = "pick up the red block and place it in the tray"
 
 wl = ImageWAMWorkload.libero()
@@ -68,6 +78,43 @@ for _ in range(3):
 torch.cuda.synchronize()
 act = np.asarray(out["actions"])
 print("actions", act.shape, "finite", bool(np.isfinite(act).all()), flush=True)
+
+
+def copy_gbps() -> float:
+    a = torch.empty(512 << 20, dtype=torch.uint8, device="cuda")
+    b = torch.empty_like(a)
+    for _ in range(3):
+        b.copy_(a)
+    e0, e1 = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+    e0.record()
+    for _ in range(10):
+        b.copy_(a)
+    e1.record()
+    e1.synchronize()
+    return 2 * 10 * a.numel() / (e0.elapsed_time(e1) * 1e-3) / 1e9
+
+
+state = {"copy_gbps_before_soak": copy_gbps(), "soak_s": SOAK_S}
+if SOAK_S > 0:
+    t_end = time.time() + SOAK_S
+    while time.time() < t_end:
+        fe.infer(obs)
+    torch.cuda.synchronize()
+state["copy_gbps_after_soak"] = copy_gbps()
+print("device state", json.dumps({k: round(v, 1) for k, v in state.items()}), flush=True)
+
+from flash_rt.models.imagewam.text_encoder import encode_prompts  # noqa: E402
+qmodel, qtok = fe._qwen3
+te_t = []
+for _ in range(6):
+    e0, e1 = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+    e0.record()
+    encode_prompts(qmodel, qtok, [PROMPT], max_length=fe._text_max_length())
+    e1.record()
+    e1.synchronize()
+    te_t.append(e0.elapsed_time(e1))
+text_encoder_ms = float(np.median(te_t[1:]))
+print(f"text encoder (set_prompt only, not in infer): {text_encoder_ms:.2f} ms", flush=True)
 
 # ---------------- timing ----------------
 ev0, ev1 = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
@@ -270,7 +317,9 @@ for e in gprof.key_averages():
 print("graph-replay kernel ms by op class:", {k: round(v, 3) for k, v in sorted(graph_cls.items())},
       "total", round(sum(graph_cls.values()), 3), flush=True)
 
-json.dump({"precision": PRECISION, "timing": timing, "eager_kernel_total_ms": total_eager,
+state["copy_gbps_after_measure"] = copy_gbps()
+json.dump({"precision": PRECISION, "timing": timing, "device_state": state, "text_encoder_ms": text_encoder_ms,
+           "proprio_row": fe._proprio_row, "eager_kernel_total_ms": total_eager,
            "unattributed_ms": unattributed / ITERS / 1000, "kernels_per_iter": kernels_per_iter,
            "grid": [{"module": m, "op": c, "ms": v[0], "launches": v[1]} for (m, c), v in grid.items()],
            "kernels": [{"name": nm, "ms": v[0], "launches": v[1], "cells": sorted(v[2])} for nm, v in names.items()],
