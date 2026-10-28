@@ -1,0 +1,43 @@
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 23574.49it/s]
+  autotune: tested 8 algos, best=3 (110.704 us)
+  autotune: tested 8 algos, best=0 (4.8128 us)
+  autotune: tested 8 algos, best=2 (9.9936 us)
+  autotune: tested 8 algos, best=0 (245.35 us)
+  autotune: tested 8 algos, best=2 (237.715 us)
+  autotune: tested 8 algos, best=0 (120.493 us)
+  autotune: tested 8 algos, best=0 (145.574 us)
+  autotune: tested 8 algos, best=0 (2.7616 us)
+  autotune: tested 8 algos, best=0 (115.488 us)
+  autotune: tested 8 algos, best=2 (6.0032 us)
+  autotune: tested 8 algos, best=1 (46.6368 us)
+  autotune: tested 8 algos, best=0 (9.8432 us)
+  autotune: tested 8 algos, best=0 (80.4608 us)
+  autotune: tested 8 algos, best=0 (290.029 us)
+  autotune: tested 8 algos, best=3 (4.272 us)
+  autotune: tested 8 algos, best=3 (132.182 us)
+  autotune: tested 8 algos, best=2 (473.248 us)
+  autotune: tested 8 algos, best=0 (9.4656 us)
+  autotune: tested 8 algos, best=0 (233.738 us)
+  autotune: tested 8 algos, best=5 (37.696 us)
+  autotune: tested 8 algos, best=0 (6.7712 us)
+  autotune: tested 8 algos, best=1 (310.531 us)
+[W1028 10:09:02.133998154 CUDACachingAllocator.cpp:3934] memory allocation failed with OOM on device 0 while trying to allocate 75497472 bytes (free: 57540608, total: 33661911040).
+[W1028 10:09:02.134081427 CUDACachingAllocator.cpp:3934] memory allocation failed with OOM on device 0 while trying to allocate 75497472 bytes (free: 57540608, total: 33661911040).
+Traceback (most recent call last):
+  File "/home/jingwu/workspace/FlashRT/research/experiments/colocation_5090/colocation_bench.py", line 57, in <module>
+    fe = F.load_imagewam(os.environ["CKPT_PATH"], ImageWAMWorkload.libero(), precision=PRECISION,
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/workspace/FlashRT/flash_rt/frontends/torch/imagewam_thor.py", line 2522, in load_imagewam
+    return ImageWAMTorchFrontendThor.from_config(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/workspace/FlashRT/flash_rt/frontends/torch/imagewam_thor.py", line 875, in from_config
+    fe = cls(**frontend_kwargs_from_config(resolved, **kwargs))
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/workspace/FlashRT/flash_rt/frontends/torch/imagewam_thor.py", line 621, in __init__
+    self._weights = self._load_real_weights(d, sd)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/workspace/FlashRT/flash_rt/frontends/torch/imagewam_thor.py", line 1395, in _load_real_weights
+    tg = t.to(DEV).contiguous()
+         ^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 72.00 MiB. GPU 0 has a total capacity of 31.35 GiB of which 54.88 MiB is free. Process 1925817 has 52.00 MiB memory in use. Process 1925751 has 15.31 GiB memory in use. Including non-PyTorch memory, this process has 15.38 GiB memory in use. Of the allocated memory 14.36 GiB is allocated by PyTorch, and 44.55 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)

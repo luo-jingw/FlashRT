@@ -1,0 +1,7 @@
+isolated hz=0.0: ticks 1201 lat p50 25.50 p99 25.75 max 26.1 ms, miss@50ms 0.0%, planner calls 0 (call p50 None), smi {'util_gpu': 49.2, 'util_mem': 27.2, 'clk_sm': 2886.9, 'clk_mem': 13801.0, 'power_W': 263.9}
+isolated hz=0.0: ticks 1201 lat p50 26.22 p99 26.43 max 27.0 ms, miss@50ms 0.0%, planner calls 0 (call p50 None), smi {'util_gpu': 50.1, 'util_mem': 28.0, 'clk_sm': 2882.9, 'clk_mem': 13801.0, 'power_W': 276.3}
+mps10 hz=0.0: ticks 1201 lat p50 26.56 p99 26.89 max 27.5 ms, miss@50ms 0.0%, planner calls 135 (call p50 446.1390972137451), smi {'util_gpu': 97.7, 'util_mem': 53.4, 'clk_sm': 2857.3, 'clk_mem': 13801.0, 'power_W': 382.9}
+mps15 hz=0.0: ticks 1201 lat p50 27.63 p99 27.93 max 28.1 ms, miss@50ms 0.0%, planner calls 163 (call p50 368.58248710632324), smi {'util_gpu': 92.8, 'util_mem': 58.4, 'clk_sm': 2847.8, 'clk_mem': 13801.0, 'power_W': 407.3}
+mps10 hz=0.0: ticks 1201 lat p50 26.25 p99 27.23 max 27.8 ms, miss@50ms 0.0%, planner calls 13 (call p50 4849.95174407959), smi {'util_gpu': 99.8, 'util_mem': 37.8, 'clk_sm': 2850.6, 'clk_mem': 13801.0, 'power_W': 355.1}
+mps15 hz=0.0: ticks 1201 lat p50 27.43 p99 28.57 max 28.7 ms, miss@50ms 0.0%, planner calls 18 (call p50 3347.3554849624634), smi {'util_gpu': 99.7, 'util_mem': 41.4, 'clk_sm': 2851.0, 'clk_mem': 13801.0, 'power_W': 384.5}
+R4_DONE

@@ -1,0 +1,311 @@
+{
+ "prompt_tokens": 16261,
+ "attn_implementation": "sdpa",
+ "kernels": 2434,
+ "kernel_ms_total": 536.664009,
+ "span_ms": 542.64041015625,
+ "longest": [
+  {
+   "name": "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x128_32x5_tn_align8>(cutlass_80_tensorop_bf16_s16",
+   "ms": 42.910665,
+   "grid": [
+    1024,
+    149,
+    1
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.58077,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.5784009999999995,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.577440999999999,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.576480999999999,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.5748500000000005,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.5740169999999996,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.573889,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.571362,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.570561,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.570176999999999,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.569505,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.569440999999999,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.569025,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "name": "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   "ms": 5.568322,
+   "grid": [
+    128,
+    1,
+    16
+   ],
+   "block": [
+    128,
+    1,
+    1
+   ]
+  }
+ ],
+ "by_name_top": [
+  [
+   "void pytorch_flash::flash_fwd_kernel<Flash_fwd_kernel_traits<128, 128, 64, 4, false, false, cutlass::bfloat16_t, Flash_k",
+   28,
+   155.734918,
+   5.58077
+  ],
+  [
+   "nvjet_sm120_tst_mma_128x192x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+   84,
+   103.83371900000002,
+   2.21168
+  ],
+  [
+   "nvjet_sm120_tst_mma_256x128x64_2_64x64x64_tmaAB_alignCD4_bz_TNNN",
+   56,
+   99.80520700000001,
+   1.788928
+  ],
+  [
+   "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x128_32x5_tn_align8>(cutlass_80_tensorop_bf16_s16",
+   1,
+   42.910665,
+   42.910665
+  ],
+  [
+   "nvjet_sm120_tst_mma_256x96x64_2_64x48x64_tmaAB_alignCD4_bz_TNNN",
+   56,
+   16.28896,
+   0.292416
+  ],
+  [
+   "void at::native::vectorized_elementwise_kernel<4, at::native::(anonymous namespace)::pow_tensor_scalar_kernel_impl<float",
+   113,
+   15.739936999999992,
+   0.17833600000000002
+  ],
+  [
+   "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, f",
+   211,
+   15.536069999999993,
+   0.16969599999999999
+  ],
+  [
+   "void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<c10::BFloat16, ",
+   225,
+   14.590183999999995,
+   0.09728
+  ],
+  [
+   "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}:",
+   117,
+   11.85562,
+   0.136992
+  ],
+  [
+   "void at::native::vectorized_elementwise_kernel<4, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambd",
+   165,
+   10.793473,
+   0.12384
+  ],
+  [
+   "void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16,",
+   28,
+   10.214944000000001,
+   0.366752
+  ],
+  [
+   "void at::native::(anonymous namespace)::CatArrayBatchedCopy<at::native::(anonymous namespace)::OpaqueType<2u>, unsigned ",
+   112,
+   8.905277,
+   0.115008
+  ],
+  [
+   "void at::native::vectorized_elementwise_kernel<4, at::native::(anonymous namespace)::silu_kernel(at::TensorIteratorBase&",
+   28,
+   6.83549,
+   0.24748799999999999
+  ],
+  [
+   "void at::native::reduce_kernel<512, 1, at::native::ReduceOp<float, at::native::MeanOps<float, float, float, float>, unsi",
+   113,
+   6.030427999999998,
+   0.07942400000000001
+  ],
+  [
+   "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<char*, 3ul>, fa",
+   108,
+   5.390665000000002,
+   0.099456
+  ]
+ ]
+}

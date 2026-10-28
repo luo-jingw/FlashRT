@@ -1,0 +1,3 @@
+timeslice n=2 isolated hz=0.0: ticks 1201 lat p50 24.87 p99 25.11 max 34.3 ms, miss@50ms 0.0%, planner calls 0 (call p50 None), smi {'util_gpu': 11.2, 'util_mem': 20.0, 'clk_sm': 1075.8, 'clk_mem': 5196.1, 'power_W': 80.3}
+mps n=2 isolated hz=0.0: ticks 1201 lat p50 25.33 p99 25.63 max 39.3 ms, miss@50ms 0.0%, planner calls 0 (call p50 None), smi {'util_gpu': 11.5, 'util_mem': 19.7, 'clk_sm': 1077.0, 'clk_mem': 5084.6, 'power_W': 79.7}
+R3_DONE

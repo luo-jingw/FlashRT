@@ -1,0 +1,26 @@
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 13166.44it/s]
+  autotune: tested 8 algos, best=3 (110.682 us)
+  autotune: tested 8 algos, best=0 (4.9184 us)
+  autotune: tested 8 algos, best=2 (9.7056 us)
+  autotune: tested 8 algos, best=0 (245.126 us)
+  autotune: tested 8 algos, best=2 (237.747 us)
+  autotune: tested 8 algos, best=0 (121.094 us)
+  autotune: tested 8 algos, best=0 (146.083 us)
+  autotune: tested 8 algos, best=1 (2.752 us)
+  autotune: tested 8 algos, best=0 (116.022 us)
+  autotune: tested 8 algos, best=2 (5.856 us)
+  autotune: tested 8 algos, best=1 (46.6944 us)
+  autotune: tested 8 algos, best=0 (9.792 us)
+  autotune: tested 8 algos, best=0 (80.7168 us)
+  autotune: tested 8 algos, best=0 (291.053 us)
+  autotune: tested 8 algos, best=7 (4.1696 us)
+  autotune: tested 8 algos, best=3 (132.509 us)
+  autotune: tested 8 algos, best=2 (474.611 us)
+  autotune: tested 8 algos, best=0 (9.5456 us)
+  autotune: tested 8 algos, best=0 (234.288 us)
+  autotune: tested 8 algos, best=5 (38.192 us)
+  autotune: tested 8 algos, best=1 (6.736 us)
+  autotune: tested 8 algos, best=1 (311.843 us)
+  autotune: tested 8 algos, best=0 (15.3152 us)
+isolated hz=0.0: ticks 1201 lat p50 24.87 p99 25.11 max 34.3 ms, miss@50ms 0.0%, planner calls 0 (call p50 None), smi {'util_gpu': 11.2, 'util_mem': 20.0, 'clk_sm': 1075.8, 'clk_mem': 5196.1, 'power_W': 80.3}

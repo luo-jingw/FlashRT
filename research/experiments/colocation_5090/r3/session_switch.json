@@ -1,0 +1,44 @@
+{
+ "precision": "fp8",
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "context_shape": [
+  513,
+  7680
+ ],
+ "context_bytes": 7879680,
+ "set_prompt_live_encode_ms_p50": 120.6932934874203,
+ "set_prompt_cached_context_ms_p50": 0.05477850208990276,
+ "infer_ms_p50": 24.29628901882097,
+ "round_robin": [
+  {
+   "sessions": 1,
+   "ticks": 412,
+   "tick_ms_p50": 24.31436101323925,
+   "aggregate_hz": 41.10927186973976,
+   "per_session_hz": 41.10927186973976
+  },
+  {
+   "sessions": 2,
+   "ticks": 409,
+   "tick_ms_p50": 24.454350001178682,
+   "aggregate_hz": 40.87147350573682,
+   "per_session_hz": 20.43573675286841
+  },
+  {
+   "sessions": 4,
+   "ticks": 401,
+   "tick_ms_p50": 24.69349099555984,
+   "aggregate_hz": 40.07676399320683,
+   "per_session_hz": 10.019190998301708
+  },
+  {
+   "sessions": 8,
+   "ticks": 401,
+   "tick_ms_p50": 24.71498097293079,
+   "aggregate_hz": 40.05502565651102,
+   "per_session_hz": 5.0068782070638775
+  }
+ ],
+ "weights_GB_allocated": 23.162075136,
+ "peak_GB": 23.435634688
+}
