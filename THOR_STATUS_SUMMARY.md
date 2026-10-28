@@ -532,6 +532,61 @@ HEAD `6526118`，未重编。`STEPS="0 3 4"` 全部 `rc=0`。MAXN，`emc_locked=
 
 结论去向：X14 → opportunities.md OPT-032；X15 → `docs/imagewam_thor_profile.md`；X16 → opportunities.md OPT-018、plan.md Phase 7、issues.md ISSUE-023。`THOR_CHECKLIST.md` 的 X14、X15、X16 已删除。用户随后决定把 `gemm_variant_autotune` 设为 nvfp4 的服务默认（`default` / `fast` profile；`native` profile 与 native consumer 保持关闭），见 plan.md "Decisions pending"。
 
+### `1028` 轮：Y0–Y4 快慢模型共享 Thor 的 GPU（commit `43f11f9`）
+
+共同条件：HEAD `43f11f9`，MAXN，GPC / NVD 锁定，`emc_locked=null`；未改时钟、未 sudo。`nvidia-smi` 字段为 `[N/A]`，全程 `NO_SMI=1`。执行器为 ImageWAM fp8（`DROP_TEXT_ENCODER=1`），规划器为 Qwen3-VL-2B bf16，每次调用生成 32 个 token；transformers 5.17.0 装在独立目录 `$HOME/thor_val/pydeps_tf5`、经 `PYTHONPATH` 前置（torch 2.9.1+cu130、torchvision 0.24.1 为环境原有）。脚本与 5090 对照在 `research/experiments/colocation_5090/`。
+
+**Y0 / Y1 环境与 SM 划分手段。** MPS 可用（设好 `CUDA_MPS_PIPE_DIRECTORY` 后 `cuda under mps ok True`）。Thor GPU 有 20 个 SM；green context 请求 2 / 4 / 8 个 SM 都得到 8 / 12 的划分（粒度 8 SM），两组上 8192³ BF16 matmul 为 16.7 / 12.0 ms，比值 1.39，接近 SM 数之比 12 / 8 = 1.5，kernel 被限制在各自的组里。
+
+**Y2 规划器单独运行。**
+
+| 上下文 token | Thor 单次调用 ms | 5090 单次调用 | 倍数 | 峰值显存 |
+|---:|---:|---:|---:|---|
+| 259 | 4 872 | 0.30 s | ~16× | 4.3–9.7 GB（随上下文增长） |
+| 16 261 | 7 675 | 0.79 s | ~9.7× | |
+| 32 261 | 12 116 | 1.55 s | ~7.8× | |
+
+**Y3 执行器单独运行。** isolated p50 / p99 163.45 / 170.31 ms；executor 在 12 个 SM 上（`greenalone25`）156.98 / 163.71 ms；`greenalone50` 233.50 / 236.32 ms。`greenalone50` 请求规划器 10 个 SM，按 Y1 的 8 SM 粒度推断为规划器 16、执行器 4 个 SM（推断，各格 JSON 的 `green_sm` 字段未带回）。控制周期 `PERIOD_MS` = ceil₁₀(1.5 × 170.31) = 260 ms。
+
+**Y4 共享方式 × 规划器上下文**（`PERIOD_MS=260`，`MPS=1`，每格 60 s；mps<P> 为规划器进程 P %、执行器进程 100 − P % 的线程上限，mps100 两者都不限）：
+
+| 格 | p50 | p99 | max | 错过 @260 ms | 规划器调用次数（单次 p50 ms） |
+|---|---:|---:|---:|---:|---|
+| grid_isolated_start | 162.32 | 163.23 | 170.4 | 0 % | — |
+| ctx0 serial hz1 | 5 095.65 | 5 111.65 | 5 112.7 | 100 % | 12（4 932） |
+| ctx0 process hz1 | 378.50 | 393.39 | 394.3 | 100 % | 8（7 977） |
+| ctx0 process hz0 | 379.31 | 389.61 | 403.4 | 100 % | 8（8 134） |
+| ctx0 prio hz1 | 169.01 | 205.33 | 211.6 | 0 % | 5（11 141） |
+| ctx0 prio hz0 | 171.58 | 210.19 | 211.4 | 0 % | 5（10 789） |
+| ctx0 green25 | 160.88 | 197.73 | 201.3 | 0 % | 6（9 263） |
+| ctx0 green50 | 236.45 | 333.75 | 340.7 | 11.6 % | 4（12 395） |
+| ctx0 mps25 | — | — | — | 两次都在 cuDNN 中 segfault | — |
+| ctx0 mps50 | 172.36 | 306.38 | 309.1 | 12.3 % | 10（6 472） |
+| ctx0 mps100 | 167.43 | 225.24 | 231.3 | 0 % | 7（9 138） |
+| ctx16000 serial hz1 | 7 715.38 | 7 865.88 | 7 873.9 | 100 % | 8（7 589） |
+| ctx16000 process hz1 | 313.69 | 414.26 | 417.6 | 98.3 % | 5（13 932） |
+| ctx16000 process hz0 | 300.96 | 393.34 | 411.6 | 97.4 % | 5（13 757） |
+| ctx16000 prio hz1 | 129.92 | 1 327.43 | 1 336.4 | 2.4 % | 4（12 114） |
+| ctx16000 prio hz0 | 129.74 | 1 283.93 | 1 330.5 | 2.4 % | 5（11 946） |
+| ctx16000 green25 | 157.42 | 2 380.06 | 2 448.6 | 3.0 % | 3（15 122） |
+| ctx16000 green50 | 227.60 | 1 595.87 | 1 599.0 | 26.9 % | 3（16 181） |
+| ctx16000 mps25 | — | — | — | 两次都在 cuDNN 中 segfault | — |
+| ctx16000 mps50 | 183.31 | 225.19 | 225.9 | 0 % | 5（11 990） |
+| ctx16000 mps100 | 131.11 | 1 714.11 | 1 740.3 | 5.0 % | 6（10 947） |
+| grid_isolated_end | 126.32 | 165.04 | 166.2 | 0 % | — |
+
+- 漂移：`grid_isolated_end` 比 start 的 p50 低 36 ms，p99 只差 1.8 ms；ctx16000 一半的 prio / mps100 p50 也在 130 ms 左右。p50 的漂移大于本轮所有 p50 上的共享效应，p50 不能当分母、ctx0 与 ctx16000 之间的 p50 也不能直接比；错过率和秒级的 p99 远大于漂移，可以读。
+- 短上下文：prio、green25、mps100 都不错过截止期（p99 198–225 ms）；process（时间片）p99 约 390 ms，全部错过；green50 与 mps50 把执行器限制到少数 SM，p99 超过周期。
+- 长上下文：只有 mps50 不错过（p99 225 ms）。prio、mps100、green25 的错过率只有 2–5 %，但每次错过都是 1.3–2.4 s 的停顿；按 60 s 内约 230 个周期、3–5 次规划器调用计，大约是每次调用一次停顿（推断）。
+- green25 在长上下文下停顿 2.4 s，与 5090 的结果相反（5090 上同一格 p99 34.2 ms，不错过）；green 在短上下文下有效、长上下文下无效，而独立进程的 mps50 有效。原因未查明（issues.md ISSUE-098）。
+- SM 划分之后的共享开销：green25 / green50 相对 greenalone25 / greenalone50，p50 只高 2.5 % / 1.3 %，p99 高 21 % / 41 %（5090 上 p99 高 3–15 %）。差异集中在尾部，不是均匀的带宽减速。
+- 规划器在共享时单次调用变慢约 2×（短上下文 4.9 s → 6.5–12.4 s）。
+- tegrastats 没有 EMC / GR3D 字段（与以往 Thor 轮次一致），带宽利用率无法直接读出；整段 RAM 平均约 39.5 GB，VDD_GPU 平均约 19.2 W。
+
+**Y5 未得到结果。** `overlap_trace.py` 的 alone trace 里没有 CUDA kernel 事件，overlap 阶段两次都在 `cuGraphLaunch` / `CUDAGraph::replay` 处 segfault（issues.md ISSUE-099）。mps25 两格的 segfault 记在 issues.md ISSUE-100。
+
+结论去向：本节；`research/experiments/colocation_5090/README.md` 的 Thor 一节；issues.md ISSUE-098–100。`THOR_CHECKLIST.md` 的 `1028` 轮已删除。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

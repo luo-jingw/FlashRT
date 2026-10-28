@@ -1101,3 +1101,71 @@ Thor `$OUT=/home/jingwu/thor_val/1021/X16_infer.log` (local to the Thor), THOR_S
 ## Next Experiment
 
 Read the counting code against the capture order; count the differing linears before resetting the tiles, and check the printed count against the per-shape table on the next run.
+
+# ISSUE-098
+
+Status: open, non-blocking
+
+Area: `research/experiments/colocation_5090/colocation_bench.py` (`green<P>`, `prio`) on Jetson Thor
+
+## Observation
+
+In the `1028` Thor round, with a 16k-token planner context, an in-process green-context split (planner 8 SMs, executor 12 SMs) still leaves executor ticks stalled for up to 2.4 s (p99 2 380 ms, 3.0 % misses at a 260 ms period). The same split keeps the executor at p99 198 ms with a short planner context, and the same cell on the RTX 5090 has p99 34.2 ms. Of the long-context cells, only the process-level MPS limit at 50 % has no misses (p99 225 ms); the in-process `prio` cell and the unlimited `mps100` cell also show second-scale stalls (1.3 s, 1.7 s).
+
+## Evidence
+
+THOR_STATUS_SUMMARY.md round `1028` (Y4); Thor `$HOME/thor_val/1028/cells/*.json` (local to the Thor); `research/experiments/colocation_5090/README.md` R5 for the 5090 cells.
+
+## Hypotheses
+
+- A resource shared inside one process and not partitioned by green contexts blocks the executor's tick: the CUDA caching allocator or a device-wide synchronizing driver call (cudaMalloc / cudaFree of the planner's growing long-context buffers on unified memory), or the CPU side of the tick.
+- Memory-bandwidth contention: less likely to explain a 15× stall, since the executor on 4 SMs is only 1.4× slower than on 20 SMs.
+- The stalls in `prio` / `mps100` are the kernel-boundary queuing measured on the RTX 5090 (R4), scaled by the planner's ~10× longer kernels on the Thor; `green25` would then need a different mechanism.
+
+## Next Experiment
+
+Without CUPTI (see ISSUE-099): timestamp every executor tick (CPU start, GPU events around `stage_inputs` and the graph replay) and every planner phase (prefill start/end, each decode step, call end), plus `torch.cuda.memory_stats()` counters (`num_alloc_retries`, segment allocations) per planner call, in the `green25` long-context cell. A stall that coincides with a planner allocation event supports the first hypothesis; one that sits inside the executor's GPU events while the planner runs prefill supports bandwidth.
+
+# ISSUE-099
+
+Status: open, non-blocking
+
+Area: `research/experiments/colocation_5090/overlap_trace.py` on Jetson Thor
+
+## Observation
+
+In the `1028` Thor round (Y5) the torch profiler's chrome trace of five executor ticks alone contains no event with `cat == "kernel"`, and the overlap phase segfaults twice inside `cuGraphLaunch` / `CUDAGraph::replay` while profiling.
+
+## Evidence
+
+THOR_STATUS_SUMMARY.md round `1028` (Y5); Thor `$HOME/thor_val/1028/Y5.log` (local to the Thor).
+
+## Hypotheses
+
+- CUPTI kernel activity is not recorded for graph-replayed kernels on this Thor stack (torch 2.9.1+cu130), and the graph launch under an active CUPTI subscriber crashes.
+
+## Next Experiment
+
+Run the alone phase with eager kernels only (one `a @ a` under the profiler) to check whether any kernel activity is recorded; if none, CUPTI kernel tracing is unavailable and per-tick timing uses CUDA events instead (ISSUE-098).
+
+# ISSUE-100
+
+Status: open, non-blocking
+
+Area: `research/experiments/colocation_5090/run_thor.sh` (`mps25`) on Jetson Thor
+
+## Observation
+
+In the `1028` Thor round both `mps25` cells (planner process at 25 %, executor process at 75 % of threads) segfault in cuDNN engine configuration (`Engcfg`), twice each, and write no result. `mps50` and `mps100` run.
+
+## Evidence
+
+THOR_STATUS_SUMMARY.md round `1028` (Y4); Thor `$HOME/thor_val/1028/cells/ctx*_mps25_hz0.log` (local to the Thor).
+
+## Hypotheses
+
+- cuDNN's engine heuristics fail for a thread percentage that does not map to a whole number of the Thor's SM groups (75 % of 20 SMs = 15).
+
+## Next Experiment
+
+From the cell logs, find which process (planner or executor) crashed; run that process alone under MPS at 75 % and at 25 %.
