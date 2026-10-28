@@ -189,3 +189,37 @@ partition (then 50.4 ms on 42 SMs). Eager kernels follow the launch stream (8192
 
 Green contexts give the same protection as the MPS SM limit within ~3 ms of executor p99, in one process and without
 a daemon (25 % requested → 48 SMs: the split rounds up to the device's SM granularity).
+
+## Jetson AGX Thor (round 1028)
+
+Same scripts on the Thor (`run_thor.sh`; 20 SMs, MAXN, GPC locked, EMC not locked; transformers 5.17.0 from an isolated
+directory). Executor alone p50 / p99 163 / 170 ms, so the control period is 260 ms (1.5 × p99). Full table and per-cell
+planner calls in `THOR_STATUS_SUMMARY.md` round `1028`.
+
+| | Thor | RTX 5090 |
+|---|---|---|
+| planner call, 259 / 16k / 32k tokens | 4.9 / 7.7 / 12.1 s | 0.30 / 0.79 / 1.55 s |
+| green-context split | 2, 4, 8 SMs requested → 8 | 43 requested → 48 |
+| executor alone on 12 / 4 SMs (inferred split) vs 20 SMs, p50 | 157 / 234 vs 163 ms | — |
+
+Executor p99 ms and misses at the 260 ms period (the planner runs continuously; `mps25` crashed in cuDNN in both
+contexts):
+
+| mode | short context | long context (16k) |
+|---|---|---|
+| serial | 5 112, 100 % | 7 866, 100 % |
+| process | 390–393, 100 % | 393–414, 97–98 % |
+| prio | 205–210, 0 % | 1 284–1 327, 2.4 % |
+| green25 (planner 8 SMs) | 198, 0 % | 2 380, 3.0 % |
+| green50 | 334, 11.6 % | 1 596, 26.9 % |
+| mps50 | 306, 12.3 % | 225, 0 % |
+| mps100 | 225, 0 % | 1 714, 5.0 % |
+
+- The isolated executor's p50 moved from 162 to 126 ms between the start and the end of the grid (p99 163 → 165), so
+  p50 differences in this round are not effects; misses and second-scale p99 values are.
+- Long context breaks the in-process modes on the Thor: `green25` stalls up to 2.4 s although the same split protects
+  the executor with a short context and on the 5090 (p99 34 ms). Only the process-level MPS limit at 50 % is clean.
+  Cause open (issues.md ISSUE-098).
+- With SMs split, sharing costs the executor 1–3 % at p50 and 21–41 % at p99 (5090: 3–15 % at p99).
+- The torch profiler records no kernel events on the Thor and `overlap_trace.py` segfaults in the graph launch
+  (issues.md ISSUE-099), so the R4 kernel-level timeline has no Thor counterpart yet.
