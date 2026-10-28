@@ -64,13 +64,32 @@ export OUT=$HOME/thor_val/1028; mkdir -p $OUT
 export FLASHRT_ROOT=$(git rev-parse --show-toplevel) DATASET_STATS_PATH=$(dirname $CKPT_PATH)/dataset_stats.json
 python -c "from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state as r; r()" | tee $OUT/Y0_clock.log
 git rev-parse HEAD | tee $OUT/Y0_commit.log
-python -c "import transformers, cuda.bindings; from transformers import Qwen3VLForConditionalGeneration; print(transformers.__version__)" 2>&1 | tee $OUT/Y0_env.log
-huggingface-cli download Qwen/Qwen3-VL-2B-Instruct --local-dir $FLASHRT_ROOT/tmp/checkpoints/Qwen3-VL-2B-Instruct 2>&1 | tail -2 | tee -a $OUT/Y0_env.log
+python -c "import cuda.bindings; print('cuda.bindings ok')" 2>&1 | tee $OUT/Y0_env.log
 nvidia-smi --query-gpu=utilization.gpu,utilization.memory,clocks.sm,clocks.mem,power.draw --format=csv,noheader,nounits 2>&1 | tee $OUT/Y0_smi.log
-nvidia-cuda-mps-control -d 2>&1 | tee $OUT/Y0_mps.log; echo get_server_list | nvidia-cuda-mps-control 2>&1 | tee -a $OUT/Y0_mps.log; echo quit | nvidia-cuda-mps-control
+export CUDA_MPS_PIPE_DIRECTORY=$OUT/.mps/pipe CUDA_MPS_LOG_DIRECTORY=$OUT/.mps/log; mkdir -p $CUDA_MPS_PIPE_DIRECTORY $CUDA_MPS_LOG_DIRECTORY
+nvidia-cuda-mps-control -d 2>&1 | tee $OUT/Y0_mps.log; sleep 1
+python -c "import torch; a=torch.randn(4096,4096,device='cuda'); print('cuda under mps ok', (a@a).sum().item()!=0)" 2>&1 | tail -1 | tee -a $OUT/Y0_mps.log
+echo quit | nvidia-cuda-mps-control; unset CUDA_MPS_PIPE_DIRECTORY CUDA_MPS_LOG_DIRECTORY
 ```
 
-这两个导出在本轮所有命令里都要保持（新开 shell 要重新导出）。带回：commit、时钟状态（`emc_locked`）、transformers 版本、`cuda.bindings` 能否导入、权重是否下载成功、`nvidia-smi` 那一行的原样输出、MPS 守护进程能否启动。判据：`cuda.bindings` 或 `Qwen3VLForConditionalGeneration` 导入失败就停在这一项、带回报错（后面全部依赖它们）；`nvidia-smi` 那一行有任何字段不是数字，后面所有命令前加 `NO_SMI=1`；MPS 守护进程起不来，Y4 不加 `MPS=1`。结论去向：`THOR_STATUS_SUMMARY.md` 的 `1028` 小节。
+规划器需要 transformers ≥ 5（`Qwen3VLForConditionalGeneration`）。共享环境里的 transformers 不升级：新版本装进本轮单独的目录，只通过 `PYTHONPATH` 前置给本轮使用，其他项目不受影响。目录里只放 transformers 及其纯 Python 依赖，**不放 torch、torchvision、numpy**（它们继续用环境里原有的版本）：
+
+```
+export PYDEPS=$HOME/thor_val/pydeps_tf5
+pip install --target $PYDEPS --no-deps transformers==5.17.0 tokenizers==0.23.2 huggingface_hub==1.32.0 safetensors==0.8.0 2>&1 | tail -1 | tee $OUT/Y0_pydeps.log
+export PYTHONPATH=$PYDEPS:$PYTHONPATH
+python -c "import torch, transformers, torchvision; from transformers import Qwen3VLForConditionalGeneration, AutoProcessor; print(torch.__version__, transformers.__version__, torchvision.__version__)" 2>&1 | tail -1 | tee -a $OUT/Y0_pydeps.log
+```
+
+最后一条若报 `ModuleNotFoundError: No module named 'X'`，把 X 用同样的 `pip install --target $PYDEPS --no-deps X` 补进去再试，直到导入成功（X 是 torch / torchvision / numpy 时停下带回，不要装进这个目录）。`PYDEPS` 与 `PYTHONPATH` 的这两个导出和上面两个一样，整轮保持。导入成功后再下载权重：
+
+```
+huggingface-cli download Qwen/Qwen3-VL-2B-Instruct --local-dir $FLASHRT_ROOT/tmp/checkpoints/Qwen3-VL-2B-Instruct 2>&1 | tail -2 | tee -a $OUT/Y0_env.log
+```
+
+`huggingface-cli` 不存在时用 `python -c "from huggingface_hub import snapshot_download as d; d('Qwen/Qwen3-VL-2B-Instruct', local_dir='$FLASHRT_ROOT/tmp/checkpoints/Qwen3-VL-2B-Instruct')"`。
+
+这两个导出在本轮所有命令里都要保持（新开 shell 要重新导出）。带回：commit、时钟状态（`emc_locked`）、`cuda.bindings` 能否导入、`Y0_pydeps.log`（补装了哪些模块、最终的 torch / transformers / torchvision 版本）、权重是否下载成功、`nvidia-smi` 那一行的原样输出、`Y0_mps.log`。判据：`cuda.bindings` 或 `Qwen3VLForConditionalGeneration` 最终仍导入失败就停在这一项、带回报错（后面全部依赖它们）；`nvidia-smi` 那一行有任何字段不是数字，后面所有命令前加 `NO_SMI=1`；`Y0_mps.log` 最后一行不是 `cuda under mps ok True`，Y4 用 `MPS=0`。结论去向：`THOR_STATUS_SUMMARY.md` 的 `1028` 小节。
 
 **Y1 green context 能否在 Thor 上划分 SM。**
 
