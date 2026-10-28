@@ -13,12 +13,14 @@ Planner modes (planner = planner_qwen3vl.py, one image + short prompt -> 32 toke
   mps<P>    MPS daemon running (started by run_r1.sh); planner process limited to P % of SMs, executor to 100 - P %
   green<P>  same process, two green contexts (green_partition.py): planner thread on P % of SMs, executor on the rest
   greenalone<P>  as green<P> without the planner (executor on 100 - P % of SMs)
+  greenhog<P>    as green<P> with bandwidth_hog.py (back-to-back DRAM copies) in place of the planner
 DRAM / SM activity: nvidia-smi utilization.{gpu,memory} sampled every 100 ms during the timed window.
 
-EXEC_PRECISION overrides the executor precision (default fp8). NO_SMI=1 skips the nvidia-smi sampler (devices whose nvidia-smi lacks these fields). DROP_TEXT_ENCODER=1 frees the text encoder after set_prompt; START_AT=<epoch s> delays the timed window to that wall-clock time (used by run_r3.sh to align several executors).
+EXEC_PRECISION overrides the executor precision (default fp8); EXEC_STEPS the denoise steps (default 10). NO_SMI=1 skips the nvidia-smi sampler (devices whose nvidia-smi lacks these fields). DROP_TEXT_ENCODER=1 frees the text encoder after set_prompt; START_AT=<epoch s> delays the timed window to that wall-clock time (used by run_r3.sh to align several executors).
 
 usage: python colocation_bench.py MODE HZ DURATION_S OUT_JSON
 """
+import dataclasses
 import json
 import os
 import subprocess
@@ -39,6 +41,9 @@ from flash_rt.models.imagewam.workload import ImageWAMWorkload  # noqa: E402
 
 MODE, HZ, DURATION, OUT = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
 PRECISION = os.environ.get("EXEC_PRECISION", "fp8")
+WORKLOAD = ImageWAMWorkload.libero()
+if os.environ.get("EXEC_STEPS"):
+    WORKLOAD = dataclasses.replace(WORKLOAD, num_steps=int(os.environ["EXEC_STEPS"]))
 PERIOD_MS = float(os.environ.get("PERIOD_MS", "50"))
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -56,7 +61,7 @@ SMI_FIELDS = ["util_gpu", "util_mem", "clk_sm", "clk_mem", "power_W"]
 
 exec_stream = torch.cuda.Stream(priority=-1) if MODE == "prio" else torch.cuda.Stream()
 with torch.cuda.stream(exec_stream):
-    fe = F.load_imagewam(os.environ["CKPT_PATH"], ImageWAMWorkload.libero(), precision=PRECISION,
+    fe = F.load_imagewam(os.environ["CKPT_PATH"], WORKLOAD, precision=PRECISION,
                          ae_model_path=os.environ["FLUX2_AE_MODEL_PATH"], flux2_src=os.environ["FLUX2_SRC"],
                          qwen3_model_spec=os.environ["QWEN3_MODEL_SPEC"],
                          dataset_stats_path=os.environ["DATASET_STATS_PATH"])
@@ -80,7 +85,7 @@ def tick() -> None:
 green = None
 if MODE.startswith("green"):
     from green_partition import GreenPartition
-    pct = int(MODE.removeprefix("greenalone").removeprefix("green"))
+    pct = int(MODE.removeprefix("greenalone").removeprefix("greenhog").removeprefix("green"))
     green = GreenPartition(max(1, round(torch.cuda.get_device_properties(0).multi_processor_count * pct / 100)))
     exec_stream = green.rest.stream
     fe._graph_stream = exec_stream  # a graph captured on another stream replays on all SMs; recapture on the partition
@@ -89,8 +94,11 @@ if MODE.startswith("green"):
 for _ in range(10):
     tick()
 
-planner, worker, planner_recs = None, None, []
-if MODE in ("serial", "prio") or (green is not None and not MODE.startswith("greenalone")):
+planner, worker, planner_recs, hog, hog_rec = None, None, [], None, {}
+if MODE.startswith("greenhog"):
+    from bandwidth_hog import BandwidthHog
+    hog = BandwidthHog(green.part.stream)
+elif MODE in ("serial", "prio") or (green is not None and not MODE.startswith("greenalone")):
     planner = Planner(green.part.stream if green is not None else torch.cuda.Stream(priority=0))
     px = planner.inputs()
     for _ in range(3):
@@ -129,6 +137,9 @@ if worker is not None:
     worker.stdin.flush()
 if planner is not None and MODE != "serial":
     threading.Thread(target=planner_thread, args=(t_end,), daemon=True).start()
+if hog is not None:
+    threading.Thread(target=lambda: hog_rec.update(hog.run(t_end).__dict__), daemon=True).start()
+alloc0 = torch.cuda.memory_stats()
 
 ticks, release, next_plan = [], t0, t0
 period = PERIOD_MS / 1e3
@@ -146,6 +157,7 @@ while release < t_end:
     release += period
     if fin > release:  # overran: next tick released immediately, the schedule slips
         release = fin
+alloc1 = torch.cuda.memory_stats()
 smi_rows = []
 if smi is not None:
     smi.terminate()
@@ -159,7 +171,9 @@ lat = np.array([(f - r) * 1e3 for r, s, f in ticks])
 svc = np.array([(f - s) * 1e3 for r, s, f in ticks])
 smi = np.array(smi_rows)
 pc = planner_recs
-res = {"mode": MODE, "planner_hz": HZ, "period_ms": PERIOD_MS, "precision": PRECISION, "duration_s": DURATION,
+ALLOC_KEYS = ["num_alloc_retries", "num_device_alloc", "num_device_free", "segment.all.allocated", "segment.all.freed"]
+res = {"mode": MODE, "planner_hz": HZ, "period_ms": PERIOD_MS, "precision": PRECISION, "steps": WORKLOAD.num_steps,
+       "duration_s": DURATION,
        "gpu": torch.cuda.get_device_name(), "ticks": len(ticks),
        "torch_reserved_GB": round(torch.cuda.memory_reserved() / 1e9, 2),
        "green_sm": None if green is None else {"device": green.device_sm_count, "planner": green.part.sm_count, "executor": green.rest.sm_count},
@@ -172,8 +186,13 @@ res = {"mode": MODE, "planner_hz": HZ, "period_ms": PERIOD_MS, "precision": PREC
        "planner_decode_ms_p50": float(np.median([c["decode_ms"] for c in pc])) if pc else None,
        "smi_samples": len(smi),
        "smi_mean": dict(zip(SMI_FIELDS, [round(float(v), 1) for v in smi.mean(0)])) if len(smi) else None,
-       "latency_series_ms": [round(float(x), 3) for x in lat]}
+       "hog": hog_rec or None,
+       "alloc_events_in_window": {k: alloc1.get(k, 0) - alloc0.get(k, 0) for k in ALLOC_KEYS},
+       "latency_series_ms": [round(float(x), 3) for x in lat],
+       "ticks_wall_s": [[round(x - t0, 4) for x in t] for t in ticks],
+       "planner_records": [dict(c, t_start=round(c["t_start"] - t0, 4), t_end=round(c["t_end"] - t0, 4)) for c in pc]}
 json.dump(res, open(OUT, "w"))
 print(f"{MODE} hz={HZ}: ticks {len(ticks)} lat p50 {res['latency_ms']['p50']:.2f} p99 {res['latency_ms']['p99']:.2f} "
       f"max {res['latency_ms']['max']:.1f} ms, miss@{PERIOD_MS:.0f}ms {res['miss_rate_at_period']*100:.1f}%, "
-      f"planner calls {len(pc)} (call p50 {res['planner_call_ms_p50']}), smi {res['smi_mean']}", flush=True)
+      f"planner calls {len(pc)} (call p50 {res['planner_call_ms_p50']}, decode p50 {res['planner_decode_ms_p50']}), "
+      f"hog {res['hog']}, alloc {res['alloc_events_in_window']}, green {res['green_sm']}, smi {res['smi_mean']}", flush=True)
