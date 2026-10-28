@@ -1,0 +1,128 @@
+{
+ "model": "Qwen3-VL-2B-Instruct bf16 (transformers eager loop)",
+ "new_tokens": 32,
+ "image_px": 448,
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "rows": [
+  {
+   "images": 1,
+   "prompt_tokens": 259,
+   "prefill_ms": 20.530624389648438,
+   "decode_ms_per_token": 9.015404485887096,
+   "call_ms": 300.08745193481445,
+   "peak_mem_GB": 4.346188288
+  },
+  {
+   "images": 1,
+   "prompt_tokens": 1261,
+   "prefill_ms": 35.626304626464844,
+   "decode_ms_per_token": 9.029525264616936,
+   "call_ms": 315.5331611633301,
+   "peak_mem_GB": 4.513387008
+  },
+  {
+   "images": 1,
+   "prompt_tokens": 4261,
+   "prefill_ms": 96.7008285522461,
+   "decode_ms_per_token": 9.262092836441532,
+   "call_ms": 383.88633728027344,
+   "peak_mem_GB": 5.021172736
+  },
+  {
+   "images": 1,
+   "prompt_tokens": 16261,
+   "prefill_ms": 500.3861999511719,
+   "decode_ms_per_token": 9.244246944304436,
+   "call_ms": 787.0733737945557,
+   "peak_mem_GB": 7.042527744
+  },
+  {
+   "images": 1,
+   "prompt_tokens": 32261,
+   "prefill_ms": 1213.817138671875,
+   "decode_ms_per_token": 10.804671748991936,
+   "call_ms": 1549.057960510254,
+   "peak_mem_GB": 9.738086912
+  },
+  {
+   "images": 2,
+   "prompt_tokens": 457,
+   "prefill_ms": 27.521440505981445,
+   "decode_ms_per_token": 9.105069068170362,
+   "call_ms": 309.80634689331055,
+   "peak_mem_GB": 4.388519424
+  },
+  {
+   "images": 2,
+   "prompt_tokens": 1459,
+   "prefill_ms": 44.359134674072266,
+   "decode_ms_per_token": 9.030830629410282,
+   "call_ms": 324.3844509124756,
+   "peak_mem_GB": 4.558360576
+  },
+  {
+   "images": 2,
+   "prompt_tokens": 4459,
+   "prefill_ms": 103.32233428955078,
+   "decode_ms_per_token": 9.302085630355343,
+   "call_ms": 391.74962043762207,
+   "peak_mem_GB": 5.063214592
+  },
+  {
+   "images": 2,
+   "prompt_tokens": 16459,
+   "prefill_ms": 497.40435791015625,
+   "decode_ms_per_token": 9.224135860320061,
+   "call_ms": 783.4270000457764,
+   "peak_mem_GB": 7.085793792
+  },
+  {
+   "images": 2,
+   "prompt_tokens": 32459,
+   "prefill_ms": 1227.0570068359375,
+   "decode_ms_per_token": 10.870175269342237,
+   "call_ms": 1564.2733573913574,
+   "peak_mem_GB": 9.781974528
+  },
+  {
+   "images": 4,
+   "prompt_tokens": 853,
+   "prefill_ms": 44.166847229003906,
+   "decode_ms_per_token": 9.275174048639112,
+   "call_ms": 331.85720443725586,
+   "peak_mem_GB": 4.479783936
+  },
+  {
+   "images": 4,
+   "prompt_tokens": 1855,
+   "prefill_ms": 62.197120666503906,
+   "decode_ms_per_token": 9.085013112714213,
+   "call_ms": 343.9476490020752,
+   "peak_mem_GB": 4.64612864
+  },
+  {
+   "images": 4,
+   "prompt_tokens": 4855,
+   "prefill_ms": 125.29955291748047,
+   "decode_ms_per_token": 9.375784597089213,
+   "call_ms": 416.00966453552246,
+   "peak_mem_GB": 5.152457728
+  },
+  {
+   "images": 4,
+   "prompt_tokens": 16855,
+   "prefill_ms": 520.4839477539062,
+   "decode_ms_per_token": 8.987329298450101,
+   "call_ms": 799.1571426391602,
+   "peak_mem_GB": 7.173180416
+  },
+  {
+   "images": 4,
+   "prompt_tokens": 32855,
+   "prefill_ms": 1275.831298828125,
+   "decode_ms_per_token": 11.018053608555947,
+   "call_ms": 1617.466688156128,
+   "peak_mem_GB": 9.87250688
+  }
+ ]
+}
