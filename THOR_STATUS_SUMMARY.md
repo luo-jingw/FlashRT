@@ -636,6 +636,11 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 
 结论去向：本节；`research/experiments/colocation_5090/README.md` 的 Thor 一节；issues.md ISSUE-098。长上下文 prio / green25 四格的 JSON 在 Thor 的 `$HOME/thor_val/1029/cells/`，停顿定位在 `1029b`。
 
+**`1029b`（commit `63a0064`，环境同上）。** Z3：`stall_timeline.py` 读四个长上下文格。每次规划器调用恰有一次秒级停顿，落在 prefill 区间的后段：green25 在 prefill 开始后约 5.7–5.8 s，长 2.39–2.43 s；prio 在约 6.4 s（周期 100）/ 9.7 s（周期 50）处，长 1.24–1.25 s。按各格单次调用与解码的 p50 推算的 prefill 长度（green25 约 8.0 s，prio 约 10.9 s），停顿都在 prefill 结束时结束（推算）。最后一次调用之后偶有记为 `between` 的错过。Z4：纯拷贝负载在执行器旁边拿到 227.7 GB/s（执行器在 12 个 SM 上）与 223.3 GB/s（执行器在 4 个 SM 上），单独时约 236 GB/s；执行器 p99 103.3 / 383.6 ms，与 Z1 一致。
+
+- 停顿长度与规划器分到的 SM 数近似成反比：规划器 8 个 SM（green25）2.4 s，20 个 SM（prio）1.24 s，比值 1.9，SM 数之比 2.5。
+- transformers 5.17 的 `generate` 在 prefill 中只算最后一个位置的 logits（`logits_to_keep=1`），停顿不是全位置的 LM head。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

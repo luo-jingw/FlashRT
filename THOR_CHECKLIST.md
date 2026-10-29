@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` 轮做完 Z0–Z2，已从本清单删除；`1029b`（Z3、Z4）待测。剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` 轮做完，已从本清单删除；`1030` 轮（V1，green context 是否同时运行）待测。剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,31 +52,29 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-### `1029b` 轮：长上下文秒级停顿落在规划器的哪一段，纯拷贝负载的实际带宽
+### `1030` 轮：Thor 上两个 green context 是同时运行还是轮流运行
 
-脚本在 `research/experiments/colocation_5090/`，命令在该目录下运行；环境同 `1029` 轮（`FLASHRT_ROOT`、`DATASET_STATS_PATH`、`PYDEPS` / `PYTHONPATH`、`NO_SMI=1`）。不改机器状态。
+问题：`1029b` 显示规划器的长上下文 prefill 期间，即使执行器在不相交的 SM 上也完全停住。两个 green context 在 Thor 上是同时运行，还是轮流占用 GPU？脚本在 `research/experiments/colocation_5090/`，命令在该目录下运行；只需要 torch 与 `cuda.bindings`，不需要规划器、执行器和 `PYDEPS`。不改机器状态，GPU 上不要有别的任务。
 
-**Z3 停顿定位（只读已有结果，约 1 分钟）。**
-
-```
-export OUT=$HOME/thor_val/1029
-python stall_timeline.py $OUT/cells/p50_ctx16000_green25.json $OUT/cells/p100_ctx16000_green25.json $OUT/cells/p50_ctx16000_prio.json $OUT/cells/p100_ctx16000_prio.json | tee $OUT/Z3.log
-```
-
-带回：`Z3.log` 全文。判据：错过的执行器调用集中在每次规划器调用的 prefill 开头（offset 接近 0，长度与停顿相当），说明停顿来自调用开始时的一段（包括 `generate` 里在 CPU 上准备输入）；集中在 decode 或调用之间，说明是别的原因。结论去向：`THOR_STATUS_SUMMARY.md` 的 `1029` 小节，issues.md ISSUE-098。
-
-**Z4 纯拷贝负载在执行器旁边的实际带宽（约 5 分钟）。**
+**V1。**
 
 ```
 git pull
-for p in 25 50; do EXEC_PRECISION=nvfp4 EXEC_STEPS=2 DROP_TEXT_ENCODER=1 PERIOD_MS=1000 python colocation_bench.py greenhog$p 0 60 $OUT/cells/probe_greenhog${p}_r2.json 2>&1 | grep "hz=" | tee -a $OUT/Z4.log; done
+export OUT=$HOME/thor_val/1030; mkdir -p $OUT
+git rev-parse HEAD | tee $OUT/V1_commit.log
+for n in 8 16; do python partition_concurrency.py $n $OUT/V1_part$n.json 2>&1 | tail -3; done | tee $OUT/V1.log
 ```
 
-带回：两行全文（其中 `hog` 字段的 `GBps`）。判据：执行器旁边负载拿到的带宽，加上执行器自身的需求，接近 236 GB/s 的上限，说明两者在分同一份带宽。结论去向：同上。
+带回：commit、`emc_locked`、`V1.log` 全文（每个划分两行：`green` 与 `streams`，加一行 SM 数）。判据：
+- `green` 一行里，两个分区一起跑时的 TFLOP/s 接近各自单独时，说明同时运行；接近单独时的一半或更低（两者之和约等于单独一个的值），说明轮流运行；
+- `green` 一行里小 matmul 在长 kernel 期间的最长等待：远小于 `long kernel` 的 ms，说明长 kernel 不挡另一个分区；接近 `long kernel` 的 ms，说明被挡住；
+- `streams` 一行是同一 context 内两条普通流的对照（预期两者分享 SM）。5090 上的参考：green 一起 / 单独 42.5 / 46.1 与 99.0 / 100.9 TFLOP/s，最长等待 5.3 ms（长 kernel 256 ms）。
+
+结论去向：`THOR_STATUS_SUMMARY.md` 的 `1030` 小节，issues.md ISSUE-098。
 
 ## 已完成的轮次（不再重跑）
 
-逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`、`1029`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
+逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`、`1029`、`1029b`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
 
 ---
 
