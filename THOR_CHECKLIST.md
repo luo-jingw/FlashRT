@@ -72,6 +72,14 @@ for n in 8 16; do python partition_concurrency.py $n $OUT/V1_part$n.json 2>&1 | 
 
 结论去向：`THOR_STATUS_SUMMARY.md` 的 `1030` 小节，issues.md ISSUE-098。
 
+**V2 重叠与不重叠的执行器调用分开统计（只读 `1029` 已有结果，约 1 分钟，不占 GPU）。**
+
+```
+python overlap_stats.py $(ls $HOME/thor_val/1029/cells/p*_ctx*.json | grep -v planner.json) | tee $OUT/V2.log
+```
+
+带回：`V2.log` 全文。判据：每格里与规划器调用重叠的执行器调用（`overlap`，再按重叠最多的是 prefill 还是 decode 分开）与不重叠的（`none`）各自的 p50 / p99；重叠的 p50 除以不重叠的 p50，就是只看重叠调用时的减速，可以和其他只统计重叠调用的结果直接比较。结论去向：同上。
+
 ## 已完成的轮次（不再重跑）
 
 逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`、`1029`、`1029b`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
