@@ -260,3 +260,13 @@ Executor p99 / slowdown against the same-SM alone value / misses, planner runnin
   planner; that executor's ticks overlap the planner's decode only in the tail.
 - The second-scale stalls with a long planner context do not depend on the executor: about 2.4 s under green25 and
   1.2–1.3 s under prio in both rounds, 0.6 s under mps100, none under mps50 (issues.md ISSUE-098).
+
+### Partition concurrency and overlapped ticks (round 1030)
+
+- Green contexts on the Thor run at the same time: a small matmul on one partition waits at most 11.7 ms while a
+  241–273 ms kernel runs on the other. The device has a shared limit of about 100 TFLOP/s (2048³ BF16 matmuls) that
+  12 SMs already reach; two partitions together split it in proportion to their SMs.
+- Splitting executor ticks by what they overlap (`overlap_stats.py` on the round 1029 cells): ticks overlapping the
+  planner's decode are 1.3–1.7× the same-SM alone p50 under green25 / mps50; ticks overlapping a short-context
+  prefill are not slowed. The slowdown follows the planner's bandwidth-heavy phase.
+- The long-context stalls fall in ticks overlapping the prefill; their mechanism is still open (issues.md ISSUE-098).
