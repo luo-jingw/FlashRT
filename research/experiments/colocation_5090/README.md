@@ -200,7 +200,7 @@ planner calls in `THOR_STATUS_SUMMARY.md` round `1028`.
 |---|---|---|
 | planner call, 259 / 16k / 32k tokens | 4.9 / 7.7 / 12.1 s | 0.30 / 0.79 / 1.55 s |
 | green-context split | 2, 4, 8 SMs requested → 8 | 43 requested → 48 |
-| executor alone on 12 / 4 SMs (inferred split) vs 20 SMs, p50 | 157 / 234 vs 163 ms | — |
+| executor alone on 12 / 4 SMs vs 20 SMs, p50 | 157 / 234 vs 163 ms | — |
 
 Executor p99 ms and misses at the 260 ms period (the planner runs continuously; `mps25` crashed in cuDNN in both
 contexts):
@@ -223,3 +223,40 @@ contexts):
 - With SMs split, sharing costs the executor 1–3 % at p50 and 21–41 % at p99 (5090: 3–15 % at p99).
 - The torch profiler records no kernel events on the Thor and `overlap_trace.py` segfaults in the graph launch
   (issues.md ISSUE-099), so the R4 kernel-level timeline has no Thor counterpart yet.
+
+### Short executor configuration (round 1029)
+
+Executor ImageWAM nvfp4 with 2 denoise steps (`run_thor_align.sh`), alone 38–45 ms (the isolated p50 moves between
+the two levels within the round). Denominators on the same SMs, and a planner stand-in that only uses DRAM bandwidth
+(`bandwidth_hog.py`: back-to-back 256 MB copies; 236–238 GB/s alone on the whole device, on 8 SMs and on 16 SMs):
+
+| executor on | alone p99 ms | next to the copy load on the other SMs | slowdown |
+|---|---:|---:|---:|
+| 12 SMs (load on 8) | 57.3 | 103.4 | 1.80× |
+| 4 SMs (load on 16) | 134.1 | 386.8 | 2.89× |
+| 20 SMs / MPS 50 % threads | 45.7 / 62.2 | — | — |
+
+Executor p99 / slowdown against the same-SM alone value / misses, planner running continuously:
+
+| period | mode | short context | long context (16k) |
+|---|---|---|---|
+| 50 ms | prio | 67.8 / 1.48× / 13 % | 104 (max 1 243) / 21 % |
+| 50 ms | green25 | 105 / 1.83× / 100 % | 190 (max 2 388) / 100 % |
+| 50 ms | mps50 | 105 / 1.68× / 100 % | 87.6 / 1.41× / 100 % |
+| 50 ms | mps100 | 53.6 / 1.17× / 17 % | 559 / 18 % |
+| 100 ms | prio | 63.7 / 1.39× / 0 % | 899 (max 1 245) / 2.1 % |
+| 100 ms | green25 | 109 / 1.91× / 4.2 % | 2 385 / 13.5 % |
+| 100 ms | mps50 | 130 / 2.09× / 15 % | 88.8 / 1.43× / 0 % |
+| 100 ms | mps100 | 66.6 / 1.46× / 0 % | 634 / 4.8 % |
+
+- With disjoint SMs the planner slows the executor's p99 by 1.8–2.1×, the same as the pure copy load (1.80×): on the
+  Thor the interference left after SM partitioning is DRAM bandwidth. The planner decodes at 27.8 ms per token at
+  259 tokens, about 155 GB/s for its 4.3 GB of bf16 weights (derived), so its decode phase alone takes about two
+  thirds of the measured bandwidth.
+- At a 50 ms period, partitioning cannot meet the deadline at all: the executor alone on 12 SMs (57 ms) or at 50 %
+  MPS threads (62 ms) is already over it. Whether a partition meets a deadline depends first on this slack.
+- The executor in this configuration needs its SMs (12 SMs: 1.25× slower, 4 SMs: 2.9×), unlike the fp8 10-step
+  executor of round 1028, which was as fast on 12 SMs as on 20 and lost only 1–3 % at p50 next to a partitioned
+  planner; that executor's ticks overlap the planner's decode only in the tail.
+- The second-scale stalls with a long planner context do not depend on the executor: about 2.4 s under green25 and
+  1.2–1.3 s under prio in both rounds, 0.6 s under mps100, none under mps50 (issues.md ISSUE-098).

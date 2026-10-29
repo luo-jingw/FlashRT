@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` 轮（Z0–Z2，短执行器配置与分母对齐）待测。剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` 轮做完 Z0–Z2，已从本清单删除；`1029b`（Z3、Z4）待测。剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,61 +52,31 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-### `1029` 轮：短执行器配置下的共享，与同 SM 数的分母对齐
+### `1029b` 轮：长上下文秒级停顿落在规划器的哪一段，纯拷贝负载的实际带宽
 
-问题：执行器为 ImageWAM nvfp4、2 步去噪、周期 50 / 100 ms 时，各共享方式下的错过率是否与 `1028` 轮（fp8、10 步、周期 260 ms）的结论一致？SM 分开以后，执行器相对"同样 SM 数单独运行"慢多少？只占带宽、不占 SM 的负载能让它慢多少？长上下文下的秒级停顿（issues.md ISSUE-098）落在规划器的哪个阶段？脚本在 `research/experiments/colocation_5090/`，命令都在该目录下运行；环境变量同 `1028` 轮，包括 `PYDEPS` / `PYTHONPATH`（transformers 5.17.0 的独立目录，`1028` 轮已装好，不重装）。整轮不改机器状态；GPU 上不要有别的任务，有的话记下来。全程 `NO_SMI=1`。
+脚本在 `research/experiments/colocation_5090/`，命令在该目录下运行；环境同 `1029` 轮（`FLASHRT_ROOT`、`DATASET_STATS_PATH`、`PYDEPS` / `PYTHONPATH`、`NO_SMI=1`）。不改机器状态。
 
-**Z0 环境，补 `1028` 轮没带回的字段。**
-
-```
-cd research/experiments/colocation_5090
-export OUT=$HOME/thor_val/1029; mkdir -p $OUT
-export FLASHRT_ROOT=$(git rev-parse --show-toplevel) DATASET_STATS_PATH=$(dirname $CKPT_PATH)/dataset_stats.json
-export PYDEPS=$HOME/thor_val/pydeps_tf5; export PYTHONPATH=$PYDEPS:$PYTHONPATH NO_SMI=1
-python -c "from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state as r; r()" | tee $OUT/Z0_clock.log
-git rev-parse HEAD | tee $OUT/Z0_commit.log
-python -c "
-import glob, json, os
-for f in sorted(glob.glob(os.path.expanduser('~/thor_val/1028/cells/*.json'))):
-    if f.endswith('.planner.json'): continue
-    d = json.load(open(f)); print(os.path.basename(f)[:-5], d['green_sm'], d.get('planner_prefill_ms_p50'), d.get('planner_decode_ms_p50'))
-for r in json.load(open(os.path.expanduser('~/thor_val/1028/Y2_planner_cost.json')))['rows']:
-    print(r['images'], r['prompt_tokens'], round(r['prefill_ms']), round(r['decode_ms_per_token'], 1))
-" | tee $OUT/Z0_1028_fields.log
-```
-
-带回：commit、`emc_locked`、`Z0_1028_fields.log` 全部行。判据：`green_sm` 给出 `1028` 轮 green25 / green50 的实际划分（推断是 8 / 12 与 16 / 4）；每 token 的解码 ms 给出这个规划器的解码速度，用来和其他规划器实现比较带宽需求。结论去向：`THOR_STATUS_SUMMARY.md` 的 `1028` 小节（补字段）。
-
-**Z1 分母与纯带宽负载（约 15 分钟）。**
+**Z3 停顿定位（只读已有结果，约 1 分钟）。**
 
 ```
-OUT=$OUT MPS=1 bash run_thor_align.sh probe | tee $OUT/Z1.log
+export OUT=$HOME/thor_val/1029
+python stall_timeline.py $OUT/cells/p50_ctx16000_green25.json $OUT/cells/p100_ctx16000_green25.json $OUT/cells/p50_ctx16000_prio.json $OUT/cells/p100_ctx16000_prio.json | tee $OUT/Z3.log
 ```
 
-带回：`Z1.log` 全部行。判据：
-- `hog_probe_*` 行：纯拷贝负载在整卡、8 个 SM、16 个 SM 上能拿到的带宽（GB/s），是这块 Thor 带宽的实测上限；
-- `probe_isolated` / `probe_greenalone25` / `probe_greenalone50` / `probe_mpsalone50`：执行器单独运行在 20 / 12 / 4 个 SM 上和 MPS 50 % 线程下的 p50 / p99，是 Z2 各格的分母；
-- `probe_greenhog25` / `probe_greenhog50` 相对 `probe_greenalone25` / `probe_greenalone50` 慢多少，就是 SM 不相交时只靠带宽争用造成的减速；同一行的 `hog` 字段是执行器在旁边时负载实际拿到的带宽。
+带回：`Z3.log` 全文。判据：错过的执行器调用集中在每次规划器调用的 prefill 开头（offset 接近 0，长度与停顿相当），说明停顿来自调用开始时的一段（包括 `generate` 里在 CPU 上准备输入）；集中在 decode 或调用之间，说明是别的原因。结论去向：`THOR_STATUS_SUMMARY.md` 的 `1029` 小节，issues.md ISSUE-098。
 
-结论去向：同上，`1029` 小节。
-
-**Z2 网格（约 1 小时）。**
+**Z4 纯拷贝负载在执行器旁边的实际带宽（约 5 分钟）。**
 
 ```
-OUT=$OUT MPS=1 bash run_thor_align.sh grid | tee $OUT/Z2.log
+git pull
+for p in 25 50; do EXEC_PRECISION=nvfp4 EXEC_STEPS=2 DROP_TEXT_ENCODER=1 PERIOD_MS=1000 python colocation_bench.py greenhog$p 0 60 $OUT/cells/probe_greenhog${p}_r2.json 2>&1 | grep "hz=" | tee -a $OUT/Z4.log; done
 ```
 
-带回：`Z2.log` 全部行（每格一行：p50、p99、max、错过率、规划器调用次数、单次调用与解码耗时、`alloc`、`green`），出错的格带回它 `.log` 的最后 20 行；`$OUT/cells/p*_ctx16000_green25.json` 与 `p*_ctx16000_prio.json` 四个文件原样带回（它们含每次执行器调用的起止时间 `ticks_wall_s` 和每次规划器调用的起止与预填充耗时 `planner_records`）。判据：
-- 周期 50 / 100 ms 下每种方式是否错过截止期，各格 p50 / p99 除以 Z1 里同 SM 数的分母（green25 用 `probe_greenalone25`，mps50 用 `probe_mpsalone50`，其余用 `probe_isolated`）；
-- 同一方式在 50 与 100 ms 下错过率的差别，说明结果对周期余量有多敏感；
-- 长上下文 green25 / prio 里超过周期的那几次执行器调用，落在规划器调用的哪一段（预填充：`t_start` 到 `t_start + prefill_ms`；解码：之后到 `t_end`；调用之间）；`alloc` 里 `segment.all.allocated` / `num_device_alloc` 非零，说明计时窗口内规划器在向驱动申请显存；
-- `p50_isolated_end` / `p100_isolated_end` 与各自 start 的差值超过上面的效应，就不能当分母，要标明。
-
-结论去向：同上；`research/experiments/colocation_5090/README.md` 的 Thor 一节；ISSUE-098 的结果写进 issues.md。
+带回：两行全文（其中 `hog` 字段的 `GBps`）。判据：执行器旁边负载拿到的带宽，加上执行器自身的需求，接近 236 GB/s 的上限，说明两者在分同一份带宽。结论去向：同上。
 
 ## 已完成的轮次（不再重跑）
 
-逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
+逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`、`1029`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
 
 ---
 

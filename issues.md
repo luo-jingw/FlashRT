@@ -1122,9 +1122,11 @@ THOR_STATUS_SUMMARY.md round `1028` (Y4); Thor `$HOME/thor_val/1028/cells/*.json
 - Memory-bandwidth contention: less likely to explain a 15× stall, since the executor on 4 SMs is only 1.4× slower than on 20 SMs.
 - The stalls in `prio` / `mps100` are the kernel-boundary queuing measured on the RTX 5090 (R4), scaled by the planner's ~10× longer kernels on the Thor; `green25` would then need a different mechanism.
 
+Round `1029` (executor nvfp4, 2 steps): the stalls keep their length with a different executor (green25 about 2.4 s, prio 1.24 s, mps100 0.56–0.65 s, mps50 none), and the in-process cells record one allocator event per 60 s cell while the planner makes 4–11 calls, which weakens the allocation hypothesis. A further hypothesis: CPU-side work of the planner thread inside `generate` for a 16k-token input holds the Python interpreter while the executor's tick needs it (in-process modes only; mps100's shorter stall would then be GPU queuing alone).
+
 ## Next Experiment
 
-Without CUPTI (see ISSUE-099): timestamp every executor tick (CPU start, GPU events around `stage_inputs` and the graph replay) and every planner phase (prefill start/end, each decode step, call end), plus `torch.cuda.memory_stats()` counters (`num_alloc_retries`, segment allocations) per planner call, in the `green25` long-context cell. A stall that coincides with a planner allocation event supports the first hypothesis; one that sits inside the executor's GPU events while the planner runs prefill supports bandwidth.
+Round `1029b`: `stall_timeline.py` on the four long-context prio / green25 cells of round `1029`, which carry per-tick and per-call wall times, places each missed tick in a planner call's prefill (including CPU-side input preparation), decode, or between calls. Before that, the plan was: without CUPTI (see ISSUE-099): timestamp every executor tick (CPU start, GPU events around `stage_inputs` and the graph replay) and every planner phase (prefill start/end, each decode step, call end), plus `torch.cuda.memory_stats()` counters (`num_alloc_retries`, segment allocations) per planner call, in the `green25` long-context cell. A stall that coincides with a planner allocation event supports the first hypothesis; one that sits inside the executor's GPU events while the planner runs prefill supports bandwidth.
 
 # ISSUE-099
 

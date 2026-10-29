@@ -137,8 +137,10 @@ if worker is not None:
     worker.stdin.flush()
 if planner is not None and MODE != "serial":
     threading.Thread(target=planner_thread, args=(t_end,), daemon=True).start()
+hog_thread = None
 if hog is not None:
-    threading.Thread(target=lambda: hog_rec.update(hog.run(t_end).__dict__), daemon=True).start()
+    hog_thread = threading.Thread(target=lambda: hog_rec.update(hog.run(t_end).__dict__), daemon=True)
+    hog_thread.start()
 alloc0 = torch.cuda.memory_stats()
 
 ticks, release, next_plan = [], t0, t0
@@ -158,6 +160,8 @@ while release < t_end:
     if fin > release:  # overran: next tick released immediately, the schedule slips
         release = fin
 alloc1 = torch.cuda.memory_stats()
+if hog_thread is not None:
+    hog_thread.join()
 smi_rows = []
 if smi is not None:
     smi.terminate()
