@@ -54,12 +54,16 @@ implementation.
 ```python
 from flash_rt import flash_rt_kernels as fvk       # 87 kernels, always built (pybind, PyTorch)
 from flash_rt import flash_rt_fa2     as fa2       # 2 entries, RTX only (SM80/86/89/120)
+from flash_rt import flash_rt_lawam   as lk        # 41 entries, opt-in (FLASHRT_ENABLE_LAWAM, SM120)
 # JAX side (training + inference): consumed via ctypes + jax.ffi
 #   <repo>/flash_rt/flash_rt_jax_ffi.so             # 2 XLA FFI handlers, optional
 ```
 
 `flash_rt_fa2` is skipped on Thor SM110 (Thor uses `fvk.attention_qkv_fp16`
 cuBLAS-decomposed attention — hand-tuned for Thor's unified LPDDR).
+`flash_rt_lawam` is the opt-in LaWAM (LeRobot) module built by
+`-DFLASHRT_ENABLE_LAWAM=ON` on SM120; its entries are grouped by pipeline
+stage in [LaWAM on RTX SM120](lawam_rtx.md).
 `flash_rt_jax_ffi.so` is built only when JAX + the XLA FFI header are
 importable at configure time; it carries **zero new compute kernels**
 — each handler delegates to an existing entry in `flash_rt_kernels`
@@ -243,7 +247,73 @@ the same one); see
 [`training/jax/README.md` § Per-shape FP8 forward microbench](../training/jax/README.md)
 for measured numbers on RTX 5090 SM120.
 
+## 12. SM120 small-row NVFP4 and fused prefill families (`GPU_ARCH=120/121`)
+
+Built into `flash_rt_kernels` on SM120 builds only; the bindings are compiled
+under the same gate, so other architectures do not expose them and the
+frontends keep their FP8 paths there.
+
+| Group | Symbols | What it is |
+|---|---|---|
+| Skinny W4A4 GEMM | `nvfp4_skinny_gemm`, `nvfp4_skinny_gemm_bf16_act`, `nvfp4_skinny_pack_weight`, `nvfp4_skinny_quantize_weight`, `nvfp4_skinny_config_*` | `mma.sync` block-scaled e2m1 GEMM for <= 48 rows per CTA (action decoders, DiT heads); weights prefetched into registers before the programmatic-dependent-launch wait; FP32 K-split partials |
+| Skinny consumers | `nvfp4_skinny_layer_norm`, `nvfp4_skinny_sum_bias_residual_norm`, `nvfp4_skinny_sum_bias_gelu`, `nvfp4_skinny_partials_attention` | Sum the partials and run the next step (bias, residual, LayerNorm / AdaLN, GELU, attention) while emitting the next NVFP4 operand |
+| Prefill NVFP4 | `nvfp4_norm_quant`, `nvfp4_quant`, `nvfp4_qk_norm_rope`, `nvfp4_scatter_add_rows`, `nvfp4_sf_bytes` | Norm / quantize producers writing e2m1 + swizzled UE4M3 scales for the CUTLASS block-scaled GEMMs |
+| CUTLASS NVFP4 epilogues | `nvfp4_gemm_bias_res_bf16out`, `nvfp4_gemm_bias_gelu_fp4out`, `nvfp4_gemm_geglu_fold_fp4out` | W4A4 GEMMs with bias + residual (BF16 out) or GELU / GeGLU straight to the next NVFP4 operand |
+| FP8 prefill (FP16 stream) | `fp8_residual_norm_quant`, `fp8_qkv_split`, `fp8_bias_gelu_quant` | Residual + norm -> FP8, Q/K/V split with bias / q-k RMSNorm / RoPE, bias + GELU -> FP8 around per-tensor FP8 GEMMs |
+| Prefill attention | `fused_qkv_attention` | Non-causal FP16 / BF16 attention reading Q/K/V straight from projection rows (bias / RoPE on load), head_dim 64 / 72 |
+
+Pi0.5's decoder-specific consumers (`pi05_dec_fp4_*`) build only with
+`-DFLASHRT_ENABLE_PI05_NVFP4=ON`.
+
+## 13. Flint (`flash_rt_flint`, `-DFLASHRT_ENABLE_FLINT=ON`, `GPU_ARCH=120`)
+
+A separate module for the Flint official NVFP4 GGUF (W4A16: NVFP4 weights,
+BF16 activations); nothing builds into `flash_rt_kernels`. Shapes are Flint's
+(hidden 2048, 32/4 heads of 128, 256 experts top-6); the runtime only calls them with
+those, and the GEMM / GEMV launchers reject unsupported N / K.
+
+| Group | Symbols | What it is |
+|---|---|---|
+| Load | `repack_nvfp4` | GGUF type-40 blocks -> row-major e2m1 codes + UE4M3 scales, bit-exact, with interleaved / grouped row placement |
+| Decode step (PDL, graph-captured) | `embed_pdl_bf16`, `gemv_fused_w4a16`, `decode_attention_fused_bf16`, `router_norm_bf16`, `moe_gate_up_pdl_bf16`, `moe_down_combine_pdl_bf16`, `lm_head_greedy_w4a16` (`add_rmsnorm_pdl_bf16`, `argmax_next_f32` for the unfused tail) | Six kernels per MoE layer: residual-RMSNorm + QKV GEMV, Q/K norm + RoPE + KV write + split attention with sinks (cluster merge), o_proj GEMV, norm + router + top-6, routed + shared SwiGLU, down + weighted combine; then final norm + LM head + greedy pick in one kernel; static weights loaded before the dependency wait |
+| Decode reference | `embed_at_pos_bf16`, `add_rmsnorm_bf16`, `gemv_w4a16`, `qk_norm_rope_kv_bf16`, `decode_attention_bf16`, `router_topk_bf16`, `moe_gate_up_bf16`, `moe_down_combine_bf16` | Unfused step (`FLINT_DECODE=basic`), the tests' reference for the fused one |
+| Prefill (graph-captured per chunk shape) | `embed_rows_bf16`, `gemm_w4a16_qkrope`, `prefill_attention_bf16`, `gemm_w4a16`, `gemm_w4a16_grouped`, `router_topk_rows_bf16`, `moe_scan_place`, `moe_combine_norm_rows_bf16`, `advance_pos` (`qk_norm_rope_kv_rows_bf16`, `moe_combine_rows_bf16` unfused) | W4A16 tensor-core GEMM (exact dequant into `mma.sync` fragments, 16-128-row tiles, cluster split-K) for dense and expert-grouped matrices; the QKV GEMM epilogue does the Q/K norm, RoPE and KV-cache write per 128-column head tile; tensor-core router with top-6, expert placement (padding rows past the prompt take no expert slot), MoE combine fused with the next layer's residual + RMSNorm, split-KV causal / sliding attention with sinks |
+| Tuning hooks | `gemm_w4a16_cfg`, `set_gemm_override`, `set_gemv_launch_config`, `set_moe_launch_config`, `get_moe_launch_config`, `set_lm_head_rows` | Explicit launch shapes for searches; defaults need none |
+
 ---
+
+## 13. X-VLA RTX SM120 helpers (`GPU_ARCH=120/121`)
+
+Model-specific kernels for `lerobot/xvla-libero`; compiled into
+`flash_rt_kernels` only when `FLASHRT_BUILD_XVLA=ON` and GPU_ARCH is 120/121,
+and their pybind entries are under the same option plus
+`ENABLE_CUTLASS_SM120_NVFP4_W4A16`. Other architectures do not inherit these
+sources or bindings.
+
+| Group | Symbols | What it is |
+|---|---|---|
+| Opt-in shared entries | `add_bias_bf16_pdl`, `residual_add_pdl`, `layer_norm_pdl`, `quantize_bf16_to_nvfp4_swizzled_v3`, `fp8_per_token_block128_quant_bf16_v2` | Distinctly named PDL/vectorized siblings used only by the X-VLA pipeline; the existing shared symbols are unchanged |
+| Small-M NVFP4 GEMM | `xvla_fp4_gemm_bias_bf16out`, `xvla_fp4_gemm_bias_gelu_fp4out` | TMA producer + `mma.sync` block-scaled e2m1 consumers, 32-112-row M tiles for M=262/100/30; bias/BF16 out or bias+GELU+NVFP4+SF out |
+| Flow / decoder helpers | `xvla_flow_step_bf16`, `xvla_action_decoder_gemv`, `xvla_add2_bf16`, `xvla_proprio_bf16`, `xvla_finalize_bf16` | Euler step, decoder GEMV, prefix/proprio add, action postprocess |
+| Fold / norm helpers | `xvla_add_ln_quant_bf16`, `xvla_add_ln_quant_norm_bf16`, `xvla_ln_quant_bf16`, `xvla_ln_quant_bf16_nt256`, `xvla_ln_bf16` | Residual + LayerNorm + NVFP4 pack (denoise and encoder variants) |
+| Copy / cast | `xvla_copy_bf16`, `xvla_copy_f16`, `xvla_cast_f16_to_bf16` | Graph-safe staging helpers |
+| DaViT tower | `xvla_vision_resize`, `xvla_vision_im2col`, `xvla_vision_add_bias`, `xvla_vision_dwconv3x3_res`, `xvla_vision_window_attn`, `xvla_vision_window_qkv_pad[_fill]`, `xvla_vision_window_out_unpad_to_nvfp4`, `xvla_vision_channel_attn`, `xvla_vision_gelu_erf_to_nvfp4`, `xvla_vision_projector_pack` | Florence-2 DaViT-L tower at the four static stage shapes |
+| FA2 tile set | `fa2.fwd_bf16_tile64m32w2[_qnvfp4]` (`<64,32,64,2>`) and the internal `<64,64,64,4>` / `<64,32,64,4>` entries | Additive head_dim-64 instantiations of the vendored FA2 templates; see `csrc/attention/flash_attn_2_src/VENDOR.md` |
+
+## 14. GR00T N1.5 (`flash_rt_groot_n15`, `-DFLASHRT_ENABLE_GROOT_N15=ON`, `GPU_ARCH=89`)
+
+A separate module for GR00T N1.5 on RTX 4090; nothing builds into
+`flash_rt_kernels`. The forward also uses the shared `patch_im2col_nchw_bf16`,
+`embedding_lookup_bf16`, `bf16_matmul_cublaslt_ref_bf16`, the `*_hf_bf16`
+Qwen3 kernels, `GemmRunner.fp8_nt_dev` and `flash_rt_fa2`. See
+`docs/groot_n15_rtx_sm89.md`.
+
+| Group | Symbols | What it is |
+|---|---|---|
+| Torch-algorithm GEMMs | `groot_n15_linear_bias_bf16`, `groot_n15_bmm_bf16` | `x @ W^T + b` on the cuBLASLt bias-epilogue algorithm torch's addmm runs; `x @ W` on the strided-batched cuBLAS call torch.bmm makes for one batch -- both bitwise equal to PyTorch 2.5 (the release the reference pins) |
+| Norms | `groot_n15_layer_norm_bf16`, `groot_n15_layer_norm_to_f32`, `groot_n15_residual_layer_norm_f32`, `groot_n15_residual_add_f32_to_bf16`, `groot_n15_ada_layer_norm_bf16` | Residual add + LayerNorm on bf16 or fp32 residual streams, AdaLayerNorm with bf16 `(1 + scale)` / `shift` tables, rounded where the bf16-autocast reference rounds; dim <= 2048 |
+| Elementwise | `groot_n15_add_rows_bf16`, `groot_n15_bias_act_bf16`, `groot_n15_concat_bias_bf16`, `groot_n15_gelu_tanh_bf16`, `groot_n15_actions_init`, `groot_n15_euler_step` | Bias / position add, bias + ReLU / swish, action-encoder concat, GELU (tanh), flow-matching state |
+| FP8 tier | `groot_n15_quant_rows_fp8`, `groot_n15_rescale_rows_bf16` | Per-token E4M3 activation quantization; token x channel dequantization + bias after a unit-scale FP8 GEMM |
 
 ## Re-use decision tree
 

@@ -7,6 +7,7 @@
 #include "namespace_config.h"
 
 #include <cuda.h>
+#include <cuda_fp8.h>
 #include <vector>
 
 // Vendor patch: replace PyTorch ATen dependency with a minimal POD stub.
@@ -64,6 +65,22 @@ struct Flash_fwd_params : public Qkv_params {
 
     // The O matrix (output).
     void * __restrict__ o_ptr;
+
+    // FlashRT local patch 4: optional FP8 (e4m3) copy of the final attention
+    // output, written from the registers that already feed the bf16 store, so a
+    // consumer GEMM that wants an FP8 activation does not need a second pass over
+    // O. `o_fp8_scale_ptr` is a device scalar holding the static activation scale,
+    // i.e. the same buffer quantize_fp8_static would read. nullptr disables the
+    // whole path and leaves the kernel byte-for-byte as upstream.
+    //
+    // `o_bf16_skip` additionally suppresses the bf16 store for callers whose only
+    // consumer is the FP8 copy.
+    void * __restrict__ o_fp8_ptr;
+    const float * __restrict__ o_fp8_scale_ptr;
+    index_t o_fp8_batch_stride;
+    index_t o_fp8_row_stride;
+    index_t o_fp8_head_stride;
+    bool o_bf16_skip;
     void * __restrict__ oaccum_ptr;
 
     // The stride between rows of O.
@@ -77,6 +94,27 @@ struct Flash_fwd_params : public Qkv_params {
     // The pointer to the softmax sum.
     void * __restrict__ softmax_lse_ptr;
     void * __restrict__ softmax_lseaccum_ptr;
+
+    // Optional fused NVFP4 quantize of the O tile, run inside the epilogue that
+    // already holds the tile. Null on every existing caller, which leaves the
+    // epilogue bit-identical to upstream. Contract: quantize_o != 0 means this
+    // head's d_rounded columns of each row are written as
+    //   o_packed_ptr : (total_q, num_heads_q * d_rounded / 2) u8 row-major, at
+    //                  (row, bidh * d_rounded / 2)
+    //   o_sfa_ptr    : swizzled (total_q, d_rounded / 16) ue4m3 scales, the atom
+    //                  layout quantize_bf16_to_nvfp4_swizzled emits
+    // using the same batch/row/head strides the bf16 O write uses.
+    void * __restrict__ o_packed_ptr;
+    void * __restrict__ o_sfa_ptr;
+    int o_packed_row_bytes;
+    int o_sfa_n_col_blocks;
+    int quantize_o;
+
+    // Launch with a programmatic dependency on the previous graph node
+    // (cudaLaunchAttributeProgrammaticStreamSerialization). The forward kernel
+    // executes griddepcontrol.wait before its first global access, which is a
+    // no-op for an ordinary launch, so 0 -- every existing caller -- is upstream.
+    int pdl;
 
     // The dimensions.
     int b, seqlen_q, seqlen_k, seqlen_knew, d, seqlen_q_rounded, seqlen_k_rounded, d_rounded, rotary_dim, total_q;
@@ -140,6 +178,7 @@ struct Flash_fwd_params : public Qkv_params {
     uint64_t * rng_state;
 
     bool is_bf16;
+    bool lawam_short_tiles;  // Explicit model-local tile opt-in; zero for legacy entries.
     bool is_causal;
 
     // If is_seqlens_k_cumulative, then seqlen_k is cu_seqlens_k[bidb + 1] - cu_seqlens_k[bidb].

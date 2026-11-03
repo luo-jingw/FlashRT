@@ -45,11 +45,12 @@ _AMD_FRONTEND_CLASS = "GrootN17TorchFrontendAmd"
 _BOGUS_CKPT = "/nonexistent/flashrt-amd-groot-test-ckpt"
 
 
-def _amd_ext_importable() -> bool:
-    """True iff the compiled AMD module is importable in this env."""
+def _amd_cdna_ext_importable() -> bool:
+    """True iff the compiled AMD module is the CDNA4 source set."""
     try:
-        import flash_rt.amd.flash_rt_amd_kernels  # noqa: F401
-        return True
+        from flash_rt.amd import flash_rt_amd_kernels
+
+        return flash_rt_amd_kernels.build_info().get("backend") != "rdna"
     except ImportError:
         return False
 
@@ -72,9 +73,8 @@ def _amd_groot_frontend_importable() -> bool:
 
 
 _EXT_SKIP = pytest.mark.skipif(
-    not _amd_ext_importable(),
-    reason="flash_rt_amd_kernels not built (the amd_cdna4 extension gate in "
-           "flash_rt/api.py raises ImportError before this check is reached)")
+    not _amd_cdna_ext_importable(),
+    reason="CDNA4 flash_rt_amd_kernels source set is not built")
 _FRONTEND_SKIP = pytest.mark.skipif(
     not _amd_groot_frontend_importable(),
     reason="AMD GROOT N1.7 frontend not importable here (optional deps "
@@ -98,6 +98,8 @@ def test_pipeline_map_has_amd_groot_n17_entry():
     key = ("groot_n17", "torch", "amd_cdna4")
     assert key in _PIPELINE_MAP, "AMD GROOT N1.7 dispatch entry disappeared"
     assert _PIPELINE_MAP[key] == (_AMD_FRONTEND_MODULE, _AMD_FRONTEND_CLASS)
+    assert _PIPELINE_MAP[("groot_n17", "torch", "amd_cdna3")] == \
+        _PIPELINE_MAP[key]
 
 
 @_FRONTEND_SKIP
@@ -119,7 +121,7 @@ def test_resolver_rejects_unported_groot_n17_combos():
 
     for config, framework, arch in [
             ("groot_n17", "jax", "amd_cdna4"),
-            ("groot_n17", "torch", "amd_cdna3"),
+            ("groot_n17", "jax", "amd_cdna3"),
             ("groot_n17", "torch", "not_a_real_arch")]:
         with pytest.raises(RuntimeError, match="no pipeline"):
             resolve_pipeline_class(config, framework, arch)

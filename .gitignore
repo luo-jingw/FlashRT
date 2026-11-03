@@ -1,4 +1,5 @@
 # Python
+.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -53,3 +54,7 @@ third_party/flux2
 # directory by the Ascend runtime at execution time.
 fusion_result.json
 ge_check_op.json
+
+# Local tutorial environments and results
+.reference/
+results/

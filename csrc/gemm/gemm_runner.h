@@ -70,10 +70,36 @@ public:
                   int M, int N, int K,
                   cudaStream_t stream = 0);
 
+    // BF16 + BIAS epilogue over the same B layout as bf16_run:
+    //   D(M,N) = A(M,K) @ B(N,K)^T + bias(N), all row-major BF16, fp32 accumulate.
+    // B is an nn.Linear weight as stored, (N,K), so no transpose or repack is
+    // needed on the caller's side, and the sum is rounded to BF16 exactly once.
+    // bf16_nn_bias computes the same shape from a (K,N) B; this is the (N,K)
+    // twin, and it reaches cuBLASLt through column-major views because the
+    // row-order formulation with a BIAS epilogue has no algorithm on sm_120 —
+    // see the note in gemm_runner.cu.
+    void bf16_nt_bias(void* A, void* B, void* D, void* bias,
+                      int M, int N, int K,
+                      cudaStream_t stream = 0);
+
     // BF16: D = A(M,K) @ B(K,N)  (row-major, no transpose)
+    // FP16 GEMM with a fused per-column bias epilogue.
+    void fp16_nn_bias(void* A, void* B, void* D, void* bias,
+                      int M, int N, int K, cudaStream_t stream);
+
     void bf16_nn(void* A, void* B, void* D,
                  int M, int N, int K,
                  cudaStream_t stream = 0);
+
+    // BF16 GEMM with a fused FP32 bias epilogue (PyTorch addmm equivalent).
+    void bf16_nn_bias_f32(void* A, void* B, void* D, void* bias,
+                          int M, int N, int K, cudaStream_t stream = 0);
+
+    // BF16 inputs with an FP32 output.  Used to reproduce a fused-bias
+    // epilogue exactly: accumulate in FP32, add the bias, round once.
+    void bf16_nn_fp32(void* A, void* B, void* D,
+                      int M, int N, int K,
+                      cudaStream_t stream = 0);
 
     // FP16: D = A(M,K) @ B(K,N)  (row-major, no transpose)
     void fp16_nn(void* A, void* B, void* D,
@@ -223,7 +249,8 @@ private:
 
     // ── GEMM descriptor + algorithm cache ──
     enum GemmType { BF16_NN = 0, BF16_NN_RES = 1, FP8_NN_DEV = 2,
-                    FP8_NT_DEV = 5, FP16_NN = 4, FP8_NN_DEV_FP16 = 6
+                    FP8_NT_DEV = 5, FP16_NN = 4, FP8_NN_DEV_FP16 = 6,
+                    BF16_NN_FP32 = 7
 #ifdef ENABLE_NVFP4
         , FP4_NN_DEV = 3
 #endif

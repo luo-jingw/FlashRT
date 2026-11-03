@@ -7,184 +7,57 @@
 **FlashRT is a high-performance realtime inference engine for small-batch, latency-sensitive AI workloads.**
 
 <p align="center">
-  | <a href="https://arxiv.org/abs/2606.20537"><b>Paper</b></a>
+  | <a href="https://arxiv.org/abs/2610.24349"><b>Paper</b></a>
   | <a href="https://github.com/flashrt-project/FlashRT-HF-kernels"><b>HF Kernels</b></a>
-  | <a href="https://github.com/LiangSu8899/FlashRT-Nexus"><b>Nexus</b></a> |
+  | <a href="https://github.com/LiangSu8899/FlashRT-Nexus"><b>Nexus</b></a>
+  | <a href="docs/demos.md"><b>Demos</b></a> |
 </p>
 
-A general kernel library composed into static graphs — no ONNX export, no engine compilation, no per-driver rebuild. Hand-written kernels (norm / activation / fusion / RoPE / FP8 / NVFP4 GEMM / attention) cover standard transformer, DiT, and SigLIP primitives. The composition pattern itself is hardware-agnostic; today the codebase ships with NVIDIA implementations spanning edge to server (Jetson AGX Thor through A100 / RTX 4090 / 5090).
+FlashRT combines model-specific dataflows, static execution, quantization and
+calibration, cross-layer fusion, and highly tuned hand-written kernels for
+small-batch realtime inference. Its hardware-independent architecture supports
+NVIDIA GPUs, AMD GPUs, and Ascend NPUs, with CUDA, HIP, and AscendC backends.
 
-The flagship integration today is **VLA control** — production frontends for Pi0, Pi0.5, GROOT N1.6, GROOT N1.7, and Pi0-FAST, validated on LIBERO where applicable. The same kernel set also powers BAGEL world-model research paths, Higgs Audio v3 TTS, Wan2.2 / Motus video-policy paths, and **single-stream LLM inference** with Qwen3.6-27B NVFP4 long-context serving. The pattern is workload-shaped (small-batch realtime), not model-class-shaped.
-
-Existing inference tooling is shaped for different workloads — TensorRT for tactic-search compile to frozen engines, vLLM / SGLang for high-batch LLM serving. FlashRT targets the small-batch realtime cell with hand-tuned kernels and no compile step.
+FlashRT runs robot policies (π0, π0.5, π0-FAST, GR00T N1.6 and N1.7, LingBot-VLA, Hy-Embodied-0.5-VLA), the Alpamayo 1.5 driving VLA, world and video models (Cosmos3, Wan2.2, Motus), vision-language and language models (Qwen3, Qwen3-VL, Qwen3.6) and speech and audio models (Higgs Audio v3, OmniVoice, Mel-Band RoFormer) at batch size one, on Jetson AGX Thor and Orin, RTX 50- and 40-series GPUs, DGX Spark, AMD Instinct MI350X and MI300X, and Ascend 910B. The pattern is workload-shaped (small-batch realtime), not model-class-shaped.
 
 ## Demos
-
-Each film is one checkpoint executed several ways, side by side on **one wall
-clock**, each pane advancing at the rate it was actually measured at. The GIFs
-below are sped up to fit the page; the [real-time recordings](https://github.com/flashrt-project/FlashRT-assets/tree/main/demo/mp4) and the
-[full walkthrough](https://huggingface.co/spaces/liangsu9988/fast-kernels-are-not-fast-pipelines) play one second per second.
 
 ### VLA
 
 **π0.5 on a Jetson AGX Thor.** LIBERO-spatial task 1, one flow-matching sample
-held fixed. Two hosts as their authors ship them, then the same model
-accelerated two ways. Per-decision latency **266.0 / 303.6 → 36.1 → 29.2 ms**,
-3.8 Hz to **34.2 Hz** of policy decisions; the task finishes in **6.0 s**
-instead of 23.5 s, and all four arms complete it.
+held fixed. OpenPI and LeRobot hosts as shipped, plus FlashRT structures and
+native inference. Median per-decision latency **266.0 / 303.6 → 36.1 → 22.2 ms**,
+3.8 Hz to **45.1 Hz** of policy decisions. On the shared policy + 20 Hz control
+timeline, the task completes at **5.4 s** versus 23.5 s; all four arms succeed.
 
 <img src="https://github.com/flashrt-project/FlashRT-assets/raw/main/demo/gif/thor_pi05.gif" alt="thor_pi05" width="100%">
 
 <sub>2× playback. <a href="https://github.com/flashrt-project/FlashRT-assets/blob/main/demo/mp4/thor_pi05.mp4">Real-time recording</a>.</sub>
 
-<details>
-<summary><strong>More VLA films</strong> — one checkpoint four ways, and the same checkpoint on two hosts</summary>
+| Workload | Watch |
+|---|---|
+| Real-robot deployment | [MindOn Mind-1 demo](https://www.youtube.com/watch?v=SsNYtZJZyLM) · [Blog](https://www.mindon.tech/blog/mind-1/index.html) |
+| Robot policies | [π0.5 and GR00T](docs/demos.md#vla) |
+| Vision-language models | [Qwen3-VL](docs/demos.md#vlm) |
+| Language models and serving | [Qwen3.6, vLLM and SGLang](docs/demos.md#llm) |
+| Video generation | [Wan2.2](docs/demos.md#video) |
 
-**π0.5 · RTX 5090 — four ways of executing one checkpoint.** The host as
-shipped, the same host compiled, the same host with structures attached, and
-the hand-written FlashRT pipeline. **107.5 → 58.9 → 25.6 → 21.6 ms**, i.e.
-9.3 → 46.5 Hz. Same task, same initial state in every pane.
+More recordings and setup details: [demo gallery](docs/demos.md).
 
-<img src="https://github.com/flashrt-project/FlashRT-assets/raw/main/demo/gif/pi05_race.gif" alt="pi05_race" width="100%">
+## Community highlights
 
-<sub>1.5× playback. <a href="https://github.com/flashrt-project/FlashRT-assets/blob/main/demo/mp4/pi05_race.mp4">Real-time recording</a>.</sub>
+**Congratulations to the [MindOn](https://www.mindon.tech/) team on [Mind-1](https://www.mindon.tech/blog/mind-1/index.html).** Their work spans the model, training, control stack and real-robot deployment. Physical deployment is a full-system effort; we are happy to see FlashRT contribute one part of Mind-1's inference stack. Thank you to MindOn for supporting the FlashRT open-source community and helping move the project forward.
 
-**GR00T N1.7 · RTX 5090.** LIBERO-10 task 4, two camera views.
-**44.4 → 25.4 → 17.8 → 15.8 ms**, 22.5 → 63.1 Hz.
+**Thanks to the [Cybernetic Physics](https://cyberneticphysics.com/) team** for extending FlashRT's AMD backend from MI350X/CDNA4 to MI300X/CDNA3, including CDNA3-specific kernel optimizations. Read our joint [technical write-up](https://cyberneticphysics.com/blog/real-time-vla-inference-on-amd-hardware), or start with the [AMD deployment guide](docs/deployment_amd.md).
 
-<img src="https://github.com/flashrt-project/FlashRT-assets/raw/main/demo/gif/groot_race.gif" alt="groot_race" width="100%">
-
-<sub>3× playback. <a href="https://github.com/flashrt-project/FlashRT-assets/blob/main/demo/mp4/groot_race.mp4">Real-time recording</a>.</sub>
-
-**GR00T N1.7 · Jetson AGX Thor.** The same checkpoint and one flow-matching
-sample shared by all four panes. **109.5 / 154.2 → 28.4 → 28.1 ms** — the
-explicit structure book and the hand-written pipeline land 0.25 ms apart.
-
-<img src="https://github.com/flashrt-project/FlashRT-assets/raw/main/demo/gif/thor_groot.gif" alt="thor_groot" width="100%">
-
-<sub>5× playback. <a href="https://github.com/flashrt-project/FlashRT-assets/blob/main/demo/mp4/thor_groot.mp4">Real-time recording</a>.</sub>
-
-**π0.5 under two independent hosts.** LeRobot **107.5 → 25.6 ms**, OpenPI
-**41.7 → 28.8 ms**. Two hosts that start 2.58× apart end within 12% of each
-other; each is measured against the form its own authors ship.
-
-<img src="https://github.com/flashrt-project/FlashRT-assets/raw/main/demo/gif/pi05_cross.gif" alt="pi05_cross" width="100%">
-
-<sub>1.5× playback. <a href="https://github.com/flashrt-project/FlashRT-assets/blob/main/demo/mp4/pi05_cross.mp4">Real-time recording</a>.</sub>
-
-**GR00T N1.7 under Isaac-GR00T and the LeRobot port.** One NVIDIA checkpoint,
-two hosts: **44.4 → 17.8 ms** and **41.8 → 18.6 ms**. The two hosts agree to a
-cosine of 0.999995 on the one decision both made from a byte-identical
-observation.
-
-<img src="https://github.com/flashrt-project/FlashRT-assets/raw/main/demo/gif/groot_cross.gif" alt="groot_cross" width="100%">
-
-<sub>3× playback. <a href="https://github.com/flashrt-project/FlashRT-assets/blob/main/demo/mp4/groot_cross.mp4">Real-time recording</a>.</sub>
-
-</details>
-
-### VLM
-
-**Qwen3-VL-8B on the unedited `transformers` host.** One image, one prompt,
-greedy. Three arms: the host as shipped, the host compiled with a static cache,
-and the host with structures attached. Decode **65.6 → 82.9 → 145.7 tok/s**,
-**1.76×** over the host's own compiled form; TTFT ~30 ms in all three. 180
-seats, no host edit.
-
-<img src="https://github.com/flashrt-project/FlashRT-assets/raw/main/demo/gif/qwen3vl.gif" alt="qwen3vl" width="100%">
-
-<sub>1× playback. <a href="https://github.com/flashrt-project/FlashRT-assets/blob/main/demo/mp4/qwen3vl.mp4">Real-time recording</a>.</sub>
-
-### LLM
-
-**Qwen3.6-35B-A3B on one 32 GB card.** 67 GB of BF16 weights do not fit;
-`quantize_on_adopt` regrids the expert banks before the model reaches the
-device (22.3 GiB resident) and the model runs. Decode **51.6 → 203.5 → 284.9
-tok/s**, the third pane being the checkpoint's own draft head at 3.43 tokens
-accepted per round — shown on the prompt where it wins, dropped on the one
-where it does not.
-
-<img src="https://github.com/flashrt-project/FlashRT-assets/raw/main/demo/gif/qwen36.gif" alt="qwen36" width="100%">
-
-<sub>1× playback. <a href="https://github.com/flashrt-project/FlashRT-assets/blob/main/demo/mp4/qwen36.mp4">Real-time recording</a>.</sub>
-
-**Attached inside vLLM, under batch.** The same 35B mixture-of-experts served
-by vLLM on a Jetson AGX Thor at 1, 4, 8 and 16 concurrent requests — four
-chapters in one file, each pane a live stream. Aggregate throughput
-**38.4 → 77.4**, **77.5 → 182.8**, **98.9 → 245.5**, **211.4 → 302.1 tok/s**;
-every level gains. A routed mixture of experts does not dilute the way a dense
-model does — each token reads its own experts, so expert weight traffic grows
-with the batch instead of being shared — which is why the gain climbs to batch
-8 rather than falling away.
-
-<img src="https://github.com/flashrt-project/FlashRT-assets/raw/main/demo/gif/thor_concurrency.gif" alt="thor_concurrency" width="100%">
-
-<sub>3.5× playback. <a href="https://github.com/flashrt-project/FlashRT-assets/blob/main/demo/mp4/thor_concurrency.mp4">Real-time recording</a>.</sub>
-
-<details>
-<summary><strong>More LLM films</strong> — inside vLLM and SGLang, single stream</summary>
-
-**Inside two serving engines.** Qwen3-8B, single stream, 144 seats bound by a
-hook that fires after the engine loads and before its first trace. vLLM
-**99.1 → 145.3 tok/s**, SGLang **101.2 → 203.0 tok/s**, TTFT falls in both.
-Neither engine is forked: each keeps its scheduler, its memory planner and its
-own graph, and the seats go inside that.
-
-<img src="https://github.com/flashrt-project/FlashRT-assets/raw/main/demo/gif/engines.gif" alt="engines" width="100%">
-
-<sub>1× playback. <a href="https://github.com/flashrt-project/FlashRT-assets/blob/main/demo/mp4/engines.mp4">Real-time recording</a>.</sub>
-
-</details>
-
-### Video
-
-**Wan2.2 TI2V-5B — one clip, four ways of making it.** 480×480, 33 frames, 20
-denoise steps, one prompt and one seed, all four arms in one process against
-one baseline. **6.48 → 5.23 → 2.11 → 1.68 s**; per transformer call
-**162.2 → 41.8 ms**. The third arm runs 4-bit on every call whose own per-step
-score holds the band and hands the rest to FP8 — 171 calls at four bits, 50 at
-eight, decided per call by measurement. Every pane plays its own clip at the
-end.
-
-<img src="https://github.com/flashrt-project/FlashRT-assets/raw/main/demo/gif/wan22.gif" alt="wan22" width="100%">
-
-<sub>1× playback. <a href="https://github.com/flashrt-project/FlashRT-assets/blob/main/demo/mp4/wan22.mp4">Real-time recording</a>.</sub>
-
----
-
-## FlashRT is fast with:
-
-- **hand-written CUDA kernels**: norm, activation, residual+norm+quant fusion, RoPE / qkv-split, FP8 / NVFP4 GEMM, cuBLASLt FP8, CUTLASS SM100 FP8, vendored Flash-Attention 2, Thor CUTLASS FMHA
-- **Static CUDA Graph capture** of the entire forward — zero Python overhead at replay
-- **Production FP8 (E4M3) and NVFP4** with automatic per-tensor calibration, JSON-cached to disk
-- **No compile, no export**: direct safetensors / Orbax loading, first call ~3 s, every call after is graph replay
-- Survives CUDA driver upgrades, GPU swaps, and prompt changes without rebuild
-- **Serving hosts** for OpenAI-compatible LLM/audio endpoints and robot execution-state scenarios
-
-## FlashRT is easy to use with:
-
-- **3-line API**: `flash_rt.load_model(...).predict(images, prompt)`
-- **Auto-dispatched hardware**: same code path on Jetson Thor / RTX 5090 / RTX 4090
-- **PyTorch and JAX frontends** share one kernel binary, equivalent results (cosine ≥ 0.999)
-- **Plugin model registration** — add a new VLA via one frontend file + a declarative `WEIGHT_SPEC`, no fork required
-- **LIBERO benchmark integration** out of the box; ~6 minutes from `git clone` to first inference
-- **FlashRT Structures** — attach the kernel catalog onto an **unmodified** PyTorch host, no fork and no edit to its source; works on `lerobot`, Isaac-GR00T, `openpi`, `transformers`, `diffusers`, and inside vLLM / SGLang. Its own package and repository: [FlashRT-Structures](https://github.com/flashrt-project/FlashRT-Structures)
-
-```python
-import flashrt_structures as structures    # pip install flashrt-structures
-
-plan = structures.attach(model, forward)   # discover → calibrate → gate → activate
-print(structures.explain(plan))            # bound / routed / kept-at-host / refused, with reasons
-
-loop = structures.decode_loop(model, max_len=4096)      # serving door
-out  = loop.generate(input_ids, max_new_tokens=256)
-```
-
-Structures: [repository](https://github.com/flashrt-project/FlashRT-Structures) · [explicit pipeline examples](https://github.com/flashrt-project/FlashRT-Structures/tree/main/examples) · [walkthrough with films](https://huggingface.co/spaces/liangsu9988/fast-kernels-are-not-fast-pipelines)
-
-See [Supported Models](#supported-models), [Hardware Support](#hardware-support), and [Benchmark](#benchmark) for the current map.
+**[EagleVLA-Edge](https://github.com/PKU-SEC-Lab/EagleVLA-Edge) from PKU-SEC-Lab** integrates a C API provider that lets FlashRT call its llama.cpp-based PI0/PI0.5 GGUF runtime directly from Python. Their work combines an onboard inference engine with EagleVLA's asynchronous robot-control framework; see their [README](https://github.com/PKU-SEC-Lab/EagleVLA-Edge#readme) for the integration and deployment details.
 
 ## News
+
+- **Oct 2026** — Thor reproduction guides now cover [OpenPI π0.5](docs/thor/pi05.md), [GR00T N1.7](docs/thor/groot-n17.md), native builds and the [official Thor Docker image](docker/README.md#thor).
+- **Oct 2026** — [AMD MI300X support](https://github.com/flashrt-project/FlashRT/pull/214) is merged. Thanks to [Yiannis](https://github.com/yiannisha) and Cybernetic Physics; see the [porting story](https://cyberneticphysics.com/blog/real-time-vla-inference-on-amd-hardware).
+- **Oct 2026** — Thanks to [@tlitdc](https://github.com/tlitdc) for the [Hy-Embodied-0.5-VLA RTX SM120 backend](docs/hyvla05_rtx_sm120.md) ([#217](https://github.com/flashrt-project/FlashRT/pull/217)), extending the existing Thor model path to consumer Blackwell.
+- **Sep 2026** — Congratulations to [MindOn on Mind-1](https://www.mindon.tech/blog/mind-1/index.html), and thank you for supporting the FlashRT community.
 
 - **Aug 2026** — **AMD Instinct MI350X (CDNA4)** joins the VLA line: **Pi0.5 at 16.4 ms** (2.47× over `torch.compile` max-autotune, 7.1× over eager) and **GROOT N1.7 at 16.0 ms** full-frame (4.24× over eager). A standalone ROCm/HIP backend — hand-written HIP kernels, hipBLASLt FP8 GEMM, MFMA attention, HIP graph capture — arch-gated to gfx950 at both build and run time, carrying no CUDA assumptions. See [AMD deployment](docs/deployment_amd.md) and [Pi0.5 on MI350X](docs/deployment_amd_pi05.md).
 - **Aug 2026** — **FlashRT Structures** ships: the kernel catalog attaches to an *unmodified* PyTorch host — `lerobot`, Isaac-GR00T, `openpi`, `transformers`, `diffusers`, and inside vLLM / SGLang — with no fork and no edit to the host. Measured on VLA, VLM, LLM and video models across RTX 5090 and Jetson AGX Thor. Now its own package: [FlashRT-Structures](https://github.com/flashrt-project/FlashRT-Structures). See also the [walkthrough with films](https://huggingface.co/spaces/liangsu9988/fast-kernels-are-not-fast-pipelines).
@@ -215,6 +88,38 @@ See [Supported Models](#supported-models), [Hardware Support](#hardware-support)
 
 <a name="performance"></a>
 
+## FlashRT is fast with:
+
+- **Highly tuned hand-written kernels** for NVIDIA GPUs, AMD GPUs, and Ascend NPUs, covering attention, GEMM, normalization, quantization, and fused model operations
+- **Static graph execution** over stable buffers, using CUDA Graphs, HIP graphs, or NPU graphs on supported model paths
+- **FP8, NVFP4 and INT8 / W4A8 precision tiers** with static weights; activation scales are calibrated and cached to disk, or computed inside the kernels that produce the activations
+- **No compile, no export**: direct safetensors / Orbax loading, first call ~3 s, every call after is graph replay
+- Survives CUDA driver upgrades, GPU swaps, and prompt changes without rebuild
+- **Serving hosts** for OpenAI-compatible LLM/audio endpoints and robot execution-state scenarios
+
+## FlashRT is easy to use with:
+
+- **3-line API**: `flash_rt.load_model(...).predict(images, prompt)`
+- **Hardware dispatch**: a common model API with backend-specific kernels for NVIDIA, AMD, and Ascend
+- **PyTorch and JAX frontends** share one kernel binary, equivalent results (cosine ≥ 0.999)
+- **Plugin model registration** — add a new VLA via one frontend file + a declarative `WEIGHT_SPEC`, no fork required
+- **LIBERO benchmark integration** out of the box; ~6 minutes from `git clone` to first inference
+- **FlashRT Structures** — attach the kernel catalog onto an **unmodified** PyTorch host, no fork and no edit to its source; works on `lerobot`, Isaac-GR00T, `openpi`, `transformers`, `diffusers`, and inside vLLM / SGLang. Its own package and repository: [FlashRT-Structures](https://github.com/flashrt-project/FlashRT-Structures)
+
+```python
+import flashrt_structures as structures    # pip install flashrt-structures
+
+plan = structures.attach(model, forward)   # discover → calibrate → gate → activate
+print(structures.explain(plan))            # bound / routed / kept-at-host / refused, with reasons
+
+loop = structures.decode_loop(model, max_len=4096)      # serving door
+out  = loop.generate(input_ids, max_new_tokens=256)
+```
+
+Structures: [repository](https://github.com/flashrt-project/FlashRT-Structures) · [explicit pipeline examples](https://github.com/flashrt-project/FlashRT-Structures/tree/main/examples) · [walkthrough with films](https://huggingface.co/spaces/liangsu9988/fast-kernels-are-not-fast-pipelines)
+
+See [Supported Models](#supported-models), [Hardware Support](#hardware-support), and [Benchmark](#benchmark) for the current map.
+
 ## Benchmark
 
 Baseline comparisons and source methodology live in [Benchmark Comparison](docs/benchmark_comparison.md).
@@ -223,22 +128,20 @@ Baseline comparisons and source methodology live in [Benchmark Comparison](docs/
 
 | Hardware | Mode | Latency | Throughput | Source |
 |---|---|---:|---:|---|
-| Jetson AGX Thor | FP8, 2-view | **44.0 ms** | **23 Hz** | [Thor VLA](examples/thor/README.md#thor-vla-performance) |
-| Jetson AGX Thor | NVFP4 + FA4, 1-view † | **23.01 ms** | **43 Hz** | [Pi0.5 Thor NVFP4](docs/pi05_thor_decoder_fp4_e2e.md) |
-| Jetson AGX Thor | NVFP4 + FA4, 2-view | **27.17 ms** | **37 Hz** | [Pi0.5 Thor NVFP4](docs/pi05_thor_decoder_fp4_e2e.md) |
-| Jetson AGX Thor | NVFP4 + FA4, 3-view | **31.74 ms** | **32 Hz** | [Pi0.5 Thor NVFP4](docs/pi05_thor_decoder_fp4_e2e.md) |
-| RTX 5090 | FP8, 2-view | **17.58 ms** | **57 Hz** | [Blackwell VLA](examples/blackwell/README.md#vla-latency-rtx-5090) |
+| Jetson AGX Thor | OpenPI FP8, 2 cameras | **40.71 ms** | **24.6 Hz** | [Verified results](docs/thor/pi05.md#4-check-the-result) |
+| Jetson AGX Thor | OpenPI NVFP4 + FA4, 2 cameras | **20.33 ms** | **49.2 Hz** | [Verified results](docs/thor/pi05.md#4-check-the-result) |
+| RTX 5090 | FP8, 2-view | **13.10 ms** | **76 Hz** | [Blackwell VLA](examples/blackwell/README.md#vla-latency-rtx-5090) |
+| RTX 5090 | FP4, 2-view | **8.75 ms** | **114 Hz** | [Pi0.5 NVFP4](docs/pi05_prefix_nvfp4.md#latest-verified-modes-2026-10-16) |
 | AMD Instinct MI350X | FP8, CDNA4 | **16.4 ms** | **61 Hz** | [AMD Pi0.5](docs/deployment_amd_pi05.md) |
 
-For the Pi0.5 Thor rows, use about 300 warmup calls; 20 can be insufficient.
-See the [warmup and latency reference notes](docs/pi05_thor_decoder_fp4_e2e.md#warmup-and-latency-references).
+The Thor rows use OpenPI `pi05_libero`, two cameras and 10 denoising steps.
+These are steady-state medians from the public Thor image after 200 warmups and
+1,000 measured calls. Action cosine against OpenPI is 0.999905 (FP8) / 0.999707 (NVFP4).
 
-† At 1 view the per-sample action cosine against the FP8 reference does
-not clear the 0.995 gate (worst sample 0.971): with single-view input the
-flow-matching field itself is near a decision boundary on some samples,
-so trajectories land in a different action basin. See
-[one-view fidelity](docs/pi05_thor_decoder_fp4_e2e.md#one-view-fidelity-diagnosis-and-passing-configuration-2026-07-27)
-for the diagnosis and a configuration that does clear the gates at 1 view.
+Using OpenPI's `pi05_libero` model, FlashRT achieved **94.29% success on LIBERO-10**. On RTX 5090 the NVFP4 tier scores **93.32%** on LIBERO-10
+over 10 seeds (5000 episodes; [protocol](docs/pi05_prefix_nvfp4.md#libero-10-closed-loop)).
+
+**Guide:** [Thor](docs/thor/pi05.md) · [RTX 5090](examples/blackwell/README.md) · [AMD](docs/deployment_amd_pi05.md).
 
 #### Pi0
 
@@ -249,6 +152,8 @@ for the diagnosis and a configuration that does clear the gates at 1 view.
 | RTX 5090 | FP8, 2-view | **21.16 ms** | **47 Hz** | [API snippets](#api-snippets) |
 | RTX 5090 | FP8, 3-view | **24.48 ms** | **41 Hz** | [API snippets](#api-snippets) |
 
+**Guide:** [Thor](examples/thor/README.md) · [RTX 5090](examples/blackwell/README.md).
+
 #### GROOT N1.6
 
 | Hardware | Mode | Latency | Throughput | Source |
@@ -258,16 +163,35 @@ for the diagnosis and a configuration that does clear the gates at 1 view.
 | RTX 5090 | T=16, 2-view | **12.53 ms** | **80 Hz** | [Blackwell VLA](examples/blackwell/README.md#vla-latency-rtx-5090) |
 | RTX 5090 | T=50, 2-view | **13.08 ms** | **76 Hz** | [Blackwell VLA](examples/blackwell/README.md#vla-latency-rtx-5090) |
 
+**Guide:** [Thor](examples/thor/README.md) · [RTX 5090](examples/blackwell/README.md).
+
+#### GROOT N1.5
+
+| Hardware | Mode | Latency | Source |
+|---|---|---:|---|
+| RTX 4090 | FP8 (default), 3-view, `infer` / graph replay | **30.8 ms** / 21.2 ms (upstream eager 81.2 ms) | [GROOT N1.5 SM89](docs/groot_n15_rtx_sm89.md) |
+| RTX 4090 | BF16, 3-view, `infer` / graph replay | **35.0 ms** / 24.9 ms | [GROOT N1.5 SM89](docs/groot_n15_rtx_sm89.md) |
+
 #### GROOT N1.7
 
 | Hardware | Mode | Latency | Throughput | Source |
 |---|---|---:|---:|---|
-| Jetson AGX Thor | NVFP4 + FA4, LIBERO 1-view | **23.7 ms** | **42 Hz** | [N1.7 Thor NVFP4](USAGE.md#groot-n17-thor) |
-| Jetson AGX Thor | FP8, LIBERO 1-view | **36.8 ms** | **27 Hz** | [Benchmark comparison](docs/benchmark_comparison.md#groot-n17-on-jetson-agx-thor) |
-| Jetson AGX Thor | NVFP4 + FA4, 2-view | **29.9 ms** | **33 Hz** | [N1.7 Thor NVFP4](USAGE.md#groot-n17-thor) |
-| Jetson AGX Thor | FP8, 2-view | **50.2 ms** | **20 Hz** | [GROOT N1.7 API](#groot-n17-rtx) |
-| RTX 5090 | FP8, 2-view base, full graph | **16.6 ms** | **60 Hz** | [GROOT N1.7 API](#groot-n17-rtx) |
+| Jetson AGX Thor | NVFP4 + FA4, LIBERO `libero_10`, 1 camera | **23.23 ms** | **43.0 Hz** | [Reproduce](docs/thor/groot-n17.md) |
+| Jetson AGX Thor | NVFP4 + FA4, DROID 2-view feature graph | **29.60 ms** | **33 Hz** | — |
+| Jetson AGX Thor | FP8, DROID 2-view feature graph | **48.94 ms** | **20.4 Hz** | — |
+| RTX 5090 | FP8, 2-view base, full graph | **14.0 ms** | **71 Hz** | [GROOT N1.7 API](#groot-n17-rtx) |
+| RTX 5090 | NVFP4 action head + fused FP8 backbone, 2-view, full graph | **8.64 ms** | **116 Hz** | [GROOT N1.7 NVFP4](docs/groot_n17_rtx_nvfp4.md) |
 | AMD Instinct MI350X | FP8 backbone + BF16 DiT, full frame | **16.0 ms** | **62 Hz** | [AMD deployment](docs/deployment_amd.md) |
+
+The LIBERO row uses four denoising steps, batch 1 and two CPU threads. Latency
+includes input transfer, backbone and action head, measured as native medians.
+The older DROID feature-graph rows exclude image/text embedding generation and
+physical decoding.
+
+**Preprocessing:** approximately 4 ms per frame with the official GR00T processor
+and `--cpu-threads 2`, measured separately from model inference.
+
+**Guide:** [Thor](docs/thor/groot-n17.md) · [RTX 5090](#groot-n17-rtx) · [AMD](docs/deployment_amd.md).
 
 #### Pi0-FAST
 
@@ -276,6 +200,8 @@ for the diagnosis and a configuration that does clear the gates at 1 view.
 | Jetson AGX Thor | max-perf | **8.1 ms/token** | **123 tok/s** | [Thor VLA](examples/thor/README.md#thor-vla-performance) |
 | RTX 5090 | max-perf | **2.39 ms/token** | **418 tok/s** | [Blackwell VLA](examples/blackwell/README.md#vla-latency-rtx-5090) |
 
+**Guide:** [Thor](examples/thor/README.md) · [RTX 5090](examples/blackwell/README.md).
+
 #### LingBot-VLA
 
 | Hardware | Mode | Latency | Throughput | Source |
@@ -283,6 +209,8 @@ for the diagnosis and a configuration that does clear the gates at 1 view.
 | Jetson AGX Thor | FA4, 10 steps | **64.1 ms** | **16 Hz** | [LingBot usage](docs/lingbot_usage.md#5-accuracy--latency-thor-sm_110-cuda-graph-replay) |
 | Jetson AGX Thor | FA4, 25 steps | **97.5 ms** | **10 Hz** | [LingBot usage](docs/lingbot_usage.md#5-accuracy--latency-thor-sm_110-cuda-graph-replay) |
 | Jetson AGX Thor | FA4, 50 steps | **155.8 ms** | **6 Hz** | [LingBot usage](docs/lingbot_usage.md#5-accuracy--latency-thor-sm_110-cuda-graph-replay) |
+
+**Guide:** [Thor](docs/lingbot_usage.md).
 
 #### Qwen3.6-27B
 
@@ -308,6 +236,8 @@ DGX Spark / GB10:
 |---|---:|---:|---|
 | NVFP4, 128 | **170.1 ms** | **40.42 tok/s** | [Qwen3.6 Spark](docs/qwen36_spark.md#performance) |
 | NVFP4, 16 K | **8.545 s** | **54.94 tok/s** | [Qwen3.6 Spark](docs/qwen36_spark.md#performance) |
+
+**Guide:** [Thor](docs/qwen36_nvfp4.md#jetson-agx-thor-numbers) · [RTX 5090](docs/qwen36_nvfp4.md) · [DGX Spark](docs/qwen36_spark.md).
 
 #### Qwen3.6-35B-A3B
 
@@ -335,12 +265,43 @@ Speculative decode with the MTP head reaches **106.74 tok/s** against 100.35
 plain in the same process, emitting the same tokens as greedy decoding. See
 [speculative decode](docs/qwen36_moe_usage.md#speculative-decode).
 
+**Guide:** [Thor](docs/qwen36_moe_usage.md#jetson-agx-thor-numbers) · [RTX 5090](docs/qwen36_moe_usage.md).
+
+#### Flint (official NVFP4 GGUF)
+
+FlashRT W4A16 kernels and a torch frontend for RTX 5090. Batch 1, greedy,
+identical public token inputs; both executors use full-forward wall time.
+The reference is stock llama.cpp CUDA at `1b44e30`; FlashRT uses BF16 KV,
+llama.cpp F16 KV. [Protocol, accuracy and reproduction](docs/flint_usage.md).
+
+**Decode** (256 steps after prefill):
+
+| Context tokens | llama.cpp tok/s | FlashRT tok/s | Speedup | Throughput increase |
+|---:|---:|---:|---:|---:|
+| 1,024 | 234.8 | **683.6** | **2.91×** | +191.1% |
+| 8,192 | 217.9 | **603.0** | **2.77×** | +176.8% |
+| 32,768 | 197.7 | **478.9** | **2.42×** | +142.3% |
+| 102,400 | 157.8 | **303.8** | **1.93×** | +92.5% |
+
+**Prefill** (through the first generated token):
+
+| Prompt tokens | llama.cpp ms | FlashRT ms | Speedup | Latency reduction |
+|---:|---:|---:|---:|---:|
+| 1,024 | 105.0 | **41.4** | **2.54×** | 60.6% |
+| 8,192 | 681.4 | **267.9** | **2.54×** | 60.7% |
+| 32,768 | 3,126.0 | **1,603.2** | **1.95×** | 48.7% |
+| 102,400 | 14,410.5 | **9,476.2** | **1.52×** | 34.2% |
+
+**Guide:** [RTX 5090 setup and limits](docs/flint_usage.md).
+
 #### Qwen3-8B
 
 | Hardware | Mode | Prefill | Decode | Source |
 |---|---|---:|---:|---|
 | RTX 5090 | P=64 | **9.1 ms** | **150 tok/s** | [Qwen3-8B NVFP4](docs/qwen3_8b_nvfp4.md) |
 | RTX 5090 | P=1024 | **24.8 ms** | **150 tok/s** | [Qwen3-8B NVFP4](docs/qwen3_8b_nvfp4.md) |
+
+**Guide:** [RTX 5090](docs/qwen3_8b_nvfp4.md).
 
 #### Qwen3-VL-8B
 
@@ -350,6 +311,8 @@ RTX 5090, NVFP4 language stack + FP8 ViT, image + text:
 |---|---:|---:|---:|---|
 | Full resolution | 1581 | **~100 ms** | **~150 tok/s** | [Qwen3-VL RTX 5090](docs/qwen3_vl_nvfp4.md#1-headline-performance) |
 | 0.5 MP cap | 473 | **~32 ms** | **~150 tok/s** | [Qwen3-VL resolution sweep](docs/qwen3_vl_nvfp4.md#ttft-vs-resolution-the-dominant-knob) |
+
+**Guide:** [RTX 5090](docs/qwen3_vl_nvfp4.md).
 
 #### Qwen3-VL-2B on Jetson
 
@@ -367,12 +330,16 @@ Thor prefill is eager by measurement, not omission: a prefill CUDA Graph
 prototype bought 0.3% there (GPU-bound), so it was not shipped; see
 [Where prefill time goes](docs/qwen3_vl_thor.md#where-prefill-time-goes).
 
+**Guide:** [Thor](docs/qwen3_vl_thor.md) · [Orin](docs/qwen3_vl_rtx_bf16.md).
+
 #### Higgs Audio v3
 
 | Hardware | Mode | Latency | TTFA | Throughput | Source |
 |---|---|---:|---:|---:|---|
 | RTX 5090 | FP8 AR decode | **3.6 ms/frame** | **~79 ms** | RTF **0.09** | [Higgs performance](docs/higgs_audio_v3.md#performance) |
 | RTX 5090 | BF16 AR decode | **6.0 ms/frame** | **~127 ms** | RTF **0.151** | [Higgs performance](docs/higgs_audio_v3.md#performance) |
+
+**Guide:** [RTX 5090](docs/higgs_audio_v3.md).
 
 #### Motus Stage3
 
@@ -381,12 +348,16 @@ prototype bought 0.3% there (GPU-bound), so it was not shipped; see
 | RTX 5090 | fast profile | **167 ms** | **6.0 Hz** | [Motus usage](docs/motus_usage_beta.md) |
 | RTX 5090 | TeaCache | **100 ms** | **10 Hz** | [Motus usage](docs/motus_usage_beta.md) |
 
+**Guide:** [RTX 5090](docs/motus_usage_beta.md).
+
 #### Wan2.2 TI2V-5B
 
 | Hardware | Mode | Generation time | Source |
 |---|---|---:|---|
 | RTX 5090 | 720p, 121f, 20 steps | **178.6 s** | [Wan2.2 benchmarks](docs/wan22_usage.md#benchmarks) |
 | RTX 5090 | TeaCache 0.3 | **114.2 s** | [Wan2.2 benchmarks](docs/wan22_usage.md#benchmarks) |
+
+**Guide:** [RTX 5090](docs/wan22_usage.md).
 
 #### Cosmos3-Edge AV inverse dynamics and Reasoner
 
@@ -405,9 +376,29 @@ the public 1705/911/1263-token text/image/video profile:
 |---|---:|---:|---:|---|
 | FlashRT NVFP4 + whole-step CUDA Graph | **104.3 tok/s** | **112.6 tok/s** | **108.7 tok/s** | [Cosmos3-Edge Reasoner usage](docs/cosmos3_edge_thor.md) |
 
-See the [complete Cosmos3-Edge Thor usage guide](docs/cosmos3_edge_thor.md) for
-the SM110 build flags, official AV baseline and fixture workflow, FP8/NVFP4
-commands, Reasoner text/image/video inputs, accuracy checks, and limitations.
+**Guide:** [Thor](docs/cosmos3_edge_thor.md).
+
+#### Alpamayo 1.5 reasoning driving VLA
+
+Jetson AGX Thor, nine PhysicalAI-AV clips x three seeds (1719 windows per
+arm), mean latency per request: 4 cameras x 4 frames, 128-token reasoning
+budget, one trajectory sample. Every FlashRT row is neutral in trajectory
+error against its reference (paired ADE intervals include zero). Guide:
+[Alpamayo 1.5 on Thor](docs/alpamayo15.md).
+
+| Full request (official procedure) | Jetson Thor |
+|---|---:|
+| Alpamayo 1.5 (ms) | 3322 |
+| + FlashRT, `balanced` preset, the default (ms) | **897** |
+| + FlashRT, `fast` preset (ms) | **811** |
+| Speedup | **3.7x / 4.1x** |
+
+| Streaming (FlashDrive procedure) | Jetson Thor |
+|---|---:|
+| FlashDrive (ms per window) | 958 |
+| + FlashRT backend (ms) | **458** |
+| + FlashRT backend with its INT8 / INT8 / FP8 tiers (ms) | **345** |
+| Speedup | **2.1x / 2.8x** |
 
 #### Cosmos3-Nano text-to-video
 
@@ -419,27 +410,14 @@ RTX 5090, 480p, 49 frames, 10-step UniPC:
 | FlashRT BF16, no step cache | 4.4 s | 2.3 s | **6.7 s** | [Cosmos3-Nano usage](docs/cosmos3_video_usage.md#1-precision--speed-rtx-5090--sm120) |
 | FlashRT FP8, no step cache | 2.5 s | 2.3 s | **4.8 s** | [Cosmos3-Nano usage](docs/cosmos3_video_usage.md#1-precision--speed-rtx-5090--sm120) |
 
-## Getting Started
-
-- [Install FlashRT](#build--install)
-- [Quick Start](#quick-start)
-- [API snippets — Pi0 / Pi0.5 / GROOT / Pi0-FAST / Qwen3.6](#api-snippets)
-- [Supported Models](#supported-models) · [Hardware Support](#hardware-support) · [Benchmark](#benchmark)
-- [Native C++ PI0.5](docs/pi05_native_cpp.md) · [native FP8 calibration](docs/pi05_native_calibration.md) · [model-runtime C ABI](docs/model_runtime_api.md)
-- [FlashRT Nexus](https://github.com/LiangSu8899/FlashRT-Nexus) — embedded robot loops, serving, and execution-state capsules
-- [Asynchronous VLA execution](docs/vlash.md) · [RTC temporal fusion](docs/rtc_temporal_fusion.md) · [legacy chunk runner](docs/rtc_lite_design.md)
-- [Serving](serving/README.md) · [Architecture](docs/architecture.md)
-- [Qwen3.6-27B NVFP4 LLM path — quickstart, K selection, measured throughput](docs/qwen36_nvfp4.md) · [Spark usage](docs/qwen36_spark.md) · [parameter reference](docs/qwen36_usage.md) · [OpenAI-compatible server example](serving/qwen36_agent/README.md)
-- [Adding a new model](docs/adding_new_model.md)
-- [Contributing](CONTRIBUTING.md)
-- [Architecture](docs/architecture.md)
+**Guide:** [RTX 5090](docs/cosmos3_video_usage.md).
 
 ## Quick Start
 
 > Already built? Run the snippet below. **Not yet built? See [Build & install](#build--install) first** — `cmake .. && make -j` produces the kernel `.so` files this snippet imports. About 6 minutes from `git clone` to first inference.
 
 ```python
-import flash_rt   # Python module name; project is FlashRT (see About)
+import flash_rt   # Python module name; the project is FlashRT
 
 model = flash_rt.load_model(
     checkpoint="/path/to/pi05_checkpoint",
@@ -454,11 +432,15 @@ actions = model.predict(
 # Pi0.5: actions shape (10, 7) — 10 future steps, 7 DOF
 ```
 
-First call: ~3 s (calibration + CUDA Graph capture). Every subsequent call: 44 ms graph replay on Thor. No `.engine` file, no rebuild after restart. Full snippets for Pi0 / GROOT / Pi0-FAST in [API snippets](#api-snippets).
+The first call calibrates and captures the CUDA Graph (about 3 s); every later call replays it (latencies in [Benchmark](#pi05)). No `.engine` file, no rebuild after restart. Full snippets for Pi0 / GROOT / Pi0-FAST in [API snippets](#api-snippets).
 
 
 
 ## Start here
+
+The **official FlashRT Thor image** is `ghcr.io/flashrt-project/flashrt-thor:thor-v0.2.0` — [pull, prepare weights and validate](docker/README.md#thor).
+
+For Jetson Thor: [OpenPI π0.5](docs/thor/pi05.md) · [GR00T N1.7](docs/thor/groot-n17.md) · [Docker](docker/README.md#thor).
 
 | If you want to … | Read |
 |---|---|
@@ -471,6 +453,7 @@ First call: ~3 s (calibration + CUDA Graph capture). Every subsequent call: 44 m
 | **Run Wan2.2 TI2V-5B official-pipeline baseline** | [`docs/wan22_usage.md`](docs/wan22_usage.md) |
 | **Run Cosmos3-Edge AV inverse dynamics or Reasoner on Jetson AGX Thor** | [`docs/cosmos3_edge_thor.md`](docs/cosmos3_edge_thor.md) — SM110 build, official AV baseline, optimized denoise, Reasoner text/image/video usage, correctness checks, and benchmarks |
 | **Run Cosmos3-Nano text-to-video on RTX 5090** | [`docs/cosmos3_video_usage.md`](docs/cosmos3_video_usage.md) — SM120 build, BF16/FP8 denoise, quality metrics, and benchmark workflow |
+| **Run LaWAM (LeRobot `lawam-pretrain-lerobot`) on RTX SM120** | [`docs/lawam_rtx.md`](docs/lawam_rtx.md) — SM120 build, one CUDA graph for the whole policy step, precision tiers, measured latency and correctness |
 | **Use FlashRT kernels through Hugging Face Kernel Hub** | [`flashrt-project/FlashRT-HF-kernels`](https://github.com/flashrt-project/FlashRT-HF-kernels) · [`huggingface.co/flashrt`](https://huggingface.co/flashrt) |
 | **Deploy the Python-free PI0.5 C++ pipeline** | [`docs/pi05_native_cpp.md`](docs/pi05_native_cpp.md) — build, configure, calibrate, and execute · [`docs/pi05_native_calibration.md`](docs/pi05_native_calibration.md) — FP8 artifacts · [`docs/model_runtime_api.md`](docs/model_runtime_api.md) — stable C ABI |
 | **Integrate FlashRT with Nexus** | [`FlashRT-Nexus`](https://github.com/LiangSu8899/FlashRT-Nexus) — embedded and HTTP deployment over `frt_model_runtime_v1` · [`docs/runtime_contract.md`](docs/runtime_contract.md) — FlashRT-side contract |
@@ -483,38 +466,39 @@ First call: ~3 s (calibration + CUDA Graph capture). Every subsequent call: 44 m
 | **Use a load-bearing API** (weight loading, attention, calibration) | [`docs/extension/weight_spec.md`](docs/extension/weight_spec.md) · [`docs/extension/attention_backend.md`](docs/extension/attention_backend.md) · [`docs/extension/calibration.md`](docs/extension/calibration.md) |
 | **See supported model list** | [Supported Models](#supported-models) |
 | **See measured performance** | [Benchmark](#benchmark) · [Benchmark comparison](docs/benchmark_comparison.md) |
-| **Know which GPUs have been tested (and how to contribute a run)** | [Hardware Support](#hardware-support) · [Community benchmarks](#community-benchmarks) |
+| **Know which GPUs have been tested (and how to contribute a run)** | [Hardware Support](#hardware-support) · [Community benchmarks](#community-hardware-benchmarks) |
 | **Know what kernels ship and whether they fit your model** | [`docs/kernel_catalog.md`](docs/kernel_catalog.md) — the "parts list" with a re-use decision tree |
 | **See which fusion patterns exist and why some were rejected** | [`docs/kernel_fusion.md`](docs/kernel_fusion.md) |
 | **Understand FP8 calibration mechanics** | [`docs/calibration.md`](docs/calibration.md) |
 | **Train a Pi0.5 LoRA fine-tune (FP8 + LoRA, plain or RECAP/ACP-conditioned, PyTorch *or* JAX)** | [`training/README.md`](training/README.md). JAX companion at [`training/jax/README.md`](training/jax/README.md) |
 | **Run advantage-conditioned (RECAP / π\*0.6) policies with classifier-free guidance** | [`docs/rl_inference.md`](docs/rl_inference.md) — PyTorch + JAX frontends both supported |
+| **Roll out many environments per forward, reproduce a sample, inspect the denoise loop, export prefix features (B=N batching, seeded noise, denoise trace, prefix hidden state)** | [`docs/rl_inference.md`](docs/rl_inference.md#reproducible-sampling-and-denoise-trace-rl-rollouts) — Pi0.5 RTX |
 | **See how FlashRT differs from TensorRT / vLLM / SGLang** | [`docs/inference_engine_differences.md`](docs/inference_engine_differences.md) |
 
 ---
 
 ## Key techniques
 
-The short version: kernel fusion + static FP8 + captured CUDA Graph
-+ vendored in-SO Flash-Attention 2. Hand-written CUDA kernels cover
-only the memory-bound ops (norm, activation, fusion, quant);
-compute-bound GEMM / attention are delegated to cuBLASLt, CUTLASS,
-and the vendored FA2.
+Model-specific dataflows over static buffers, precision tiers (FP8, NVFP4,
+INT8 / W4A8) whose quantization is fused into the producing kernels,
+cross-layer fusion, and CUDA / HIP / NPU graph replay. GEMMs run on
+hand-written kernels (tcgen05 on Blackwell, MFMA on AMD, AscendC on Ascend)
+or on the vendor library where it is faster at the shape (cuBLASLt,
+hipBLASLt); attention runs on vendored FlashAttention 2 (RTX), FlashAttention
+4 (Thor) or FlashRT's own kernels.
 
-Full details by topic:
+Details by topic:
 
 - [`docs/kernel_catalog.md`](docs/kernel_catalog.md) — every kernel
   shipped, grouped by function, with a re-use decision tree for
   non-VLA models.
 - [`docs/kernel_fusion.md`](docs/kernel_fusion.md) — production
-  fusion patterns, the four historical dead-end optimizations, and
-  why the current fusion set converged where it did.
+  fusion patterns, the dead-end optimizations, and why the fusion set
+  converged where it did.
 - [`docs/calibration.md`](docs/calibration.md) — FP8 static
   calibration mechanics.
 - [`docs/pi05_native_calibration.md`](docs/pi05_native_calibration.md) —
   native PI0.5 single-view, multi-view and dataset artifact workflow.
-- [`docs/optimization-details.md`](docs/optimization-details.md) —
-  line-by-line Pi0.5 latency breakdown (44 ms vs 70 ms baseline).
 
 ---
 
@@ -715,177 +699,21 @@ actions_normalized = model.infer(
 )
 ```
 
-GROOT N1.7 is registered as `config="groot_n17"` for the RTX torch
-path (`rtx_sm120` and `rtx_sm89`). `rtx_sm120` keeps the shared RTX
-registration and `load_model()` refines that default to the FP8
-production frontend when `use_fp16=False`; `rtx_sm89` is registered
-directly to its dedicated FP8 frontend. `use_fp16=True, use_fp8=False`
-selects the explicit RTX reference frontend for the selected hardware. It
-uses the N1.7 `set_prompt(aux=...)` / normalized-state `infer(...)`
-contract. On the RTX FP8 path, the first `infer(aux=...)` lazily captures the
-backbone graph; later compatible calls replay it before the existing action
-graph, covering the complete backbone-to-action execution without rebuilding
-per-call scratch buffers. Omitting `aux` keeps the original eager backbone from
-`set_prompt()` and does not capture the optional graph. See
-[USAGE.md](USAGE.md#groot-n17-rtx).
+GROOT N1.7 uses a `set_prompt(aux=...)` / normalized-state `infer(...)`
+contract; the RTX registration (`rtx_sm120`, `rtx_sm89`) selects the FP8
+frontend, `use_fp4=True` on `rtx_sm120` the NVFP4 action-head tier. See
+[USAGE.md](USAGE.md#groot-n17-rtx) and
+[GROOT N1.7 NVFP4](docs/groot_n17_rtx_nvfp4.md); Thor:
+[GR00T N1.7 on Thor](docs/thor/groot-n17.md).
 
-### Autotune
+### More options
 
-CUDA Graph instantiation is non-deterministic on Thor — the same kernels can produce different schedules with ~2ms variance. `autotune` recaptures until a fast schedule is found:
-
-| `autotune=` | Behavior | Extra Startup |
-|-------------|----------|---------------|
-| `0` or `False` | Off — single capture, may be 2ms slower | 0 |
-| `3` (default) | Retry up to 3× — usually finds fast graph on trial 0 | ~1s |
-| `5` | Retry up to 5× — better chance for JAX | ~2.5s |
-| `True` | Same as `3` | ~1s |
-
-### Pi0-FAST Performance Modes
-
-Pi0-FAST supports two decode modes, controlled by `decode_cuda_graph`:
-
-| Parameter | `set_prompt` (cold) | `set_prompt` (cached) | 50-token E2E | Best for |
-|-----------|--------------------:|----------------------:|-------------:|----------|
-| `decode_cuda_graph=False` (default) | ~2.5 s | **~0.1 s** | **~464 ms** | Frequent prompt changes |
-| `decode_cuda_graph=True` | ~4.0 s | **~1.5 s** | **~431 ms** | Fixed prompt, 24h deployment |
-
-**How it works:**
-
-- **Default mode** (`decode_cuda_graph=False`): Each decode token runs through a
-  Python loop with per-step kernel launches. Lowest startup cost. FP8 calibration
-  scales are cached to `~/.flash_rt/calibration/` after the first run — subsequent
-  `set_prompt` calls with the same checkpoint skip the 2.4s calibration entirely.
-
-- **Max-performance mode** (`decode_cuda_graph=True`): The action-phase decode loop
-  is captured as a single CUDA Graph (same technique as Pi0's diffusion loop).
-  Eliminates all Python dispatch overhead during decode. Adds ~1.5s to `set_prompt`
-  for graph capture, but saves ~33 ms per 50-token inference.
-  Break-even at ~45 inferences.
-
-```python
-# Default: good for interactive / multi-prompt scenarios
-model = flash_rt.load_model(checkpoint, config="pi0fast")
-model.set_prompt("pick up the red block", state=state)
-# set_prompt: 0.1s (cached) / 2.5s (first run)
-# infer: ~464 ms per 50-token sequence
-
-# Max-performance: best for fixed-prompt continuous control
-model = flash_rt.load_model(
-    checkpoint, config="pi0fast",
-    decode_cuda_graph=True,
-    decode_graph_steps=46,    # covers sequences up to 46 action tokens (50 total)
-)
-model.set_prompt("pick up the red block", state=state)
-# set_prompt: 1.5s (cached) / 4.0s (first run)
-# infer: ~431 ms per 50-token sequence
-```
-
-**Calibration caching**: FP8 activation scales are automatically cached per
-checkpoint and sequence length. Delete `~/.flash_rt/calibration/` to force
-recalibration. The first `infer()` call always recalibrates with real image
-data regardless of cache.
-
-### NVFP4 encoder FFN (Pi0.5 only)
-
-Optional NVFP4 (Blackwell block-scaled FP4) quantization on the Pi0.5 encoder
-FFN stack. Implemented for **Pi0.5 torch and JAX on Thor** — passing
-`use_fp4=True` with any other config (pi0 / groot / pi0fast) emits a warning
-and uses the FP8 route. (`config="groot_n17"` on Thor has its own NVFP4
-tier behind the same flag — see [GROOT N1.7 Thor](USAGE.md#groot-n17-thor).)
-
-```python
-model = flash_rt.load_model(
-    checkpoint,
-    config="pi05",
-    use_fp4=True,    # single flag → enables the production-validated preset
-)
-```
-
-`use_fp4=True` resolves to the best-known production preset automatically:
-- `fp4_layers` = all 17 live encoder FFN layers (0-16)
-- `use_awq` = `True` — activation-aware weight quantization (AWQ)
-- `use_p1_split_gu` = `True` — P1 split-GU 2-GEMM path
-
-Adding `use_fp4_decoder=True` selects the complete Thor NVFP4 tier the
-latency table above is measured with, resolving the remaining sub-flags to
-`awq_alpha=0.8`, `use_fp4_encoder_attn=True`, `use_fp4_siglip_ffn=True` and
-`encoder_p1_combiner="epilogue_hw"`:
-
-```python
-model = flash_rt.load_model(
-    checkpoint, config="pi05", framework="torch", hardware="thor",
-    num_views=3,
-    use_fp4=True, use_fp4_decoder=True,
-    use_fa4=True,    # attention backend; independent of the NVFP4 flags
-)
-```
-
-The decoder path is a strict opt-in: unavailable kernels and unsupported
-modes raise errors rather than selecting FP8 projections. `use_fa4=True` is
-also supported on the FP8 frontend and is what the FP8 baseline in that
-table runs, so the reported speedup isolates NVFP4 rather than the
-attention backend.
-
-Advanced users can override any sub-flag explicitly at `load_model()` call
-time (e.g. `fp4_layers=(7, 8, 9), use_awq=False` reverts to the conservative
-L7-9 subset).
-
-**What it does**:
-- Gate+Up and Down GEMMs across all 17 live encoder FFN layers run in NVFP4
-  (block-size 16, UE4M3 block scales) instead of FP8.
-- **AWQ** applies activation-aware per-input-channel pre-scaling to the
-  quantized weights, with the inverse scale fused into pre-GEMM kernels
-  (`residual_add_rms_norm_mul_fp4_sfa`, `geglu_two_mul_fp4_to_fp4`). This
-  preserves precision under full-scope FP4 (without AWQ, full-scope FP4 cos
-  drops from ~0.998 to ~0.33 due to cumulative multi-layer drift).
-- **P1 split-GU** splits the merged Gate+Up GEMM into separate gate_proj /
-  up_proj NVFP4 GEMMs that emit packed FP4 + SFA directly (via
-  `LinCombBlockScaleFactor` epilogue), combined by a dedicated
-  `geglu_two_mul_fp4_to_fp4` kernel. Eliminates ~31 MB/layer of DRAM
-  round-trips vs the merged-GU path.
-- Residual stream stays fp16 through the FP4 region (NVIDIA
-  `enable_llm_nvfp4` style — `output_quantizer` disabled).
-
-**Requirements**:
-- SM100+ GPU (validated on Thor SM110). Non-SM100 hardware logs a warning
-  and uses the FP8 route.
-- `flash_rt_fp4.so` extension (built alongside `flash_rt_kernels.so`).
-
-**Measured on Thor SM110, Pi0.5 / LIBERO Spatial 10 × 50 = 500 episodes**:
-
-| Config | Task success | E2E P50 (normal) |
-|---|---|---|
-| FP8 baseline | 491 / 500 (98.2%) | ~43.5 ms |
-| **NVFP4 full-17 + AWQ + P1 (`--use_fp4`)** | **491 / 500 (98.2%)** | **~43.5 ms** |
-
-Task-level parity with the FP8 baseline (491/500 for both — P1 + AWQ
-preserves FP4 precision across all 17 live FFN layers).
-
-**Replay-latency benchmark (1-view / 2-view / 3-view, N=8 LIBERO
-stratified calibration, 50 graph replays, Thor SM110)**:
-
-| Config | 1-view | 2-view | 3-view | cos vs PyTorch FP32 ref (3v) |
-|---|---|---|---|---|
-| FP8 baseline (torch) | 34.06 ms | 41.79 ms | 55.46 ms | 0.999236 |
-| **NVFP4 encoder (torch)** | **31.91 ms** | **39.78 ms** | **51.51 ms** | **0.998932** |
-| **NVFP4 encoder (jax, Orbax)** | **34.39 ms** | **43.65 ms** | **56.90 ms** | **0.999030** |
-
-Encoder FP4 preserves cosine **≥ 0.9989** vs the same-origin PyTorch
-reference in these Thor replay-latency checks. The JAX FP4 path derives
-NVFP4 weights directly from the Orbax checkpoint (no torch dependency at
-runtime) and uses the same two-phase multi-sample calibration flow as the
-torch FP4 path. Treat the table as Thor correctness / availability evidence,
-not a broad performance claim across every view count or host.
-Reproduce with
-[`tests/bench_pi05_thor_views.py`](tests/bench_pi05_thor_views.py)
-(defaults now include `jax_fp4`).
-
-**What's next**:
-- Decoder FP4 is implemented as a draft all-projection W4A4 path. The current
-  multi-view latency and precision blockers are tracked in
-  [`docs/pi05_thor_decoder_fp4_e2e.md`](docs/pi05_thor_decoder_fp4_e2e.md).
-- `geglu_two_mul` SFA-prefetch optimization (O1, ~-0.5-1.1 ms)
-- SigLIP FFN FP4 / AWQ auto-tune / Pi0.6 port
+[CUDA Graph autotune](USAGE.md#autotune) ·
+[Pi0-FAST decode modes](USAGE.md#pi0-fast) ·
+[Pi0.5 NVFP4 on Thor](USAGE.md#nvfp4-pi05-only) ·
+[calibration](USAGE.md#calibration) ·
+[full parameter examples](USAGE.md#full-parameter-examples) ·
+[Thor reproduction guide](docs/thor/pi05.md)
 
 ---
 
@@ -918,12 +746,12 @@ section. For a single-page install reference (prerequisites,
 troubleshooting table, JAX/transformers pin rationale) see
 [`docs/INSTALL.md`](docs/INSTALL.md).
 
-Docker and native Linux paths both produce the same two
-extension modules:
+Docker and native Linux paths produce the same extension modules:
 
 | Artifact | Size | What it contains |
 |---|---|---|
-| `flash_rt/flash_rt_kernels.so` | ~3 MB | Hand-written memory-bound kernels (norm, activation, fusion, FP8 quant, cuBLASLt wrappers, Thor FMHA). **Always built.** |
+| `flash_rt/flash_rt_kernels.so` | 3-25 MB, by GPU and enabled model groups | Hand-written kernels (normalization, activation, fusion, quantization, attention, the tcgen05 / few-row GEMMs) and the cuBLASLt wrappers. **Always built.** |
+| `flash_rt/flash_rt_fp4.so` | ~6 MB | NVFP4 GEMMs and quantizers. **Built on SM100+ targets** (Thor, RTX 50-series, DGX Spark). |
 | `flash_rt/flash_rt_fa2.so` | ~135 MB | Vendored Flash-Attention 2 v2.7.4.post1 fwd (fp16 + bf16, SM80/86/89/120). **Built automatically on RTX targets.** Thor skips it by default and uses `fvk.attention_qkv_fp16` (cuBLAS-decomposed) instead; `-DFLASHRT_ENABLE_THOR_FA2=ON` builds it there for the one model whose long prefill needs it (Qwen3.6, bf16 head_dim 256 — a single instantiation). |
 
 **Crucially — no `pip install flash-attn` required.** The FA2 kernel
@@ -957,8 +785,7 @@ image = modal.Image.from_registry("ghcr.io/liangsu8899/flashrt:0.2.0")
 Tags + advanced usage (build args, slim variants, mounting checkpoints):
 see [`docker/README.md`](docker/README.md).
 
-> **Thor (SM110)** is not covered by this image — Jetson is ARM64 and
-> uses a different NVIDIA base. Thor users follow Option C below.
+> **Thor (SM110 / ARM64)** uses a separate NVIDIA base. Follow the [Thor Docker guide](docker/README.md#thor) or the [model guides](docs/thor/pi05.md). Pull `ghcr.io/flashrt-project/flashrt-thor:thor-v0.2.0`.
 
 ### Option B — Build the Docker image yourself
 
@@ -1069,101 +896,20 @@ through the cuBLAS-decomposed `fvk.attention_qkv_fp16` path instead of
 FA2 — `flash_rt_fa2.so` simply isn't built, and no runtime error
 results.
 
-### Build timing (one-time)
-
-On a 5090 with CUDA 13 in a warm container, `make -j$(nproc)`:
-
-| Target | Time |
-|---|---|
-| `flash_rt_kernels` (main kernels) | ~2 min |
-| `flash_rt_fa2` (FA2 vendor, default — 12 kernel .cu files × sm_80 + sm_120/sm_121 + Blackwell PTX fallback) | **~4.5 min** (267 s) |
-| Full `make -j$(nproc)` | ~6.5 min |
-
-Subsequent rebuilds of only the hand-written kernels take ~2 min —
-FA2 is a separate CMake target and is only re-linked, not recompiled,
-unless the vendored source itself changes.
-
-### Slim-build flags (developer iteration speed)
-
-FA2's CUTLASS 3.x templates dominate cold-build cost. The default
-matrix covers every RTX family card × fp16+bf16 × all 3 hdim
-buckets, which is right for distribution but overkill when you're
-iterating on a single 5090/4090 and a single model family. Three
-opt-in CMake flags trade binary coverage for iteration speed:
-
-| Flag | Default | What it does | `fa2` cold build on 5090 |
-|---|---|---|---|
-| — | (none) | 12 .cu × sm_80 + sm_120/sm_121 + Blackwell PTX fallback | **267 s (4.5 min)** |
-| `-DFA2_ARCH_NATIVE_ONLY=ON` | OFF | Only emit SASS for the detected GPU; skip sm_80 + PTX passes | **110 s** (−59%) |
-| `-DFA2_HDIMS="96;256"` | `"96;128;256"` | Drop `head_dim=128` (shipped models don't use it; reserved for future DiT variants) | **210 s** (−21%) |
-| `-DFA2_DTYPES="fp16"` | `"fp16;bf16"` | Drop bf16 (Pi0 is fp16-only; Pi0.5 / GROOT need bf16) | **179 s** (−33%) |
-| `-DFA2_ARCH_NATIVE_ONLY=ON -DFA2_HDIMS="96;256" -DFA2_DTYPES="fp16"` | — | All three combined (single-card + pi0-only) | **87 s** (−67%) |
-
-Shipped `flash_rt_fa2.so` size also shrinks — the all-three-slim
-build produces **17.8 MB** (vs 135 MB default), a **87% reduction**
-in binary size on the FA2 module.
-
-Dropped entries still resolve at the Python layer — calling a
-stubbed entry (e.g. `fa2.fwd_bf16` on a build with
-`FA2_DTYPES="fp16"`) aborts the process with a clear
-"rebuild with -DFA2_DTYPES=…" message instead of linker errors or
-silent wrong output.
-
-### ccache (iterative C++ rebuild speedup)
-
-If `ccache` is on PATH at CMake-config time, it is enabled
-automatically for both C++ and CUDA compiles. First build is
-unchanged. Hit rate on the `.cpp` side (pybind bindings) is high,
-so repeat edits to `csrc/bindings.cpp` / `csrc/fa2_bindings.cpp` get
-fast rebuilds. CUDA .cu files — nvcc's invocation style makes
-`ccache` hit rate unreliable, so treat CUDA speedup as a bonus
-rather than a guarantee. Tip: set `CCACHE_DIR` to a host-mounted
-path so the cache survives container rebuilds.
-
-Install via `apt-get install ccache` (Ubuntu) or equivalent.
-
 ### Verify
 
 ```bash
 python examples/quickstart.py \
     --checkpoint /path/to/pi05_checkpoint \
-    --benchmark 20
+    --benchmark 20                      # GROOT N1.6: --checkpoint <groot> --config groot
 ```
 
-Expected (default `--num_views 2`): `P50: ~44 ms (23 Hz)` on Thor.
-On RTX 5090 pure replay is ~17.4 ms (57 Hz); `quickstart.py` reports
-end-to-end wall clock (~19.5 ms / 51 Hz) because it wraps
-`model.predict(...)` with `time.perf_counter` and therefore also
-counts image normalization, upload, download, and un-normalization.
-For the pure-replay number, time `model._pipe._enc_ae_graph.replay()`
-between `cuda.Event` markers — see [Measurement protocol](#measurement-protocol).
-
-### Verify
-
-```bash
-python examples/quickstart.py \
-    --checkpoint /path/to/pi05_checkpoint \
-    --benchmark 20
-```
-
-Expected (default `--num_views 2`): `P50: ~44 ms (23 Hz)` on Thor.
-On RTX 5090 pure replay is ~17.6 ms (57 Hz); `quickstart.py` reports
-the end-to-end wall clock (~19.5 ms / 51 Hz) because it wraps
-`model.predict(...)` with `time.perf_counter` and therefore also
-counts the graph-external image normalization, upload, download, and
-un-normalization. For the pure-replay number, time
-`model._pipe._enc_ae_graph.replay()` between `cuda.Event` markers —
-see [Measurement protocol](#measurement-protocol).
-
-**GROOT N1.6:**
-```bash
-python examples/quickstart.py \
-    --checkpoint /path/to/groot_checkpoint \
-    --config groot \
-    --benchmark 20
-```
-
-Expected: `P50: ~44 ms (23 Hz)` on Thor.
+`quickstart.py` times `model.predict(...)` with the host clock, so its numbers
+include the image normalization, upload, download and un-normalization around
+the captured graph. The [Benchmark](#benchmark) tables time the graph replay;
+the [Thor π0.5 guide](docs/thor/pi05.md) gives the full measurement protocol
+and the expected results. Build times, FA2 slim-build flags and ccache are in
+[`docs/INSTALL.md`](docs/INSTALL.md#63-build-time-fa2-slim-flags-and-ccache).
 
 ---
 
@@ -1172,9 +918,14 @@ Expected: `P50: ~44 ms (23 Hz)` on Thor.
 - **Pi0.5** (`config="pi05"`) — [quickstart](#quick-start), [API reference](USAGE.md#api-reference), [NVFP4 notes](USAGE.md#nvfp4-pi05-only), [Thor example](examples/thor/README.md), [RTX 5090 example](examples/blackwell/README.md)
 - **Pi0** (`config="pi0"`) — [API snippets](#api-snippets), [usage guide](USAGE.md#api-reference)
 - **GROOT N1.6** (`config="groot"`) — [API snippets](#api-snippets), [GROOT embodiment slots](#groot-n16-embodiment-slots)
-- **GROOT N1.7** (`config="groot_n17"`) — 23.7 ms on Jetson AGX Thor (NVFP4 + FA4 tier, LIBERO 1-view; 36.8 ms FP8), 16.6 ms on RTX 5090 (2-view base, full graph); [usage guide](USAGE.md#groot-n17-rtx), [API snippet](#groot-n17-rtx)
-- **Pi0-FAST** (`config="pi0fast"`) — [usage guide](USAGE.md#pi0-fast), [performance modes](#pi0-fast-performance-modes)
+- **GROOT N1.7** (`config="groot_n17"`) — [Thor guide](docs/thor/groot-n17.md), [usage guide](USAGE.md#groot-n17-rtx), [API snippet](#groot-n17-rtx), [RTX NVFP4 tier](docs/groot_n17_rtx_nvfp4.md), [AMD](docs/deployment_amd_groot_n17.md), [Ascend](docs/deployment_npu_groot_n17.md)
+- **Pi0-FAST** (`config="pi0fast"`) — [usage guide](USAGE.md#pi0-fast), [decode modes](USAGE.md#performance-modes)
+- **MolmoAct2** (allenai, `config="molmoact2"`) — RTX SM120/SM121 NVFP4 VLA: 3-view ViT + pooling adapter + Qwen2.5-style text tower with a 10-step flow-matching action expert, captured in one CUDA Graph. **51.0 ms** graph replay on RTX 5060 Ti, 7.87× over the bf16 HF reference; [usage and performance](docs/molmoact2_usage.md). Needs `-DFLASHRT_ENABLE_MOLMOACT2=ON` and is constructed directly (per-call state + real-data calibration).
+- **Hy-Embodied-0.5-VLA** (`config="hyvla"`) — Jetson Thor SM110, Jetson Orin SM87, and RTX SM120 (SM120 block-128 FP8 with a default NVFP4 ViT + VLM-prefill tier, expert tower on FP8); [RTX SM120 usage](docs/hyvla05_rtx_sm120.md), [Thor notes](docs/hyvla05_thor_sm110.md), [Orin SM87 notes](docs/hyvla05_orin_sm87.md)
+- **LaWAM** (`config="lawam"`) — RTX SM120 (RTX 5060 Ti validated), LeRobot `jialei02/lawam-pretrain-lerobot`: Qwen3-VL + DINOv3 + LAM decoder + 10-step flow DiT replayed as one CUDA graph, 18.85 ms E2E (8.11x vs the stock LeRobot policy), action cosine 0.9957 on held-out LIBERO frames; [usage and performance](docs/lawam_rtx.md)
+- **Alpamayo 1.5** — the official full request and the FlashDrive streaming procedure on Jetson AGX Thor; [Alpamayo 1.5 on Thor](docs/alpamayo15.md)
 - **LingBot-VLA** — [LingBot usage](docs/lingbot_usage.md), [Thor latency](docs/lingbot_usage.md#5-accuracy--latency-thor-sm_110-cuda-graph-replay)
+- **X-VLA** (`config="xvla"`) — RTX SM120/SM121, torch only; NVFP4 default with FP8/BF16 tiers; [RTX SM120 usage](docs/xvla_rtx_sm120.md)
 - **Motus Stage3 RTX beta** (`config="motus"`) — [Motus usage](docs/motus_usage_beta.md), [legacy async chunk runner](docs/rtc_lite_design.md)
 - **Wan2.2 TI2V-5B** (`config="wan22_ti2v_5b"`) — [Wan2.2 usage](docs/wan22_usage.md)
 - **Cosmos3-Nano text-to-video** (`config="cosmos3_video"`) — RTX 5090 BF16/FP8 denoise and complete benchmark workflow; [usage and performance](docs/cosmos3_video_usage.md)
@@ -1182,10 +933,11 @@ Expected: `P50: ~44 ms (23 Hz)` on Thor.
 - **Qwen3-VL-8B** — RTX 5090 NVFP4/FP8 multimodal path, RTX 4090 official-FP8 path, and Jetson BF16 paths for Thor and Orin; [RTX 5090 usage](docs/qwen3_vl_nvfp4.md), [RTX 4090 usage](docs/qwen3_vl_fp8_sm89.md), [Jetson Thor usage](docs/qwen3_vl_thor.md), [Jetson Orin usage](docs/qwen3_vl_rtx_bf16.md)
 - **Chameleon-7B** — Jetson Thor dynamic-FP8 prefill (~120 ms E2E, ~30 tok/s decode) and Jetson Orin INT8/QuaRot-INT4 path; [usage](docs/chameleon_usage.md), [Thor notes](docs/chameleon_thor_sm110.md), [Orin SM87 notes](docs/chameleon7b_rtx_sm87.md)
 - **MiniMax-Remover** — FP8 transformer + NVFP4 VAE video inpainting; [usage and performance](docs/minimax_remover_usage.md)
-- **MelBandRoformer** — kernelized FP8 audio source separation; [usage and performance](docs/melband_roformer_usage.md)
+- **Mel-Band RoFormer** — kernelized FP8 audio source separation; [usage and performance](docs/melband_roformer_usage.md)
 - **OmniVoice TTS** — BF16/FP4 acceleration and HTTP serving; [serving quickstart](serving/omnivoice_agent/README.md)
 - **Higgs Audio v3 TTS-4B** — [Higgs usage](docs/higgs_audio_v3.md#3-quickstart), [Higgs serving](serving/higgs_audio_agent/README.md)
-- **Qwen3.6-27B NVFP4** — [Qwen3.6 usage](docs/qwen36_nvfp4.md), [parameter reference](docs/qwen36_usage.md), [serving](serving/qwen36_agent/README.md)
+- **Qwen3.6-27B NVFP4** — [Qwen3.6 usage](docs/qwen36_nvfp4.md), [parameter reference](docs/qwen36_usage.md), [serving](serving/qwen36_agent/README.md), [DGX Spark](docs/qwen36_spark.md)
+- **Qwen3.6-35B-A3B NVFP4** — [Qwen3.6-MoE usage](docs/qwen36_moe_usage.md)
 - **Qwen3-8B NVFP4** — [Qwen3-8B usage](docs/qwen3_8b_nvfp4.md), [OpenAI server example](examples/qwen3_openai_server.py)
 - **BAGEL world-model path** — research preview; see [kernel catalog](docs/kernel_catalog.md) and [adding a model](docs/adding_new_model.md)
 - **Reusable HF kernel packages** — [flashrt-project/FlashRT-HF-kernels](https://github.com/flashrt-project/FlashRT-HF-kernels), [huggingface.co/flashrt](https://huggingface.co/flashrt)
@@ -1194,20 +946,22 @@ Expected: `P50: ~44 ms (23 Hz)` on Thor.
 
 ## Hardware Support
 
-FlashRT ships CUDA and ROCm implementations today. The kernel composition
+FlashRT ships CUDA, ROCm/HIP, and AscendC/CANN implementations. The kernel composition
 pattern is not vendor-specific; what is vendor-specific is which artifacts
 have been built and tested, and the dispatch map that selects them.
 
-| Hardware | SM | Status | Validated paths / notes |
+| Hardware | Architecture | Status | Validated paths / notes |
 |---|---:|---|---|
-| Jetson AGX Thor | SM110 | Production target | Pi0, Pi0.5, GROOT N1.6, Pi0-FAST, Qwen3.6 Thor path, Lingbot, Cosmos3-Edge AV/Reasoner, and Qwen3-VL BF16 with opt-in W8/W4 decode ([docs](docs/qwen3_vl_thor.md)); CUTLASS FMHA / Thor attention paths; Pi0.5 FP8 and NVFP4 validation live in [examples/thor](examples/thor/README.md#thor-vla-performance). |
+| Jetson AGX Thor | SM110 | Production target | Pi0, Pi0.5, GROOT N1.6 and N1.7, Pi0-FAST, LingBot-VLA, Hy-Embodied-0.5-VLA, Alpamayo 1.5 (full request and FlashDrive streaming), Cosmos3-Edge AV / Reasoner, Qwen3.6, and Qwen3-VL BF16 with opt-in W8/W4 decode; reproduction guides for [π0.5](docs/thor/pi05.md) and [GR00T N1.7](docs/thor/groot-n17.md). |
 | RTX 5090 | SM120 | Production target | Pi0/Pi0.5/GROOT/Pi0-FAST RTX paths, Qwen3.6, Qwen3-8B, Qwen3-VL, Higgs Audio v3 FP8, Motus, Wan2.2, Cosmos3-Nano, and HF Kernel Hub package validation; see [RTX 5090 latency](examples/blackwell/README.md#vla-latency-rtx-5090). |
-| AMD Instinct MI350X | gfx950 (CDNA4) | Production target | Pi0.5 at **16.4 ms** FP8 and GROOT N1.7 at **16.0 ms** full-frame, on a standalone ROCm/HIP backend: hand-written HIP kernels, hipBLASLt FP8 GEMM, MFMA attention, HIP graph capture. Arch-gated to gfx950 at both build and run time. See [AMD deployment](docs/deployment_amd.md) and [Pi0.5 on MI350X](docs/deployment_amd_pi05.md). |
-| AMD Instinct MI300 | gfx942 (CDNA3) | Refused, not ported | The backend rejects any device whose architecture does not start with `gfx950`, because the kernels use CDNA4-specific MFMA shapes. `FLASHRT_AMD_ALLOW_ARCH=1` is a build-script escape hatch for porting work, not a supported path. |
+| AMD Instinct MI350X | gfx950 (CDNA4) | Supported | Pi0.5 at **16.4 ms** FP8 and GROOT N1.7 at **16.0 ms** full-frame, on a standalone ROCm/HIP backend: hand-written HIP kernels, hipBLASLt FP8 GEMM, MFMA attention, HIP graph capture. Uses the gfx950 source set, checked at build and runtime. See [AMD deployment](docs/deployment_amd.md) and [Pi0.5 on MI350X](docs/deployment_amd_pi05.md). |
+| AMD Instinct MI300X | gfx942 (CDNA3) | Supported | Architecture-specific BF16/FP8 FNUZ kernels and HIP graphs. See [AMD deployment](docs/deployment_amd.md), [π0.5](docs/deployment_amd_pi05.md), and [GR00T N1.7](docs/deployment_amd_groot_n17.md). |
+| Ascend 910B4 | Ascend NPU | Supported | Pi0.5 and GR00T N1.7 backend with native AscendC kernels and NPU graphs. See [π0.5 deployment](docs/deployment_npu.md) and [GR00T N1.7 deployment](docs/deployment_npu_groot_n17.md). |
+| Apple Silicon | Metal / PyTorch MPS | Experimental | Pi0.5 BF16 eager execution using the shared torch pipeline. No CUDA build required; checkpoint accuracy and production latency remain unqualified. See [Apple setup with uv](docs/deployment_apple.md). |
 | RTX 4090 | SM89 | Validated / supported target | RTX VLA build path and deployment recipe; Higgs BF16 path compiles/configures. See [deployment_rtx4090.md](docs/deployment_rtx4090.md). |
-| RTX 5060 Ti | SM120 | Community validated | Pi0.5 FP8 and LIBERO Spatial submission; see [Community benchmarks](#community-benchmarks). |
+| RTX 5060 Ti | SM120 | Community validated | Pi0.5 FP8 and LIBERO Spatial submission, Hy-Embodied-0.5-VLA (`config="hyvla"`, SM120 FP8 / NVFP4 ViT+prefill), LaWAM (`config="lawam"`, 18.85 ms E2E), and MolmoAct2 (`config="molmoact2"`, 51.0 ms graph replay, 7.87x); see [Community benchmarks](#community-hardware-benchmarks), [HyVLA RTX notes](docs/hyvla05_rtx_sm120.md), [LaWAM RTX notes](docs/lawam_rtx.md), and [MolmoAct2 usage](docs/molmoact2_usage.md). |
 | RTX 4060 Ti | SM89 | Validated build/run target | Included in current tested hardware list; run local benchmarks before making model-specific latency claims. |
-| NVIDIA L40 | SM89 | Community validated | Pi0.5 FP8 submission; see [Community benchmarks](#community-benchmarks). |
+| NVIDIA L40 | SM89 | Community validated | Pi0.5 FP8 submission; see [Community benchmarks](#community-hardware-benchmarks). |
 | Jetson AGX Orin | SM87 | Community port | Pi0.5 INT8/BF16 paths, Orin tile dispatch, frame-cache inference, and Qwen3-VL BF16 with opt-in INT8/INT4 decode ([docs](docs/qwen3_vl_rtx_bf16.md)); see [deployment_orin.md](docs/deployment_orin.md). |
 | A100 / A10 / RTX 3090 / RTX 3080 / A5000 / A6000 and other SM80/86/89 GPUs | SM80/86/89 | Build target | CMake and FA2 gates cover Ampere/Ada shapes. Treat unlisted cards as expected to build until a benchmark or regression row is submitted. |
 
@@ -1252,7 +1006,24 @@ driver/CUDA/PyTorch versions, and `nvidia-smi` output. For new cards, start with
 
 ## Citation
 
-If you use FlashRT for your research, please cite our paper:
+If FlashRT is useful in your project or research, please cite the paper and link to
+[this repository](https://github.com/flashrt-project/FlashRT)
+([`CITATION.cff`](CITATION.cff)):
+
+```bibtex
+@misc{su2026flashrtpai,
+  title={FlashRT-PAI: Fast Kernels Are Not Fast Pipelines for Physical AI Inference},
+  author={Liang Su and David Chen and Jason Li and Kevin Guo and Teresa Lv},
+  year={2026},
+  eprint={2610.24349},
+  archivePrefix={arXiv},
+  primaryClass={cs.AI},
+  doi={10.48550/arXiv.2610.24349},
+  url={https://arxiv.org/abs/2610.24349},
+}
+```
+
+Work on execution-state checkpoint and restore should also cite:
 
 ```bibtex
 @misc{su2026executionstatecapsules,
@@ -1269,12 +1040,51 @@ If you use FlashRT for your research, please cite our paper:
 
 ---
 
+## Acknowledgment
 
+FlashRT builds on [CUTLASS](https://github.com/NVIDIA/cutlass) (GEMM
+templates), [FlashAttention](https://github.com/Dao-AILab/flash-attention) and
+[FlashInfer](https://github.com/flashinfer-ai/flashinfer) (attention kernels),
+and [vLLM](https://github.com/vllm-project/vllm) (Marlin). Sources, licenses
+and local changes are recorded in file headers and directory-local `VENDOR.md`
+files.
 
-## Acknowledgments
+FlashRT accelerates models released by their authors. Thank you to:
 
-- [CUTLASS](https://github.com/NVIDIA/cutlass) — GEMM templates and FMHA kernels
-- [FlashAttention](https://github.com/Dao-AILab/flash-attention) — Attention backend for SM89/SM120
-- [Physical Intelligence](https://www.physicalintelligence.company/) — Pi0/Pi0.5 model architecture
-- [OpenPI](https://github.com/Physical-Intelligence/openpi) — Reference PyTorch implementation
-- [NVIDIA Isaac GR00T](https://github.com/NVIDIA/Isaac-GR00T) — GROOT N1.6 model
+| Models | Authors |
+|---|---|
+| π0, π0.5, π0-FAST | [Physical Intelligence](https://github.com/Physical-Intelligence/openpi) |
+| GR00T N1.6, N1.7 | [NVIDIA Isaac GR00T](https://github.com/NVIDIA/Isaac-GR00T) |
+| Alpamayo 1.5 | [NVIDIA](https://github.com/NVlabs/alpamayo1.5); streaming: [FlashDrive](https://github.com/z-lab/flashdrive) (z-lab) |
+| Cosmos3 | [NVIDIA Cosmos](https://github.com/NVIDIA/cosmos) |
+| LingBot-VLA | [Robbyant](https://github.com/Robbyant/lingbot-vla) |
+| Hy-Embodied-0.5-VLA | [Tencent Hunyuan](https://github.com/Tencent-Hunyuan/HY-Embodied) |
+| Motus | [thu-ml](https://github.com/thu-ml/Motus) |
+| Qwen3, Qwen3-VL, Qwen3.6 | [Qwen](https://github.com/QwenLM) |
+| Wan2.2 | [Wan-AI](https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B) |
+| BAGEL | [ByteDance Seed](https://github.com/ByteDance-Seed/BAGEL) |
+| Chameleon | [Meta FAIR](https://github.com/facebookresearch/chameleon) |
+| MiniMax-Remover | [MiniMax-Remover authors](https://github.com/zibojia/MiniMax-Remover) |
+| Higgs Audio v3 | [Boson AI](https://huggingface.co/bosonai/higgs-audio-v3-tts-4b) |
+| OmniVoice | [k2-fsa](https://github.com/k2-fsa/OmniVoice) |
+| Mel-Band RoFormer | ByteDance SAMI ([paper](https://arxiv.org/abs/2310.01809)); [melband-roformer-infer](https://github.com/openmirlab/melband-roformer-infer) |
+
+Community contributions are credited in [News](#news) and
+[Community Hardware Benchmarks](#community-hardware-benchmarks).
+[Community statement](docs/COMMUNITY_AND_CREDIT.md) (English / 中文).
+
+---
+
+## Integrations
+
+FlashRT provides adapters and kernel support for the projects below; see the [integration guide](docs/integrations.md) for implementations and usage, including the community-built EagleVLA-Edge provider.
+
+[HF Kernels](https://huggingface.co/flashrt) ([source](https://github.com/flashrt-project/FlashRT-HF-kernels)) ·
+[LeRobot](https://github.com/huggingface/lerobot) ·
+[OpenPI](https://github.com/Physical-Intelligence/openpi) ·
+[Isaac GR00T](https://github.com/NVIDIA/Isaac-GR00T) ·
+[Transformers](https://github.com/huggingface/transformers) ·
+[Diffusers](https://github.com/huggingface/diffusers) ·
+[vLLM](https://github.com/vllm-project/vllm) ·
+[SGLang](https://github.com/sgl-project/sglang) ·
+[EagleVLA-Edge](https://github.com/PKU-SEC-Lab/EagleVLA-Edge).

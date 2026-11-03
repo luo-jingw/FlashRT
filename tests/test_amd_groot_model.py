@@ -1,6 +1,6 @@
-"""GROOT N1.7 on AMD CDNA4 — checkpoint-gated E2E gates for the frontend.
+"""GROOT N1.7 on AMD CDNA3/CDNA4 — checkpoint-gated E2E gates for the frontend.
 
-The full path on an MI350X: :class:`GrootN17TorchFrontendAmd` →
+The full path on an MI300X or MI350X: :class:`GrootN17TorchFrontendAmd` →
 ``set_prompt`` (FP8 kernel backbone: ViT → DeepStack → truncated LLM → VL
 self-attn, plus the baked FP8 alphas) → ``infer`` (bf16 DiT action head
 replayed from a captured graph). Gates:
@@ -86,9 +86,12 @@ def _env(*names: str):
 def amd_env():
     """ROCm torch + device + extension + frontend, or skip with the reason."""
     try:
-        importlib.import_module("flash_rt.amd.flash_rt_amd_kernels")
+        extension = importlib.import_module(
+            "flash_rt.amd.flash_rt_amd_kernels")
     except ImportError as exc:
         pytest.skip(f"flash_rt_amd_kernels not importable: {exc}")
+    if extension.build_info().get("backend") == "rdna":
+        pytest.skip("requires the CDNA4 AMD extension source set")
     try:
         # Pulls in the Thor base and its third-party helpers (declared
         # under an optional extra); skip rather than error on a lean env.
