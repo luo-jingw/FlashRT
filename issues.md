@@ -1443,3 +1443,36 @@ the cuBLAS build and the partition differ between the zero and non-zero cases.
 Log the cuBLASLt algorithm the executor's GEMMs get on the whole device and on each partition (or compare kernel names
 in an nsys trace of one graph replay), with 13.6.1.10 and 13.4.1.3.
 
+
+# ISSUE-108
+
+Status: resolved
+
+Area: `Qwen36TorchFrontendRtx` long-context prefill with `FLASHRT_QWEN36_TQ_PREFILL_GRAPH=1` (NVFP4, FP8 or TQ KV)
+
+## Observation
+
+With the prefill graph on, the first call at a prompt length not seen before in the process gives a broken reply
+(`{"user": "I want to 100% natural, 100% organic, ...` instead of `{"subgoals":["put the red-and-white alphabet soup
+carton in the woven basket ...`); the same messages called again give the correct reply. With the prefill graph off,
+the first call is already correct. Seen on every new prompt length of the recorded VoLoAgent calls (decompose 2 126 /
+2 942 tokens, monitor 4 072-5 726, replan 1 427) (`research/experiments/harness_replay_5090/calls/`, `text_equal`;
+`smoke/first_call_pf{0,1}.json`).
+
+## Evidence
+
+`_ensure_prefill_graph_nvfp4_fp8kv` / `_tq` run the chunk twice as warm-up, roll the linear-attention state and the
+dequant mark back after each, capture the graph and return `captured_live=True`, and the caller then skips the replay.
+A capture does not execute the kernels, so the chunk never runs: the recurrent state stays at its pre-chunk value
+(the KV rows hold the warm-up's writes) and every later chunk and the decode start from the wrong state.
+
+## Resolution
+
+Both capture functions return only the graph, and the four call sites in the long-context prefill always replay it,
+after a capture as after a cache hit (`flash_rt/frontends/torch/qwen36_rtx.py`). After the change, with the prefill
+graph on, the first call equals the later calls and the prefill-graph-off output for a 2 126-token decompose call and
+a 5 704-token monitor call (`smoke/first_call_pf1_fix_*.json`, `smoke/first_call_pf0_*.json`).
+
+The co-location cells with the prefill graph (`research/experiments/colocation_qwen27b_5090/`) ran fixed prompts
+whose prefill graphs were captured in the warm-up calls before the measured window; ISSUE-105's flips were calls that
+captured graphs inside the window.

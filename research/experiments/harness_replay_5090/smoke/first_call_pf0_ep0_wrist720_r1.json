@@ -1,0 +1,34 @@
+{
+ "calls": "calls/ep0_wrist720.jsonl",
+ "index": 1,
+ "kind": "monitor",
+ "prefill_graph": "0",
+ "runs": [
+  {
+   "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The moka pot is still on the table near the black frying pan, not on the grey stove burner, and the stove does not appear turned on yet. The robot is positioned near the stove knob and can continue the task.\"}",
+   "tokens": 59,
+   "prompt_len": 5704,
+   "timings_ms": {
+    "preprocess": 66.50686101056635,
+    "vit": 148.84212700417265,
+    "inject": 4.608295974321663,
+    "prefill": 610.9910888671875,
+    "decode": 2521.493896484375
+   },
+   "n_graphs": 0
+  },
+  {
+   "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The moka pot is still on the table near the black frying pan, not on the grey stove burner, and the stove does not appear turned on yet. The robot is positioned near the stove knob and can continue the task.\"}",
+   "tokens": 59,
+   "prompt_len": 5704,
+   "timings_ms": {
+    "preprocess": 15.514511964283884,
+    "vit": 124.0074840025045,
+    "inject": 0.9868470369838178,
+    "prefill": 453.6207275390625,
+    "decode": 691.41064453125
+   },
+   "n_graphs": 0
+  }
+ ]
+}

@@ -1,0 +1,47 @@
+{
+ "calls": "calls/ep188_wrist224.jsonl",
+ "index": 0,
+ "kind": "decompose",
+ "prefill_graph": "1",
+ "runs": [
+  {
+   "text": "{\"user\": \"I want to 100% natural, 100% organic, ",
+   "tokens": 22,
+   "prompt_len": 2126,
+   "timings_ms": {
+    "preprocess": 56.956600048579276,
+    "vit": 66.43841398181394,
+    "inject": 3.661780967377126,
+    "prefill": 535.7230224609375,
+    "decode": 2520.056884765625
+   },
+   "n_graphs": 0
+  },
+  {
+   "text": "{\"subgoals\":[\"put the red-and-white alphabet soup carton in the woven basket with the silver rim\",\"put the red tomato sauce bottle in the woven basket with the silver rim\"],\"ordered\":false}",
+   "tokens": 40,
+   "prompt_len": 2126,
+   "timings_ms": {
+    "preprocess": 8.684151980560273,
+    "vit": 40.70121701806784,
+    "inject": 0.6447770283557475,
+    "prefill": 172.3832244873047,
+    "decode": 1709.4205322265625
+   },
+   "n_graphs": 0
+  },
+  {
+   "text": "{\"subgoals\":[\"put the red-and-white alphabet soup carton in the woven basket with the silver rim\",\"put the red tomato sauce bottle in the woven basket with the silver rim\"],\"ordered\":false}",
+   "tokens": 40,
+   "prompt_len": 2126,
+   "timings_ms": {
+    "preprocess": 8.252998988609761,
+    "vit": 40.888198011089116,
+    "inject": 0.6757010123692453,
+    "prefill": 172.25318908691406,
+    "decode": 736.1607666015625
+   },
+   "n_graphs": 0
+  }
+ ]
+}

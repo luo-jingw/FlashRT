@@ -8431,9 +8431,10 @@ class Qwen36TorchFrontendRtx:
         ``last``/``hidden_last`` for the tail. Reusing verify's all-logits
         graph would reintroduce a large lm_head cost during prefill.
 
-        Returns ``(graph, captured_live)``. ``captured_live`` means the
-        capture itself already ran the chunk from the current input/state,
-        so the caller should not immediately replay it again.
+        Returns the graph. A capture does not execute the chunk, and the
+        warm-up runs before it are rolled back (linear-attention state and
+        the dequant mark), so the caller replays the graph after a capture
+        as after a cache hit.
         """
         import torch
 
@@ -8443,7 +8444,7 @@ class Qwen36TorchFrontendRtx:
         key = (cur_pos, K, logits_mode)
         g = self._graph_cache_get(self._captured_prefill_graphs_tq, key)
         if g is not None:
-            return g, False
+            return g
 
         gs = self._graph_stream
         snap_lin = self._lin_state.clone()
@@ -8480,11 +8481,15 @@ class Qwen36TorchFrontendRtx:
         torch.cuda.current_stream().wait_stream(gs)
 
         self._graph_cache_put(self._captured_prefill_graphs_tq, key, g)
-        return g, True
+        return g
 
     def _ensure_prefill_graph_nvfp4_fp8kv(
             self, cur_pos: int, K: int, logits_mode: str):
-        """Lazy CUDA Graph capture for long-context FP8-KV prefill chunks."""
+        """Lazy CUDA Graph capture for long-context FP8-KV prefill chunks.
+
+        Returns the graph; as in ``_ensure_prefill_graph_nvfp4_tq``, the
+        caller replays it after a capture as after a cache hit.
+        """
         import torch
 
         if not hasattr(self, '_captured_prefill_graphs_fp8kv'):
@@ -8493,7 +8498,7 @@ class Qwen36TorchFrontendRtx:
         key = (cur_pos, K, logits_mode)
         g = self._graph_cache_get(self._captured_prefill_graphs_fp8kv, key)
         if g is not None:
-            return g, False
+            return g
 
         gs = self._graph_stream
         snap_lin = self._lin_state.clone()
@@ -8530,7 +8535,7 @@ class Qwen36TorchFrontendRtx:
         torch.cuda.current_stream().wait_stream(gs)
 
         self._graph_cache_put(self._captured_prefill_graphs_fp8kv, key, g)
-        return g, True
+        return g
 
     # ---------- Stage 7 G2: NVFP4 MTP chain graph capture ----------
 
@@ -8940,29 +8945,25 @@ class Qwen36TorchFrontendRtx:
                     sin_S.data_ptr(), S * d * 2, s,
                 )
                 if kv_mode == 'fp8':
-                    graph, captured_live = (
-                        self._ensure_prefill_graph_nvfp4_fp8kv(
-                            start, S, mode))
-                    if not captured_live:
-                        gs = self._graph_stream
-                        gs.wait_stream(torch.cuda.current_stream())
-                        with torch.cuda.stream(gs):
-                            graph.replay()
-                        torch.cuda.current_stream().wait_stream(gs)
+                    graph = self._ensure_prefill_graph_nvfp4_fp8kv(
+                        start, S, mode)
+                    gs = self._graph_stream
+                    gs.wait_stream(torch.cuda.current_stream())
+                    with torch.cuda.stream(gs):
+                        graph.replay()
+                    torch.cuda.current_stream().wait_stream(gs)
                     self._fp8_mark_dequant_valid_end(end)
                     logits = (None if mode in ('none', 'hidden')
                               else self._logits_buf)
                 else:
                     self._tq_mark_dequant_valid_end(start)
-                    graph, captured_live = (
-                        self._ensure_prefill_graph_nvfp4_tq(
-                            start, S, mode))
-                    if not captured_live:
-                        gs = self._graph_stream
-                        gs.wait_stream(torch.cuda.current_stream())
-                        with torch.cuda.stream(gs):
-                            graph.replay()
-                        torch.cuda.current_stream().wait_stream(gs)
+                    graph = self._ensure_prefill_graph_nvfp4_tq(
+                        start, S, mode)
+                    gs = self._graph_stream
+                    gs.wait_stream(torch.cuda.current_stream())
+                    with torch.cuda.stream(gs):
+                        graph.replay()
+                    torch.cuda.current_stream().wait_stream(gs)
                     self._tq_mark_dequant_valid_end(end)
                     logits = (None if mode in ('none', 'hidden')
                               else self._logits_buf)
@@ -9636,28 +9637,24 @@ class Qwen36TorchFrontendRtx:
                         sin_S.data_ptr(), S * d * 2, s,
                     )
                     if kv_mode == 'fp8':
-                        graph, captured_live = (
-                            self._ensure_prefill_graph_nvfp4_fp8kv(
-                                start, S, mode))
-                        if not captured_live:
-                            gs = self._graph_stream
-                            gs.wait_stream(torch.cuda.current_stream())
-                            with torch.cuda.stream(gs):
-                                graph.replay()
-                            torch.cuda.current_stream().wait_stream(gs)
+                        graph = self._ensure_prefill_graph_nvfp4_fp8kv(
+                            start, S, mode)
+                        gs = self._graph_stream
+                        gs.wait_stream(torch.cuda.current_stream())
+                        with torch.cuda.stream(gs):
+                            graph.replay()
+                        torch.cuda.current_stream().wait_stream(gs)
                         self._fp8_mark_dequant_valid_end(end)
                         logits = self._logits_buf if is_last else None
                     else:
                         self._tq_mark_dequant_valid_end(start)
-                        graph, captured_live = (
-                            self._ensure_prefill_graph_nvfp4_tq(
-                                start, S, mode))
-                        if not captured_live:
-                            gs = self._graph_stream
-                            gs.wait_stream(torch.cuda.current_stream())
-                            with torch.cuda.stream(gs):
-                                graph.replay()
-                            torch.cuda.current_stream().wait_stream(gs)
+                        graph = self._ensure_prefill_graph_nvfp4_tq(
+                            start, S, mode)
+                        gs = self._graph_stream
+                        gs.wait_stream(torch.cuda.current_stream())
+                        with torch.cuda.stream(gs):
+                            graph.replay()
+                        torch.cuda.current_stream().wait_stream(gs)
                         self._tq_mark_dequant_valid_end(end)
                         logits = self._logits_buf if is_last else None
                 elif kv_mode == 'fp8':
