@@ -1,0 +1,47 @@
+{
+ "calls": "calls/ep188_wrist224.jsonl",
+ "index": 0,
+ "kind": "decompose",
+ "prefill_graph": "1",
+ "runs": [
+  {
+   "text": "{\"subgoals\":[\"put the red-and-white alphabet soup carton in the woven basket with the silver rim\",\"put the red tomato sauce bottle in the woven basket with the silver rim\"],\"ordered\":false}",
+   "tokens": 40,
+   "prompt_len": 2126,
+   "timings_ms": {
+    "preprocess": 61.14786502439529,
+    "vit": 67.27710395352915,
+    "inject": 3.69385804515332,
+    "prefill": 705.6834716796875,
+    "decode": 2696.614990234375
+   },
+   "n_graphs": 0
+  },
+  {
+   "text": "{\"subgoals\":[\"put the red-and-white alphabet soup carton in the woven basket with the silver rim\",\"put the red tomato sauce bottle in the woven basket with the silver rim\"],\"ordered\":false}",
+   "tokens": 40,
+   "prompt_len": 2126,
+   "timings_ms": {
+    "preprocess": 8.426006010267884,
+    "vit": 40.674528980161995,
+    "inject": 0.6638679769821465,
+    "prefill": 171.789306640625,
+    "decode": 735.8740234375
+   },
+   "n_graphs": 0
+  },
+  {
+   "text": "{\"subgoals\":[\"put the red-and-white alphabet soup carton in the woven basket with the silver rim\",\"put the red tomato sauce bottle in the woven basket with the silver rim\"],\"ordered\":false}",
+   "tokens": 40,
+   "prompt_len": 2126,
+   "timings_ms": {
+    "preprocess": 7.293642032891512,
+    "vit": 40.473008004482836,
+    "inject": 0.5959649570286274,
+    "prefill": 171.8077392578125,
+    "decode": 736.2017211914062
+   },
+   "n_graphs": 0
+  }
+ ]
+}
