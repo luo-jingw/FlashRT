@@ -188,3 +188,39 @@ eager 256-token chunks):
   executor ticks differ by up to 4.9e-3 where the two models share SMs (`prio`, `coop`; 0 of about 1 200 per `green`
   window; ISSUE-106).
 
+## Re-measured with cuBLAS 13.6.1.10 (`run_cublas136.sh` -> `cells/cublas136/`, `cublas136.log`)
+
+All cells above ran with conda's cuBLAS 13.4.1.3 (executor alone 28.2-28.8 ms). These cells ran in one session with
+the env's pip cuBLAS 13.6.1.10 (each cell logs the loaded `libcublasLt` path). "Before" is FlashRT at `e28b28e1`
+(worktree `tmp/wt_orig_e28b28e1` with its kernel libraries from `tmp/so_backup_full_e28b28e1/`), flags as in
+`run_grid.sh`; "after" is the current tree, flags as in `run_hostfix.sh` (prefill graph on, except coop: eager
+256-token chunks).
+
+- Executor alone: 24.74 / 24.91 ms (p50 / p99) at the start, 24.98 / 25.22 ms at the end.
+- Planner alone (whole device): short 662.6 ms (preprocess + ViT 16.7, prefill 53.0, decode 592.6), long 1 317.7 ms
+  (23.6, 654.8, 639.1).
+
+Executor p99 ms / miss rate, planner call ms:
+
+| cell | before | after | planner call ms (before / after) |
+|---|---|---|---|
+| prio, short | 281.1 / 83.0 % (first window crashed in capture) | 40.7 / 0 % | 773 / 939 |
+| green25, short | 268.0 / 80.7 % | 32.4 / 0.1 % | 948 / 1 050 |
+| green50, short | 257.0 / 83.0 % | 40.6 / 0 % | 858 / 985 |
+| coop, short | 26.1 / 0 % | 26.4 / 0 % | 1 500 / 1 500 |
+| prio, long (no SM limit) | crashed in capture, 2 of 2 windows | 51.1 / 7.3 % | - / 1 875 |
+| green25, long | 605.1 / 89.9 % | 32.0 / 0.1 % | 2 652 / 3 100 |
+| green50, long | 448.6 / 85.4 % | 40.8 / 0 % | 1 874 / 2 350 |
+| coop, long | 51.6 / 1.6 % | 30.9 / 0 % | 3 152 / 3 100 |
+
+- green25 long with the research monkeypatches on the pre-fix tree (`PLANNER_READBACK_NOGIL=1 CAPTURE_THREAD_LOCAL=1`,
+  no prefill graph): 512.0 ms / 13.8 %, planner 2 946 ms.
+- MPS 50/50 (current tree): executor 37.9 / 38.0 ms p99, 0 %; planner 906 / 2 070 ms; 0.013 / 0.139 GB free, against
+  2.57-2.94 GB in process.
+- The capture crashes (`operation failed due to a previous error during capture` in an FA2 launch) are the failure
+  that thread-local capture removes.
+- The 0.1 % green25 cells each hold one 173 ms tick.
+- Executor actions (`exec_action_check`): every tick of the green cells differs from the whole-device reference by a
+  constant 2.8e-3-4.7e-3, already right after the graph is recaptured on the partition (ISSUE-107); prio short / long
+  1 and 2 ticks of about 1 200 (2.7e-3, 3.5e-3; ISSUE-106); coop none.
+

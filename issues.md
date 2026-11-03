@@ -1404,5 +1404,42 @@ with the planner's graph-replayed prefill (the executor's graph takes 55-60 ms d
 ## Next Experiment
 
 As in ISSUE-105: the executor alone next to a compute-only load on shared SMs; and a list of the executor graph's
-kernels that use atomics or split-K. A shared-workspace race would also show as differences under `green25`, which has
-none so far.
+kernels that use atomics or split-K. A shared-workspace race would also show as sporadic tick differences under
+`green25`, on top of the constant offset of ISSUE-107.
+
+## Measurements (2026-11-03, cuBLAS 13.6.1.10)
+
+`cells/cublas136/cur_*.json`: `prio` short 1 of 1 201 ticks (2.7e-3), `prio` long 2 of 1 200 (3.5e-3); `coop` short
+and long 0; `green` cells see ISSUE-107.
+
+# ISSUE-107
+
+Status: open, non-blocking
+
+Area: ImageWAM fp8 executor graph captured on a green-context partition, cuBLAS 13.6.1.10 (RTX 5090)
+
+## Observation
+
+With cuBLAS 13.6.1.10, the executor graph recaptured on the green partition's stream gives actions that differ from
+the whole-device reference (`fe.infer` on the default stream, same fixed noise) by 4.73e-3 (green25 short), 2.81e-3
+(green25 long) and 2.95e-3 (green50 short and long), max abs, normalized actions. The difference is there in the check
+right after the recapture, before the planner starts, and every tick of the window shows the same maximum
+(`research/experiments/colocation_qwen27b_5090/cells/cublas136/cur_*_green*.json`, `exec_action_check`). With cuBLAS
+13.4.1.3 the same check gave 0 under `green25` (`cells/hostfix/`).
+
+## Evidence
+
+The offset is constant across ticks and present without a planner, so it is not a race between the two models. Only
+the cuBLAS build and the partition differ between the zero and non-zero cases.
+
+## Hypotheses
+
+- cuBLASLt 13.6.1.10 picks GEMM algorithms from the SM count of the context it runs in, and a green context reports
+  its partition's SM count, so the executor's fp8 GEMMs use other kernels (other split-K or tile orders) on 82 or
+  122 SMs than on 170.
+
+## Next Experiment
+
+Log the cuBLASLt algorithm the executor's GEMMs get on the whole device and on each partition (or compare kernel names
+in an nsys trace of one graph replay), with 13.6.1.10 and 13.4.1.3.
+
