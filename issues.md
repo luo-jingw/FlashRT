@@ -1223,7 +1223,7 @@ Log the algorithm each autotuned GEMM picks, run the check in five processes, an
 
 # ISSUE-103
 
-Status: open, non-blocking
+Status: cause identified (cuBLAS version); the environment fix is pending a decision
 
 Area: ImageWAM LIBERO fp8 executor tick time on the RTX 5090 with the current `flash_rt_kernels` build
 
@@ -1243,17 +1243,33 @@ machine (24.95 -> 27.0-28.8 ms) after the same rebuild. SM clocks during the run
 
 ## Hypotheses
 
-- The rebuilt kernel library (build flags or the merged kernel sources) is slower for these pipelines.
-- A common machine state (clocks, driver) changed between the two measurements.
+- The rebuilt kernel library (build flags or the merged kernel sources) is slower for these pipelines. Refuted: see
+  Measurements.
+- The cuBLAS library the process loads changed. Supported: see Measurements.
+
+## Measurements (2026-11-03)
+
+- Kernel library swapped into `flash_rt/`, one session, `exec_capture_check.py` (100 ticks): every pair of
+  `flash_rt_kernels` (current `build_full/`, pre-merge, slim of 2026-10-11) and `flash_rt_fa2` (2026-11-03, 2026-10-12)
+  gives 28.0-28.2 ms, the current pair run first and last 28.0 / 28.0-28.2
+  (`research/experiments/colocation_qwen27b_5090/cells/so_compare/`, `run_so_compare.sh`).
+- `benchmarks/imagewam_module_operator_profile.py fp8` on the current tree: `infer()` P50 28.17 ms against 23.85 ms in
+  `docs/imagewam_rtx5090_profile.md`. Eager kernel time 26.59 against 22.47 ms: GEMM 14.5 against 10.86 ms and the
+  attention GEMMs about 0.4 ms more; conv 2.43 / 2.41, norm 2.08 / 2.08, elementwise 1.72 / 1.70, quant/cast
+  0.81 / 0.80 (`cells/so_compare/doc_profile_fp8_now.json`).
+- The process loads `libcublas{,Lt}.so.13.4.1.3` from the conda env (`targets/x86_64-linux/lib`, installed
+  2026-09-22). No `nvidia-cublas` pip wheel is installed in the env any more; PROJECT.md recorded 13.6.1.10 for it.
+- `nvidia-cublas` 13.6.1.10 installed with `--target tmp/cublas_13.6.1.10` and loaded with `LD_PRELOAD`: 24.36-24.40 ms;
+  13.4.1.3 before and after it: 28.0 and 28.1 ms (`cells/so_compare/cublas_*.json`).
 
 ## Next Experiment
 
-Time `exec_capture_check.py` with the slim-build `.so` files kept in `tmp/so_backup_slim/` and with the pre-merge ones in
-`tmp/so_backup_premerge/`, in one session, against the current build.
+Restoring `nvidia-cublas` 13.6.1.10 in the flashrt env is an environment change (decision pending). ISSUE-102 (Pi0.5
+24.95 -> 27.0-28.8 ms) is probably the same cause: time Pi0.5 with the preloaded 13.6.1.10.
 
 # ISSUE-104
 
-Status: open, non-blocking
+Status: resolved
 
 Area: `Qwen36TorchFrontendRtx` (NVFP4) / `Qwen36VlTorchFrontendRtx` constructed while a non-default CUDA stream is current
 
@@ -1281,3 +1297,91 @@ streams are non-blocking, so stream 0 does not wait for the copy.
 Construct under a side stream with a `torch.cuda.current_stream().synchronize()` before each stream-0 launch, or with
 the launch on the current stream, and compare the output and the quantized weights against a default-stream
 construction.
+
+## Resolution
+
+The load-time conversion kernels in `_qwen36_rtx_nvfp4_weights.py` (`nvfp4_sf_linear_to_swizzled` in
+`_load_quantized_proj` / `_load_quantized_mlp_gate_up`, `bf16_weight_to_nvfp4_swizzled` in `_quant_bf16_lin_proj`) now
+run on the current torch stream. Before the change, a side-stream construction left 48 of the 1 482 language-model
+weight buffers different from a default-stream construction (most of them all zero) and produced garbage; after it, the
+byte-sum digest of all 1 482 buffers equals the default-stream one and the three outputs are identical
+(`research/experiments/colocation_qwen27b_5090/smoke/stream_check_{plain,side}_{prefix,fix}.json`).
+
+# ISSUE-105
+
+Status: open, non-blocking
+
+Area: Qwen3.8-27B planner output under in-process co-location with the ImageWAM executor (`prio`, RTX 5090)
+
+## Observation
+
+In `prio` short-context co-location with the planner's per-cycle readback outside the GIL, one planner call in about 60
+produces a different token sequence from all the others (same prompt, greedy): 1 of 63 calls
+(`research/experiments/colocation_qwen27b_5090/cells/hostfix/short_prio_p1.json`, binding fix) and 1 of 61
+(`cells/short_prio_nogil.json`, research monkeypatch). The planner alone (5 calls per context), `prio` with the GIL-held
+readback (76 calls) and the green-context cells (19-57 calls) give one sequence each.
+
+## Evidence
+
+- The differing calls are the slow ones: 1 259 ms and 2 699 ms against about 945 ms for the others; in both windows the
+  planner's captured-graph count grows (50 -> 56, 50 -> 86), and in the windows with a single sequence it does not.
+- The differing calls take 26 speculative cycles with 39 accepted drafts; the others 25 cycles, 40 accepted.
+- Under MPS (`mps50`, separate process) every call gives one sequence that differs from the whole-device planner's (67 of
+  67 calls the same).
+
+- With per-call graph counts (`cells/hostfix/*_p2w*.json`, thread-local capture in the frontends, both monkeypatches
+  off): every differing call captured graphs (short `prio` window 1: calls 31 and 36, 50 -> 82 -> 92 graphs; window 2:
+  call 57, 50 -> 66); one capturing call (long `prio` window 1, call 15, 64 -> 108) kept the common output. The
+  differing outputs come from a small set: 3880926757, 3071263923 and 2639096006, the last being the sequence every
+  `mps50` call produces. No differing call in 9 `green25` windows (19-57 calls each).
+- The MTP chain graphs are keyed by cache position and draft length, and the draft length adapts
+  (`FLASHRT_QWEN36_TQ_ADAPTIVE_K`), so a call whose acceptance deviates visits positions with no graph yet and captures.
+- In the same `prio` windows, 3-6 of about 1 120 executor ticks give actions that differ from the reference by up to
+  4.9e-3 (ISSUE-106); `green25` windows: 0 of about 1 200.
+
+## Hypotheses
+
+- Without an SM partition, the two models' kernels interleave on the same SMs and a reduction whose result depends on
+  block scheduling (atomics, split-K) changes slightly; for the planner this flips a near-tie in a draft or verify argmax,
+  the call takes another acceptance path, and the graph capture follows from that path.
+- A planner call that captures a new graph while the executor thread runs computes a different result (a race between
+  the capture path and the other thread's CUDA work).
+- The MPS difference is a deterministic numeric change from the thread-percentage limit; its sequence is one of the
+  near-tie alternatives.
+
+## Next Experiment
+
+List the kernels on the planner's decode path and the executor's graph that reduce with atomics or split-K. Run the
+executor alone next to a compute-only load on shared SMs (no planner) and count ticks with action differences; run
+`prio` with the planner warmed until no capture happens in the window and count differing calls.
+
+# ISSUE-106
+
+Status: open, non-blocking
+
+Area: ImageWAM fp8 executor actions under in-process co-location without an SM partition (`prio`, RTX 5090)
+
+## Observation
+
+With a fixed action noise, the executor's actions are bit-identical to the reference on every tick alone and under
+`green25` (about 1 200 ticks per window, 6 windows), and in two short-context `prio` windows; in two long-context `prio`
+windows 3 and 6 of about 1 120 ticks differ, by up to 4.4e-3 and 4.9e-3 (max abs, normalized actions), and in a short
+`prio` window under py-spy sampling 3 of 1 181 ticks differ by up to 4.4e-3
+(`research/experiments/colocation_qwen27b_5090/cells/hostfix/*_prio_p2w*.json`, `exec_action_check`).
+
+## Evidence
+
+The differences occur only where the planner's kernels share the executor's SMs. `prio` long overlaps the executor
+with the planner's graph-replayed prefill (the executor's graph takes 55-60 ms during it).
+
+## Hypotheses
+
+- A kernel in the executor's graph reduces in an order that depends on block scheduling (atomics, split-K), and SM
+  sharing changes that order.
+- A buffer shared between the two models (a global workspace in the kernel library) is written by both concurrently.
+
+## Next Experiment
+
+As in ISSUE-105: the executor alone next to a compute-only load on shared SMs; and a list of the executor graph's
+kernels that use atomics or split-K. A shared-workspace race would also show as differences under `green25`, which has
+none so far.

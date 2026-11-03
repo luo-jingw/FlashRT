@@ -3005,3 +3005,174 @@ Phase Status: completed
 
 - Video input (per-frame timestamps in the prompt).
 - `qwen36_thor.py` with the same hooks.
+
+# Plan: host-side decoupling for a planner and an executor in one process (RTX 5090)
+
+Plan Status: completed
+
+## Problem
+
+Current state (measured 2026-11-03, `research/experiments/colocation_qwen27b_5090/`,
+`research/reports/planner_executor_colocation_5090.md`):
+
+- A Qwen3.8-27B NVFP4 planner (`Qwen36VlTorchFrontendRtx`) and the ImageWAM fp8 executor
+  (`ImageWAMTorchFrontendThor`) in one process, two Python threads, miss 80-92% of the
+  executor's 50 ms deadlines under `prio` and `green<P>`. The executor's GPU work is only
+  10-20% slower; its thread waits 24-118 ms for the GIL before staging its inputs.
+- `fvk.cuda_read_i32_sync` (`csrc/bindings.cpp`) runs `cudaMemcpyAsync` + `cudaStreamSynchronize`
+  with the GIL held. The planner calls it once per speculative-decode cycle
+  (`qwen36_rtx.py`, two call sites) and waits there for the whole verify forward
+  (20-30 ms); 632 of 683 py-spy samples of the planner thread holding the GIL are in it.
+- The long-context chunked prefill launches its kernels from a Python loop unless
+  `FLASHRT_QWEN36_TQ_PREFILL_GRAPH=1`.
+- All 17 `torch.cuda.graph(...)` captures in `qwen36_rtx.py`, the ViT capture in
+  `_qwen3_vl_vision_rtx.py` and the ImageWAM capture in `imagewam_thor.py` use the default
+  global capture mode. The planner captures graphs lazily on first use, also inside a
+  running co-location window (46-64 → 86-110 graphs); a CUDA call from the other thread
+  during such a capture fails it with `cudaErrorStreamCaptureUnsupported`.
+- Research-only monkeypatches in `colocation_bench.py` (`PLANNER_READBACK_NOGIL`,
+  `CAPTURE_THREAD_LOCAL`) remove the first and third problem; with them and the prefill
+  graph, `prio` short and `green25` / `green50` short and long miss 0-0.1%.
+- ISSUE-104: constructing the Qwen3.6 frontend while a side stream is current gives garbage
+  output; `_quant_bf16_lin_proj` copies on the current stream and quantizes on stream 0.
+- ISSUE-103: the ImageWAM fp8 tick is 28.2 ms against 23.85 ms documented, with the
+  current `build_full/` kernel library.
+
+Problem: the host-side fixes live only as monkeypatches in a research script; FlashRT itself
+still blocks the GIL in the readback, captures in global mode, and builds wrong weights under
+a side stream.
+
+Goal: with the unmodified FlashRT frontends (no research monkeypatch), (1) the planner's
+per-cycle readback does not hold the GIL, (2) no capture fails because of the other thread,
+(3) side-stream construction gives the same output and weights as default-stream
+construction, (4) the co-location cells that met the deadline with the monkeypatches meet it
+again, with planner output unchanged, (5) the cause of the executor's 28.2 ms is measured.
+
+## Structure
+
+- `csrc/bindings.cpp` (`flash_rt_kernels` module): `cuda_read_i32_sync` releases the GIL while
+  it waits. No other binding changes.
+- `flash_rt/frontends/torch/qwen36_rtx.py`, `_qwen3_vl_vision_rtx.py`, `imagewam_thor.py`:
+  every graph capture passes `capture_error_mode='thread_local'`. Capture order, pools and
+  streams unchanged.
+- `flash_rt/frontends/torch/_qwen36_rtx_nvfp4_weights.py`: load-time conversion kernels run on
+  the current torch stream instead of stream 0.
+- `research/experiments/colocation_qwen27b_5090/`: measurement only; the monkeypatch flags stay,
+  default off.
+
+## State Ownership
+
+- The GIL during the readback: released by the binding for the duration of the copy and
+  stream synchronize only; no Python object is touched while released.
+- Graph capture state: each capturing frontend, per capture; the mode is fixed at each call site.
+- Weight buffers at load: `extract_weights_nvfp4`, produced on the stream current at
+  construction.
+
+## Interface
+
+- `flash_rt_kernels.cuda_read_i32_sync(src: int, stream: int = 0) -> int`: signature and result
+  unchanged; the GIL is released between entry and return of the CUDA calls.
+- `torch.cuda.graph(g, ..., capture_error_mode='thread_local')` at every capture site listed above.
+- `_quant_bf16_lin_proj` and the other load-time helpers in `_qwen36_rtx_nvfp4_weights.py` that
+  launch with a `stream` argument: the default becomes the current torch stream's handle.
+
+## Flow
+
+Planner thread, per decode cycle: draft chain graph replay → verify graph replay →
+`cuda_read_i32_sync` (GIL released while waiting) → accept. Executor thread, per tick: wait for
+the release time → stage inputs (needs the GIL; obtains it while the planner waits in the
+readback) → graph replay on its stream. A planner graph captured during the window captures
+in thread-local mode, so the executor thread's CUDA calls neither fail nor enter it.
+
+## Code Mapping
+
+- Readback: `csrc/bindings.cpp` (`cuda_read_i32_sync`); rebuilt into
+  `flash_rt/flash_rt_kernels.cpython-312-x86_64-linux-gnu.so` from `build_full/`.
+- Capture mode: `flash_rt/frontends/torch/qwen36_rtx.py` (17 sites),
+  `flash_rt/frontends/torch/_qwen3_vl_vision_rtx.py` (1), `flash_rt/frontends/torch/imagewam_thor.py`
+  (`_record_graph`).
+- Load stream: `flash_rt/frontends/torch/_qwen36_rtx_nvfp4_weights.py`.
+- Measurements: `research/experiments/colocation_qwen27b_5090/` (cells, README), report and page
+  `research/reports/planner_executor_colocation_5090.{md,html}`; issues ISSUE-103 / ISSUE-104.
+
+## Implementation
+
+### Phase 1 — Readback outside the GIL
+
+Phase Status: completed
+
+Result: the binding drains the stream with the GIL released, then copies. Copying first (the first attempt) left the
+executor's graph launch at 37.5 ms p50 and 92.4% misses: a device-to-pageable-host copy enqueued behind pending work
+waits inside the driver and stalls the other thread's launches. With drain-then-copy, `prio` short with only
+`CAPTURE_THREAD_LOCAL=1`: executor 36.9 / 46.8 ms p50 / p99, 0% misses, staging 0.5 ms (the monkeypatched cell: 36.9 /
+46.6, 0%); planner alone output CRC unchanged in both contexts (`cells/hostfix/`). One planner call in 63 gave a
+different output under co-location, as with the monkeypatch (ISSUE-105).
+
+- Goal: `cuda_read_i32_sync` releases the GIL while it copies and synchronizes.
+- Modified files: `csrc/bindings.cpp`; rebuild `flash_rt_kernels` in `build_full/`.
+- Observation: planner alone (short / long, whole device) output CRC identical to the
+  pre-change run, call ms within run-to-run spread; co-location `prio` short with
+  `PLANNER_READBACK_NOGIL=0`, `CAPTURE_THREAD_LOCAL=1`: executor miss rate and input-staging
+  wait, against the monkeypatched cell (0%, 0.5 ms).
+
+### Phase 2 — Thread-local graph capture
+
+Phase Status: completed
+
+Result: 12 windows with both monkeypatches off (`prio`, `green25`, short and long, one under py-spy): no capture error;
+planner alone CRC unchanged. `prio` short 0% misses (p99 46.7-47.0 ms; 13.5% under py-spy), `green25` long 0% (p99 36.0),
+`prio` long 44-46% (prefill fills the SMs, as with the monkeypatches). `green25` short without the prefill graph misses
+2.4-3.6% (p99 53-56 ms), as the monkeypatched cell without it (2.3%); Phase 5 therefore runs short context with the
+prefill graph too. Differing planner outputs coincide with in-window captures (ISSUE-105); a few executor ticks differ
+by up to 4.9e-3 under `prio` only (ISSUE-106).
+
+- Goal: captures in the planner and executor frontends use thread-local capture mode.
+- Modified files: `qwen36_rtx.py`, `_qwen3_vl_vision_rtx.py`, `imagewam_thor.py`.
+- Observation: planner alone and executor alone outputs bit-identical to Phase 1; co-location
+  `prio` and `green25`, short and long, with both monkeypatch flags off: no capture error in
+  three 60 s windows each, one of them under py-spy sampling (which triggered the failure
+  before); planner graph counts at window start and end.
+
+### Phase 3 — Load-time kernels on the current stream (ISSUE-104)
+
+Phase Status: completed
+
+Result: before the change a side-stream construction left 48 of 1 482 weight buffers different (most all zero) and
+gave garbage; after it the weight digest and all three outputs equal the default-stream construction (ISSUE-104
+resolved).
+
+- Goal: constructing the frontend under a side stream gives the same weights and output.
+- Modified files: `_qwen36_rtx_nvfp4_weights.py`.
+- Observation: `stream_check.py` with side-stream construction: output text equal to the
+  default-stream construction; checksums of every quantized weight buffer equal.
+
+### Phase 4 — Executor tick time by kernel build (ISSUE-103)
+
+Phase Status: completed
+
+Result: the kernel library does not explain it (all six build pairs 28.0-28.2 ms). The documented profile script now
+gives 28.17 ms with the whole difference in cuBLAS GEMMs; the env loads conda's cuBLAS 13.4.1.3, and preloading
+13.6.1.10 (the version PROJECT.md recorded) gives 24.4 ms (ISSUE-103). Phase 5 keeps the current environment so that
+it compares with the monkeypatched cells under the same libraries.
+
+- Goal: measure whether the kernel library explains 28.2 ms against 23.85 ms.
+- Modified files: none (experiment); `.so` files swapped from `tmp/so_backup_slim/` and
+  `tmp/so_backup_premerge/` in one session, current build restored afterwards.
+- Observation: `exec_capture_check.py` tick ms (100 ticks) per build, SM clock per run. The
+  result goes to ISSUE-103; a build change, if any, is a separate plan.
+
+### Phase 5 — Co-location with framework fixes only
+
+Phase Status: completed
+
+Result: with both monkeypatches off, every compared cell reproduces the monkeypatched one (p99 within 0.1-1.3 ms,
+same miss rates, planner call within 0-50 ms): prio short 0.1 %, green25 short / long 0.1 / 0 %, green50 short / long
+0 / 0.1 %, coop short / long 0 %, prio long 44.4 % (no SM limit). The 0.1 % are single ticks during the planner's first
+call of the window (`research/experiments/colocation_qwen27b_5090/README.md`, "Host-side fixes in FlashRT").
+
+- Goal: re-measure the co-location cells with the unmodified frontends.
+- Modified files: research cells, README, report and page.
+- Observation: short and long × `prio`, `green25`, `green50`, `coop`, both monkeypatch flags
+  off, `FLASHRT_QWEN36_TQ_PREFILL_GRAPH=1` in both contexts except `coop` (eager 256-token chunks; prio and green25
+  long are the Phase 2 windows): executor p50 / p99 / miss, planner call ms and output CRC, against the monkeypatched
+  cells.
