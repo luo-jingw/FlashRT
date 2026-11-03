@@ -266,15 +266,17 @@ this fork covers Jetson AGX Thor (sm_110).
   2.14.0+cu130); there is no `python` on `PATH`, call
   `~/anaconda3/envs/flashrt/bin/python`. `pytest` was installed into that
   env on 2026-10-02.
-- cuBLAS in that env (checked 2026-11-03): processes load conda's
-  `libcublas{,Lt}.so.13.4.1.3` (`targets/x86_64-linux/lib`); no
-  `nvidia-cublas` pip wheel is installed. With 13.4.1.3 the ImageWAM fp8
-  tick is 28.0-28.2 ms; with `nvidia-cublas` 13.6.1.10 (installed
-  `--target tmp/cublas_13.6.1.10`, loaded through
-  `LD_PRELOAD=tmp/cublas_13.6.1.10/nvidia/cu13/lib/libcublasLt.so.13:tmp/cublas_13.6.1.10/nvidia/cu13/lib/libcublas.so.13`)
-  it is 24.4 ms (issues.md ISSUE-103). Check
-  `grep cublas /proc/<pid>/maps` before comparing GEMM-bound timings across
-  sessions.
+- cuBLAS in that env: pip `nvidia-cublas` 13.6.1.10 and
+  `nvidia-cuda-nvrtc` 13.3.33 (`site-packages/nvidia/cu13/lib`), loaded
+  ahead of conda's `libcublas{,Lt}.so.13.4.1.3` (`targets/x86_64-linux/lib`).
+  torch's `cuda-toolkit==13.0.3` pins 13.1.1.3 / 13.0.88, so a `pip install`
+  that re-resolves torch's dependencies replaces both wheels; install other
+  packages with `--no-deps` or with `nvidia-cublas==13.6.1.10` and
+  `nvidia-cuda-nvrtc==13.3.33` as constraints, and run `pip list | grep
+  nvidia-cublas` afterwards. GEMM time depends on the build: the ImageWAM fp8
+  tick is 24.2 ms with 13.6.1.10 and 28.0-28.2 ms with 13.4.1.3 (issues.md
+  ISSUE-103). Check `grep cublas /proc/<pid>/maps` before comparing
+  GEMM-bound timings across sessions.
 - Build: `build/` configured with `GPU_ARCH=120`; the in-tree
   `flash_rt/flash_rt_kernels.cpython-312-x86_64-linux-gnu.so` exports the
   SM120 NVFP4 GEMMs (`fp4_w4a16_gemm_sm120_bf16out{,_widen,_pingpong}`),

@@ -1200,7 +1200,7 @@ Add a `Pi05TorchFrontendThorFP4Optimized` stub to the test's fake module and ass
 
 # ISSUE-102
 
-Status: open, non-blocking
+Status: latency resolved (cuBLAS version, see ISSUE-103); cross-process action differences open, non-blocking
 
 Area: `Pi05TorchFrontendRtx` (RTX 5090, default FP8 path), run-to-run outputs and latency across processes
 
@@ -1210,20 +1210,23 @@ On 2026-11-03, the same Pi0.5 check (LIBERO checkpoint, one fixed observation, `
 
 ## Evidence
 
-Later runs span `libcublas` 13.1.1.3 (pip `nvidia-cublas`, installed with `accelerate` and then removed) and the conda env's 13.4.1.3, with identical actions, so the cuBLAS build does not explain the difference. Between the first run and the later ones, `flash_rt_kernels` was rebuilt with `-DFLASHRT_BUILD_QWEN3_VL=ON`; the only binding it adds is `w16a16_gemm_sm120_bf16`, which the Pi0.5 code does not call. The pipeline autotunes its GEMMs by timing at construction (`Pi05Pipeline.autotune_gemms`, always on); the frontend's docstring notes autotune variance perturbs numerics.
+The first run loaded pip `nvidia-cublas` 13.6.1.10. The later runs loaded 13.1.1.3 (pip, pulled in by `pip install accelerate` at 2026-11-03 01:03) or, after that wheel was uninstalled, the conda env's 13.4.1.3; they agree with each other bit for bit. Between the first run and the later ones, `flash_rt_kernels` was also rebuilt with `-DFLASHRT_BUILD_QWEN3_VL=ON`; the only binding it adds is `w16a16_gemm_sm120_bf16`, which the Pi0.5 code does not call. The pipeline autotunes its GEMMs by timing at construction (`Pi05Pipeline.autotune_gemms`, always on); the frontend's docstring notes autotune variance perturbs numerics.
+
+## Measurements (2026-11-03, `nvidia-cublas` 13.6.1.10 restored)
+
+`research/experiments/colocation_qwen27b_5090/cells/cublas_restored/pi05_check.py`, two processes: `infer()` P50 24.97 and 25.02 ms. Actions: 0.0040 max abs between the two processes, 0.0089 and 0.0049 against the first run of the day (`pi05_env13.6*.npz`, `pi05_cublas13.6_before.npz`).
 
 ## Hypotheses
 
-- Timing-based GEMM autotuning picked different algorithms in the first process.
-- The SM clock is unlocked; latency differences follow the GPU's clock and thermal state.
+- Timing-based GEMM autotuning picks different algorithms per process under cuBLAS 13.6.1.10, which would give the cross-process action differences; under 13.1.1.3 and 13.4.1.3 the picks were stable across five processes.
 
 ## Next Experiment
 
-Log the algorithm each autotuned GEMM picks, run the check in five processes, and compare the picks with the action differences; repeat with the SM clock locked if permitted.
+Log the algorithm each autotuned GEMM picks, run the check in five processes under 13.6.1.10, and compare the picks with the action differences.
 
 # ISSUE-103
 
-Status: cause identified (cuBLAS version); the environment fix is pending a decision
+Status: resolved
 
 Area: ImageWAM LIBERO fp8 executor tick time on the RTX 5090 with the current `flash_rt_kernels` build
 
@@ -1264,8 +1267,26 @@ machine (24.95 -> 27.0-28.8 ms) after the same rebuild. SM clocks during the run
 
 ## Next Experiment
 
-Restoring `nvidia-cublas` 13.6.1.10 in the flashrt env is an environment change (decision pending). ISSUE-102 (Pi0.5
-24.95 -> 27.0-28.8 ms) is probably the same cause: time Pi0.5 with the preloaded 13.6.1.10.
+None.
+
+## Resolution
+
+The flashrt env had pip `nvidia-cublas` 13.6.1.10 and `nvidia-cuda-nvrtc` 13.3.33 until 2026-11-03 01:03, when
+`pip install accelerate` re-resolved torch's `cuda-toolkit==13.0.3` pin and replaced them with 13.1.1.3 / 13.0.88;
+uninstalling those two wheels at 01:05 left conda's 13.4.1.3. Both wheels were reinstalled at their earlier versions
+with `pip install --no-deps "nvidia-cublas==13.6.1.10" "nvidia-cuda-nvrtc==13.3.33"`; processes load
+`site-packages/nvidia/cu13/lib/libcublas{,Lt}.so.13` again. Measured after the restore
+(`research/experiments/colocation_qwen27b_5090/cells/cublas_restored/`):
+
+| Measurement | 13.4.1.3 (conda) | 13.6.1.10 (pip, restored) |
+|---|---|---|
+| `exec_capture_check.py` tick P50, 3 x 100 ticks | 28.0-28.2 ms | 24.21-24.25 ms |
+| `imagewam_module_operator_profile.py fp8` `infer()` P50 | 28.17 ms | 24.11 ms (23.85 ms in `docs/imagewam_rtx5090_profile.md`) |
+| same, GEMM kernels in the graph | 17.48 ms | 13.37 ms |
+| same, conv / norm / elementwise | 2.43 / 2.08 / 1.62 ms | 2.40 / 2.09 / 1.61 ms |
+| Pi0.5 `infer()` P50 (ISSUE-102) | 27.0-28.8 ms | 24.97 / 25.02 ms |
+
+The co-location measurements of 2026-11-03 (`research/experiments/colocation_qwen27b_5090/cells/`) ran under 13.4.1.3.
 
 # ISSUE-104
 
