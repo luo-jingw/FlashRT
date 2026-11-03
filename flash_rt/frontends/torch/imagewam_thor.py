@@ -1650,7 +1650,9 @@ class ImageWAMTorchFrontendThor:
     def _record_graph(self, graph: torch.cuda.CUDAGraph, dims: dict, s: torch.cuda.Stream) -> None:
         """The capture itself (`_capture_graph`): VAE stage, prefill and
         denoise loop for `dims` on stream `s`, into the shared pool."""
-        with torch.cuda.graph(graph, pool=self._graph_pool, stream=s):
+        # Thread-local capture mode: a co-located model's CUDA calls on another
+        # thread neither fail this capture nor enter it.
+        with torch.cuda.graph(graph, pool=self._graph_pool, stream=s, capture_error_mode='thread_local'):
             if self._vae_stage is not None:
                 self._vae_stage.run()
             imagewam_prefill(self._ctx, fvk, self._gemm, self._bufs, self._weights,

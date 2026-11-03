@@ -548,7 +548,7 @@ class Qwen3VlVisionRtx:
                     self.forward(si['pixel'], si['pos'], si['cos'], si['sin'])
             gs.synchronize()
             graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph, stream=gs), torch.no_grad():
+            with torch.cuda.graph(graph, stream=gs, capture_error_mode='thread_local'), torch.no_grad():
                 out = self.forward(
                     si['pixel'], si['pos'], si['cos'], si['sin'])
             gs.synchronize()

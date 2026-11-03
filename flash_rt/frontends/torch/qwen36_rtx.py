@@ -7009,9 +7009,14 @@ class Qwen36TorchFrontendRtx:
         # Capture. torch.cuda.graph entry/exit handles capture begin/end
         # synchronously; we are already on gs so the ``stream=gs`` arg
         # is consistent.
+        # Every capture in this class uses thread-local capture mode: graphs
+        # are captured lazily on first use, possibly while another Python
+        # thread (a co-located model) issues CUDA calls; in the default
+        # global mode such a call invalidates this capture.
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             self.forward_own_decode(
                 self._static_token_id, cos, sin, cur_pos,
@@ -7069,6 +7074,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             self.forward_mtp_head(
                 self._mtp_static_prev_h,
@@ -7137,6 +7143,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             self.forward_own_decode_K(
                 tokens_K, cos_K, sin_K, cur_pos, K=K)
@@ -7916,6 +7923,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             self.forward_own_decode_nvfp4(
                 self._static_token_id, cos, sin, cur_pos,
@@ -7983,6 +7991,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             self.forward_own_decode_K_nvfp4(
                 tokens_K, cos_K, sin_K, cur_pos, K=K)
@@ -8347,6 +8356,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             self.forward_own_decode_K_nvfp4_tq(
                 tokens_K, cos_K, sin_K, cur_pos, K=K)
@@ -8400,6 +8410,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             self.forward_own_decode_K_nvfp4_fp8kv(
                 tokens_K, cos_K, sin_K, cur_pos, K=K)
@@ -8460,6 +8471,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             self.forward_own_decode_K_nvfp4_tq(
                 tokens_K, cos_K, sin_K, cur_pos, K=K,
@@ -8509,6 +8521,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             self.forward_own_decode_K_nvfp4_fp8kv(
                 tokens_K, cos_K, sin_K, cur_pos, K=K,
@@ -8560,6 +8573,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             self.forward_mtp_head_nvfp4(
                 self._mtp_static_prev_h,
@@ -8690,6 +8704,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             _run_chain()
         with torch.cuda.stream(gs), torch.no_grad():
@@ -11533,6 +11548,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             self.forward_own_decode_nvfp4_tq(
                 self._static_token_id, cos, sin, cur_pos,
@@ -11748,6 +11764,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             dflash_drafter_forward_capture(self)
         with torch.cuda.stream(gs), torch.no_grad():
@@ -11911,6 +11928,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             dflash_drafter_forward_pertoken(self)
         gs.synchronize()
@@ -11968,6 +11986,7 @@ class Qwen36TorchFrontendRtx:
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(
                 g, stream=gs, pool=self._graph_mempool,
+                capture_error_mode='thread_local',
         ), torch.no_grad():
             self._dflash_verify_forward_K(
                 tokens_K, cos_K, sin_K, cur_pos, K,
