@@ -1,0 +1,27 @@
+text_quantum           text  S    19 ids_equal True | logit cos 0.9858 top1 False top5 1.0 | prefix 0/64 match 0.00
+   ours: 'Quantum entanglement is a phenomenon in which two or more particles become linked in such a way that the quantum state of each particle cannot be described independently of the others, even when they '
+   hf:   '<think>\nThe user wants a concise, one-paragraph explanation of quantum entanglement. I should make it clear, accurate, and accessible without being overly technical. Key points to hit: particles becom'
+text_robot_plan        text  S    31 ids_equal True | logit cos 0.9794 top1 True top5 1.0 | prefix 3/18 match 0.12
+   ours: '{"steps":["Locate the bowl and the target drawer.","Open the drawer if it is closed.","Place the bowl inside the drawer.","Close the drawer."]}'
+   hf:   '{"steps":["Open the drawer","Place the bowl inside the drawer","Close the drawer"]}'
+text_summary           text  S    39 ids_equal True | logit cos 0.9782 top1 True top5 1.0 | prefix 4/29 match 0.22
+   ours: 'CUDA graphs capture a series of kernel launches into a single executable graph, allowing the entire sequence to be replayed with minimal CPU involvement. This eliminates the per-kernel launch overhead'
+   hf:   'CUDA graphs capture a sequence of kernel launches into a single graph that can be replayed later. This eliminates the per-kernel CPU launch overhead.'
+img_libero10_agent     image S   277 ids_equal True | logit cos 0.9507 top1 True top5 1.0 | prefix 1/64 match 0.02
+   ours: '{"context":{"text":"Describe the scene. Which objects are'
+   hf:   '{"prompt":"Describe the scene. Which objects are on the table?","caption":"The scene shows a light wooden tabletop with a few kitchen-related objects arranged on it. On the left side, there is a small'
+img_libero10_wrist     image S   283 ids_equal True | logit cos 0.9065 top1 True top5 0.6 | prefix 5/12 match 0.08
+   ours: '{"answer":["a round button with a vertical bar across it","a round button with a vertical bar","a round button with a vertical bar in the middle","a round button with a vertical bar in the center","a '
+   hf:   '{"answer":["a round metal plate with concentric circles"]}'
+img_libero_goal_agent  image S   273 ids_equal True | logit cos 0.9187 top1 True top5 0.6 | prefix 3/31 match 0.23
+   ours: '{"objects":["bottle","bowl","plate","cabinet","stove","box"]}'
+   hf:   '{"objects":["robot arm","stove","bowl","plate","bottle","cabinet","drawer handle","wooden rack","small blue box"]}'
+img_two_views          image S   544 ids_equal True | logit cos 0.9266 top1 True top5 1.0 | prefix 1/64 match 0.11
+   ours: '{"task":"The robot is most likely preparing to cook or heat something using the stove and pan."}'
+   hf:   '{"en":"The robot is most likely positioning or preparing to interact with the black knob on the stove, possibly to turn it on or off. The wrist camera shows a close-up of the knob and the stove burner'
+img_logo_text          image S  1582 ids_equal True | logit cos 0.8920 top1 True top5 0.8 | prefix 1/24 match 0.08
+   ours: '{"prompt":"What text is written in this image?","response":"FlashRT"}'
+   hf:   '{"text":"FlashRT","rect":[315,387,910,622]}'
+img_chart              image S   245 ids_equal True | logit cos 0.9466 top1 True top5 0.8 | prefix 1/64 match 0.03
+   ours: '{"type":"text","text":"This is a scientific figure from a research paper, specifically a multi-panel figure (likely Figure 1 or a similar overview figure) that presents the results of a single-cell RN'
+   hf:   '{"figure_type":"multi-panel scientific figure","content":"This is a multi-panel scientific figure from a research paper on the protein Actin2L1. It shows several types of data: (1) a domain architectu'

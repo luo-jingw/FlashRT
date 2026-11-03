@@ -1,0 +1,23 @@
+loaded: GPU allocated 20.83 GiB
+[none text_only] S 19 img_tok 0 route fp8_spec | preprocess 1.8 vit 0.0 inject 0.0 prefill 21.7 decode 1117.9 ms (128 tok) | peak 20.84 GiB
+   answer: '<think>\nThe user wants a concise explanation of quantum entanglement in one short paragraph. I need to be accurate, clear, and keep it brief. Let me distill the core idea: two or more particles become linked such that the quantum state of one cannot be described independently of the others, even across large distances. Measuring one instantly determines the state of the other. I should avoid overcomplicating it while staying scientifically accurate.\n</think>\n\nQuantum entanglement is a phenomenon'
+[none libero_agent] S 277 img_tok 256 route fp8_spec | preprocess 3.4 vit 7.0 inject 0.5 prefill 32.7 decode 1141.3 ms (12 tok) | peak 20.94 GiB
+   answer: '{"context":{"text":"Describe the scene. Which objects are'
+[none libero_wrist] S 283 img_tok 256 route fp8_spec | preprocess 3.4 vit 7.0 inject 0.4 prefill 32.8 decode 1116.6 ms (114 tok) | peak 20.94 GiB
+   answer: '{"answer":["a round button with a vertical bar across it","a round button with a vertical bar","a round button with a vertical bar in the middle","a round button with a vertical bar in the center","a round button with a vertical bar in the middle of it","a round button with a vertical bar in the center of it","a round button with a vertical bar in the middle of it","a round button with a vertical bar in the center of it","a round button with a vertical bar in the middle of it","a round button wi'
+[none libero_two_views] S 544 img_tok 512 route fp8_spec | preprocess 4.3 vit 13.5 inject 0.5 prefill 51.7 decode 1193.2 ms (21 tok) | peak 21.00 GiB
+   answer: '{"task":"The robot is most likely preparing to cook or heat something using the stove and pan."}'
+[none logo_text] S 1582 img_tok 1564 route fp8_spec | preprocess 9.2 vit 56.2 inject 0.8 prefill 123.4 decode 1455.2 ms (17 tok) | peak 21.45 GiB
+   answer: '{"prompt":"What text is written in this image?","response":"FlashRT"}'
+[none chart] S 6619 img_tok 6596 route fp8_spec | preprocess 36.4 vit 622.0 inject 1.1 prefill 545.1 decode 1160.6 ms (128 tok) | peak 22.74 GiB
+   answer: '{"figure_type":"line","data":{"labels":["enc","d0","d1","d2","d3","d4","s0","s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","s12","s13","s14","s15","s16","s17","s18","s19"],"datasets":[{"label":"任务 0 · 炉子 + 摩卡壶","data":[5.1,13.2,15.'
+[262144 libero_agent] S 277 img_tok 256 route fp8_spec | preprocess 2.3 vit 6.9 inject 0.5 prefill 32.8 decode 1140.9 ms (12 tok) | peak 21.21 GiB
+   answer: '{"context":{"text":"Describe the scene. Which objects are'
+[262144 libero_wrist] S 283 img_tok 256 route fp8_spec | preprocess 2.3 vit 7.0 inject 0.5 prefill 33.0 decode 1116.3 ms (114 tok) | peak 21.21 GiB
+   answer: '{"answer":["a round button with a vertical bar across it","a round button with a vertical bar","a round button with a vertical bar in the middle","a round button with a vertical bar in the center","a round button with a vertical bar in the middle of it","a round button with a vertical bar in the center of it","a round button with a vertical bar in the middle of it","a round button with a vertical bar in the center of it","a round button with a vertical bar in the middle of it","a round button wi'
+[262144 libero_two_views] S 544 img_tok 512 route fp8_spec | preprocess 3.0 vit 13.4 inject 0.5 prefill 51.8 decode 1194.0 ms (21 tok) | peak 21.22 GiB
+   answer: '{"task":"The robot is most likely preparing to cook or heat something using the stove and pan."}'
+[262144 logo_text] S 261 img_tok 243 route fp8_spec | preprocess 5.3 vit 7.2 inject 0.5 prefill 32.6 decode 1307.4 ms (78 tok) | peak 21.20 GiB
+   answer: '{"_meta":{"lang":"en","model":"gemini-2.0-flash","prompt":"What text is written in this image?","response":"FlashRT","usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}},"_meta":{"lang":"en","model":"gemini-2.0-flash","prompt":"What text is written in'
+[262144 chart] S 245 img_tok 222 route fp8_spec | preprocess 19.2 vit 6.5 inject 0.5 prefill 28.9 decode 1213.2 ms (30 tok) | peak 21.32 GiB
+   answer: '{"type":"tool_use","name":"web_search","arguments":{"query":"AtoXb1 T 巨噬细胞 功能 研究"}}'

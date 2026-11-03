@@ -1,0 +1,109 @@
+Loading weights:   0%|          | 0/1520 [00:00<?, ?it/s]Loading weights:   0%|          | 2/1520 [00:00<01:27, 17.40it/s]Loading weights:   2%|▏         | 37/1520 [00:00<00:07, 190.75it/s]Loading weights:   4%|▍         | 63/1520 [00:00<00:06, 208.60it/s]Loading weights:   7%|▋         | 111/1520 [00:00<00:04, 305.31it/s]Loading weights:  11%|█         | 166/1520 [00:00<00:03, 362.90it/s]Loading weights:  15%|█▌        | 229/1520 [00:00<00:02, 441.60it/s]Loading weights:  18%|█▊        | 277/1520 [00:00<00:02, 433.42it/s]Loading weights:  21%|██        | 321/1520 [00:00<00:02, 423.45it/s]Loading weights:  24%|██▍       | 364/1520 [00:01<00:03, 350.84it/s]Loading weights:  28%|██▊       | 426/1520 [00:01<00:02, 391.62it/s]Loading weights:  32%|███▏      | 481/1520 [00:01<00:02, 374.42it/s]Loading weights:  35%|███▌      | 536/1520 [00:01<00:02, 386.20it/s]Loading weights:  38%|███▊      | 581/1520 [00:01<00:02, 393.72it/s]Loading weights:  42%|████▎     | 646/1520 [00:01<00:01, 446.34it/s]Loading weights:  46%|████▌     | 692/1520 [00:01<00:02, 413.41it/s]Loading weights:  48%|████▊     | 735/1520 [00:01<00:01, 411.77it/s]Loading weights:  51%|█████     | 777/1520 [00:02<00:01, 411.13it/s]Loading weights:  57%|█████▋    | 870/1520 [00:02<00:01, 535.85it/s]Loading weights:  63%|██████▎   | 951/1520 [00:02<00:00, 598.57it/s]Loading weights:  71%|███████   | 1073/1520 [00:02<00:00, 753.87it/s]Loading weights:  79%|███████▉  | 1207/1520 [00:02<00:00, 908.98it/s]Loading weights:  88%|████████▊ | 1335/1520 [00:02<00:00, 1012.95it/s]Loading weights:  96%|█████████▌| 1459/1520 [00:02<00:00, 1077.30it/s]Loading weights: 100%|██████████| 1520/1520 [00:02<00:00, 554.89it/s] 
+[transformers] [1mQwen3_5ForConditionalGeneration LOAD REPORT[0m from: /home/jingwu/workspace/FlashRT/tmp/checkpoints/qwen27-tmp/qwen38-27b-master-full-gpt55-first-recovery-fp8
+Key                                                                 | Status     |  | 
+--------------------------------------------------------------------+------------+--+-
+model.language_model.layers.{0...63}.mlp.gate_proj.weight_scale_inv | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+Some parameters are on the meta device because they were offloaded to the cpu.
+HF loaded in 25 s, GPU allocated 21.62 GiB, offload 24.0
+Traceback (most recent call last):
+  File "/home/jingwu/workspace/FlashRT/research/experiments/qwen38_vision/hf_reference.py", line 50, in <module>
+    logits = model(**inp).logits[0, -1].float().cpu()
+             ^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1783, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1794, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/accelerate/hooks.py", line 192, in new_forward
+    output = module._old_forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/utils/generic.py", line 939, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py", line 1855, in forward
+    outputs = self.model(
+              ^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1783, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1794, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/utils/generic.py", line 939, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py", line 1648, in forward
+    outputs = self.language_model(
+              ^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1783, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1794, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/utils/generic.py", line 1068, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/utils/output_capturing.py", line 286, in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py", line 1292, in forward
+    hidden_states = decoder_layer(
+                    ^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/modeling_layers.py", line 109, in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1783, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1794, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/accelerate/hooks.py", line 192, in new_forward
+    output = module._old_forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py", line 889, in forward
+    hidden_states = self.linear_attn(
+                    ^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1783, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1794, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/accelerate/hooks.py", line 192, in new_forward
+    output = module._old_forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/integrations/accelerate.py", line 1010, in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py", line 565, in forward
+    mixed_qkv = self.in_proj_qkv(hidden_states)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1783, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1794, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/accelerate/hooks.py", line 192, in new_forward
+    output = module._old_forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/integrations/finegrained_fp8.py", line 333, in forward
+    return fp8_linear(
+           ^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/integrations/finegrained_fp8.py", line 282, in fp8_linear
+    return finegrained_fp8_linear(input, weight, weight_scale_inv, block_size, bias, activation_scale)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/integrations/finegrained_fp8.py", line 194, in finegrained_fp8_linear
+    finegrained_fp8 = load_finegrained_fp8_kernel()
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/integrations/finegrained_fp8.py", line 142, in load_finegrained_fp8_kernel
+    _load_finegrained_fp8_kernel()
+  File "/home/jingwu/anaconda3/envs/flashrt/lib/python3.12/site-packages/transformers/integrations/finegrained_fp8.py", line 107, in _load_finegrained_fp8_kernel
+    raise ImportError(f"finegrained-fp8 kernel unavailable: {_MISSING_KERNELS_MESSAGE}")
+ImportError: finegrained-fp8 kernel unavailable: `kernels` is either not installed or uses an incompatible version. Please install a compatible version (0.16.0 <= version < 0.17.0), e.g. `pip install kernels==0.16.0`

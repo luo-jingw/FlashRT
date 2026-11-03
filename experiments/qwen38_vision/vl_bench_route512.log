@@ -1,0 +1,28 @@
+loaded: GPU allocated 20.80 GiB
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+[none text_only] S 19 img_tok 0 route short_spec | preprocess 0.9 vit 0.0 inject 0.0 prefill 392.0 decode 973.8 ms (128 tok) | peak 20.80 GiB
+   answer: '<think>\nThe user wants a concise, one-paragraph explanation of quantum entanglement. I should make it clear, accurate, and accessible without being overly technical. Let me distill the key ideas: two particles become linked such that measuring one instantly determines the state of the other, regardless of distance, and this is a fundamental feature of quantum mechanics (not a signal or hidden variable). Keep it to one short paragraph.\n</think>\n\nQuantum entanglement is a phenomenon in which two o'
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+[none libero_agent] S 277 img_tok 256 route short_spec | preprocess 2.9 vit 7.0 inject 0.5 prefill 19665.4 decode 1294.7 ms (33 tok) | peak 20.86 GiB
+   answer: '{"objects":[{"id":"A","name":"stove"},{"id":"B","name":"moka pot"},{"id":"C","name":"frying pan"}]}'
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+[none libero_wrist] S 283 img_tok 256 route short_spec | preprocess 3.1 vit 7.0 inject 0.5 prefill 20244.6 decode 1211.2 ms (31 tok) | peak 20.86 GiB
+   answer: '{"en":"A round, metallic button or dial with a vertical slot or handle, positioned below a square metal plate with concentric circular grooves."}'
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+[none libero_two_views] S 544 img_tok 512 route fp8_spec | preprocess 4.9 vit 13.5 inject 0.6 prefill 52.0 decode 1195.2 ms (21 tok) | peak 20.97 GiB
+   answer: '{"task":"The robot is most likely preparing to cook or heat something using the stove and pan."}'
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+[none logo_text] S 1582 img_tok 1564 route fp8_spec | preprocess 11.0 vit 56.5 inject 0.8 prefill 123.9 decode 1452.5 ms (17 tok) | peak 21.42 GiB
+   answer: '{"prompt":"What text is written in this image?","response":"FlashRT"}'
+[transformers] Kwargs passed to `processor.__call__` have to be in `processor_kwargs` dict, not in `**kwargs`
+Traceback (most recent call last):
+  File "/home/jingwu/workspace/FlashRT/research/experiments/qwen38_vision/vl_bench.py", line 79, in <module>
+    fe.generate(msgs, max_new_tokens=args.new_tokens, chat_template_kwargs=kw)
+  File "/home/jingwu/workspace/FlashRT/flash_rt/frontends/torch/qwen36_vl_rtx.py", line 135, in generate
+    raise ValueError(f'{n_img} image tokens exceed max_image_tokens {self.max_image_tokens}')
+ValueError: 6596 image tokens exceed max_image_tokens 4096

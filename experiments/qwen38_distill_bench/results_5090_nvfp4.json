@@ -1,0 +1,225 @@
+{
+ "ckpt": "/home/jingwu/workspace/FlashRT/tmp/checkpoints/qwen27-tmp-nvfp4",
+ "mtp_dir": "/home/jingwu/workspace/FlashRT/tmp/checkpoints/qwen38-27b-fp8-official-mtp",
+ "max_seq": 8320,
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "chat_check": "<think>\nThe user wants a concise, one-paragraph explanation of quantum entanglement. I should make it clear, accurate, and accessible without being overly technical. Let me distill the key ideas: two particles become linked such that measuring one instantly determines the state of the other, regardless of distance, and this is a fundamental feature of quantum mechanics (not a signal or hidden variable). Keep it to one short paragraph.\n</think>\n\nQuantum entanglement is a phenomenon in which two or more particles become linked so that the state of each one is inseparably tied to the others, no matter how far apart they are.",
+ "cells": [
+  {
+   "prompt": "repeat",
+   "ctx": 1024,
+   "new_tokens": 64,
+   "route": "fp8_spec",
+   "prefill_ms_median": 76.548095703125,
+   "decode_ms_median": 735.803466796875,
+   "prefill_tok_s": 13377.210635929592,
+   "decode_tok_s": 85.6206892776053,
+   "spec_attempts": 31,
+   "spec_accepts": 34,
+   "peak_allocated_gib": 20.445438385009766,
+   "runs": [
+    {
+     "prefill_ms": 76.548095703125,
+     "decode_ms": 735.0142211914062,
+     "route": "fp8_spec",
+     "spec_attempts": 31,
+     "spec_accepts": 34
+    },
+    {
+     "prefill_ms": 76.53478240966797,
+     "decode_ms": 735.8237915039062,
+     "route": "fp8_spec",
+     "spec_attempts": 31,
+     "spec_accepts": 34
+    },
+    {
+     "prefill_ms": 76.56448364257812,
+     "decode_ms": 735.803466796875,
+     "route": "fp8_spec",
+     "spec_attempts": 31,
+     "spec_accepts": 34
+    }
+   ]
+  },
+  {
+   "prompt": "repeat",
+   "ctx": 4096,
+   "new_tokens": 64,
+   "route": "fp8_spec",
+   "prefill_ms_median": 308.56805419921875,
+   "decode_ms_median": 944.0425415039062,
+   "prefill_tok_s": 13274.219233840477,
+   "decode_tok_s": 66.73428074505827,
+   "spec_attempts": 39,
+   "spec_accepts": 24,
+   "peak_allocated_gib": 20.599849700927734,
+   "runs": [
+    {
+     "prefill_ms": 308.2219543457031,
+     "decode_ms": 943.7354736328125,
+     "route": "fp8_spec",
+     "spec_attempts": 39,
+     "spec_accepts": 24
+    },
+    {
+     "prefill_ms": 308.7615966796875,
+     "decode_ms": 944.160888671875,
+     "route": "fp8_spec",
+     "spec_attempts": 39,
+     "spec_accepts": 24
+    },
+    {
+     "prefill_ms": 308.56805419921875,
+     "decode_ms": 944.0425415039062,
+     "route": "fp8_spec",
+     "spec_attempts": 39,
+     "spec_accepts": 24
+    }
+   ]
+  },
+  {
+   "prompt": "repeat",
+   "ctx": 8192,
+   "new_tokens": 64,
+   "route": "fp8_spec",
+   "prefill_ms_median": 654.3646850585938,
+   "decode_ms_median": 937.6806640625,
+   "prefill_tok_s": 12519.013001544336,
+   "decode_tok_s": 67.18705249509209,
+   "spec_attempts": 38,
+   "spec_accepts": 27,
+   "peak_allocated_gib": 20.59989881515503,
+   "runs": [
+    {
+     "prefill_ms": 653.6458129882812,
+     "decode_ms": 937.7095947265625,
+     "route": "fp8_spec",
+     "spec_attempts": 38,
+     "spec_accepts": 27
+    },
+    {
+     "prefill_ms": 654.3646850585938,
+     "decode_ms": 937.6122436523438,
+     "route": "fp8_spec",
+     "spec_attempts": 38,
+     "spec_accepts": 27
+    },
+    {
+     "prefill_ms": 654.6841430664062,
+     "decode_ms": 937.6806640625,
+     "route": "fp8_spec",
+     "spec_attempts": 38,
+     "spec_accepts": 27
+    }
+   ]
+  },
+  {
+   "prompt": "doc",
+   "ctx": 1024,
+   "new_tokens": 64,
+   "route": "fp8_spec",
+   "prefill_ms_median": 76.7488021850586,
+   "decode_ms_median": 831.4306640625,
+   "prefill_tok_s": 13342.227772244654,
+   "decode_tok_s": 75.77300516217693,
+   "spec_attempts": 35,
+   "spec_accepts": 29,
+   "peak_allocated_gib": 20.59984540939331,
+   "runs": [
+    {
+     "prefill_ms": 76.653564453125,
+     "decode_ms": 831.3200073242188,
+     "route": "fp8_spec",
+     "spec_attempts": 35,
+     "spec_accepts": 29
+    },
+    {
+     "prefill_ms": 76.9454116821289,
+     "decode_ms": 831.4306640625,
+     "route": "fp8_spec",
+     "spec_attempts": 35,
+     "spec_accepts": 29
+    },
+    {
+     "prefill_ms": 76.7488021850586,
+     "decode_ms": 831.447021484375,
+     "route": "fp8_spec",
+     "spec_attempts": 35,
+     "spec_accepts": 29
+    }
+   ]
+  },
+  {
+   "prompt": "doc",
+   "ctx": 4096,
+   "new_tokens": 64,
+   "route": "fp8_spec",
+   "prefill_ms_median": 309.602294921875,
+   "decode_ms_median": 871.9226684570312,
+   "prefill_tok_s": 13229.876093242732,
+   "decode_tok_s": 72.25411413088484,
+   "spec_attempts": 36,
+   "spec_accepts": 27,
+   "peak_allocated_gib": 20.599868297576904,
+   "runs": [
+    {
+     "prefill_ms": 309.4026184082031,
+     "decode_ms": 871.9226684570312,
+     "route": "fp8_spec",
+     "spec_attempts": 36,
+     "spec_accepts": 27
+    },
+    {
+     "prefill_ms": 309.602294921875,
+     "decode_ms": 871.8776245117188,
+     "route": "fp8_spec",
+     "spec_attempts": 36,
+     "spec_accepts": 27
+    },
+    {
+     "prefill_ms": 309.7620544433594,
+     "decode_ms": 872.2135009765625,
+     "route": "fp8_spec",
+     "spec_attempts": 36,
+     "spec_accepts": 27
+    }
+   ]
+  },
+  {
+   "prompt": "doc",
+   "ctx": 8192,
+   "new_tokens": 64,
+   "route": "fp8_spec",
+   "prefill_ms_median": 656.60107421875,
+   "decode_ms_median": 891.2793579101562,
+   "prefill_tok_s": 12476.3731307433,
+   "decode_tok_s": 70.68490865503765,
+   "spec_attempts": 36,
+   "spec_accepts": 29,
+   "peak_allocated_gib": 20.599905014038086,
+   "runs": [
+    {
+     "prefill_ms": 656.2744140625,
+     "decode_ms": 890.945556640625,
+     "route": "fp8_spec",
+     "spec_attempts": 36,
+     "spec_accepts": 29
+    },
+    {
+     "prefill_ms": 656.60107421875,
+     "decode_ms": 891.2793579101562,
+     "route": "fp8_spec",
+     "spec_attempts": 36,
+     "spec_accepts": 29
+    },
+    {
+     "prefill_ms": 657.1233520507812,
+     "decode_ms": 892.1179809570312,
+     "route": "fp8_spec",
+     "spec_attempts": 36,
+     "spec_accepts": 29
+    }
+   ]
+  }
+ ]
+}
