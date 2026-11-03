@@ -1,0 +1,5 @@
+{
+ "a_default_stream": "{\"done\":[],\"next\":\"Move the gripper to grasp the tomato sauce can.\"}",
+ "b_side_stream_call": "{\"done\":[],\"next\":\"Move the gripper to grasp the tomato sauce can.\"}",
+ "a2_default_stream_again": "{\"done\":[],\"next\":\"Move the gripper to grasp the tomato sauce can.\"}"
+}

@@ -1,0 +1,25 @@
+{
+ "precision": "fp8",
+ "memory": {
+  "after_load_GB": 22.555,
+  "after_set_prompt_GB": 22.963,
+  "peak_GB": 23.074
+ },
+ "slim": {
+  "text_encoder_freed": true,
+  "sources_freed": 140,
+  "sources_freed_GB": 8.619,
+  "allocated_before_GB": 22.963,
+  "allocated_after_GB": 6.299,
+  "reserved_after_GB": 9.118
+ },
+ "actions_equal_after_slim": true,
+ "actions_equal_after_nan_fill": true,
+ "actions_finite": true,
+ "actions_shape": [
+  64,
+  7
+ ],
+ "filler_GB": 20.98,
+ "gpu": "NVIDIA GeForce RTX 5090"
+}

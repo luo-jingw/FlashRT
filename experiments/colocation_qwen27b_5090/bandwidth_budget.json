@@ -1,0 +1,19 @@
+{
+ "verify_forward_GB": 14.451556352,
+ "groups_GB": {
+  "MLP (NVFP4)": 9.625928448,
+  "full-attn projections (NVFP4)": 0.94373504,
+  "lm_head (NVFP4 at load)": 0.7151616,
+  "norms and other": 0.00132096,
+  "linear-attn small tensors (BF16)": 0.051139584,
+  "linear-attn projections (NVFP4 at load)": 3.11427072
+ },
+ "mtp_layer_GB": 0.314297344,
+ "draft_GB": 1.029458944,
+ "cycle_GB": {
+  "3": 17.539933184,
+  "4": 18.569392128,
+  "5": 19.598851072,
+  "6": 20.628310016
+ }
+}
