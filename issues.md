@@ -1175,3 +1175,25 @@ THOR_STATUS_SUMMARY.md round `1028` (Y4); Thor `$HOME/thor_val/1028/cells/ctx*_m
 ## Next Experiment
 
 From the cell logs, find which process (planner or executor) crashed; run that process alone under MPS at 75 % and at 25 %.
+
+# ISSUE-101
+
+Status: open, non-blocking
+
+Area: `tests/test_load_model_use_fp8_kwarg.py::test_load_model_routes_pi05_torch_thor_decoder_fp4`
+
+## Observation
+
+The test fails with `ImportError: cannot import name 'Pi05TorchFrontendThorFP4Optimized'`. `flash_rt/api.py` imports `Pi05TorchFrontendThorFP4Optimized` from `flash_rt.frontends.torch.pi05_thor_fp4` for the decoder-FP4 route; the test replaces that module with a stub that defines only `Pi05TorchFrontendThorFP4`.
+
+## Evidence
+
+Fails identically on a clean checkout of upstream `fdd3969b` (test file and `api.py` equal upstream's after merge `4feede2d`); passes on the pre-merge fork `9cb3511`.
+
+## Hypotheses
+
+- The upstream change that added `Pi05TorchFrontendThorFP4Optimized` to the route did not update the test's stub module.
+
+## Next Experiment
+
+Add a `Pi05TorchFrontendThorFP4Optimized` stub to the test's fake module and assert that `use_fp4_decoder=True` routes to it.
