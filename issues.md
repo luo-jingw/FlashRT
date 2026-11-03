@@ -1220,3 +1220,64 @@ Later runs span `libcublas` 13.1.1.3 (pip `nvidia-cublas`, installed with `accel
 ## Next Experiment
 
 Log the algorithm each autotuned GEMM picks, run the check in five processes, and compare the picks with the action differences; repeat with the SM clock locked if permitted.
+
+# ISSUE-103
+
+Status: open, non-blocking
+
+Area: ImageWAM LIBERO fp8 executor tick time on the RTX 5090 with the current `flash_rt_kernels` build
+
+## Observation
+
+On 2026-11-03 the ImageWAM fp8 LIBERO tick (`stage_inputs` + graph replay, 10 steps, VAE in the graph) takes 28.2 ms
+(CUDA events, 100 ticks, GPU idle otherwise), whether the graph is the one `set_prompt` captured or a recapture on a
+side stream (`research/experiments/colocation_qwen27b_5090/cells/exec_capture_check.json`). `docs/imagewam_rtx5090_profile.md`
+records `infer()` P50 23.85 ms for the same configuration at `a21507e`, and the 2026-10 co-location study measured
+24.8 ms per tick.
+
+## Evidence
+
+The current `flash_rt_kernels` comes from `build_full/` (non-slim, `-DFLASHRT_BUILD_QWEN3_VL=ON`,
+`FA2_ARCH_NATIVE_ONLY=ON`), built after merging upstream `fdd3969b`. ISSUE-102 sees a similar rise for Pi0.5 on this
+machine (24.95 -> 27.0-28.8 ms) after the same rebuild. SM clocks during the runs were 2.84-2.87 GHz.
+
+## Hypotheses
+
+- The rebuilt kernel library (build flags or the merged kernel sources) is slower for these pipelines.
+- A common machine state (clocks, driver) changed between the two measurements.
+
+## Next Experiment
+
+Time `exec_capture_check.py` with the slim-build `.so` files kept in `tmp/so_backup_slim/` and with the pre-merge ones in
+`tmp/so_backup_premerge/`, in one session, against the current build.
+
+# ISSUE-104
+
+Status: open, non-blocking
+
+Area: `Qwen36TorchFrontendRtx` (NVFP4) / `Qwen36VlTorchFrontendRtx` constructed while a non-default CUDA stream is current
+
+## Observation
+
+Constructing the frontend inside `with torch.cuda.stream(side_stream):` produces garbage output on every later call
+(for example `<{"juga\n<{"juga><function|...` instead of `{"done":[],"next":"Move the gripper to grasp the tomato sauce
+can."}`), with the same checkpoint and prompt. Constructed on the default stream, the same frontend called later
+under a side stream, and with its graph and snapshot streams replaced by side streams, gives the correct output
+(`research/experiments/colocation_qwen27b_5090/stream_check.py`, `smoke/stream_check_*.json`).
+
+## Evidence
+
+`_quant_bf16_lin_proj` (`_qwen36_rtx_nvfp4_weights.py`) copies each BF16 weight to the device with `.to(device)` on the
+current stream and then launches `fvk.bf16_weight_to_nvfp4_swizzled(..., 0)` on the legacy stream 0. Torch side
+streams are non-blocking, so stream 0 does not wait for the copy.
+
+## Hypotheses
+
+- The load-time quantization kernels on stream 0 read partly copied BF16 weights when the current stream is a side
+  stream.
+
+## Next Experiment
+
+Construct under a side stream with a `torch.cuda.current_stream().synchronize()` before each stream-0 launch, or with
+the launch on the current stream, and compare the output and the quantized weights against a default-stream
+construction.
