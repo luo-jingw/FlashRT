@@ -1,0 +1,106 @@
+{
+ "ckpt": "/home/jingwu/workspace/FlashRT/tmp/checkpoints/qwen27-tmp-nvfp4",
+ "rotary_dim": 64,
+ "mrope_section": [
+  11,
+  11,
+  10
+ ],
+ "rope_theta": 10000000.0,
+ "prompts": [
+  {
+   "name": "text_only",
+   "seq_len": 20,
+   "image_tokens": 0,
+   "grids": [],
+   "ids_equal": true,
+   "delta_ours": 0,
+   "delta_hf": 0,
+   "cos_max_abs": 0.0,
+   "sin_max_abs": 0.0,
+   "equal_to_1d_table": true
+  },
+  {
+   "name": "one_image",
+   "seq_len": 272,
+   "image_tokens": 256,
+   "grids": [
+    [
+     1,
+     32,
+     32
+    ]
+   ],
+   "ids_equal": true,
+   "delta_ours": -240,
+   "delta_hf": -240,
+   "cos_max_abs": 0.0,
+   "sin_max_abs": 0.0,
+   "equal_to_1d_table": null
+  },
+  {
+   "name": "two_images",
+   "seq_len": 530,
+   "image_tokens": 512,
+   "grids": [
+    [
+     1,
+     32,
+     32
+    ],
+    [
+     1,
+     32,
+     32
+    ]
+   ],
+   "ids_equal": true,
+   "delta_ours": -480,
+   "delta_hf": -480,
+   "cos_max_abs": 0.0,
+   "sin_max_abs": 0.0,
+   "equal_to_1d_table": null
+  },
+  {
+   "name": "interleaved",
+   "seq_len": 536,
+   "image_tokens": 512,
+   "grids": [
+    [
+     1,
+     32,
+     32
+    ],
+    [
+     1,
+     32,
+     32
+    ]
+   ],
+   "ids_equal": true,
+   "delta_ours": -480,
+   "delta_hf": -480,
+   "cos_max_abs": 0.0,
+   "sin_max_abs": 0.0,
+   "equal_to_1d_table": null
+  },
+  {
+   "name": "one_image_640x480",
+   "seq_len": 316,
+   "image_tokens": 300,
+   "grids": [
+    [
+     1,
+     30,
+     40
+    ]
+   ],
+   "ids_equal": true,
+   "delta_ours": -280,
+   "delta_hf": -280,
+   "cos_max_abs": 0.0,
+   "sin_max_abs": 0.0,
+   "equal_to_1d_table": null
+  }
+ ]
+}

@@ -1,0 +1,87 @@
+{
+ "ckpt": "/home/jingwu/workspace/FlashRT/tmp/checkpoints/qwen27-tmp-nvfp4",
+ "ref": "hf_reference_textlong.pt",
+ "vit_bf16": false,
+ "ref_meta": {
+  "fp8_dir": "/home/jingwu/workspace/FlashRT/tmp/checkpoints/qwen27-tmp/qwen38-27b-master-full-gpt55-first-recovery-fp8",
+  "offload_gib": 24.0,
+  "dequantize": true,
+  "load_s": 19.394136905670166,
+  "new_tokens": 0,
+  "peak_allocated_gib": 24.35359764099121
+ },
+ "rows": [
+  {
+   "name": "text_doc_260",
+   "kind": "text",
+   "prompt_len": 279,
+   "image_tokens": 0,
+   "ids_equal": true,
+   "argmax_matches_token": true,
+   "first_logit_cos": 0.9462034106254578,
+   "top1_equal": true,
+   "top5_overlap": 0.8,
+   "identical_prefix": 0,
+   "ours_len": 1,
+   "hf_len": 0,
+   "match_fraction": 0.0,
+   "ours_text": "{\"",
+   "hf_text": "",
+   "timings_ms": {
+    "preprocess": 1.3693409855477512,
+    "vit": 0.0,
+    "inject": 0.0,
+    "prefill": 32.52016067504883,
+    "decode": 0.00035200000274926424
+   }
+  },
+  {
+   "name": "text_doc_525",
+   "kind": "text",
+   "prompt_len": 544,
+   "image_tokens": 0,
+   "ids_equal": true,
+   "argmax_matches_token": true,
+   "first_logit_cos": 0.968185305595398,
+   "top1_equal": true,
+   "top5_overlap": 0.6,
+   "identical_prefix": 0,
+   "ours_len": 1,
+   "hf_len": 0,
+   "match_fraction": 0.0,
+   "ours_text": "{\"",
+   "hf_text": "",
+   "timings_ms": {
+    "preprocess": 1.415218983311206,
+    "vit": 0.0,
+    "inject": 0.0,
+    "prefill": 51.45395278930664,
+    "decode": 0.00035200000274926424
+   }
+  },
+  {
+   "name": "text_doc_1560",
+   "kind": "text",
+   "prompt_len": 1579,
+   "image_tokens": 0,
+   "ids_equal": true,
+   "argmax_matches_token": true,
+   "first_logit_cos": 0.9622381925582886,
+   "top1_equal": true,
+   "top5_overlap": 0.8,
+   "identical_prefix": 0,
+   "ours_len": 1,
+   "hf_len": 0,
+   "match_fraction": 0.0,
+   "ours_text": "{\"",
+   "hf_text": "",
+   "timings_ms": {
+    "preprocess": 2.8775690007023513,
+    "vit": 0.0,
+    "inject": 0.0,
+    "prefill": 123.06739044189453,
+    "decode": 0.00038400001358240843
+   }
+  }
+ ]
+}

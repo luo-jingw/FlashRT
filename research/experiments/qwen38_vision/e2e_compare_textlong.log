@@ -1,0 +1,9 @@
+text_doc_260           text  S   279 ids_equal True | logit cos 0.9462 top1 True top5 0.8 | prefix 0/0 match 0.00
+   ours: '{"'
+   hf:   ''
+text_doc_525           text  S   544 ids_equal True | logit cos 0.9682 top1 True top5 0.6 | prefix 0/0 match 0.00
+   ours: '{"'
+   hf:   ''
+text_doc_1560          text  S  1579 ids_equal True | logit cos 0.9622 top1 True top5 0.8 | prefix 0/0 match 0.00
+   ours: '{"'
+   hf:   ''

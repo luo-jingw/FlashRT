@@ -1,0 +1,245 @@
+{
+ "ckpt": "/home/jingwu/workspace/FlashRT/tmp/checkpoints/qwen27-tmp-nvfp4",
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "hf_vision_config": {
+  "transformers_version": "5.17.0",
+  "architectures": null,
+  "output_hidden_states": false,
+  "return_dict": true,
+  "dtype": null,
+  "chunk_size_feed_forward": 0,
+  "is_encoder_decoder": false,
+  "id2label": {
+   "0": "LABEL_0",
+   "1": "LABEL_1"
+  },
+  "label2id": {
+   "LABEL_0": 0,
+   "LABEL_1": 1
+  },
+  "problem_type": null,
+  "depth": 27,
+  "hidden_size": 1152,
+  "hidden_act": "gelu_pytorch_tanh",
+  "intermediate_size": 4304,
+  "num_heads": 16,
+  "in_channels": 3,
+  "patch_size": 16,
+  "spatial_merge_size": 2,
+  "temporal_patch_size": 2,
+  "out_hidden_size": 5120,
+  "num_position_embeddings": 2304,
+  "initializer_range": 0.02,
+  "rope_parameters": {
+   "rope_theta": 10000.0,
+   "rope_type": "axial"
+  },
+  "_name_or_path": "",
+  "deepstack_visual_indexes": [],
+  "model_type": "qwen3_5_vision",
+  "output_attentions": false
+ },
+ "cases": [
+  {
+   "name": "libero_agent_native",
+   "image_sizes": [
+    [
+     512,
+     512
+    ]
+   ],
+   "grids": [
+    [
+     1,
+     32,
+     32
+    ]
+   ],
+   "tokens": 256,
+   "fp8": {
+    "cos": 0.9978439807891846,
+    "rel_l2": 0.06702597439289093,
+    "max_abs": 19.75,
+    "min_token_cos": 0.9717546701431274
+   },
+   "bf16": {
+    "cos": 0.9997483491897583,
+    "rel_l2": 0.022496778517961502,
+    "max_abs": 8.5,
+    "min_token_cos": 0.9882937073707581
+   },
+   "hf_ms": 10.5349440574646,
+   "fp8_ms": 6.647279977798462,
+   "bf16_ms": 10.049071788787842
+  },
+  {
+   "name": "libero_wrist_native",
+   "image_sizes": [
+    [
+     512,
+     512
+    ]
+   ],
+   "grids": [
+    [
+     1,
+     32,
+     32
+    ]
+   ],
+   "tokens": 256,
+   "fp8": {
+    "cos": 0.9959176778793335,
+    "rel_l2": 0.09089646488428116,
+    "max_abs": 56.0,
+    "min_token_cos": 0.9234355688095093
+   },
+   "bf16": {
+    "cos": 0.9994128346443176,
+    "rel_l2": 0.03454316779971123,
+    "max_abs": 22.75,
+    "min_token_cos": 0.9948410987854004
+   },
+   "hf_ms": 10.559103965759277,
+   "fp8_ms": 6.65444803237915,
+   "bf16_ms": 10.057231903076172
+  },
+  {
+   "name": "libero_agent_448x336",
+   "image_sizes": [
+    [
+     448,
+     336
+    ]
+   ],
+   "grids": [
+    [
+     1,
+     20,
+     28
+    ]
+   ],
+   "tokens": 140,
+   "fp8": {
+    "cos": 0.9981958866119385,
+    "rel_l2": 0.06200969219207764,
+    "max_abs": 16.5,
+    "min_token_cos": 0.9875645041465759
+   },
+   "bf16": {
+    "cos": 0.9997643232345581,
+    "rel_l2": 0.022034773603081703,
+    "max_abs": 8.0,
+    "min_token_cos": 0.9981170892715454
+   },
+   "hf_ms": 8.000735759735107,
+   "fp8_ms": 5.007888078689575,
+   "bf16_ms": 7.248847961425781
+  },
+  {
+   "name": "libero_agent_640x480",
+   "image_sizes": [
+    [
+     640,
+     480
+    ]
+   ],
+   "grids": [
+    [
+     1,
+     30,
+     40
+    ]
+   ],
+   "tokens": 300,
+   "fp8": {
+    "cos": 0.9983479976654053,
+    "rel_l2": 0.05922052636742592,
+    "max_abs": 13.5,
+    "min_token_cos": 0.9789098501205444
+   },
+   "bf16": {
+    "cos": 0.9996956586837769,
+    "rel_l2": 0.024749968200922012,
+    "max_abs": 8.75,
+    "min_token_cos": 0.9966973662376404
+   },
+   "hf_ms": 11.651424407958984,
+   "fp8_ms": 8.216896057128906,
+   "bf16_ms": 12.811215877532959
+  },
+  {
+   "name": "flashrt_logo",
+   "image_sizes": [
+    [
+     2172,
+     724
+    ]
+   ],
+   "grids": [
+    [
+     1,
+     46,
+     136
+    ]
+   ],
+   "tokens": 1564,
+   "fp8": {
+    "cos": 0.997401237487793,
+    "rel_l2": 0.0724097490310669,
+    "max_abs": 26.0,
+    "min_token_cos": 0.9244520664215088
+   },
+   "bf16": {
+    "cos": 0.9990222454071045,
+    "rel_l2": 0.04432462900876999,
+    "max_abs": 22.5,
+    "min_token_cos": 0.9433113932609558
+   },
+   "hf_ms": 75.90289688110352,
+   "fp8_ms": 55.431087493896484,
+   "bf16_ms": 77.24556732177734
+  },
+  {
+   "name": "two_images_agent_wrist",
+   "image_sizes": [
+    [
+     512,
+     512
+    ],
+    [
+     512,
+     512
+    ]
+   ],
+   "grids": [
+    [
+     1,
+     32,
+     32
+    ],
+    [
+     1,
+     32,
+     32
+    ]
+   ],
+   "tokens": 512,
+   "fp8": {
+    "cos": 0.9968748688697815,
+    "rel_l2": 0.07992425560951233,
+    "max_abs": 56.0,
+    "min_token_cos": 0.9234355688095093
+   },
+   "bf16": {
+    "cos": 0.9995787143707275,
+    "rel_l2": 0.02918207086622715,
+    "max_abs": 22.75,
+    "min_token_cos": 0.9882937073707581
+   },
+   "hf_ms": 18.87068748474121,
+   "fp8_ms": 13.395263671875,
+   "bf16_ms": 20.234880447387695
+  }
+ ]
+}

@@ -2691,3 +2691,317 @@ Phase Status: completed
   `warpsplit_mrows`, reading each weight once): `opportunities.md`
   OPT-036.
 - `flash_rt.load_model()` routing for the RTX NVFP4 encoder.
+
+
+# Plan: image input for the Qwen3.6 / Qwen3.8-27B NVFP4 frontend (RTX 5090)
+
+Plan Status: completed
+
+## Problem
+
+Current state:
+
+- `Qwen36TorchFrontendRtx(quant='nvfp4')` runs the Qwen3.5-architecture 27B
+  language model (Qwen3.6-27B, Qwen3.8-27B; `Qwen3_5ForConditionalGeneration`)
+  text-only. `extract_weights_nvfp4` skips `model.visual.*`; RoPE is 1-D
+  (`_rope_cos_table[pos]`, rotary dim 64 = `head_dim` 256 × `partial_rotary_factor`
+  0.25, θ = 1e7).
+- The checkpoints carry a vision tower (`vision_config`: depth 27, hidden 1152,
+  16 heads, patch 16, spatial merge 2, `out_hidden_size` 5120,
+  `deepstack_visual_indexes` []), image/video token ids, a `Qwen3VLProcessor`
+  config and interleaved MRoPE (`mrope_section` [11, 11, 10]).
+- In transformers 5.17, `Qwen3_5VisionModel` subclasses `Qwen3VLVisionModel`
+  and only deletes the deepstack mergers; `Qwen3_5Model` inherits
+  `Qwen3VLModel.get_rope_index`.
+- `Qwen3VlVisionRtx` (`_qwen3_vl_vision_rtx.py`) implements the Qwen3-VL ViT
+  from `vision_config` (depth, widths, `deepstack_visual_indexes`,
+  `out_hidden_size` all read from config; FP8 GEMMs on SM >= 89) and loads from
+  a sharded or single-file checkpoint. `_qwen3_vl_geometry.py` implements the
+  processor-side geometry (vision segments, MRoPE position ids, vision RoPE,
+  position-embedding interpolation).
+- In `qwen36_rtx.py`, every RoPE application (8 `qwen36_partial_rope_qk_bf16`
+  call sites, all routes: BF16 prefill walk, long-context chunked prefill,
+  decode, verify, MTP) reads cos/sin from `_rope_cos_table` /
+  `_rope_sin_table` rows indexed by cache position, and every embedding lookup
+  (8 `qwen36_embedding_lookup_bf16` call sites, MTP included) reads
+  `self._weights.ptrs['embed_w']` at call time. No CUDA graph is captured in
+  the constructor; graphs are captured on first use and replay the table
+  memory they were captured with.
+
+Problem: no image input on this frontend.
+
+Goal: `generate(messages)` with images on RTX 5090 for the Qwen3.8-27B
+LoRA-merged checkpoint, with (1) ViT output matching HF `Qwen3_5VisionModel`
+on real images, (2) MRoPE position ids equal to HF `get_rope_index` and the
+cos/sin rows matching HF's rotary embedding, (3) text-only generation
+unchanged, (4) measured image TTFT (preprocess, ViT, prefill) and decode
+tok/s, (5) end-to-end agreement with an HF reference of the same
+checkpoint (its FP8 release) on image prompts at the level measured on
+text-only prompts. Video input and the Thor frontend are outside this
+plan.
+
+## Structure
+
+- `flash_rt/frontends/torch/qwen36_rtx.py` (`Qwen36TorchFrontendRtx`): the
+  language model. Gains two explicit hooks: reserved embedding rows and
+  per-request RoPE rows. No change to any forward path.
+- `flash_rt/frontends/torch/_qwen36_rtx_nvfp4_weights.py`: allocates the
+  embedding table with the reserved rows at load.
+- `flash_rt/frontends/torch/_qwen36_mrope.py` (new): builds Qwen3.5 text RoPE
+  rows (rotary dim 64, full-width rotate_half layout of `_rope_cos_table`)
+  from (3, S) MRoPE position ids.
+- `flash_rt/frontends/torch/qwen36_vl_rtx.py` (new,
+  `Qwen36VlTorchFrontendRtx`): processor, ViT, image-feature placement,
+  RoPE-row construction, generation; composes the two classes below.
+- `flash_rt/frontends/torch/_qwen3_vl_vision_rtx.py` (`Qwen3VlVisionRtx`) and
+  `_qwen3_vl_geometry.py`: reused; changed only if Phase 1 or 2 finds a
+  mismatch.
+- `research/experiments/qwen38_distill_bench/fp8_to_nvfp4_ct.py`: keeps the
+  vision tower (BF16) in the converted checkpoint, so one directory holds the
+  language model and the ViT.
+
+## State Ownership
+
+- Embedding table (vocab rows + reserved image rows): `Qwen36TorchFrontendRtx`
+  (`_weights.ptrs['embed_w']`); the reserved rows are written only through
+  `write_embedding_rows`.
+- RoPE tables: `Qwen36TorchFrontendRtx` owns `_rope_cos_table` /
+  `_rope_sin_table` and an unmodified copy (`_rope_cos_base` /
+  `_rope_sin_base`); the live tables are rewritten in place only through
+  `set_rope_rows` / `reset_rope_rows`, never reassigned after construction.
+- Per-request image state (token ids after remapping, image features,
+  position ids, rope delta): `Qwen36VlTorchFrontendRtx`, for the duration of
+  one `generate` call.
+- ViT weights: `Qwen3VlVisionRtx`.
+
+## Interface
+
+`flash_rt/frontends/torch/qwen36_rtx.py`:
+
+- `Qwen36TorchFrontendRtx.__init__(..., extra_embedding_rows: int = 0)`:
+  NVFP4 only (`ValueError` otherwise). The embedding table has
+  `vocab_size + extra_embedding_rows` rows; rows `>= vocab_size` start at zero.
+- `embedding_slot_base -> int`: first reserved row id (`vocab_size`).
+- `write_embedding_rows(first_slot: int, rows: torch.Tensor) -> None`:
+  `rows` (n, 5120) BF16 on the device; `ValueError` if
+  `first_slot + n > vocab_size + extra_embedding_rows` or
+  `first_slot < vocab_size`.
+- `set_rope_rows(start: int, cos: torch.Tensor, sin: torch.Tensor) -> None`:
+  writes rows `[start, start + n)` of the live tables in place; `cos`/`sin`
+  (n, 64) BF16.
+- `reset_rope_rows() -> None`: copies the base tables back into the live
+  tables.
+
+`flash_rt/frontends/torch/_qwen36_mrope.py`:
+
+- `text_rope_rows(position_ids: torch.Tensor, *, rotary_dim: int,
+  rope_theta: float, mrope_section: tuple[int, int, int]) ->
+  tuple[torch.Tensor, torch.Tensor]`: (3, S) long -> (S, rotary_dim) BF16
+  cos and sin, interleaved sections, halves duplicated (the
+  `_rope_cos_table` layout). Equal to the base table rows when the three axes
+  are equal.
+
+`flash_rt/frontends/torch/qwen36_vl_rtx.py`:
+
+- `Qwen36VlTorchFrontendRtx(checkpoint_path: str, *, device: str = 'cuda:0',
+  max_seq: int, max_image_tokens: int, max_pixels: int | None = None)`.
+  `checkpoint_path` is a converted NVFP4 directory that also holds
+  `model.visual.*`, `config.json` and processor files; MTP from
+  `FLASHRT_QWEN36_MTP_CKPT_DIR` as today.
+- `generate(messages: list, *, max_new_tokens: int) -> VlGeneration`:
+  `VlGeneration` dataclass with `token_ids: list[int]`, `text: str`,
+  `timings_ms: dict[str, float]` (`preprocess`, `vit`, `prefill`, `decode`),
+  `num_image_tokens: int`, `prompt_len: int`. Text-only messages take the
+  unchanged text path. `ValueError` when the prompt exceeds `max_seq` or the
+  image tokens exceed `max_image_tokens`; video input raises
+  `NotImplementedError`.
+
+## Flow
+
+Construction: `Qwen36TorchFrontendRtx(path, quant='nvfp4', max_seq,
+extra_embedding_rows=max_image_tokens)` -> base RoPE tables copied after
+`_extend_rope_table_to` -> `Qwen3VlVisionRtx(path, config=vision_config)` ->
+`AutoProcessor.from_pretrained(path)` with the `max_pixels` cap.
+
+`generate(messages)`:
+1. Processor -> `input_ids` (1, S), `pixel_values`, `image_grid_thw`.
+2. `_qwen3_vl_geometry.vision_segments` -> image spans; vision RoPE and
+   position embeddings per image; `Qwen3VlVisionRtx.forward` per image ->
+   (n_i, 5120) features (deepstack list empty).
+3. `write_embedding_rows(embedding_slot_base, concat features)`; image-token
+   positions of `input_ids` replaced by `embedding_slot_base + j`.
+4. `mrope_position_ids` -> (3, S); `text_rope_rows` -> rows for cache
+   positions `[0, S)`; delta = `max(position_ids) + 1 - S`; rows for cache
+   positions `[S, max_seq)` = base rows `p + delta`;
+   `set_rope_rows(0, ...)` for the whole range.
+5. `generate_own_speculative_KN_nvfp4(remapped_ids, max_new_tokens)`
+   unchanged; prefill, decode, verify and MTP read the rewritten rows and
+   the image rows through their existing lookups.
+6. Generated ids taken after position S; `reset_rope_rows()`.
+
+## Code Mapping
+
+| Item | File |
+|---|---|
+| reserved embedding rows, `write_embedding_rows`, `embedding_slot_base` | `flash_rt/frontends/torch/qwen36_rtx.py` |
+| table allocation with reserved rows | `flash_rt/frontends/torch/_qwen36_rtx_nvfp4_weights.py` |
+| `set_rope_rows`, `reset_rope_rows`, base tables | `flash_rt/frontends/torch/qwen36_rtx.py` |
+| `text_rope_rows` | `flash_rt/frontends/torch/_qwen36_mrope.py` (new) |
+| `Qwen36VlTorchFrontendRtx`, `VlGeneration` | `flash_rt/frontends/torch/qwen36_vl_rtx.py` (new) |
+| ViT, geometry (reused) | `flash_rt/frontends/torch/_qwen3_vl_vision_rtx.py`, `_qwen3_vl_geometry.py` |
+| converter keeps `model.visual.*` | `research/experiments/qwen38_distill_bench/fp8_to_nvfp4_ct.py` |
+| validation scripts and results | `research/experiments/qwen38_vision/` (new) |
+
+## Implementation Phases
+
+### Phase 1: ViT parity against HF
+
+Phase Status: completed
+
+- Goal: `Qwen3VlVisionRtx` on the Qwen3.8 vision tower matches HF
+  `Qwen3_5VisionModel` (BF16 weights from the same checkpoint).
+- Modified files: `research/experiments/qwen38_vision/vit_parity.py` (new);
+  `_qwen3_vl_vision_rtx.py` / `_qwen3_vl_geometry.py` only on a found
+  mismatch; `fp8_to_nvfp4_ct.py` (keep `model.visual.*`).
+- Observation: on LIBERO frames at native size and resized to non-square
+  sizes (several grids), and two images in one prompt: cosine, max abs and
+  relative L2 of the merged features (pooler output) against HF, FP8 and
+  BF16-GEMM modes of `Qwen3VlVisionRtx`; ViT latency per image.
+- Result (`research/experiments/qwen38_vision/vit_parity_5090.json`): no code
+  change to the ViT or geometry. Merged features vs HF over six cases (grids
+  32x32, 20x28, 30x40, 46x136, two 32x32 images): BF16 GEMMs cosine
+  0.99902-0.99976, rel. L2 0.022-0.044; FP8 GEMMs cosine 0.99592-0.99835,
+  rel. L2 0.059-0.091, minimum per-token cosine 0.923. Eager latency, 256
+  tokens: HF 10.5 ms, FP8 6.65 ms, BF16 10.1 ms; 1564 tokens: 75.9 / 55.4 /
+  77.3 ms. Requires `-DFLASHRT_BUILD_QWEN3_VL=ON` (module
+  `flash_rt_qwen3_vl_kernels` and `w16a16_gemm_sm120_bf16` in
+  `flash_rt_kernels`). The converter keeps `model.visual.*` (27.70 GB).
+
+### Phase 2: MRoPE positions and rows against HF
+
+Phase Status: completed
+
+- Goal: position ids and cos/sin rows equal to HF for image prompts.
+- Modified files: `flash_rt/frontends/torch/_qwen36_mrope.py` (new);
+  `research/experiments/qwen38_vision/mrope_parity.py` (new).
+- Observation: `mrope_position_ids` vs HF `Qwen3_5Model.get_rope_index` on
+  processor outputs (text-only, one image, two images, image between text):
+  exact equality and the rope delta. `text_rope_rows` vs HF
+  `Qwen3_5TextRotaryEmbedding` for the same ids: max abs difference; for
+  equal axes, equality with `_rope_cos_table` rows.
+- Result (`research/experiments/qwen38_vision/mrope_parity_5090.json`): on
+  five prompts (text only; one image; two images; text-image-text-image-text;
+  one 640x480 image; S 20-536, grids 32x32 and 30x40) the position ids equal
+  HF's and the deltas agree (0, -240, -480, -480, -280); `text_rope_rows`
+  equals HF's rotary output (max abs difference 0 for cos and sin) and, for
+  the text-only prompt, the 1-D table bit for bit. No change to
+  `_qwen3_vl_geometry.py`.
+
+### Phase 3: language-model hooks
+
+Phase Status: completed
+
+- Goal: reserved embedding rows and per-request RoPE rows with text-only
+  behavior unchanged.
+- Modified files: `flash_rt/frontends/torch/qwen36_rtx.py`,
+  `flash_rt/frontends/torch/_qwen36_rtx_nvfp4_weights.py`;
+  `research/experiments/qwen38_vision/hook_checks.py` (new).
+- Observation, on the Qwen3.8 NVFP4 checkpoint at 1k and 4k context:
+  (a) `extra_embedding_rows` 0 vs N: generated tokens identical, GPU memory
+  delta reported; (b) reserved rows filled with the embeddings of real
+  prompt tokens and those positions remapped to the reserved ids: tokens
+  identical to the original prompt; (c) all three position axes shifted by
+  a constant through `set_rope_rows`: greedy token agreement and
+  first-token logit cosine against the unshifted run; (d) after
+  `reset_rope_rows`, tokens identical to a fresh run; (e)
+  `context_bench.py` prefill and decode within run-to-run noise.
+- Result (`research/experiments/qwen38_vision/hook_{baseline,hooks}_5090.json`,
+  doc prompts, 64 greedy MTP-spec tokens): (a), (b), (d) identical tokens at
+  1k and 4k; reserved 4096 rows cost 0.039 GiB; prefill / decode 76.4 / 712.9
+  ms (1k) and 308.7 / 849.1 ms (4k) vs 76.3 / 711.3 and 308.5 / 845.7 ms
+  without. (c) a 1000-position shift keeps the first 12 (1k) / 22 (4k) tokens,
+  then a coherent different continuation. First-token logits (300-token
+  prompts at 8 offsets, BF16 route, the logits the API exposes): shift 1000 vs
+  none cosine median 0.986 (min 0.927), top-1 6/8; shift 1 vs none median
+  0.986 (min 0.924), top-1 5/8; 1000 vs 1001 median 0.984. A one-position
+  shift, which only re-rounds every BF16 table row, moves the logits as much
+  as a 1000-position shift, so the spread is the model's sensitivity to the
+  BF16 RoPE table's rounding, not a position-magnitude effect. This spread is
+  the noise floor for Phase 5.
+
+### Phase 4: image frontend
+
+Phase Status: completed
+
+- Goal: `Qwen36VlTorchFrontendRtx.generate` with images.
+- Modified files: `flash_rt/frontends/torch/qwen36_vl_rtx.py` (new);
+  `research/experiments/qwen38_vision/vl_bench.py` (new).
+- Observation: answers for LIBERO frames and a few non-robot images printed
+  verbatim; timings per stage (preprocess, ViT, prefill, decode) and image
+  token counts at two `max_pixels` settings; GPU memory peak. No numerical
+  end-to-end reference in this phase.
+- Result (`research/experiments/qwen38_vision/vl_bench_route{512,1}*`): the
+  frontend runs text-only and image prompts. With the default long-route
+  threshold (512 tokens), single-image prompts (S 277-283) take the BF16
+  one-token-at-a-time prefill: 19.7-20.2 s. With
+  `FLASHRT_QWEN36_LONG_CTX_ROUTE_MIN_SEQ=1` every prompt takes the chunked
+  FP8-KV route: one LIBERO frame (256 image tokens) preprocess 3.4 / ViT 7.0 /
+  inject 0.5 / prefill 32.7 ms; two frames (512) 4.3 / 13.5 / 0.5 / 51.7 ms;
+  FlashRT.png full resolution (1564) 9.2 / 56.2 / 0.8 / 123.4 ms; a chart at
+  full resolution (6596) 36.4 / 622 / 1.1 / 545 ms. Decode (128 tokens, MTP)
+  1.12-1.46 s. GPU allocated 20.83 GiB after construction (4096 reserved rows
+  and the ViT), peak 22.74 GiB at 6619 prompt tokens. Answers: the logo is
+  read as "FlashRT"; the full-resolution chart answer reproduces its Chinese
+  legend text; LIBERO answers name stove / moka pot / frying pan on the BF16
+  route; on the chunked route the single-frame answer is a degenerate JSON
+  echo and the wrist answer repeats one phrase, and the capped chart prompt
+  yields a tool call. Whether these come from the model or from the pipeline
+  is the Phase 5 question.
+
+### Phase 5: end-to-end comparison against HF
+
+Phase Status: completed
+
+- Goal: image-prompt outputs of `Qwen36VlTorchFrontendRtx` (NVFP4) agree
+  with HF `Qwen3_5ForConditionalGeneration` on the FP8 checkpoint as closely
+  as text-only outputs do; the gap on text-only prompts is the NVFP4-vs-FP8
+  quantization floor.
+- Reference: the FP8 checkpoint
+  (`qwen38-27b-master-full-gpt55-first-recovery-fp8`, 30.4 GB of weights) in
+  transformers 5.17 on the same RTX 5090, run in its own process before the
+  FlashRT run (both do not fit at once); layers offloaded to CPU memory if a
+  prompt does not fit. Requires `accelerate` in the `flashrt` environment.
+- Modified files: `research/experiments/qwen38_vision/hf_reference.py`
+  (new; saves first-step logits and greedy tokens per prompt),
+  `research/experiments/qwen38_vision/e2e_compare.py` (new).
+- Observation, same prompt set for both: text-only prompts and image prompts
+  (LIBERO frames, non-robot images, two images in one prompt); per prompt
+  first-token logit cosine, top-1 / top-5 agreement, length of the identical
+  greedy prefix over 64 tokens; HF peak memory and whether offload was used.
+- Result (`research/experiments/qwen38_vision/e2e_compare*_5090.json`): the
+  FP8 checkpoint does not fit the RTX 5090 in transformers (load stops at
+  30.66 GiB allocated), and transformers' FP8 matmul needs the `kernels`
+  package; the reference therefore dequantizes the FP8 weights to BF16 at
+  load (`FineGrainedFP8Config(dequantize=True)`) with 24 GiB on the GPU and
+  the rest in CPU memory (peak 24.39 GiB, 2.6 s per generated token). Prompt
+  token ids equal on every prompt. First-token logits, FlashRT vs reference:
+
+  | prompts | prompt tokens | cosine | top-1 | top-5 overlap |
+  |---|---|---|---|---|
+  | text, short (3) | 19-39 | 0.978-0.986 | 2/3 | 1.0 |
+  | text, length-matched (3) | 279-1579 | 0.946-0.968 | 3/3 | 0.6-0.8 |
+  | image, FP8 ViT (6) | 245-1582 | 0.892-0.951 | 6/6 | 0.6-1.0 |
+  | image, BF16-GEMM ViT (6) | 245-1582 | 0.871-0.965 | 6/6 | 0.6-0.8 |
+
+  Greedy outputs share 0-5 leading tokens on every prompt, text and image,
+  and agree in content (logo read as "FlashRT" by both; both name the stove
+  and its knob or plate; both hallucinate on the capped chart). Image
+  cosines sit below length-matched text (median 0.92 vs 0.96) inside the
+  spread a one-position RoPE re-rounding produces (Phase 3, min 0.924), and
+  switching the ViT between FP8 and BF16 GEMMs moves single prompts by up to
+  0.05 without raising the median; no image-specific deviation is found.
+
+## Related, not in this plan
+
+- Video input (per-frame timestamps in the prompt).
+- `qwen36_thor.py` with the same hooks.

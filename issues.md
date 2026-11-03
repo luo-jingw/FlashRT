@@ -1197,3 +1197,26 @@ Fails identically on a clean checkout of upstream `fdd3969b` (test file and `api
 ## Next Experiment
 
 Add a `Pi05TorchFrontendThorFP4Optimized` stub to the test's fake module and assert that `use_fp4_decoder=True` routes to it.
+
+# ISSUE-102
+
+Status: open, non-blocking
+
+Area: `Pi05TorchFrontendRtx` (RTX 5090, default FP8 path), run-to-run outputs and latency across processes
+
+## Observation
+
+On 2026-11-03, the same Pi0.5 check (LIBERO checkpoint, one fixed observation, `torch.manual_seed(1234)` per call, `calibrate_with_real_data` then `infer`) gave actions differing by up to 0.021 (max abs) between the run right after merge `4feede2d` and five later runs, which agree with each other bit for bit. `infer()` P50 was 24.95 ms in the first run and 27.0-28.8 ms in the later ones. Within each process, repeated `infer()` calls are bit-identical.
+
+## Evidence
+
+Later runs span `libcublas` 13.1.1.3 (pip `nvidia-cublas`, installed with `accelerate` and then removed) and the conda env's 13.4.1.3, with identical actions, so the cuBLAS build does not explain the difference. Between the first run and the later ones, `flash_rt_kernels` was rebuilt with `-DFLASHRT_BUILD_QWEN3_VL=ON`; the only binding it adds is `w16a16_gemm_sm120_bf16`, which the Pi0.5 code does not call. The pipeline autotunes its GEMMs by timing at construction (`Pi05Pipeline.autotune_gemms`, always on); the frontend's docstring notes autotune variance perturbs numerics.
+
+## Hypotheses
+
+- Timing-based GEMM autotuning picked different algorithms in the first process.
+- The SM clock is unlocked; latency differences follow the GPU's clock and thermal state.
+
+## Next Experiment
+
+Log the algorithm each autotuned GEMM picks, run the check in five processes, and compare the picks with the action differences; repeat with the SM clock locked if permitted.
