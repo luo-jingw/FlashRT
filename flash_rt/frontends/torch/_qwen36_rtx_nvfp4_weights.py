@@ -98,9 +98,14 @@ def _load_quantized_proj(
     base_key: str,
     fvk,
     device: str,
-    stream: int = 0,
+    stream: int | None = None,
 ) -> None:
     """Read 1 NVFP4 quantized linear (3 tensors), produce 3 ptrs.
+
+    ``stream`` defaults to the current torch stream: the uploads, the
+    zero fill and the frees below are ordered on that stream, so the
+    reshape kernel must run on it too (on the legacy stream 0 it races
+    them whenever the current stream is a non-blocking side stream).
 
     Tensors come from safe_open(device='cpu') — we explicitly move
     just packed and sf_lin to GPU here, do the reshape on-device,
@@ -122,6 +127,8 @@ def _load_quantized_proj(
     sf_bytes = n_row_super * n_col_super * 512
     sf_swz = torch.zeros(sf_bytes, dtype=torch.uint8, device=device)
 
+    if stream is None:
+        stream = torch.cuda.current_stream().cuda_stream
     fvk.nvfp4_sf_linear_to_swizzled(
         int(sf_lin.data_ptr()),
         int(sf_swz.data_ptr()),
@@ -152,9 +159,12 @@ def _load_quantized_mlp_gate_up(
     base_mlp_key: str,
     fvk,
     device: str,
-    stream: int = 0,
+    stream: int | None = None,
 ) -> None:
     """Load MLP gate/up as one row-concatenated NVFP4 projection.
+
+    ``stream`` defaults to the current torch stream (see
+    ``_load_quantized_proj``).
 
     Qwen3.6's gate_proj and up_proj share the same global scale across
     all observed layers. Keeping them as one physical tensor lets the
@@ -208,6 +218,8 @@ def _load_quantized_mlp_gate_up(
     sf_bytes = n_row_super_fused * n_col_super * 512
     sf_swz = torch.zeros(sf_bytes, dtype=torch.uint8, device=device)
 
+    if stream is None:
+        stream = torch.cuda.current_stream().cuda_stream
     fvk.nvfp4_sf_linear_to_swizzled(
         int(sf_lin.data_ptr()),
         int(sf_swz.data_ptr()),
@@ -278,7 +290,7 @@ def _quant_bf16_lin_proj(handles: WeightHandles, ld: dict, prefix: str,
         int(w_bf16.data_ptr()),
         int(packed.data_ptr()), int(sf_swz.data_ptr()),
         int(scratch_amax.data_ptr()), int(out_gs.data_ptr()),
-        N, K, 0)
+        N, K, torch.cuda.current_stream().cuda_stream)  # same stream as the upload and the zero fills above
     torch.cuda.synchronize()
     ld[prefix + '_packed'] = _ensure_anchored(handles, packed)
     ld[prefix + '_sf'] = _ensure_anchored(handles, sf_swz)
