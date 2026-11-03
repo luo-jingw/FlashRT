@@ -143,9 +143,10 @@ which releases the GIL) with `CAPTURE_THREAD_LOCAL=1`; "prefill graphs" = `FLASH
    scratch at 1024 rows (`MAX_Q_SEQ`, -2.0 GB, long prefill +5 %) for `process` / `mps100`; mps50 / mps25 started with
    0.01-0.14 GB left. The executor runs without its text encoder, so a new instruction from the planner cannot be
    encoded on the GPU without loading Qwen3-4B again.
-9. Executor alone is 28.2-28.8 ms with the cuBLAS this environment loads (13.4.1.3), independent of where its graph is
-   captured (`cells/exec_capture_check.json`) and of the kernel-library build (`cells/so_compare/`); with cuBLAS
-   13.6.1.10 preloaded it is 24.4 ms (`issues.md` ISSUE-103). Every cell of this README ran with 13.4.1.3. The cells
+9. Every cell of this README ran with cuBLAS 13.4.1.3 (conda), under which the executor alone is 28.2-28.8 ms,
+   independent of where its graph is captured (`cells/exec_capture_check.json`) and of the kernel-library build
+   (`cells/so_compare/`). With the env's pip cuBLAS 13.6.1.10 it is 24.2 ms (`cells/cublas_restored/`, `issues.md`
+   ISSUE-103). The cells
    above construct both models on the default stream and then move them to their streams; side-stream construction
    corrupted the planner's weights until the loader fix (`issues.md` ISSUE-104).
 
