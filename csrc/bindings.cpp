@@ -3840,16 +3840,28 @@ PYBIND11_MODULE(flash_rt_kernels, m) {
        py::arg("rows"), py::arg("cols_a"), py::arg("cols_b"),
        py::arg("stream") = 0);
 
+    // Blocks until `stream` drains, so it waits with the GIL released: a
+    // caller on another Python thread (e.g. a co-located executor) keeps
+    // running while this one waits for its GPU work. The stream is drained
+    // before the copy is enqueued: a device-to-pageable-host copy enqueued
+    // behind pending work waits inside the driver, and while it waits other
+    // threads' launches stall (a co-located executor's graph launch took
+    // 37 ms instead of 14 ms). No Python object is touched between release
+    // and re-acquire.
     m.def("cuda_read_i32_sync", [](uintptr_t src, uintptr_t stream) {
         int host = 0;
-        cudaStream_t st = to_stream(stream);
-        cudaError_t err = cudaMemcpyAsync(
-            &host, reinterpret_cast<const void*>(src), sizeof(int),
-            cudaMemcpyDeviceToHost, st);
-        if (err != cudaSuccess) {
-            throw std::runtime_error(cudaGetErrorString(err));
+        cudaError_t err;
+        {
+            py::gil_scoped_release nogil;
+            cudaStream_t st = to_stream(stream);
+            err = cudaStreamSynchronize(st);
+            if (err == cudaSuccess) {
+                err = cudaMemcpyAsync(
+                    &host, reinterpret_cast<const void*>(src), sizeof(int),
+                    cudaMemcpyDeviceToHost, st);
+            }
+            if (err == cudaSuccess) err = cudaStreamSynchronize(st);
         }
-        err = cudaStreamSynchronize(st);
         if (err != cudaSuccess) {
             throw std::runtime_error(cudaGetErrorString(err));
         }
