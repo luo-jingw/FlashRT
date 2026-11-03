@@ -28,6 +28,9 @@ count, which waits for the verify forward while holding the GIL) so that it firs
 torch (GIL released), then reads (research-only instrumentation; the frontend code is unchanged).
 CAPTURE_THREAD_LOCAL=1 makes `torch.cuda.graph` default to capture_error_mode="thread_local", so that a CUDA call from
 the other thread does not invalidate a graph the planner captures lazily during the window (default "global").
+EXEC_CHECK_ACTIONS=1 stages every tick with the fixed reference noise and compares the tick's actions with the
+reference actions (max abs diff per tick; read after the tick's timing ends), and records per in-process planner call
+the planner's graph count before and after it (`graphs_before_after`).
 GIL_SWITCH_MS sets the interpreter's thread switch interval (sys.setswitchinterval; default 5 ms) for the in-process
 modes. GPU telemetry: nvidia-smi every 100 ms (timestamped: utilization, DRAM utilization, SM / memory clock, power).
 
@@ -139,6 +142,10 @@ tick_gpu_ms: list[float] = []
 tick_host_ms: list[list[float]] = []  # per tick: [stage_inputs, graph launch, wait for completion] host wall ms
 
 
+CHECK_ACTIONS = os.environ.get("EXEC_CHECK_ACTIONS", "0") == "1"
+exec_action_diffs: list[float] = []
+
+
 def tick() -> None:
     """One executor tick. Appends the event span (before staging -> after the graph; includes any host-side delay
     between the two records) to tick_gpu_ms, the replay-only event span to graph_gpu_ms, and the host split to
@@ -147,7 +154,10 @@ def tick() -> None:
     h0 = time.perf_counter()
     with torch.cuda.stream(exec_stream):
         e0.record(exec_stream)
-        fe.stage_inputs(obs)
+        if CHECK_ACTIONS:
+            fe.stage_inputs(obs, noise=_noise)
+        else:
+            fe.stage_inputs(obs)
         h1 = time.perf_counter()
         e1.record(exec_stream)
         fe._graph.replay()
@@ -158,6 +168,8 @@ def tick() -> None:
     tick_gpu_ms.append(e0.elapsed_time(e2))
     graph_gpu_ms.append(e1.elapsed_time(e2))
     tick_host_ms.append([round((h1 - h0) * 1e3, 3), round((h2 - h1) * 1e3, 3), round((h3 - h2) * 1e3, 3)])
+    if CHECK_ACTIONS:
+        exec_action_diffs.append(float(np.abs(np.asarray(fe.read_actions(), dtype=np.float64) - actions_ref).max()))
 
 
 graph_gpu_ms: list[float] = []
@@ -167,6 +179,7 @@ for _ in range(10):
     tick()
 tick_gpu_ms.clear()
 graph_gpu_ms.clear()
+exec_action_diffs.clear()
 tick_host_ms.clear()
 exec_alloc_GB = torch.cuda.memory_allocated() / 1e9
 
@@ -240,7 +253,11 @@ def planner_thread(t_end: float) -> None:
             if time.time() < nxt:
                 time.sleep(nxt - time.time())
             nxt += 1.0 / HZ
-        planner_recs.append(dataclasses.asdict(planner.call(msgs)))
+        g0 = planner_graph_count()
+        rec = dataclasses.asdict(planner.call(msgs))
+        if CHECK_ACTIONS:
+            rec["graphs_before_after"] = [g0, planner_graph_count()]
+        planner_recs.append(rec)
         if gate is not None:
             gate.close()
 
@@ -333,6 +350,9 @@ res = {"mode": MODE, "gil_switch_ms": sys.getswitchinterval() * 1e3, "planner_re
                         for i, k in enumerate(("stage_inputs", "graph_launch", "wait"))},
        "tick_host_series_ms": tick_host_ms,
        "miss_rate_at_period": float((lat > PERIOD_MS).mean()),
+       "exec_action_check": {"enabled": CHECK_ACTIONS, "ticks": len(exec_action_diffs),
+                             "ticks_nonzero": int(sum(d > 0 for d in exec_action_diffs)),
+                             "max_abs_diff": max(exec_action_diffs) if exec_action_diffs else None},
        "planner_calls": len(pc),
        "planner_last_text": (planner.last_text if planner is not None else
                              json.load(open(OUT + ".planner.json")).get("last_text") if worker is not None else None),

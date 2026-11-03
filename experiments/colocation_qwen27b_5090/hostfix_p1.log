@@ -1,0 +1,4 @@
+short 0 602 {'preprocess_ms': 3.0, 'vit_ms': 13.3, 'inject_ms': 0.4, 'prefill_ms': 53.2, 'decode_ms': 593.4, 'call_ms': 663.8, 'decode_tok_s': 106.2, 'spec_cycles': 25.0, 'decode_ms_per_cycle': 23.7}
+long 0 8110 {'preprocess_ms': 9.2, 'vit_ms': 13.6, 'inject_ms': 0.7, 'prefill_ms': 660.6, 'decode_ms': 639.6, 'call_ms': 1324.0, 'decode_tok_s': 98.5, 'spec_cycles': 23.0, 'decode_ms_per_cycle': 27.8}
+prio ctx=short hz=0.0: ticks 1201 lat p50 36.86 p99 46.75 max 47.1 ms (service p50 36.7, tick GPU p50 36.6 p99 46.5, graph GPU p50 36.2 p99 46.1, host stage/launch/wait p50 0.5/17.6/20.5), miss@50ms 0.0%, planner calls 63 (call p50 949.897050857544, prefill 67.71814727783203, decode 836.2177734375), hog None, green None, graphs [50, 56], act diff 0.00e+00, foreign [], mem exec 6.299 proc 28.722 free 2.893, smi {'util_gpu': 99.5, 'util_mem': 67.5, 'clk_sm': 2824.4, 'clk_mem': 13801.0, 'power_W': 533.9}
+HOSTFIX_DONE p1

@@ -143,7 +143,47 @@ which releases the GIL) with `CAPTURE_THREAD_LOCAL=1`; "prefill graphs" = `FLASH
    scratch at 1024 rows (`MAX_Q_SEQ`, -2.0 GB, long prefill +5 %) for `process` / `mps100`; mps50 / mps25 started with
    0.01-0.14 GB left. The executor runs without its text encoder, so a new instruction from the planner cannot be
    encoded on the GPU without loading Qwen3-4B again.
-9. Executor alone is 28.2-28.8 ms in this build, independent of where its graph is captured
-   (`cells/exec_capture_check.json`); the documented value is 23.85 ms (`issues.md` ISSUE-103). Constructing the
-   planner frontend under a side stream corrupts its weights (`stream_check.py`, `issues.md` ISSUE-104); every cell
-   constructs both models on the default stream and then moves them to their streams.
+9. Executor alone is 28.2-28.8 ms with the cuBLAS this environment loads (13.4.1.3), independent of where its graph is
+   captured (`cells/exec_capture_check.json`) and of the kernel-library build (`cells/so_compare/`); with cuBLAS
+   13.6.1.10 preloaded it is 24.4 ms (`issues.md` ISSUE-103). Every cell of this README ran with 13.4.1.3. The cells
+   above construct both models on the default stream and then move them to their streams; side-stream construction
+   corrupted the planner's weights until the loader fix (`issues.md` ISSUE-104).
+
+## Host-side fixes in FlashRT (`run_hostfix.sh` -> `cells/hostfix/`)
+
+The monkeypatches above are now changes in FlashRT itself, and these cells run with both `PLANNER_READBACK_NOGIL` and
+`CAPTURE_THREAD_LOCAL` off:
+
+- `flash_rt_kernels.cuda_read_i32_sync` waits with the GIL released, draining the stream before it enqueues the copy.
+  Copying first (`cells/hostfix/short_prio_p1a_copy_then_sync.json`) left staging at 0.6 ms but the executor's graph
+  launch at 37.5 ms p50 (14 ms alone) and 92.4 % misses: a device-to-pageable-host copy enqueued behind pending work
+  waits inside the driver and stalls the other thread's launches.
+- Every graph capture of `qwen36_rtx.py`, `_qwen3_vl_vision_rtx.py` and `imagewam_thor.py` uses thread-local capture
+  mode: no capture failure in 21 windows, one of them under py-spy sampling.
+- The Qwen3.6 NVFP4 loader runs its conversion kernels on the current stream (ISSUE-104 resolved): a side-stream
+  construction gives the same 1 482 weight buffers and outputs as a default-stream one
+  (`smoke/stream_check_{plain,side}_fix.json`; before the fix 48 buffers differed and the output was garbage).
+
+Executor p50 / p99 ms and miss rate, planner call ms, against the monkeypatched cells (prefill graph on, except coop:
+eager 256-token chunks):
+
+| cell | FlashRT fixes | monkeypatches | planner call ms (fixes / monkeypatches) |
+|---|---|---|---|
+| prio, short | 37.3 / 47.9 / 0.1 % | 36.9 / 46.6 / 0 % | 950 / 950 |
+| green25, short | 35.5 / 36.2 / 0.1 % | 35.5 / 36.1 / 0.1 % | 1 050 / 1 050 |
+| green50, short | 41.3 / 45.5 / 0 % | 41.2 / 45.4 / 0 % | 1 009 / 1 036 |
+| green25, long | 34.2 / 36.0 / 0 % | 34.1 / 35.9 / 0 % | 3 050 / 3 050 |
+| green50, long | 42.1 / 45.1 / 0.1 % | 42.0 / 44.6 / 0.1 % | 2 400 / 2 400 |
+| coop, short | 30.3 / 32.7 / 0 % | 30.1 / 32.3 / 0 % | 1 550 / 1 500 |
+| coop, long | 33.4 / 38.2 / 0 % | 33.2 / 38.0 / 0 % | 3 100 / 3 100 |
+| prio, long (no SM limit) | 40.5 / 61.1 / 44.4 % | 40.3 / 61.0 / 44.2 % | 1 876 / 1 876 |
+
+- The single missed ticks of the 0.1 % cells fall in the planner's first call of the window.
+- Short-context green25 needs the prefill graph too: without it 2.4-3.6 % misses (p99 53-56 ms, three windows), as the
+  monkeypatched cell without it (2.3 %).
+- Output checks (`EXEC_CHECK_ACTIONS=1`: fixed executor noise, per-tick action diff, per-call planner graph counts):
+  the planner alone gives the same output CRC as before the changes. Under co-location, a planner call that captures
+  graphs during the window can give a different output (1-2 of about 60 calls in `prio` short; ISSUE-105), and a few
+  executor ticks differ by up to 4.9e-3 where the two models share SMs (`prio`, `coop`; 0 of about 1 200 per `green`
+  window; ISSUE-106).
+
