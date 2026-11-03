@@ -112,7 +112,8 @@ class Qwen36TorchFrontendRtx:
                  device: str = 'cuda:0',
                  max_seq: int = 2048,
                  alloc_own_forward_buffers: bool = True,
-                 quant: str = 'fp8') -> None:
+                 quant: str = 'fp8',
+                 extra_embedding_rows: int = 0) -> None:
         """Construct the frontend.
 
         Args:
@@ -138,6 +139,10 @@ class Qwen36TorchFrontendRtx:
               that this ckpt leaves unquantized. Tokenizer still
               loaded from ``checkpoint_path`` (NVFP4 ckpts ship
               tokenizer files at the same path).
+          extra_embedding_rows: NVFP4 only. Rows appended to the
+            embedding table after the vocabulary, zero at load and
+            written through ``write_embedding_rows``; token ids
+            ``embedding_slot_base + j`` look them up on every path.
         """
         self.checkpoint_path = checkpoint_path
         self.device = device
@@ -151,6 +156,12 @@ class Qwen36TorchFrontendRtx:
             raise ValueError(
                 f"quant must be 'fp8' or 'nvfp4', got {quant!r}")
         self._quant_format = quant
+        if extra_embedding_rows < 0 or (
+                extra_embedding_rows > 0 and quant != 'nvfp4'):
+            raise ValueError(
+                'extra_embedding_rows must be >= 0 and needs '
+                f"quant='nvfp4'; got {extra_embedding_rows} with {quant!r}")
+        self._extra_embedding_rows = int(extra_embedding_rows)
 
         # Auto-route: above ``LONG_CTX_THRESHOLD`` the BF16 KV cache
         # alone is too big to fit a 32 GB card alongside the model
@@ -946,9 +957,13 @@ class Qwen36TorchFrontendRtx:
         # Raw NVFP4 weights → handles (compatible schema with FP8 path
         # but with *_packed/_sf/_alpha keys for quantized linears).
         handles = extract_weights_nvfp4(
-            self.checkpoint_path, fvk, device=self.device)
+            self.checkpoint_path, fvk, device=self.device,
+            extra_embedding_rows=self._extra_embedding_rows)
         assert_extraction_invariants_nvfp4(handles)
         self._weights = handles
+        self._embed_table = next(
+            t for t in handles.anchors
+            if t.data_ptr() == handles.ptrs['embed_w'])
 
         # MTP head from an external ckpt → NVFP4 swizzled (pure-NVFP4
         # spec). Supports both official FP8 MTP files and community
@@ -12253,6 +12268,67 @@ class Qwen36TorchFrontendRtx:
                     r += 1
             self._lin_rank_cache = cache
         return cache[L]
+
+    @property
+    def embedding_slot_base(self) -> int:
+        """Token id of the first reserved embedding row (= vocab size)."""
+        return int(self._cfg['vocab_size'])
+
+    def write_embedding_rows(self, first_slot: int, rows) -> None:
+        """Write ``rows`` ((n, hidden) bf16, on the device) into reserved
+        embedding rows ``[first_slot, first_slot + n)``."""
+        import torch
+
+        base = self.embedding_slot_base
+        total = base + self._extra_embedding_rows
+        n = int(rows.shape[0])
+        if first_slot < base or first_slot + n > total:
+            raise ValueError(
+                f'rows [{first_slot}, {first_slot + n}) outside the reserved '
+                f'embedding rows [{base}, {total})')
+        if rows.dtype != torch.bfloat16 or tuple(rows.shape[1:]) != (
+                self._embed_table.shape[1],):
+            raise ValueError(
+                f'rows must be (n, {self._embed_table.shape[1]}) bf16, got '
+                f'{tuple(rows.shape)} {rows.dtype}')
+        self._embed_table[first_slot:first_slot + n].copy_(rows)
+
+    def _rope_base_tables(self):
+        """The unmodified RoPE tables, copied from the live tables on
+        first use (the live tables are final once construction ends)."""
+        if not hasattr(self, '_rope_cos_table'):
+            self._build_rope_table()
+        if not hasattr(self, '_rope_cos_base'):
+            self._rope_cos_base = self._rope_cos_table.clone()
+            self._rope_sin_base = self._rope_sin_table.clone()
+        return self._rope_cos_base, self._rope_sin_base
+
+    def set_rope_rows(self, start: int, cos, sin) -> None:
+        """Overwrite rows ``[start, start + n)`` of the live RoPE tables in
+        place with ``cos`` / ``sin`` ((n, rope_dim) bf16). Every RoPE
+        application reads these rows by cache position, captured CUDA
+        graphs included."""
+        import torch
+
+        self._rope_base_tables()
+        n = int(cos.shape[0])
+        rows, d = self._rope_cos_table.shape
+        if start < 0 or start + n > rows:
+            raise ValueError(
+                f'rows [{start}, {start + n}) outside the RoPE table [0, {rows})')
+        for t in (cos, sin):
+            if t.dtype != torch.bfloat16 or tuple(t.shape) != (n, d):
+                raise ValueError(
+                    f'cos/sin must be ({n}, {d}) bf16, got '
+                    f'{tuple(t.shape)} {t.dtype}')
+        self._rope_cos_table[start:start + n].copy_(cos)
+        self._rope_sin_table[start:start + n].copy_(sin)
+
+    def reset_rope_rows(self) -> None:
+        """Copy the unmodified RoPE tables back into the live tables."""
+        cos_base, sin_base = self._rope_base_tables()
+        self._rope_cos_table.copy_(cos_base)
+        self._rope_sin_table.copy_(sin_base)
 
     def reset_state(self) -> None:
         """Zero linear-attn state caches and full-attn KV cache.

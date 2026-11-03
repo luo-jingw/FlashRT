@@ -290,6 +290,7 @@ def extract_weights_nvfp4(
     ckpt_dir: str,
     fvk,
     device: str = 'cuda:0',
+    extra_embedding_rows: int = 0,
 ) -> WeightHandles:
     """Build a :class:`WeightHandles` from a Qwen3.6 NVFP4 ckpt directory.
 
@@ -299,6 +300,9 @@ def extract_weights_nvfp4(
       fvk: the flash_rt_kernels pybind module
         (provides ``nvfp4_sf_linear_to_swizzled``).
       device: cuda device.
+      extra_embedding_rows: zero rows appended to the embedding table
+        after the vocabulary rows; ``ptrs['embed_rows']`` records the
+        total row count.
 
     Returns:
       WeightHandles whose ``ptrs`` mirrors the FP8 path's schema, with
@@ -347,7 +351,15 @@ def extract_weights_nvfp4(
             print(f'  [load] open, vram = {_vram_used():.2f} GB')
         # Top-level (BF16) tensors.
         embed_cpu = f.get_tensor('model.language_model.embed_tokens.weight')
-        handles.ptrs['embed_w'] = _bf16_anchor(handles, embed_cpu, device)
+        if extra_embedding_rows > 0:
+            embed = torch.zeros(
+                embed_cpu.shape[0] + extra_embedding_rows, embed_cpu.shape[1],
+                dtype=torch.bfloat16, device=device)
+            embed[:embed_cpu.shape[0]].copy_(embed_cpu.to(torch.bfloat16))
+            handles.ptrs['embed_w'] = _ensure_anchored(handles, embed)
+        else:
+            handles.ptrs['embed_w'] = _bf16_anchor(handles, embed_cpu, device)
+        handles.ptrs['embed_rows'] = embed_cpu.shape[0] + extra_embedding_rows
 
         final_norm_cpu = f.get_tensor('model.language_model.norm.weight')
         # _eff_rmsnorm_weight runs on cpu fp32 then to bf16; move to GPU.
