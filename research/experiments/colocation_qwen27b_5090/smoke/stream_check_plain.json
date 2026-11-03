@@ -1,0 +1,17 @@
+{
+ "0_short": {
+  "prompt_len": 602,
+  "route": "fp8_spec",
+  "text": "{\"done\":[],\"next\":\"Move the gripper to grasp the tomato sauce can.\"}"
+ },
+ "1_long": {
+  "prompt_len": 8110,
+  "route": "fp8_spec",
+  "text": "{\"done\":[\"locate the tomato sauce\",\"grasp the tomato sauce\",\"move the tomato sauce above the basket\",\"release the tomato sauce\"],\"next\":\"locate the alphabet soup\"}"
+ },
+ "2_short": {
+  "prompt_len": 602,
+  "route": "fp8_spec",
+  "text": "{\"done\":[],\"next\":\"Move the gripper to grasp the tomato sauce can.\"}"
+ }
+}

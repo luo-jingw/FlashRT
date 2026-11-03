@@ -8,6 +8,8 @@ ImageWAM 推理加速的调研与实验材料（RTX 5090 为主，Thor 数据见
 |---|---|
 | `reports/report_acceleration_research.md` | 算法与系统层面调研汇总：网格子集采样（含 2 步实测延迟）、Picard、雅可比、表示与 Q/K/V 秩、参考论文、设备状态、方向排序 |
 | `reports/report_actiondit_batched_m.md` | 实验 1–9 的完整记录：batched-M 单步成本、Picard 收敛、按组 attention、nvfp4 GEMM tile、量化融合、雅可比、网格子集（开环 / LIBERO / RoboTwin 闭环） |
+| `reports/planner_executor_colocation_5090.md` | Qwen3.8-27B 规划器 + ImageWAM 执行器同卡共置（RTX 5090）：各共享方式下执行器的截止期与规划器的代价，干扰来源拆解（主机侧 GIL、SM、显存带宽、功耗、显存容量），痛点、方向与可优化指标 |
+| `reports/gpu_sharing_colocation_literature.md` | 单 GPU 上 LLM 规划器与实时执行器共置的相关系统文献：抢占调度、SM 与带宽划分、LLM 阶段共置、边缘多 DNN 调度、机器人双系统 |
 
 ## 实验数据（`experiments/`）
 
@@ -27,6 +29,7 @@ ImageWAM 推理加速的调研与实验材料（RTX 5090 为主，Thor 数据见
 | `qkv_rank_fixed_instruction/` | Q/K/V 秩 | 固定指令、不同视觉条件下 h 与 Q/K/V 的 k90 / k99 / 单头秩 |
 | `libero_e2e_latency/` | 端到端延迟 | 官方权重 + 标准 LIBERO 输入的闭环端到端延迟 |
 | `clock_state_5090/` | 设备状态 | 5090 时钟 / 温度随时间与跨进程的延迟 |
+| `colocation_qwen27b_5090/` | 共置 | Qwen3.8-27B 规划器（NVFP4）+ ImageWAM 执行器（fp8）在 5090 上的共享方式网格、规划器单独运行时各阶段对 SM 的依赖、执行器 tick 的主机侧分段计时与 GIL 采样 |
 
 已纳入仓库的对应脚本在 `benchmarks/`：`imagewam_batched_m_step_bench.py`、`imagewam_picard_convergence.py`、`imagewam_velocity_jacobian_study.py`、`imagewam_few_step_study.py`、`imagewam_5090_clock_state_probe.py`。
 

@@ -1,0 +1,17 @@
+{
+ "a_setprompt_graph_default_stream": {
+  "p50": 28.169471740722656,
+  "p99": 28.220551738739015,
+  "max_abs_diff": 0.0
+ },
+ "b_setprompt_graph_side_stream": {
+  "p50": 28.194496154785156,
+  "p99": 28.26897789001465,
+  "max_abs_diff": 0.0
+ },
+ "c_recaptured_side_stream": {
+  "p50": 28.199600219726562,
+  "p99": 28.263769512176513,
+  "max_abs_diff": 0.0
+ }
+}

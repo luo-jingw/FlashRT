@@ -1,0 +1,12 @@
+py-spy> Sampling process 100 times a second. Press Control-C to exit.
+Traceback (most recent call last):
+Traceback (most recent call last):
+torch.AcceleratorError: CUDA error: operation not permitted when stream is capturing
+Search for `cudaErrorStreamCaptureUnsupported' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+torch.AcceleratorError: CUDA error: operation failed due to a previous error during capture
+Search for `cudaErrorStreamCaptureInvalidated' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+Traceback (most recent call last):
+py-spy> Stopped sampling because process exited
+py-spy> Wrote raw flamegraph data to 'cells/gil_profile_prio_short.txt'. Samples: 2595 Errors: 120
+py-spy> You can use the flamegraph.pl script from https://github.com/brendangregg/flamegraph to generate a SVG
+GIL_PROFILE_DONE

@@ -43,6 +43,11 @@ class GreenPartition:
             self._ctx.append(g)
             self.groups.append(GreenGroup(res.sm.smCount, torch.cuda.ExternalStream(int(s))))
 
+    def new_stream(self, group: int, priority: int = 0) -> torch.cuda.ExternalStream:
+        """One more stream on group `group` (0 = part, 1 = rest), for a workload that uses several streams."""
+        s = _ok(cu.cuGreenCtxStreamCreate(self._ctx[group], cu.CUstream_flags.CU_STREAM_NON_BLOCKING, priority))
+        return torch.cuda.ExternalStream(int(s))
+
     @property
     def part(self) -> GreenGroup:
         return self.groups[0]
