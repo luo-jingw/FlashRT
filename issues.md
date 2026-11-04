@@ -1132,6 +1132,11 @@ Round `1030` rejected the turn-taking hypothesis: on the Thor a small matmul on 
 
 Round `1030` setup: `partition_concurrency.py` runs a compute-bound load (operands in L2, no DRAM demand) on both partitions alone and together, and a single long matmul on one partition while the other runs small matmuls one at a time. On the RTX 5090 (48 / 122 SMs, with another process on the GPU) green contexts run together (46.1 → 42.5 and 100.9 → 99.0 TFLOP/s together vs alone; a small matmul waits at most 5.3 ms during a 256 ms kernel), plain streams share (214 → 50 and 215 → 91 TFLOP/s). Earlier plan: without CUPTI (see ISSUE-099): timestamp every executor tick (CPU start, GPU events around `stage_inputs` and the graph replay) and every planner phase (prefill start/end, each decode step, call end), plus `torch.cuda.memory_stats()` counters (`num_alloc_retries`, segment allocations) per planner call, in the `green25` long-context cell. A stall that coincides with a planner allocation event supports the first hypothesis; one that sits inside the executor's GPU events while the planner runs prefill supports bandwidth.
 
+Round `1104_h` (harness rhythm: executor fp8 10 steps released every 533 ms, planner stand-in every 5.33 s at 4 061
+tokens): the stall also appears at about 4k tokens, shorter. green25 and mps100 each have 3 of 226 ticks over 533 ms
+(543–571 ms), all inside a planner prefill; prio (max 428.6 ms) and mps50 (max 294.9 ms) have none. At the harness's
+chunk deadline the stall decides which sharing modes are usable on the Thor.
+
 # ISSUE-099
 
 Status: open, non-blocking
@@ -1539,3 +1544,35 @@ fluent and on topic, so the prefill result is not broken but numerically differe
 For one changed call, compare the last-position logits (top-2 margin) and the per-layer hidden state of the prefill
 with 256-token chunks against the default chunk; repeat with the BF16 KV route to separate FP8 KV readback from
 chunked GEMM shapes.
+
+# ISSUE-111
+
+Status: open, non-blocking
+
+Area: `research/experiments/colocation_5090/colocation_bench.py` process exit on Jetson Thor (in-process planner
+thread modes)
+
+## Observation
+
+In round `1104_h`, the `prio` and `green25` cells exit with status 134 after writing their results:
+`terminate called without an active exception` (prio) and `malloc(): unsorted double linked list corrupted`
+(green25). The `isolated`, `mps50` and `mps100` cells (no planner thread in the executor's process) exit cleanly. In
+round `1029`, `p100_ctx16000_prio` raised a `c10::Error` in `conv3d` / `slow_conv_dilated3d_cuda` at exit, with the
+planner thread still running its vision encoder.
+
+## Evidence
+
+THOR_STATUS_SUMMARY.md rounds `1029` and `1104_h`; logs in the Thor's `$HOME/thor_val/1104_h/cells/H1_{prio,green25}.log`.
+The JSON results are written before the abort, and their numbers agree with the neighbouring cells.
+
+## Hypotheses
+
+- The bench ends the timed window while the planner thread is inside `generate`; interpreter shutdown destroys CUDA /
+  allocator state that the still-running thread uses (a `std::thread` destroyed while joinable gives the `terminate`
+  message; freeing under a running kernel launch gives the heap corruption).
+
+## Next Experiment
+
+Stop the planner thread and join it (after its current call) before the results are written, and check that the
+in-process cells then exit with status 0.
+

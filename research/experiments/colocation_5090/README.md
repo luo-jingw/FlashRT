@@ -270,3 +270,23 @@ Executor p99 / slowdown against the same-SM alone value / misses, planner runnin
   planner's decode are 1.3–1.7× the same-SM alone p50 under green25 / mps50; ticks overlapping a short-context
   prefill are not slowed. The slowdown follows the planner's bandwidth-heavy phase.
 - The long-context stalls fall in ticks overlapping the prefill; their mechanism is still open (issues.md ISSUE-098).
+
+### Harness rhythm (round 1104_h)
+
+`PERIOD_MS=533` (one ImageWAM fp8, 10-step action chunk per 533 ms, the VoLoAgent harness's 8 steps at 15 Hz), planner
+stand-in every 5.33 s (`HZ` 0.1875, one call per 80 env steps) at 4 061 tokens (`PLANNER_CTX_EXTRA=3800`), 120 s per
+cell:
+
+| cell | executor p50 / p99 / max ms | ticks over 533 ms (in planner prefill) | planner call p50 ms |
+|---|---|---|---:|
+| isolated (start / end) | 163.4 / 164.7 / 165.9; 167.5 / 170.4 / 172.6 | 0 | — |
+| prio | 173.2 / 360.5 / 428.6 | 0 | 7 586 |
+| green25 | 183.2 / 543.1 / 554.5 | 3 (3) | 7 819 |
+| mps50 | 173.3 / 293.5 / 294.9 | 0 | 6 630 |
+| mps100 | 169.6 / 540.3 / 571.1 | 3 (3) | 7 409 |
+
+- prio and mps50 keep the chunk deadline; green25 and mps100 miss it 3 times each, every time inside a planner
+  prefill (the ISSUE-098 stall at about 4k tokens).
+- The 2B stand-in's call (6.6–7.8 s) is longer than the 5.33 s between monitor calls, so the planner runs back to
+  back; the decision latency, not the executor deadline, is what this rhythm leaves unmet on the Thor.
+- The in-process cells with a planner thread (prio, green25) abort at exit after writing their results (ISSUE-111).

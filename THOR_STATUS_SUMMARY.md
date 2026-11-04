@@ -677,6 +677,40 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 
 结论去向：本节；issues.md ISSUE-098；`research/experiments/colocation_5090/README.md` 的 Thor 一节。
 
+### `1104_h` 轮：H1 按 harness 节奏共置，H2 执行器换指令（commit `2d2adb75`）
+
+共同条件：HEAD `2d2adb75`，MAXN，GPU 时钟锁定，`emc_locked=null`；全程 GPU 上没有其他计算进程；未改时钟、未 sudo。内存（`free -g`）：总 122 GB，已用 42，可用 80。
+
+**H2 执行器换指令，Qwen3-4B 文本编码器常驻**（ImageWAM fp8，`load_imagewam` 后对 4 条子任务指令各 `set_prompt` 两轮，每次之后两次 tick）：
+
+| `set_prompt` | Thor ms | 5090 ms |
+|---|---:|---:|
+| 进程内第一次 | 11 923 | 751 |
+| 第一次出现的指令长度 | 733–745 | 240–244 |
+| 见过的长度 / 重复的指令 | 110–111 | 30–31 |
+
+- 换指令后第一次 tick 167–173 ms，与下一次 tick（167–169 ms）相同：graph 捕获在 `set_prompt` 之内完成，没有推迟到推理。
+- 执行器连同编码器与 FP16 源权重 allocated 23.06 GB、reserved 23.57 GB；加上 27B 规划器的 NVFP4 权重约 28 GB，两者都在可用的 80 GB 之内（推算，未同时加载）。
+
+**H1 按 harness 节奏共置**（`colocation_bench.py`，`PERIOD_MS=533`，规划器替身 Qwen3-VL-2B bf16 每 5.33 s 一次（0.1875 Hz）、4 061 token、32 个新 token；执行器 ImageWAM fp8、10 步，`DROP_TEXT_ENCODER=1`；每格 120 s）：
+
+| 格 | 执行器 p50 / p99 / max ms | 超过 533 ms（其中在规划器 prefill 内） | 规划器调用次数 | 单次调用 p50 / max ms | prefill / decode p50 ms |
+|---|---|---|---:|---|---|
+| isolated_start | 163.4 / 164.7 / 165.9 | 0 | — | — | — |
+| prio | 173.2 / 360.5 / 428.6 | 0 | 15 | 7 586 / 7 722 | 6 009 / 1 557 |
+| green25 | 183.2 / 543.1 / 554.5 | 3（3） | 15 | 7 819 / 8 220 | 6 076 / 1 747 |
+| mps50 | 173.3 / 293.5 / 294.9 | 0 | 19 | 6 630 / 6 676 | 5 216 / 1 418 |
+| mps100 | 169.6 / 540.3 / 571.1 | 3（3） | 17 | 7 409 / 7 423 | 5 833 / 1 569 |
+| isolated_end | 167.5 / 170.4 / 172.6 | 0 | — | — | — |
+
+- 漂移：isolated 的 p99 从 164.7 到 170.4 ms（+3.5 %），小于下面读的差别。
+- prio 和 mps50 守住了动作块截止期（max 429 / 295 ms）。green25 和 mps100 各有 3 次超过 533 ms（543–571 ms），全部落在规划器 prefill 区间内：`1028` / `1029` 轮的长 prefill 停顿（ISSUE-098）在约 4k token 时刚好超过一个动作块。
+- 规划器替身单次调用 6.6–7.8 s，超过 monitor 的 5.33 s 间隔，调用实际是背靠背进行的；即使是 2B 的替身，在 Thor 上也跟不上每 80 步一次的 monitor。
+- tegrastats 整段平均：RAM 46 964 MB，VDD_GPU 15.8 W。
+- prio 与 green25 两格在结果写出后、进程退出时以 134 退出（`terminate called without an active exception`；`malloc(): unsorted double linked list corrupted`），不影响该格结果（issues.md ISSUE-111）。
+
+结论去向：本节；`opportunities.md` OPT-040；`research/experiments/colocation_5090/README.md` 的 Thor 一节；`research/reports/planner_executor_colocation_5090.md` 第 5 章痛点 5 与第 8 章；issues.md ISSUE-098、ISSUE-111。`THOR_CHECKLIST.md` 的 H1、H2 已删除。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |
