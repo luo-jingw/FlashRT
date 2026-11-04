@@ -82,16 +82,51 @@ Allocated memory: 22.55 GB with the text encoder and the FP16 source weights, 6.
 the planner resident (2.6-3.0 GB free in every replay cell), the 7.6 GB encoder does not fit next to the slimmed
 executor; a new subgoal reaches the executor only through another encoding path.
 
-## MTP speculative decode on these calls (`mtp_speedup.py`, `mtp_speedup_table.py`, `cells/mtp_speedup.json`)
+## MTP speculative decode on these calls (`mtp_tail_model.py`, `mtp_tail_model_table.py`, `cells/mtp_tail_{master,base}.json`)
 
-The merged master checkpoint has no MTP tensors; the drafter is the official Qwen3.8-27B-FP8 MTP head. Per
-(prompt, draft length K) one warm-up call and one timed call; graph replay times at decode position prompt + 16.
+The merged master checkpoint has no MTP tensors; the drafter is the official Qwen3.8-27B-FP8 MTP head. The RTX long
+route fills the drafter's K/V with the prompt's last rows after the prefill (the MTP prompt tail; the frontend's table
+gives 512 rows for the monitor calls and 2 048 for decompose); without it the drafter sees only generated tokens.
 
-| prompts | default K | tokens per main-model forward (K = 1 / 3 / 5 / 7) | decode at default K | single-token decode (estimate) | speedup |
-|---|---|---|---|---|---|
-| monitor x 20 (4 079 tokens) | 3 | 1.66 / 2.13 / 2.22 / 2.21 | 623 ms / call | 1 081 ms / call | 1.74x |
-| decompose x 2 (2 128 tokens) | 6 | 1.42 / 1.52 / 1.52 / 1.52 | 414 ms / call | 455 ms / call | 1.10x (K = 1: 1.34x) |
-| synthetic planning prompt, 602-16 315 tokens, 64 tokens | 3 / 3 / 5 / 7 | 1.54-1.80 / 2.33-2.62 / 2.52-2.86 / 2.52-2.86 | 581-678 ms | 1 219-1 410 ms | 1.95-2.15x |
+Grid per main model (the merged master, and the official Qwen3.8-27B converted with the same script and drafted by
+the same MTP file): MTP prompt tail (off / the frontend's table / the whole prompt) x tail fc kernel (the frontend's
+small-M kernel / cuBLASLt) x K (1, 3, 5, 7, the frontend's table), on the 22 recorded calls of ep0 and ep43 (wrist 224)
+and four synthetic prompts. Each model first decodes each call once with `max_tokens` and then decodes to its own EOS
+in every cell (official model: monitor median 72 tokens, decompose 39; master 52 / 24). One warm-up and one timed call
+per cell.
+
+Recorded calls, K = 3, tail fc on cuBLASLt; tokens per main-model forward / decode ms per call / speedup over the
+single-token estimate:
+
+| main model | MTP prompt tail | monitor x 20 (4 076 tokens) | decompose x 2 (2 127 tokens) |
+|---|---|---|---|
+| master | off | 2.13 / 623 / 1.74x | 1.52 / 374 / 1.22x |
+| master | table (512 / 2 048 rows) | 2.60 / 511 / 2.12x | 2.61 / 218 / 2.09x |
+| master | whole prompt | 2.85 / 468 / 2.31x | 2.47 / 230 / 1.98x |
+| official | off | 2.46 / 726 / 2.00x | 2.30 / 398 / 1.85x |
+| official | table | 2.72 / 656 / 2.21x | 2.92 / 314 / 2.34x |
+| official | whole prompt | 3.05 / 587 / 2.47x | 3.04 / 302 / 2.43x |
+
+The full grid (all K, both fc kernels, synthetic prompts) is `mtp_tail_table.md`.
+
+- The single-token estimate is (decoded tokens - 1) x the Kv = 1 main-model forward (graph replay, `cells/mtp_speedup.json`);
+  FlashRT has no graph-captured single-token decode on this route, and the estimate leaves out per-step host work,
+  so the speedups are lower bounds.
+- For the master, the prompt tail is the larger factor: monitor 2.13 -> 2.60 / 2.85 tokens per forward, decompose
+  1.52 -> 2.61. At the same tail setting the official model is 5-15 % higher on monitor and 12-51 % on decompose (two
+  calls); its replies differ from the master's, so this does not isolate the head.
+- With the tail, K = 3 is the fastest K for both call kinds of the master (monitor 511 / 468 ms, decompose 218 ms);
+  K = 5 / 7 accept more but cost more per cycle; the table's K = 6 for decompose gives 241 ms.
+- Tail fc: the frontend's small-M kernel costs 21 / 84 ms at 512 / 2 048 rows (cuBLASLt 0.4 / 1.2 ms); tokens per
+  forward differ by at most 2 % between the two kernels (monitor 2.66 / 2.60), and tail + decode is shorter with
+  cuBLASLt (decompose 302 -> 219 ms). The frontend default is the small-M kernel (OPT-039).
+- The tail's NVFP4 k/v projections use the activation scratch of `self.max_seq` rows (2 048 in long-context mode), in
+  chunks of that many rows; an unchunked tail above 2 048 rows wrote past the scratch and lowered every later call's
+  acceptance in the process (`smoke/mtp_state_bisect.log` against `smoke/mtp_state_bisect_fixed.log`).
+- Outputs do not change with the tail or K: 516 of 520 master cells and 520 of 520 official-model cells equal their
+  reference; the four others are the 16 315-token synthetic prompt at K = 1 (ISSUE-109).
+- The synthetic prompts' replies reach EOS after 12-35 tokens (master), too few for acceptance; they serve the
+  forward cost by prompt length:
 
 | prompt tokens | main-model forward, Kv = 1 / 2 / 4 / 6 / 8 (ms) | MTP draft chain, K = 1 / 3 / 5 / 7 (ms) |
 |---|---|---|
@@ -100,19 +135,22 @@ The merged master checkpoint has no MTP tensors; the drafter is the official Qwe
 | 8 110 | 19.70 / 19.46 / 20.98 / 22.71 / 23.65 | 0.97 / 2.91 / 4.86 / 6.79 |
 | 16 315 | 22.39 / 22.21 / 23.68 / 25.23 / 26.19 | 0.97 / 2.92 / 4.87 / 6.82 |
 
-- The single-token estimate is (decoded tokens - 1) x the Kv = 1 forward; FlashRT has no graph-captured
-  single-token decode on this route, and the estimate leaves out per-step host work, so the speedups are lower bounds.
-- A cycle costs the Kv = K + 1 forward plus the K-step chain (K = 3 at 602 tokens: 20.6 + 2.9 = 23.5 ms, measured
-  23.6 ms per cycle).
-- Drafts past the third are almost never accepted on the monitor calls. On RTX the FP8-source MTP head has no BF16
-  projection copies, so the long route skips the MTP prompt-tail prefill (0 rows at every length): the drafter
-  sees only generated tokens (OPT-039).
-- Output is the same for every K on 25 of 26 prompts; the 16 315-token synthetic prompt gives a different output
-  with K = 1 (ISSUE-109).
+A cycle costs the Kv = K + 1 forward plus the K-step chain (K = 3 at 602 tokens: 20.6 + 2.9 = 23.5 ms, measured
+23.6 ms per cycle).
+
+## Planner call shapes on the Thor frontend (`thor/planner_call_shapes.py`)
+
+LM-only time of the official Qwen3.8-27B NVFP4 with its MTP head at the harness call shapes (decompose 2 126 prompt
+tokens / 25 new, monitor 4 072 / 53, monitor 5 711 / 53), prompt = the first N tokens of the repository's
+documentation; the same code runs on the Thor (`Qwen36TorchFrontendThor`, Thor row H3a) and here
+(`thor/planner_call_shapes_rtx.{json,log}`). RTX 5090: prefill 256 / 334 / 475 ms, decode 353 / 487 / 520 ms,
+24.4-27.2 ms per cycle. ViT time and image content are not part of it.
 
 ## Files
 
 `extract_prompts.py`, `prompts.json`, `volo_calls.py`, `record_calls.py` (recording), `planner_replay.py`,
 `executor_imagewam.py`, `replay_bench.py`, `run_replay.sh` (replay grid and instruction switch), `replay_table.py`,
-`first_call_check.py`, `prefill_mode_check.py`, `mtp_speedup.py`, `mtp_speedup_table.py`; recorded calls in `calls/`,
-results in `cells/` and `smoke/`, logs `record.log`, `replay.log`, `replay_realtime.log`, `mtp_speedup.log`.
+`first_call_check.py`, `prefill_mode_check.py`, `mtp_speedup.py`, `mtp_speedup_table.py`, `mtp_tail_model.py`,
+`mtp_tail_model_table.py`, `thor/planner_call_shapes.py`; recorded calls in `calls/`,
+results in `cells/` and `smoke/`, logs `record.log`, `replay.log`, `replay_realtime.log`, `mtp_speedup.log`,
+`mtp_tail_{master,base}.log`.
