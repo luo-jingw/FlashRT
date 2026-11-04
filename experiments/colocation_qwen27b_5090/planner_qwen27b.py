@@ -95,11 +95,11 @@ def libero_frames() -> tuple[Image.Image, Image.Image]:
 
 
 class Planner:
-    def __init__(self, streams: PlannerStreams | None = None):
+    def __init__(self, streams: PlannerStreams | None = None, max_image_tokens: int = 1024):
         self.streams = streams or PlannerStreams(torch.cuda.Stream(), torch.cuda.Stream(), torch.cuda.Stream())
         # Construct on the default stream: the loader mixes kernels on the legacy stream 0 with copies on the current
         # stream, so a side current stream during loading races and corrupts the weights (garbage output).
-        self.fe = Qwen36VlTorchFrontendRtx(CKPT, max_seq=MAX_SEQ, max_image_tokens=1024)
+        self.fe = Qwen36VlTorchFrontendRtx(CKPT, max_seq=MAX_SEQ, max_image_tokens=max_image_tokens)
         torch.cuda.synchronize()
         llm = self.fe.llm
         llm._graph_stream = self.streams.graph  # every graph is captured lazily on first use, so on these streams
@@ -107,12 +107,14 @@ class Planner:
         self.front, self.wrist = libero_frames()
         self.last_text = ""
 
-    def messages(self, ctx: str = CTX) -> list:
+    def messages(self, ctx: str = CTX, long_tokens: int = LONG_TOKENS) -> list:
+        """Two frames + the planning prompt; ctx "long" prepends a text execution history so that the prompt is
+        about `long_tokens` tokens."""
         text = PROMPT
         if ctx == "long":
             tok = self.fe.processor.tokenizer
             lines, n = [], 0
-            while n < LONG_TOKENS - 700:  # two frames and the prompt take about 600 tokens
+            while n < long_tokens - 700:  # two frames and the prompt take about 600 tokens
                 i = len(lines)
                 lines.append(f"step {i}: executed \"{SUBTASKS[i % len(SUBTASKS)]}\" for {1 + i % 7} s, "
                              f"gripper {'closed' if i % 3 else 'open'}, result: {'success' if i % 5 else 'retry'}.")
