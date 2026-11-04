@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` / `1030` 轮做完，已从本清单删除。`1104_h` 轮做完 H1、H2，已从本清单删除。待测的是 H3a（27B 规划器语言模型部分）和 H3（27B 规划器带图像回放，依赖 H3a 转换好的权重）。另外剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` / `1030` 轮做完，已从本清单删除。`1104_h` 轮做完 H1、H2，`1104_h3` 轮做完 H3a、H3，已从本清单删除。待测的是 H3b（27B 规划器在 Thor 上的回复与决策、每周期耗时的核对、MTP 尾部 fc 的 kernel）。另外剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,74 +52,44 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-### H3a：27B 规划器语言模型部分，按 harness 调用长度在 Thor 上的耗时
+### H3b：27B 规划器在 Thor 上的决策、每周期耗时的核对、MTP 尾部 fc
 
-问题：Qwen3.8-27B NVFP4（官方原版，配套 MTP 头）在 Thor 上一次 decompose（2 126 token、解码 25 个）和 monitor（4 072 / 5 711 token、解码 53 个）的 prefill 与解码各要多久，能否在 5.33 s 的 monitor 间隔内返回。不含 ViT 与图像内容。
+问题：（1）`1104_h3` 的 H3 回复与 5090 全部不同，决策（monitor 的 status / action、decompose 的子目标列表）是否也不同；（2）同一 prompt 长度下每周期 136 ms（H3a）与约 90 ms（由 H3 中位数推算）哪个对；（3）Thor 的 MTP 尾部 fc（M-tile kernel）多慢，换成 cuBLASLt 后 prefill、每次前向 token 数和决策怎么变。
 
-前置：约 60 GB 磁盘（下载 31 GB + 转换后 27.7 GB），转换时进程常驻内存约 30 GB。权重从公开仓库匿名下载，不使用任何 token。
+前置：`1104_h3` 的 `$HOME/thor_val/1104_h3` 与 `$CK` 里的两份权重在位。全程约 45 分钟。
 
 ```
-export OUT=$HOME/thor_val/$(date +%m%d)_h3; mkdir -p $OUT
-export CK=$HOME/thor_val/ckpt; mkdir -p $CK
-df -h $HOME | tee $OUT/H3a_df.log; free -g | tee $OUT/H3a_free.log
-env -u HF_HUB_OFFLINE -u TRANSFORMERS_OFFLINE -u HF_TOKEN -u HUGGING_FACE_HUB_TOKEN python -c "
-from huggingface_hub import snapshot_download
-snapshot_download('Qwen/Qwen3.8-27B-FP8', revision='017b9c7af6b5689d5dd426a76e0bc077eb5ca20a',
-                  local_dir='$CK/qwen38-27b-fp8-official', max_workers=8)" 2>&1 | tail -2 | tee $OUT/H3a_download.log
-cd $CK/qwen38-27b-fp8-official && python -I -c "
-import zlib
-bad = n = 0
-for line in open('crc32.txt'):
-    crc, name = line.split(None, 1); name = name.strip()
-    if not name.endswith('.safetensors'): continue
-    c = 0
-    with open(name, 'rb') as f:
-        for b in iter(lambda: f.read(1 << 24), b''): c = zlib.crc32(b, c)
-    n += 1; bad += f'{c:08x}' != crc
-print('safetensors checked', n, 'mismatches', bad)" | tee $OUT/H3a_crc.log
-cd $FLASHRT_ROOT/research/experiments/qwen38_distill_bench
-/usr/bin/time -v python fp8_to_nvfp4_ct.py $CK/qwen38-27b-fp8-official $CK/qwen38-27b-nvfp4-official > $OUT/H3a_convert.log 2>&1
-grep -E "^nvfp4|^wrote|Elapsed|Maximum resident" $OUT/H3a_convert.log
 cd $FLASHRT_ROOT
-export PYTHONPATH=$HOME/thor_val/pydeps_tf5:$PYTHONPATH
-python research/experiments/harness_replay_5090/thor/planner_call_shapes.py thor 2>&1 | tee $OUT/H3a_shapes.log
-```
-
-`crc32.txt` 里 3 个小文本文件（`chat_template.jinja`、`generation_config.json`、`tokenizer_config.json`）的 CRC 与该版本的文件不符（git blob 与 HF 一致），所以只校验 safetensors。transformers 5.17 在 `$HOME/thor_val/pydeps_tf5`（不升级共享 venv 的 transformers）。
-
-带回：`H3a_df.log`、`H3a_free.log`、`H3a_crc.log`、转换日志里那 4 行、`H3a_shapes.log` 全部（chat check 一行，加 3 个形状各一行 JSON；有 `planner_call_shapes_thor.json` 也一并带回）。
-
-判据：prefill + decode 与 5.33 s 比较（真实调用还要加上 ViT）；每周期 ms 只取决于硬件，与 5090 的同一脚本对照（`research/experiments/harness_replay_5090/thor/planner_call_shapes_rtx.json`：每周期 24.4–27.2 ms，prefill 256 / 334 / 475 ms）；每次前向产出的 token 数是在文档文本上测的，不代表真实调用。
-
-结论去向：`research/experiments/harness_replay_5090/README.md` 的 Thor 一节；`research/reports/planner_executor_colocation_5090.md` 第 8 章；`THOR_STATUS_SUMMARY.md` 本轮小节。
-
-### H3：27B 规划器在 Thor 上回放录制的 harness 调用（带图像，Thor 版图像前端）
-
-问题：`Qwen36VlTorchFrontendThor`（语言模型 `Qwen36TorchFrontendThor`，ViT 用 BF16 线性层 + SDPA）跑官方 Qwen3.8-27B NVFP4（配套 MTP 头），在 22 次录制调用（ep0、ep43，腕部 224；decompose 2 次、monitor 20 次）上 ViT、prefill、解码、整次调用各多久，回复与 5090 是否一致，monitor 能否在 5.33 s 的间隔内返回。每次调用解码到该模型自己的 EOS（长度取自 5090 的参考），`spec_k` 6（按 prompt 长度查表）与 3 各一次预热、一次计时。
-
-前置：H3a 已经做完（`$CK/qwen38-27b-nvfp4-official` 转换好、含 `model.visual.*`，`$CK/qwen38-27b-fp8-official` 在位）；放在 H3a 之后、同一个 `$OUT`。
-
-```
-export OUT=$HOME/thor_val/$(date +%m%d)_h3; mkdir -p $OUT
+export OUT=$HOME/thor_val/$(date +%m%d)_h3b; mkdir -p $OUT
 export CK=$HOME/thor_val/ckpt
 export PYTHONPATH=$HOME/thor_val/pydeps_tf5:$PYTHONPATH
-cd $FLASHRT_ROOT
-python research/experiments/harness_replay_5090/thor/planner_calls_vl.py thor 2>&1 | tee $OUT/H3_calls_vl.log
+H3=$HOME/thor_val/1104_h3; R=research/experiments/harness_replay_5090/thor
+python -c "from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state as r; r()" | tee $OUT/P0_clock.log
+git rev-parse HEAD | tee $OUT/P0_commit.log
+python $R/planner_calls_vl_table.py $H3/planner_calls_vl_thor.json | tee $OUT/H3b_old_calls_table.txt
+python -I -c "import json, sys; [print(r['shape'], r['ctx'], r['new'], r['runs']) for r in json.load(open(sys.argv[1]))['rows']]" $H3/planner_call_shapes_thor.json | tee $OUT/H3b_old_shapes_runs.txt
+python $R/mtp_tail_fc_kernels.py 2>&1 | tee $OUT/H3b_tail_fc.log
+python $R/planner_call_shapes.py thor 2>&1 | tee $OUT/H3b_shapes_start.log; mv $OUT/planner_call_shapes_thor.json $OUT/planner_call_shapes_thor_start.json
+python $R/planner_calls_vl.py thor 2>&1 | tee $OUT/H3b_calls_thor.log
+python $R/planner_calls_vl_table.py $OUT/planner_calls_vl_thor.json | tee $OUT/H3b_calls_thor_table.txt
+python $R/planner_calls_vl.py thor_cublaslt_tail 2>&1 | tee $OUT/H3b_calls_cublaslt_tail.log
+python $R/planner_calls_vl_table.py $OUT/planner_calls_vl_thor_cublaslt_tail.json | tee $OUT/H3b_calls_cublaslt_tail_table.txt
+python $R/planner_call_shapes.py thor 2>&1 | tee $OUT/H3b_shapes_end.log; mv $OUT/planner_call_shapes_thor.json $OUT/planner_call_shapes_thor_end.json
 ```
 
-带回：`H3_calls_vl.log` 全部（`loaded:` 一行，加 44 行 JSON），以及 `$OUT/planner_calls_vl_thor.json`。
+带回：P0 两个日志、GPU 上是否有其他计算进程、`emc_locked`；`H3b_old_calls_table.txt`、`H3b_old_shapes_runs.txt`、`H3b_tail_fc.log`、`H3b_shapes_{start,end}.log`、`H3b_calls_thor_table.txt`、`H3b_calls_cublaslt_tail_table.txt` 全部；两个 `H3b_calls_*.log` 的 `loaded:` 一行。任何一步失败：完整 traceback 与失败前最后 20 行。
 
 判据：
-- `loaded:` 一行必须是 `Qwen36VlTorchFrontendThor Qwen36TorchFrontendThor ... mtp True`，否则本项作废。
-- 与 5090 同一脚本对照（`research/experiments/harness_replay_5090/thor/planner_calls_vl_rtx.json`，每次调用）：decompose ViT 41、prefill 172、解码 312–320、整次 535–542 ms，每次前向 2.92 / 3.45 个 token（`spec_k` 3 / 6）；monitor ViT 81、prefill 311、解码 652、整次 1 055 ms，每次前向 2.72 个 token。
-- monitor 的 `wall_ms` 与 5.33 s 比较；`warmup_wall_ms` 是同一 prompt 长度第一次调用的时间（含现场捕获 graph）。
-- `same_as_reference` 为 false 的行照实带回：Thor 的 kernel 与 5090 不同，贪心回复不一致需要单独查，不作为本项的失败条件。
+- `loaded:` 两行分别是 `Qwen36VlTorchFrontendThor Qwen36TorchFrontendThor ... mtp True` 与 `Qwen36VlThorWithCublasltTail Qwen36ThorWithCublasltTail ... mtp True`，否则对应一项作废。
+- 每周期：`H3b_old_calls_table.txt` 的逐行 `ms_per_cycle`（H3）对 `H3b_old_shapes_runs.txt`（H3a 三次的 decode ms / 周期数）；`shapes_start` 与 `shapes_end` 相差多于两者之间的差距时，这一轮的每周期数不作为分母。
+- 决策：两张表最后的 `decisions equal N/22`，与 5090 上同样 ViT 配置的 `rtx_thor_vit`（18 / 22，`research/experiments/harness_replay_5090/thor/planner_calls_vl_rtx_thor_vit_table.txt`）以及 FP8 / FA2 的 `rtx`（22 / 22）对照；逐行的 `reference_decision` / `run_decision` 照实带回。
+- 尾部 fc：`thor_mtile` 与 `cublaslt_algos1` 在 512 / 2 048 行的 ms 与 `max |diff|`（5090：cuBLASLt 0.24 / 0.97 ms，M-tile 不可用）；`thor` 与 `thor_cublaslt_tail` 两张表的 prefill（decompose 尾部 2 048 行、monitor 512 行）、每次前向 token 数与决策之差。
 
-结论去向：`research/experiments/harness_replay_5090/README.md` 的 Thor 一节；`research/reports/planner_executor_colocation_5090.md` 第 8 章；`THOR_STATUS_SUMMARY.md` 本轮小节；`plan.md` "image input for the 27B planner on Jetson Thor" Phase 3。
+结论去向：`research/experiments/harness_replay_5090/README.md` 的 Thor 两节；`THOR_STATUS_SUMMARY.md` 本轮小节；issues.md ISSUE-112；`opportunities.md` OPT-039 candidate 5。
 
 ## 已完成的轮次（不再重跑）
 
-逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`、`1029`、`1029b`、`1030`、`1104_h`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
+逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`、`1029`、`1029b`、`1030`、`1104_h`、`1104_h3`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
 
 ---
 

@@ -711,6 +711,37 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 
 结论去向：本节；`opportunities.md` OPT-040；`research/experiments/colocation_5090/README.md` 的 Thor 一节；`research/reports/planner_executor_colocation_5090.md` 第 5 章痛点 5 与第 8 章；issues.md ISSUE-098、ISSUE-111。`THOR_CHECKLIST.md` 的 H1、H2 已删除。
 
+### `1104_h3` 轮：H3a 27B 规划器语言模型按 harness 调用长度的耗时，H3 带图像回放（Thor 版图像前端）
+
+共同条件：清单要求的 HEAD 为 `85a83035`；本轮没有带回 P0（commit、时钟状态、`emc_locked`、GPU 是否空闲），只说明未改时钟、未 commit / push。`$OUT` = `$HOME/thor_val/1104_h3`。权重为官方 Qwen3.8-27B-FP8（revision `017b9c7a`），66 个 safetensors 的 CRC 全部一致；转换为 NVFP4：256 个张量，相对误差均值 0.0947、最大 0.0951，写出 27.70 GB，耗时 63.6 s，进程最大常驻内存 49.4 GiB。
+
+**H3a 语言模型部分**（`thor/planner_call_shapes.py thor`，提示词为仓库文档的前 N 个 token，不含 ViT；`long_ctx_mode True mtp True`。5090 一列是尾部 fc 改用 cuBLASLt 之前测的，当时的 warp kernel 在 2 048 / 512 行上要 84 / 21 ms）：
+
+| 形状（prompt / 新 token） | Thor prefill / decode ms | Thor 每周期 ms / 每次前向 token | 5090 prefill / decode / 每周期 / 每次前向 | Thor / 5090（prefill，每周期） | Thor prefill + decode |
+|---|---|---|---|---|---:|
+| decompose（2 126 / 25） | 3 708 / 2 194 | 157 / 1.71 | 256 / 353 / 27.2 / 1.85 | 14.5×，5.8× | 5.90 s |
+| monitor 腕部 224（4 072 / 53） | 4 408 / 2 998 | 136 / 2.36 | 334 / 487 / 24.4 / 2.60 | 13.2×，5.6× | 7.41 s |
+| monitor 腕部 720（5 711 / 53） | 6 106 / 2 456 | 136 / 2.89 | 475 / 520 / 24.7 / 2.48 | 12.9×，5.5× | 8.56 s |
+
+- 三个形状只算语言模型就都超过 5.33 s 的 monitor 间隔。
+- 每周期 136 ms（K = 3，每周期读约 17.5 GB）约合 129 GB/s，是 `1029` 轮纯拷贝上限 236 GB/s 的 55 %（推算）。
+
+**H3 带图像回放**（`thor/planner_calls_vl.py thor`；`loaded: Qwen36VlTorchFrontendThor Qwen36TorchFrontendThor long_ctx_mode True mtp True`；44 行齐全；中位数；峰值显存未带回）：
+
+| 调用 | `spec_k` | ViT ms | prefill ms | decode ms | 整次 ms | 每次前向 token | 5090 同一脚本（ViT / prefill / decode / 整次） |
+|---|---:|---:|---:|---:|---:|---:|---|
+| decompose × 2 | 6 | 140 | 3 652 | 1 365 | 5 173 | 3.84 | 41 / 174 / 321 / 546 |
+| decompose × 2 | 3 | 140 | 3 653 | 1 435 | 5 242 | 2.94 | 41 / 174 / 313 / 538 |
+| monitor × 20 | 6 | 269 | 4 357 | 2 352 | 7 020 | 2.76 | 81 / 315 / 634 / 1 045 |
+| monitor × 20 | 3 | 269 | 4 356 | 2 306 | 6 968 | 2.76 | 81 / 315 / 634 / 1 043 |
+
+- monitor 40 / 40 次整次调用超过 5.33 s（中位约 6.99 s），是 5090 的 6.7 倍：ViT 3.3×、prefill 13.8×、decode 3.6–3.7×。prefill 占整次调用的 62 %（5090 为 30 %）。
+- 回复与 5090 参考一致 0 / 44。5090 上只把 ViT 换成 Thor 的配置（BF16 线性层 + SDPA，`rtx_thor_vit`），回复 42 / 44 不同，决策 18 / 22 相同（issues.md ISSUE-112）；Thor 的回复文本本轮没有保存。
+- decompose 每个 prompt token 的 prefill（1.71 ms）是 monitor（1.07 ms）的 1.6 倍；两者的 MTP 尾部分别为 2 048 和 512 行。按 prefill = a × prompt token + b × 尾部行数拟合 H3 的两种调用：a ≈ 0.97 ms，b ≈ 0.77 ms（2 048 行约 1.6 s，推算）；同一组系数对 H3a 三个形状的偏差在 3 % 以内。Thor 的尾部 fc 用 M-tile kernel（`Qwen36TorchFrontendThor._mtp_tail_fc_matmul`）。
+- 每周期的两组数不一致：H3a monitor 每周期 136 ms；H3 monitor 按解码中位 2 306 ms、回复中位 71.5 个 token、每次前向 2.76 个 token 推算约 25.5 个周期、每周期约 90 ms（推算，逐行周期数本轮没有带回；ISSUE-112）。
+
+结论去向：本节；`research/experiments/harness_replay_5090/README.md` 的 Thor 两节；`research/reports/planner_executor_colocation_5090.md` 第 8 章；`docs/qwen36_vl.md` 的 Thor 一节；`opportunities.md` OPT-039、OPT-040；issues.md ISSUE-112；`plan.md` "image input for the 27B planner on Jetson Thor" Phase 3。`THOR_CHECKLIST.md` 的 H3a、H3 已删除，后续为 H3b。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

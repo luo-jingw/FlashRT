@@ -3333,7 +3333,7 @@ Phase Status: completed
 
 # Plan: image input for the 27B planner on Jetson Thor, and the planner's draft length per call
 
-Plan Status: approved
+Plan Status: completed
 
 ## Problem
 
@@ -3420,8 +3420,13 @@ Phase Status: completed
 
 ### Phase 3 — Thor run
 
-Phase Status: active
+Phase Status: completed
 
 - Thor row H3 in `THOR_CHECKLIST.md` (after H3a has converted the checkpoint).
 - Observation: the class names the script prints; per call kind ViT / prefill / decode / call ms, tokens per forward
   and same reply against `thor/planner_calls_vl_rtx.json`; peak memory.
+- Result (THOR_STATUS_SUMMARY.md round `1104_h3`): the frontend loads as `Qwen36VlTorchFrontendThor` /
+  `Qwen36TorchFrontendThor` with the MTP head and runs all 44 calls; monitor 6.97-7.02 s per call (ViT 0.27, prefill
+  4.36, decode 2.31-2.35 s), decompose 5.17-5.24 s; 0 of 44 replies equal the RTX references; peak memory not
+  reported. The reply difference and the decode-per-cycle gap between H3a and H3 are issues.md ISSUE-112; the Thor
+  tail fc is opportunities.md OPT-039 candidate 5.

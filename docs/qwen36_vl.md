@@ -37,7 +37,14 @@ different components, chosen in the construction methods `_build_language_model`
 On the RTX 5090, this ViT configuration against the FP8 / FA2 default on the three images of a recorded decompose call:
 merged-feature cosine mean 0.9986-0.9993 (min 0.962-0.996), 1.2-1.7x the time per image
 (`research/experiments/harness_replay_5090/smoke/vit_thor_config_check.log`; on SM120 its linears run
-`w16a16_gemm_sm120_bf16`, on Thor the Qwen3-VL module's cuBLASLt GEMM). Not yet run on Thor.
+`w16a16_gemm_sm120_bf16`, on Thor the Qwen3-VL module's cuBLASLt GEMM). With the RTX language model, this ViT
+configuration changes 42 of 44 greedy replies on the 22 recorded harness calls and 4 of 22 parsed decisions
+(`research/experiments/harness_replay_5090/README.md`).
+
+Measured on a Jetson AGX Thor (THOR_STATUS_SUMMARY.md round `1104_h3`; official Qwen3.8-27B NVFP4 with its MTP head,
+the 22 recorded calls, medians per call): decompose (2 131 tokens) ViT 140, prefill 3 652, decode 1 365-1 435, call
+5 173-5 242 ms; monitor (4 079 tokens) ViT 269, prefill 4 356, decode 2 306-2 352, call 6 968-7 020 ms; 2.76 tokens
+per main-model forward on monitor. Replies equal to the RTX 5090 references: 0 of 44.
 
 ## Requirements
 

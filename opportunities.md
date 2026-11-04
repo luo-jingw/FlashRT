@@ -1713,7 +1713,7 @@ Candidate 1 experiment 1 → candidate 1 experiment 2 → candidates 2 and 3.
 # OPT-039: MTP speculative decode on the planner (LoRA-merged Qwen3.8-27B master, RTX 5090)
 
 Status: candidates 1-3 done (the RTX long route runs the MTP prompt-tail prefill for FP8-source heads; the tail fc
-runs on cuBLASLt; `Qwen36VlTorchFrontendRtx.generate` takes the draft length); candidate 4 proposed.
+runs on cuBLASLt; `Qwen36VlTorchFrontendRtx.generate` takes the draft length); candidates 4-5 proposed.
 
 Area: `flash_rt/frontends/torch/qwen36_rtx.py` (`_generate_long_ctx_speculative_KN_nvfp4`,
 `_long_tq_effective_k`, `_long_mtp_prefill_tail_for_prompt`, `_prefill_mtp_tail_kv_nvfp4`,
@@ -1761,6 +1761,13 @@ cuBLASLt:
    (grid) 218 against 241 ms. Selecting K by measured acceptance per call is not implemented.
 4. An MTP head adapted to the LoRA master (training the MTP layer on the master's own hidden states and outputs).
    Observation: tokens per forward on the recorded calls, against the official model's 2.72-3.05 (monitor).
+5. The tail fc on the Jetson Thor. `Qwen36TorchFrontendThor._mtp_tail_fc_matmul` keeps its M-tile kernel. In round
+   `1104_h3` the Thor's prefill per prompt token is 1.71 ms on decompose (2 048 tail rows) against 1.07 ms on monitor
+   (512 rows); a two-term fit gives about 0.77 ms per tail row (about 1.6 s of decompose's 3.65 s prefill, derived;
+   THOR_STATUS_SUMMARY.md). Observation: Thor row H3b, which times the M-tile kernel against cuBLASLt
+   (`thor/mtp_tail_fc_kernels.py`; RTX 5090: cuBLASLt 0.24 / 0.97 ms at 512 / 2 048 rows,
+   `thor/mtp_tail_fc_kernels_rtx.log`) and runs the 22 calls with the cuBLASLt tail (`thor_cublaslt_tail`): prefill,
+   tokens per forward and decisions against `thor`.
 
 # OPT-040: Serving the planner at the VoLoAgent harness's call pattern (RTX 5090)
 
@@ -1783,6 +1790,13 @@ Measurements: `research/experiments/harness_replay_5090/README.md`.
   its FP16 source weights takes 23.06 GB, and `set_prompt` costs 110 ms (733-745 ms at a new context length, 11.9 s
   for the first call of a process; THOR_STATUS_SUMMARY.md round `1104_h`, H2).
 
+- On the Jetson Thor (round `1104_h3`, official Qwen3.8-27B NVFP4 on `Qwen36VlTorchFrontendThor`, the 22 recorded
+  calls, decoded to the reference length) a monitor call takes 6.97-7.02 s (median; ViT 0.27, prefill 4.36, decode
+  2.31-2.35 s): 40 of 40 exceed the 5.33 s monitor interval. Prefill is 62 % of the call (30 % on the 5090). The
+  language model alone (H3a) at the 5 711-token shape (wrist camera 1280x720) takes 8.56 s.
+- The monitor prompt is 4 079 tokens: 2 698 image tokens (six images) and about 1 380 text tokens, of which the
+  system prompt (5 150 characters) is the same in all 20 recorded monitor calls of both episodes.
+
 ## Candidates
 
 1. EOS stop in the speculative decode loop (check the accepted tokens of each cycle against the EOS ids).
@@ -1793,3 +1807,6 @@ Measurements: `research/experiments/harness_replay_5090/README.md`.
 3. An instruction path for the executor without the resident encoder: encode new subgoals in a separate process or
    on the CPU, a quantized encoder that fits in the free memory, or embeddings cached for a finite subgoal set.
    Observation: subgoal-to-executor latency and memory headroom with the planner resident.
+4. Prefill reuse across calls: keep the K/V of the prompt prefix that is identical in every call (the system prompt)
+   and prefill only the rest; order the prompt so that the shared part comes first. Observation: monitor prefill ms on
+   the Thor against round `1104_h3`.
