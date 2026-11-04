@@ -147,33 +147,67 @@ A cycle costs the Kv = K + 1 forward plus the K-step chain (K = 3 at 602 tokens:
 LM-only time of the official Qwen3.8-27B NVFP4 with its MTP head at the harness call shapes (decompose 2 126 prompt
 tokens / 25 new, monitor 4 072 / 53, monitor 5 711 / 53), prompt = the first N tokens of the repository's
 documentation; the same code runs on the Thor (`Qwen36TorchFrontendThor`, Thor row H3a) and here
-(`thor/planner_call_shapes_rtx.{json,log}`). RTX 5090: prefill 256 / 334 / 475 ms, decode 353 / 487 / 520 ms,
-24.4-27.2 ms per cycle. ViT time and image content are not part of it.
+(`thor/planner_call_shapes_rtx.{json,log}`). ViT time and image content are not part of it. The RTX run predates the
+cuBLASLt tail fc (its prefill includes the small-M kernel's 84 / 21 ms at 2 048 / 512 tail rows).
+
+| shape (prompt / new tokens) | RTX 5090 prefill / decode ms, ms per cycle, tokens per forward | Jetson Thor (round `1104_h3`) | prefill + decode, Thor |
+|---|---|---|---|
+| decompose (2 126 / 25) | 256 / 353, 27.2, 1.85 | 3 708 / 2 194, 157, 1.71 | 5.90 s |
+| monitor, wrist 224 (4 072 / 53) | 334 / 487, 24.4, 2.60 | 4 408 / 2 998, 136, 2.36 | 7.41 s |
+| monitor, wrist 1280x720 (5 711 / 53) | 475 / 520, 24.7, 2.48 | 6 106 / 2 456, 136, 2.89 | 8.56 s |
+
+On the Thor the language model alone exceeds the 5.33 s monitor interval at every shape; prefill is 12.9-14.5x and a
+cycle 5.5-5.8x the 5090's. 136 ms per cycle at K = 3 (about 17.5 GB of weights per cycle) is about 129 GB/s, 55 % of
+the Thor's measured copy bandwidth (236 GB/s; derived).
 
 ## The official planner with images on the Thor image frontend (`thor/planner_calls_vl.py`)
 
 The official Qwen3.8-27B NVFP4 with its MTP head on the 22 recorded calls of ep0 and ep43 (wrist 224), each decoded
 through the model's own EOS (lengths and reference replies from `cells/mtp_tail_base.json`), at `spec_k` 6 (the
-prompt-length table) and 3; the same code runs on the Thor with `Qwen36VlTorchFrontendThor` (Thor row H3) and here
-with `Qwen36VlTorchFrontendRtx` (`thor/planner_calls_vl_rtx.{json,log}`). RTX 5090, per call:
+prompt-length table) and 3, then one untimed 160-token call per call at K = 3 whose reply is parsed into the call's
+decision (`thor/planner_calls_vl_table.py`: (status, action) for monitor, the subgoal list for decompose). Medians per
+call; the same reply / same decision columns count calls equal to the reference:
 
-| call | spec_k (effective K) | tokens per forward | ViT ms | prefill ms | decode ms | wall ms | first call (warm-up) wall ms | same reply |
-|---|---|---|---|---|---|---|---|---|
-| decompose x 2 | 6 (6) | 3.45 | 41 | 172 | 320 | 542 | 1 728 | 2/2 |
-| decompose x 2 | 3 (3) | 2.92 | 41 | 172 | 312 | 535 | 1 251 | 2/2 |
-| monitor x 20 | 6 (3) | 2.72 | 81 | 311 | 652 | 1 057 | 1 410 | 20/20 |
-| monitor x 20 | 3 (3) | 2.72 | 81 | 311 | 652 | 1 055 | 1 055 | 20/20 |
+| run | call | spec_k (effective K) | tokens per forward | ViT ms | prefill ms | decode ms | wall ms | first call (warm-up) wall ms | same reply | same decision |
+|---|---|---|---|---|---|---|---|---|---|---|
+| RTX 5090, `rtx` | decompose x 2 | 6 (6) | 3.48 | 41 | 174 | 321 | 546 | 1 778 | 2/2 | 2/2 |
+| | decompose x 2 | 3 (3) | 2.94 | 41 | 174 | 313 | 538 | 1 266 | 2/2 | |
+| | monitor x 20 | 6 (3) | 2.72 | 81 | 315 | 634 | 1 045 | 1 163 | 20/20 | 20/20 |
+| | monitor x 20 | 3 (3) | 2.72 | 81 | 315 | 634 | 1 043 | 1 042 | 20/20 | |
+| RTX 5090, `rtx_thor_vit` | decompose x 2 | 6 (6) | 4.49 | 65 | 175 | 249 | 498 | 1 535 | 0/2 | 0/2 |
+| | decompose x 2 | 3 (3) | 3.45 | 65 | 175 | 265 | 515 | 1 197 | 0/2 | |
+| | monitor x 20 | 6 (3) | 2.68 | 129 | 317 | 659 | 1 117 | 1 250 | 1/20 | 18/20 |
+| | monitor x 20 | 3 (3) | 2.68 | 129 | 317 | 659 | 1 115 | 1 115 | 1/20 | |
+| Jetson Thor, `thor` (round `1104_h3`) | decompose x 2 | 6 | 3.84 | 140 | 3 652 | 1 365 | 5 173 | | 0/2 | not saved |
+| | decompose x 2 | 3 | 2.94 | 140 | 3 653 | 1 435 | 5 242 | | 0/2 | |
+| | monitor x 20 | 6 | 2.76 | 269 | 4 357 | 2 352 | 7 020 | | 0/20 | not saved |
+| | monitor x 20 | 3 | 2.76 | 269 | 4 356 | 2 306 | 6 968 | | 0/20 | |
 
-The first-call column of `spec_k` 6 includes the graph captures of each new prompt length (it runs first); peak
-allocated 22.1 GiB. The ViT configuration of the Thor frontend (BF16 linears, SDPA) against the FP8 / FA2 default on
-this GPU: merged-feature cosine mean 0.9986-0.9993 (`smoke/vit_thor_config_check.log`).
+- `rtx` = `Qwen36VlTorchFrontendRtx` (FP8 / FA2 ViT); `rtx_thor_vit` = the RTX language model with the Thor
+  frontend's ViT configuration (BF16 linears, SDPA); `thor` = `Qwen36VlTorchFrontendThor`. Logs and tables:
+  `thor/planner_calls_vl_{rtx,rtx_thor_vit}.{json,log}`, `thor/planner_calls_vl_{rtx,rtx_thor_vit}_table.txt`.
+- The first-call column of `spec_k` 6 includes the graph captures of each new prompt length (it runs first); peak
+  allocated 22.1 / 22.4 GiB (`rtx` / `rtx_thor_vit`).
+- The ViT configuration alone changes 42 of 44 replies and 4 of 22 decisions on the 5090: both decompose calls (ep0:
+  3 subgoals become 2; ep43: the same 3 subgoals in longer wording), ep43 monitor@160 (`continue` -> `grasp_tool`)
+  and ep43 monitor@800 (`replan` -> `continue`). Merged-feature cosine against the FP8 / FA2 default: mean
+  0.9986-0.9993 (`smoke/vit_thor_config_check.log`). The BF16 / SDPA ViT takes 65 / 129 ms against 41 / 81 ms.
+- On the Thor, every monitor call exceeds the 5.33 s monitor interval (40 of 40; 6.7x the 5090); prefill is 62 % of
+  the call (30 % on the 5090), 13.8x the 5090's; ViT 3.3x, decode 3.6-3.7x. The Thor run predates the decision pass;
+  its replies were not saved (issues.md ISSUE-112).
+- Thor prefill per prompt token: decompose 1.71 ms (2 048 tail rows), monitor 1.07 ms (512 tail rows). Fitting
+  prefill = a x prompt tokens + b x tail rows to the two call kinds gives a = 0.97 ms, b = 0.77 ms (derived); the same
+  coefficients fit H3a's three shapes within 3 %. The Thor frontend's tail fc is its M-tile kernel;
+  `thor/mtp_tail_fc_kernels.py` times it against cuBLASLt (RTX 5090: `thor/mtp_tail_fc_kernels_rtx.log`, cuBLASLt
+  0.24 / 0.97 / 1.98 ms at 512 / 2 048 / 4 071 rows, the M-tile kernel unavailable).
 
 ## Files
 
 `extract_prompts.py`, `prompts.json`, `volo_calls.py`, `record_calls.py` (recording), `planner_replay.py`,
 `executor_imagewam.py`, `replay_bench.py`, `run_replay.sh` (replay grid and instruction switch), `replay_table.py`,
 `first_call_check.py`, `prefill_mode_check.py`, `mtp_speedup.py`, `mtp_speedup_table.py`, `mtp_tail_model.py`,
-`mtp_tail_model_table.py`, `thor/planner_call_shapes.py`, `thor/planner_calls_vl.py`, `smoke/mtp_tail_fc_default.py`,
+`mtp_tail_model_table.py`, `thor/planner_call_shapes.py`, `thor/planner_calls_vl.py`, `thor/planner_calls_vl_table.py`,
+`thor/mtp_tail_fc_kernels.py`, `smoke/mtp_tail_fc_default.py`,
 `smoke/vit_thor_config_check.py`; recorded calls in `calls/`,
 results in `cells/` and `smoke/`, logs `record.log`, `replay.log`, `replay_realtime.log`, `mtp_speedup.log`,
 `mtp_tail_{master,base}.log`.

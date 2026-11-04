@@ -310,7 +310,7 @@
 
 ## 8. 局限与下一步
 
-- 27B 规划器的共置只在 RTX 5090 上测过。Thor 上 27B 的图像前端是 `Qwen36VlTorchFrontendThor`（语言模型 `Qwen36TorchFrontendThor`，ViT 用 BF16 线性层和 SDPA），还没有在 Thor 上跑过。Thor 上用 Qwen3-VL-2B 替身按 harness 节奏（执行器 533 ms 一个动作块，规划器每 5.33 s 一次，约 4k token）测过一轮（`1104_h`）：prio 和 mps50 没有查询超过 533 ms，green25 和 mps100 各有 3 次 543–571 ms，都落在规划器 prefill 内；替身的单次调用 6.6–7.8 s，已经超过 monitor 的间隔。
+- 27B 规划器的共置只在 RTX 5090 上测过。27B 在 Thor 上单独跑过一轮（`1104_h3`，图像前端 `Qwen36VlTorchFrontendThor`：语言模型 `Qwen36TorchFrontendThor`，ViT 用 BF16 线性层和 SDPA）：22 次录制调用中，monitor 一次 6.97–7.02 s（中位；ViT 0.27、prefill 4.36、解码 2.31–2.35 s），20 次全部超过 5.33 s 的检查间隔，是 5090 的 6.7 倍；prefill 占 62%（5090 为 30%），是 5090 的 13.8 倍，解码是 3.6 倍。MTP 尾部 fc 在 Thor 上推算每行约 0.77 ms（decompose 的 2 048 行约 1.6 s），单独计时与改用 cuBLASLt 在下一轮。回复与 5090 参考全部不同；在 5090 上只换成同样的 ViT 配置，22 次调用中有 4 次决策改变（issues.md ISSUE-112）。Thor 上用 Qwen3-VL-2B 替身按 harness 节奏（执行器 533 ms 一个动作块，规划器每 5.33 s 一次，约 4k token）测过一轮（`1104_h`）：prio 和 mps50 没有查询超过 533 ms，green25 和 mps100 各有 3 次 543–571 ms，都落在规划器 prefill 内；替身的单次调用 6.6–7.8 s，已经超过 monitor 的间隔。
 - 3.1–3.3 节的规划器是背靠背调用的最坏情况，执行器是 fp8、10 步、50 ms 周期；3.4 节按 harness 的调用频率回放（monitor 每 80 步，执行器每 533 ms），但调用内容是录制后回放的，规划器的回复不会改变 harness 的控制流。
 - 没有闭环任务指标。仿真里推理期间时间是静止的，需要带延迟注入的闭环，才能把延迟换算成成功率。
 - 共置时的数值一致性未查清：两个模型不分 SM 共享时（`prio`、`coop`），规划器约 60 次调用里有 1–2 次输出不同，都发生在运行中临时捕获 graph 的那次调用；执行器约 0.5% 的 tick 动作有最大 4.9e-3 的差异；分 SM 的配置里都没有出现（`issues.md` ISSUE-105、ISSUE-106）。
