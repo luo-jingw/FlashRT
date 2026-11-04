@@ -1,10 +1,11 @@
 """Cooperative slack scheduling of the planner around a periodic executor (same process, no SM partition).
 
 The executor loop owns an `ExecutorClock` (busy flag, next release time, end time of the last tick, executor service
-time). Before each planner GPU segment the planner thread calls `CoopGate.wait(kind)`: it drains the planner's own
-streams, then waits until the executor is idle and the segment's budget fits before the executor's next release. A
-segment longer than the largest slack (period - executor service time) never fits; it starts only at the beginning of
-a slack window (right after a tick ends) and overlaps the next tick by the difference. Segments (kinds):
+time) and calls `stop()` when it ends. Before each planner GPU segment the planner thread calls `CoopGate.wait(kind)`:
+it drains the planner's own streams, then waits until the executor is idle and the segment's budget fits before the
+executor's next release. A segment longer than the largest slack (period - executor service time) never fits; it starts
+only at the beginning of a slack window (right after a tick ends) and overlaps the next tick by the difference.
+Segments (kinds):
   vit      the image encoder of one call;
   chunk    one chunk of the chunked prefill (chunk length FLASHRT_QWEN36_TQ_PREFILL_CHUNK);
   cycle    one speculative-decode cycle (MTP draft chain + verify), gated at the draft chain.
@@ -46,6 +47,14 @@ class ExecutorClock:
             self.next_release = next_release
             self.last_end = time.time()
             self.service_s = service_s if self.service_s == 0.0 else 0.8 * self.service_s + 0.2 * service_s
+            self.busy = False
+            self.generation += 1
+            self.cond.notify_all()
+
+    def stop(self) -> None:
+        """The executor loop has ended: no further release, so every waiting or later planner segment fits."""
+        with self.cond:
+            self.next_release = float("inf")
             self.busy = False
             self.generation += 1
             self.cond.notify_all()
