@@ -86,7 +86,12 @@ chunks of the activation scratch's `max_seq` rows) for an FP8-source
 head. On recorded Qwen3.8-27B planner calls (RTX 5090, K = 3) the tail
 raises the tokens per main-model forward from 2.13 to 2.60 (monitor) and
 from 1.52 to 2.61 (decompose); see
-`research/experiments/harness_replay_5090/README.md`. Without the env var, MTP is None
+`research/experiments/harness_replay_5090/README.md`. The tail's fc
+projection (rows x 10 240 -> 5 120) runs on cuBLASLt with the
+heuristic's first algorithm (`_mtp_tail_fc_matmul`): 0.24 / 0.97 ms at
+512 / 2 048 rows on the RTX 5090, against 21 / 84 ms on the shared
+small-M kernel, with tokens per forward within 2 % and identical
+outputs; the Thor frontend keeps its own M-tile kernel. Without the env var, MTP is None
 and speculative decode is disabled (pure single-token decode still
 works at ~36 tok/s).
 

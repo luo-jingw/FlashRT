@@ -4230,18 +4230,22 @@ class Qwen36TorchFrontendRtx:
     def _mtp_tail_fc_matmul(
             self, x_ptr: int, w_ptr: int, out_ptr: int,
             rows: int, hidden: int, stream: int) -> None:
-        """Hook for the MTP prompt-tail fc matmul.
+        """Hook for the MTP prompt-tail fc matmul (rows x 2*hidden -> hidden).
 
-        Default implementation routes through the shared
-        bf16_matmul_qwen36_bf16 (N=hidden, K=2*hidden). Hardware-
-        specific frontends may override to dispatch a sibling kernel,
-        provided the kernel is bit-identical in the per-output fma
-        order (a value mismatch here corrupts the MTP drafter's KV
-        seed and silently degrades speculative-decode acceptance).
+        cuBLASLt BF16 GEMM with the heuristic's first algorithm
+        (``max_algos=1``: no timing loop, so every process picks the
+        same algorithm and the drafter's K/V seed is reproducible).
+        The result only seeds the drafter's K/V; output tokens are
+        decided by the main model's verify forward. Measured on the
+        RTX 5090: 0.24 / 0.97 ms at 512 / 2 048 rows against 21 / 84 ms
+        on the shared small-M kernel ``bf16_matmul_qwen36_bf16``; on 22
+        recorded planner calls (Qwen3.8-27B) tokens per main-model
+        forward within 2 % of that kernel's, outputs unchanged.
+        Hardware-specific frontends may override with their own kernel.
         """
         from flash_rt import flash_rt_kernels as fvk
-        fvk.bf16_matmul_qwen36_bf16(
-            x_ptr, w_ptr, out_ptr, rows, hidden, hidden * 2, stream,
+        fvk.bf16_matmul_cublaslt_bf16(
+            x_ptr, w_ptr, out_ptr, rows, hidden, hidden * 2, stream, 1,
         )
 
     def _prefill_mtp_tail_kv_nvfp4(
