@@ -1,0 +1,4 @@
+NVIDIA GeForce RTX 5090 (12, 0)
+rows 512: thor_mtile unavailable (rc 1), warp 21.076 ms, cublaslt_algos1 0.239 ms (max |diff| 3.125e-02)
+rows 2048: thor_mtile unavailable (rc 1), warp 84.617 ms, cublaslt_algos1 0.972 ms (max |diff| 6.250e-02)
+rows 4071: thor_mtile unavailable (rc 1), warp 168.442 ms, cublaslt_algos1 1.976 ms (max |diff| 6.250e-02)
