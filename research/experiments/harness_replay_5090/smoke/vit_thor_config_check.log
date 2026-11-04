@@ -1,0 +1,3 @@
+image 0 grid [1, 30, 54] tokens 405: cos mean 0.99864 min 0.96215, max |diff| 14 (max |x| 186); ms rtx_fp8_fa2 11.1, thor_bf16_sdpa 19.2
+image 1 grid [1, 44, 80] tokens 880: cos mean 0.99873 min 0.96474, max |diff| 21 (max |x| 185); ms rtx_fp8_fa2 24.8, thor_bf16_sdpa 39.7
+image 2 grid [1, 16, 16] tokens 64: cos mean 0.99928 min 0.99568, max |diff| 7 (max |x| 135); ms rtx_fp8_fa2 3.4, thor_bf16_sdpa 3.9

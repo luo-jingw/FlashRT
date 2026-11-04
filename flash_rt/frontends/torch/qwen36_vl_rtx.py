@@ -69,13 +69,21 @@ class Qwen36VlTorchFrontendRtx:
         eos = json.load(open(gen_path)).get('eos_token_id') if os.path.isfile(gen_path) else tc.get('eos_token_id')
         self._eos_token_ids = set(eos if isinstance(eos, list) else [eos]) if eos is not None else set()
 
-        self.llm = Qwen36TorchFrontendRtx(checkpoint_path, device=device, max_seq=max_seq, quant='nvfp4',
-                                          extra_embedding_rows=self.max_image_tokens)
-        self.vision = Qwen3VlVisionRtx(checkpoint_path, device=device, config=vc)
+        self.llm = self._build_language_model(checkpoint_path, device, max_seq)
+        self.vision = self._build_vision(checkpoint_path, device, vc)
         self.processor = AutoProcessor.from_pretrained(checkpoint_path)
         geo.set_processor_max_pixels(self.processor, max_pixels)
         self._vcos_cache, self._vsin_cache = geo.build_vision_rope_cache(
             max_hw=self.max_image_tokens * self._merge, head_dim=vc['hidden_size'] // vc['num_heads'], device=device)
+
+    def _build_language_model(self, checkpoint_path: str, device: str, max_seq: int) -> Qwen36TorchFrontendRtx:
+        """The NVFP4 language model with ``max_image_tokens`` reserved embedding rows."""
+        return Qwen36TorchFrontendRtx(checkpoint_path, device=device, max_seq=max_seq, quant='nvfp4',
+                                      extra_embedding_rows=self.max_image_tokens)
+
+    def _build_vision(self, checkpoint_path: str, device: str, config: dict) -> Qwen3VlVisionRtx:
+        """The ViT: FP8 block-128 linears and FA2 attention (SM120)."""
+        return Qwen3VlVisionRtx(checkpoint_path, device=device, config=config)
 
     def _encode_images(self, input_ids: torch.Tensor, pixel_values: torch.Tensor,
                        image_grid_thw: torch.Tensor) -> torch.Tensor:
@@ -110,10 +118,14 @@ class Qwen36VlTorchFrontendRtx:
         return text_rope_rows(all_pos, rotary_dim=self._rotary_dim, rope_theta=self._rope_theta,
                               mrope_section=self._mrope_section)
 
-    def generate(self, messages: list, *, max_new_tokens: int,
+    def generate(self, messages: list, *, max_new_tokens: int, spec_k: int = 6,
                  chat_template_kwargs: dict | None = None) -> VlGeneration:
         """Greedy generation for a chat ``messages`` list whose user content may hold ``{"type": "image"}`` items.
-        Output tokens stop at the first end-of-sequence token."""
+        Output tokens stop at the first end-of-sequence token.
+
+        ``spec_k`` is the MTP draft length requested from the language model (its ``_long_tq_effective_k``): below 6
+        it caps the model's prompt-length table, 6 or more takes the table; ``FLASHRT_QWEN36_TQ_SPEC_K`` overrides
+        both."""
         llm = self.llm
         torch.cuda.synchronize()
         t0 = time.perf_counter()
@@ -151,7 +163,8 @@ class Qwen36VlTorchFrontendRtx:
         else:
             t2 = t3 = t1
         try:
-            out = llm.generate_own_speculative_KN_nvfp4(lm_ids.view(1, -1), max_new_tokens=int(max_new_tokens))
+            out = llm.generate_own_speculative_KN_nvfp4(lm_ids.view(1, -1), max_new_tokens=int(max_new_tokens),
+                                                        K=int(spec_k))
         finally:
             if n_img:
                 llm.reset_rope_rows()

@@ -1712,8 +1712,8 @@ Candidate 1 experiment 1 → candidate 1 experiment 2 → candidates 2 and 3.
 
 # OPT-039: MTP speculative decode on the planner (LoRA-merged Qwen3.8-27B master, RTX 5090)
 
-Status: candidate 1 done (the RTX long route runs the MTP prompt-tail prefill for FP8-source heads); candidates 2-4
-proposed.
+Status: candidates 1-3 done (the RTX long route runs the MTP prompt-tail prefill for FP8-source heads; the tail fc
+runs on cuBLASLt; `Qwen36VlTorchFrontendRtx.generate` takes the draft length); candidate 4 proposed.
 
 Area: `flash_rt/frontends/torch/qwen36_rtx.py` (`_generate_long_ctx_speculative_KN_nvfp4`,
 `_long_tq_effective_k`, `_long_mtp_prefill_tail_for_prompt`, `_prefill_mtp_tail_kv_nvfp4`,
@@ -1741,7 +1741,7 @@ cuBLASLt:
   the official model with its matching head is 5-15 % higher on monitor at the same tail setting.
 - With the tail, K = 3 is the fastest K on both call kinds of the master; K = 5 / 7 accept more but cost more per
   cycle. The prompt-length table gives K = 6 for decompose (241 ms against 218 ms at K = 3).
-- The tail's fc projection (rows x 10 240 -> 5 120) on the frontend's shared small-M kernel costs 21 / 84 ms at 512 /
+- The tail's fc projection (rows x 10 240 -> 5 120) on the shared small-M kernel costs 21 / 84 ms at 512 /
   2 048 rows; `bf16_matmul_cublaslt_bf16` costs 0.4 / 1.2 ms. Tokens per forward differ by at most 2 % between the
   two (monitor 2.66 / 2.60), and tail + decode is shorter with cuBLASLt (decompose 302 -> 219 ms).
 - Single-token decode estimate (Kv = 1 forward graph x decoded tokens): monitor speedup 1.74x without the tail,
@@ -1751,10 +1751,14 @@ cuBLASLt:
 
 1. Done: MTP prompt-tail K/V prefill for the FP8-source head on RTX (NVFP4 k/v projections, chunked to the
    activation scratch's 2 048 rows).
-2. The tail fc projection on cuBLASLt for multi-row tails (the Thor override keeps its own M-tile kernel).
-   Observation: tail ms and tokens per forward on the recorded calls; Spark's acceptance with the same change.
-3. Draft length by call kind or by measured acceptance instead of the prompt-length table (K = 3 for both kinds in
-   this workload). Observation: decode ms per call kind.
+2. Done: the tail fc projection on cuBLASLt (`_mtp_tail_fc_matmul`, `max_algos=1`; the Thor override keeps its own
+   M-tile kernel). Official model on the 22 calls: tokens per forward equal to the grid's cuBLASLt cells, prefill
+   311 / 172 ms (monitor / decompose) against 338 / 258 ms on the small-M kernel, replies unchanged
+   (`research/experiments/harness_replay_5090/thor/planner_calls_vl_rtx.json`). Not measured: the Spark frontend,
+   which inherits the hook, and BF16-source MTP heads (Qwen3.6), whose tail also runs through it.
+3. Done: `generate(spec_k=...)` on the image frontend (below 6 caps the prompt-length table). Official model:
+   decompose 312 ms at K = 3 against 320 ms at the table's K = 6, monitor unchanged (the table gives 3); the master
+   (grid) 218 against 241 ms. Selecting K by measured acceptance per call is not implemented.
 4. An MTP head adapted to the LoRA master (training the MTP layer on the master's own hidden states and outputs).
    Observation: tokens per forward on the recorded calls, against the official model's 2.72-3.05 (monitor).
 

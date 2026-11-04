@@ -3330,3 +3330,98 @@ Phase Status: completed
 - An EOS stop in `Qwen36VlTorchFrontendRtx.generate` (needed for serving calls of unknown length).
 - OpenAI-compatible and openpi-protocol servers around the FlashRT frontends; closed-loop runs in LIBERO or RoboLab.
 - Replaying the harness's own `vlm_calls.jsonl` once available.
+
+# Plan: image input for the 27B planner on Jetson Thor, and the planner's draft length per call
+
+Plan Status: approved
+
+## Problem
+
+Current state:
+
+- `Qwen36VlTorchFrontendRtx.__init__` builds `Qwen36TorchFrontendRtx` and `Qwen3VlVisionRtx` with its defaults (FP8
+  block-128 linears, FA2 attention). On Thor FA2 is not built and the Qwen3-VL kernel module has no FP8 block-128 ViT
+  GEMM (`qwen3_vl_thor` builds the tower with `fp8=False, attention_backend='sdpa'`).
+- `Qwen36TorchFrontendThor` subclasses the RTX frontend, forwards its constructor arguments (so
+  `extra_embedding_rows`), and reads the parent's `_rope_cos_table` / `_rope_sin_table` in its K-row forward and MTP
+  tail; `write_embedding_rows`, `set_rope_rows` and `reset_rope_rows` are inherited.
+- `generate` calls `generate_own_speculative_KN_nvfp4` with its default K = 6, i.e. the prompt-length table: K = 6 for
+  decompose (2 126-2 130 tokens), K = 3 for monitor (4 072-4 083); on the master, K = 3 decodes decompose in 218 ms
+  against 241 ms (OPT-039).
+
+Problem: recorded harness calls with images cannot run on Thor; the draft length cannot be chosen per call.
+
+Goal: (1) the image frontend on Thor with the same `generate` interface; per recorded call on Thor: ViT, prefill,
+decode and call ms, spec cycles, tokens per forward, reply equal to the RTX reply of the same model; (2) a per-call
+draft length.
+
+## Structure
+
+- `flash_rt/frontends/torch/qwen36_vl_rtx.py`, `Qwen36VlTorchFrontendRtx`: the request flow (processor, one ViT call
+  per image, embedding-row injection, MRoPE rows, speculative generation) and two construction methods that choose
+  the language model and the ViT.
+- `flash_rt/frontends/torch/qwen36_vl_thor.py` (new), `Qwen36VlTorchFrontendThor(Qwen36VlTorchFrontendRtx)`: overrides
+  the two construction methods only.
+- `research/experiments/harness_replay_5090/thor/planner_calls_vl.py` (new): the recorded calls on either frontend.
+
+## State Ownership
+
+- Embedding table, RoPE tables, KV caches: the language-model frontend (`qwen36_rtx.py`); the image frontend changes
+  them only through `write_embedding_rows`, `set_rope_rows`, `reset_rope_rows` (unchanged).
+- Draft length: requested by the caller of `generate`; the language model's `_long_tq_effective_k` decides the K used.
+
+## Interface
+
+- `Qwen36VlTorchFrontendRtx._build_language_model(self, checkpoint_path: str, device: str, max_seq: int) ->
+  Qwen36TorchFrontendRtx` and `_build_vision(self, checkpoint_path: str, device: str, config: dict) ->
+  Qwen3VlVisionRtx`, called once from `__init__`.
+- `Qwen36VlTorchFrontendRtx.generate(messages: list, *, max_new_tokens: int, spec_k: int = 6,
+  chat_template_kwargs: dict | None = None) -> VlGeneration`; `spec_k` is passed as `K`: below 6 it caps the
+  prompt-length table, 6 or more takes the table.
+- `Qwen36VlTorchFrontendThor`: `_build_language_model` returns `Qwen36TorchFrontendThor(..., quant='nvfp4',
+  extra_embedding_rows=max_image_tokens)`; `_build_vision` returns `Qwen3VlVisionRtx(..., fp8=False,
+  attention_backend='sdpa')`.
+- `python research/experiments/harness_replay_5090/thor/planner_calls_vl.py {rtx|thor}` (env `CK`, `OUT`) →
+  `$OUT/planner_calls_vl_{rtx|thor}.json`: per (call, spec_k) a `CallRecord`.
+
+## Flow
+
+`planner_calls_vl.py` builds the frontend for the given hardware from `$CK/qwen38-27b-nvfp4-official` (MTP head from
+`$CK/qwen38-27b-fp8-official`) → for each recorded call (ep0, ep43, wrist 224) and `spec_k` in (6, 3): one warm-up
+and one timed `generate` with `max_new_tokens` = the official model's reply through EOS (`cells/mtp_tail_base.json`)
+→ the timed call's stage times, spec counters and reply against the reference.
+
+## Code Mapping
+
+- `flash_rt/frontends/torch/qwen36_vl_rtx.py`: construction methods, `spec_k`.
+- `flash_rt/frontends/torch/qwen36_vl_thor.py`: the Thor class.
+- `research/experiments/harness_replay_5090/thor/planner_calls_vl.py`, `thor/planner_calls_vl_rtx.{json,log}`,
+  `smoke/vit_thor_config_check.{py,log}`.
+- Records: `docs/qwen36_vl.md`, `research/experiments/harness_replay_5090/README.md`, `THOR_CHECKLIST.md` (H3),
+  `opportunities.md` OPT-039.
+
+## Implementation Phases
+
+### Phase 1 — Construction methods and `spec_k` on the RTX image frontend
+
+Phase Status: completed
+
+- Modified files: `qwen36_vl_rtx.py`.
+- Observation: the 22 recorded calls on the 5090 with the official model: replies equal to the references at both
+  `spec_k`; effective K 6 / 3 for decompose, 3 / 3 for monitor; decode ms per call kind.
+
+### Phase 2 — Thor image frontend and the call script
+
+Phase Status: completed
+
+- Modified files: new `qwen36_vl_thor.py`, `thor/planner_calls_vl.py`, `smoke/vit_thor_config_check.py`.
+- Observation: the script's RTX run (`thor/planner_calls_vl_rtx.json`) as the Thor denominator; the Thor ViT
+  configuration against the RTX default on this GPU (merged-feature cosine).
+
+### Phase 3 — Thor run
+
+Phase Status: active
+
+- Thor row H3 in `THOR_CHECKLIST.md` (after H3a has converted the checkpoint).
+- Observation: the class names the script prints; per call kind ViT / prefill / decode / call ms, tokens per forward
+  and same reply against `thor/planner_calls_vl_rtx.json`; peak memory.

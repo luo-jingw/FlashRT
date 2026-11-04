@@ -1,4 +1,4 @@
-# Image input for Qwen3.6 / Qwen3.8-27B NVFP4 on RTX 5090
+# Image input for Qwen3.6 / Qwen3.8-27B NVFP4 on RTX 5090 and Thor
 
 `Qwen36VlTorchFrontendRtx` (`flash_rt/frontends/torch/qwen36_vl_rtx.py`) adds image input to the Qwen3.5-architecture
 27B models (`Qwen3_5ForConditionalGeneration`: Qwen3.6-27B, Qwen3.8-27B and fine-tunes of them) on the NVFP4
@@ -18,6 +18,26 @@ language-model path of `Qwen36TorchFrontendRtx`. Video input is not supported.
   graphs included, reads these rows by cache position. Rows come from `_qwen36_mrope.text_rope_rows`, which equals
   transformers' `Qwen3_5TextRotaryEmbedding` exactly and the 1-D table bit for bit when the three axes are equal.
 - The language model's forward code is unchanged.
+- Draft length: `generate(..., spec_k=K)` passes K to the language model's speculative generation; K below 6 caps its
+  prompt-length table (`_long_tq_effective_k`), 6 (the default) or more takes the table. On 22 recorded VoLoAgent
+  harness calls (official Qwen3.8-27B with its MTP head; `research/experiments/harness_replay_5090/thor/
+  planner_calls_vl_rtx.json`), the table gives K = 6 for decompose (2 130 tokens) and K = 3 for monitor (4 076):
+  decompose decode 320 ms at K = 6 and 312 ms at K = 3, monitor 652 ms at both; replies identical.
+
+## Thor (SM110)
+
+`Qwen36VlTorchFrontendThor` (`flash_rt/frontends/torch/qwen36_vl_thor.py`) runs the same request flow with two
+different components, chosen in the construction methods `_build_language_model` and `_build_vision`:
+
+- language model `Qwen36TorchFrontendThor`, which subclasses the RTX frontend and keeps its embedding table, RoPE
+  tables and their write / reset methods;
+- ViT `Qwen3VlVisionRtx(fp8=False, attention_backend='sdpa')`: BF16 linears and SDPA attention (the Thor Qwen3-VL
+  module has no FP8 block-128 ViT GEMM; FA2 is not built on Thor).
+
+On the RTX 5090, this ViT configuration against the FP8 / FA2 default on the three images of a recorded decompose call:
+merged-feature cosine mean 0.9986-0.9993 (min 0.962-0.996), 1.2-1.7x the time per image
+(`research/experiments/harness_replay_5090/smoke/vit_thor_config_check.log`; on SM120 its linears run
+`w16a16_gemm_sm120_bf16`, on Thor the Qwen3-VL module's cuBLASLt GEMM). Not yet run on Thor.
 
 ## Requirements
 

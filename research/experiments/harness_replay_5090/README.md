@@ -117,9 +117,13 @@ The full grid (all K, both fc kernels, synthetic prompts) is `mtp_tail_table.md`
   calls); its replies differ from the master's, so this does not isolate the head.
 - With the tail, K = 3 is the fastest K for both call kinds of the master (monitor 511 / 468 ms, decompose 218 ms);
   K = 5 / 7 accept more but cost more per cycle; the table's K = 6 for decompose gives 241 ms.
-- Tail fc: the frontend's small-M kernel costs 21 / 84 ms at 512 / 2 048 rows (cuBLASLt 0.4 / 1.2 ms); tokens per
-  forward differ by at most 2 % between the two kernels (monitor 2.66 / 2.60), and tail + decode is shorter with
-  cuBLASLt (decompose 302 -> 219 ms). The frontend default is the small-M kernel (OPT-039).
+- Tail fc: the shared small-M kernel costs 21 / 84 ms at 512 / 2 048 rows (whole tail prefill with cuBLASLt 0.4 /
+  1.2 ms); tokens per forward differ by at most 2 % between the two kernels (monitor 2.66 / 2.60), and tail + decode
+  is shorter with cuBLASLt (decompose 302 -> 219 ms). The RTX frontend's tail fc is cuBLASLt with the heuristic's
+  first algorithm (`max_algos=1`; the fc alone 0.24 / 0.97 ms at 512 / 2 048 rows, `smoke/mtp_tail_fc_default.log`);
+  on the official model it reproduces the grid's cuBLASLt cells (tokens per forward 2.72 monitor, 2.92 / 3.45
+  decompose at K = 3 / 6; prefill 311 / 172 ms against 338 / 258 ms on the small-M kernel;
+  `thor/planner_calls_vl_rtx.json`).
 - The tail's NVFP4 k/v projections use the activation scratch of `self.max_seq` rows (2 048 in long-context mode), in
   chunks of that many rows; an unchunked tail above 2 048 rows wrote past the scratch and lowered every later call's
   acceptance in the process (`smoke/mtp_state_bisect.log` against `smoke/mtp_state_bisect_fixed.log`).
@@ -146,11 +150,30 @@ documentation; the same code runs on the Thor (`Qwen36TorchFrontendThor`, Thor r
 (`thor/planner_call_shapes_rtx.{json,log}`). RTX 5090: prefill 256 / 334 / 475 ms, decode 353 / 487 / 520 ms,
 24.4-27.2 ms per cycle. ViT time and image content are not part of it.
 
+## The official planner with images on the Thor image frontend (`thor/planner_calls_vl.py`)
+
+The official Qwen3.8-27B NVFP4 with its MTP head on the 22 recorded calls of ep0 and ep43 (wrist 224), each decoded
+through the model's own EOS (lengths and reference replies from `cells/mtp_tail_base.json`), at `spec_k` 6 (the
+prompt-length table) and 3; the same code runs on the Thor with `Qwen36VlTorchFrontendThor` (Thor row H3) and here
+with `Qwen36VlTorchFrontendRtx` (`thor/planner_calls_vl_rtx.{json,log}`). RTX 5090, per call:
+
+| call | spec_k (effective K) | tokens per forward | ViT ms | prefill ms | decode ms | wall ms | first call (warm-up) wall ms | same reply |
+|---|---|---|---|---|---|---|---|---|
+| decompose x 2 | 6 (6) | 3.45 | 41 | 172 | 320 | 542 | 1 728 | 2/2 |
+| decompose x 2 | 3 (3) | 2.92 | 41 | 172 | 312 | 535 | 1 251 | 2/2 |
+| monitor x 20 | 6 (3) | 2.72 | 81 | 311 | 652 | 1 057 | 1 410 | 20/20 |
+| monitor x 20 | 3 (3) | 2.72 | 81 | 311 | 652 | 1 055 | 1 055 | 20/20 |
+
+The first-call column of `spec_k` 6 includes the graph captures of each new prompt length (it runs first); peak
+allocated 22.1 GiB. The ViT configuration of the Thor frontend (BF16 linears, SDPA) against the FP8 / FA2 default on
+this GPU: merged-feature cosine mean 0.9986-0.9993 (`smoke/vit_thor_config_check.log`).
+
 ## Files
 
 `extract_prompts.py`, `prompts.json`, `volo_calls.py`, `record_calls.py` (recording), `planner_replay.py`,
 `executor_imagewam.py`, `replay_bench.py`, `run_replay.sh` (replay grid and instruction switch), `replay_table.py`,
 `first_call_check.py`, `prefill_mode_check.py`, `mtp_speedup.py`, `mtp_speedup_table.py`, `mtp_tail_model.py`,
-`mtp_tail_model_table.py`, `thor/planner_call_shapes.py`; recorded calls in `calls/`,
+`mtp_tail_model_table.py`, `thor/planner_call_shapes.py`, `thor/planner_calls_vl.py`, `smoke/mtp_tail_fc_default.py`,
+`smoke/vit_thor_config_check.py`; recorded calls in `calls/`,
 results in `cells/` and `smoke/`, logs `record.log`, `replay.log`, `replay_realtime.log`, `mtp_speedup.log`,
 `mtp_tail_{master,base}.log`.
