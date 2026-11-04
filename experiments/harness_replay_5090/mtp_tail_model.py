@@ -4,9 +4,9 @@ Grid (one process = one model) over the synthetic planner prompts (SYNTH_TARGETS
 harness calls (CALLS_JSONL): every (tail, fc) in TAIL_CONFIGS x K in KS.
   tail = FLASHRT_QWEN36_LONG_MTP_PREFILL_TAIL: "0" (the drafter starts without prompt context), "auto" (the
          frontend's row table), "full" (every prompt row);
-  fc   = the kernel of the tail's fc projection (rows x 10240 -> 5120): "warp" (the frontend's shared small-M kernel,
-         same fma order as the M = 1 path), "cublaslt" (`bf16_matmul_cublaslt_bf16`, set per instance on
-         `_mtp_tail_fc_matmul`);
+  fc   = the kernel of the tail's fc projection (rows x 10240 -> 5120), set per instance on `_mtp_tail_fc_matmul`:
+         "warp" (the shared small-M kernel `bf16_matmul_qwen36_bf16`, same fma order as the M = 1 path), "cublaslt"
+         (`bf16_matmul_cublaslt_bf16` with the 8-candidate autotune);
   K    = FLASHRT_QWEN36_TQ_SPEC_K as in mtp_speedup.py ("table" = the frontend's default plus adaptive K).
 
 Decode budget: a recorded call is first decoded once (tail 0, K table) with the call's max_tokens; the model's own
@@ -69,8 +69,15 @@ class CellRecord:
     same_as_reference: bool
 
 
+def warp_fc(x_ptr: int, w_ptr: int, out_ptr: int, rows: int, hidden: int, stream: int) -> None:
+    fvk.bf16_matmul_qwen36_bf16(x_ptr, w_ptr, out_ptr, rows, hidden, hidden * 2, stream)
+
+
 def cublaslt_fc(x_ptr: int, w_ptr: int, out_ptr: int, rows: int, hidden: int, stream: int) -> None:
-    fvk.bf16_matmul_cublaslt_bf16(x_ptr, w_ptr, out_ptr, rows, hidden, hidden * 2, stream)
+    fvk.bf16_matmul_cublaslt_bf16(x_ptr, w_ptr, out_ptr, rows, hidden, hidden * 2, stream, 8)
+
+
+FC = {"-": warp_fc, "warp": warp_fc, "cublaslt": cublaslt_fc}
 
 
 class TailBench(MtpBench):
@@ -98,8 +105,7 @@ class TailBench(MtpBench):
             tail_s.append(time.perf_counter() - t0)
             return out
 
-        if fc == "cublaslt":
-            self.llm._mtp_tail_fc_matmul = cublaslt_fc
+        self.llm._mtp_tail_fc_matmul = FC[fc]
         try:
             self.generate(spec)
             self.llm._prefill_mtp_tail_kv_nvfp4 = timed_tail
@@ -108,8 +114,7 @@ class TailBench(MtpBench):
             finally:
                 del self.llm._prefill_mtp_tail_kv_nvfp4
         finally:
-            if fc == "cublaslt":
-                del self.llm._mtp_tail_fc_matmul
+            del self.llm._mtp_tail_fc_matmul
         L = r.prompt_len
         eff = self.llm._long_tq_effective_k(L, 6, spec.max_new_tokens) if k == "table" else int(k)
         rows = min(self.llm._long_mtp_prefill_tail_for_prompt(L), L - 1)

@@ -1,0 +1,4 @@
+NVIDIA GeForce RTX 5090
+rows 512: warp 20.961 ms, cublaslt_algos1 0.239 ms, cublaslt_autotune8 0.239 ms
+rows 2048: warp 84.370 ms, cublaslt_algos1 0.968 ms, cublaslt_autotune8 0.951 ms
+rows 4071: warp 168.104 ms, cublaslt_algos1 1.973 ms, cublaslt_autotune8 1.924 ms
