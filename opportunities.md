@@ -1712,34 +1712,51 @@ Candidate 1 experiment 1 → candidate 1 experiment 2 → candidates 2 and 3.
 
 # OPT-039: MTP speculative decode on the planner (LoRA-merged Qwen3.8-27B master, RTX 5090)
 
-Status: proposed, not started.
+Status: candidate 1 done (the RTX long route runs the MTP prompt-tail prefill for FP8-source heads); candidates 2-4
+proposed.
 
 Area: `flash_rt/frontends/torch/qwen36_rtx.py` (`_generate_long_ctx_speculative_KN_nvfp4`,
-`_long_tq_effective_k`, `_long_mtp_prefill_tail_for_prompt`, `_prefill_mtp_tail_kv_nvfp4`),
-`flash_rt/frontends/torch/_qwen36_rtx_nvfp4_weights.py` (`extract_mtp_weights_nvfp4`).
+`_long_tq_effective_k`, `_long_mtp_prefill_tail_for_prompt`, `_prefill_mtp_tail_kv_nvfp4`,
+`_mtp_tail_fc_matmul`), `flash_rt/frontends/torch/_qwen36_rtx_nvfp4_weights.py` (`extract_mtp_weights_nvfp4`).
 
-## Observation (`research/experiments/harness_replay_5090/cells/mtp_speedup.json`)
+## Observation
 
-- The merged master checkpoint has no MTP tensors (its config still declares one MTP layer); the drafter is the MTP
-  head of the official Qwen3.8-27B-FP8 release, trained against the base model.
-- One main-model forward costs 19.4-19.9 ms up to 8 k context and 22.4 ms at 16 k, nearly independent of the number
-  of verified tokens (Kv = 1: 19.9 ms, Kv = 8: 23.7 ms at 4 k); one MTP draft step costs 0.97 ms.
-- Recorded harness monitor calls (20 calls, 4 079 prompt tokens): 2.13 tokens per main-model forward at K = 3,
-  decode 1.74x faster than a single-token loop costed from the Kv = 1 forward; K = 5 / 7 accept slightly more but
-  are slower. Decompose calls (2 calls, 21-26 tokens): 1.52 tokens per forward at the table's K = 6 (1.10x); K = 1 is
-  fastest there (1.34x). Synthetic planning prompts: 2.5-2.9 tokens per forward, 1.95-2.15x.
-- On RTX the FP8-source MTP loader keeps no BF16 projection copies, so `_long_mtp_prefill_tail_for_prompt` returns 0
-  and the drafter starts each request without any prompt context (Spark and Thor have a quantized tail prefill).
+`research/experiments/harness_replay_5090/cells/mtp_tail_{master,base}.json`, 22 recorded harness calls (ep0, ep43,
+wrist 224), each model decoding to its own EOS; tokens per main-model forward / decode ms per call, K = 3, tail fc on
+cuBLASLt:
+
+| main model | MTP prompt tail | monitor x 20 | decompose x 2 |
+|---|---|---|---|
+| LoRA-merged master | off | 2.13 / 623 | 1.52 / 374 |
+| LoRA-merged master | frontend table (512 / 2 048 rows) | 2.60 / 511 | 2.61 / 218 |
+| LoRA-merged master | whole prompt | 2.85 / 468 | 2.47 / 230 |
+| official Qwen3.8-27B | off | 2.46 / 726 | 2.30 / 398 |
+| official Qwen3.8-27B | frontend table | 2.72 / 656 | 2.92 / 314 |
+| official Qwen3.8-27B | whole prompt | 3.05 / 587 | 3.04 / 302 |
+
+- The merged checkpoint has no MTP tensors; the drafter is the official Qwen3.8-27B-FP8 MTP head, trained against the
+  base model. The official model decodes longer replies (monitor median 72 tokens, master 52), so the two rows of a
+  tail setting are not a controlled comparison of the head alone.
+- The prompt tail is the larger factor for the master (monitor +22 % / +34 % tokens per forward, decompose +72 %);
+  the official model with its matching head is 5-15 % higher on monitor at the same tail setting.
+- With the tail, K = 3 is the fastest K on both call kinds of the master; K = 5 / 7 accept more but cost more per
+  cycle. The prompt-length table gives K = 6 for decompose (241 ms against 218 ms at K = 3).
+- The tail's fc projection (rows x 10 240 -> 5 120) on the frontend's shared small-M kernel costs 21 / 84 ms at 512 /
+  2 048 rows; `bf16_matmul_cublaslt_bf16` costs 0.4 / 1.2 ms. Tokens per forward differ by at most 2 % between the
+  two (monitor 2.66 / 2.60), and tail + decode is shorter with cuBLASLt (decompose 302 -> 219 ms).
+- Single-token decode estimate (Kv = 1 forward graph x decoded tokens): monitor speedup 1.74x without the tail,
+  2.12x / 2.31x with the table / whole-prompt tail.
 
 ## Candidates
 
-1. MTP prompt-tail prefill on RTX for the FP8-source head (quantized tail prefill as on Spark / Thor, or BF16 copies
-   of the seven MTP projections). Observation: accepted drafts per cycle and decode ms on the recorded calls; prefill
-   ms added by the tail.
-2. Draft length by call kind or by measured acceptance instead of the prompt-length table (decompose prefers K = 1,
-   monitor K = 3 in this workload). Observation: decode ms per call kind.
-3. An MTP head adapted to the LoRA master (training the MTP layer on the master's own hidden states and outputs).
-   Observation: tokens per forward on the recorded calls.
+1. Done: MTP prompt-tail K/V prefill for the FP8-source head on RTX (NVFP4 k/v projections, chunked to the
+   activation scratch's 2 048 rows).
+2. The tail fc projection on cuBLASLt for multi-row tails (the Thor override keeps its own M-tile kernel).
+   Observation: tail ms and tokens per forward on the recorded calls; Spark's acceptance with the same change.
+3. Draft length by call kind or by measured acceptance instead of the prompt-length table (K = 3 for both kinds in
+   this workload). Observation: decode ms per call kind.
+4. An MTP head adapted to the LoRA master (training the MTP layer on the master's own hidden states and outputs).
+   Observation: tokens per forward on the recorded calls, against the official model's 2.72-3.05 (monitor).
 
 # OPT-040: Serving the planner at the VoLoAgent harness's call pattern (RTX 5090)
 
@@ -1757,7 +1774,10 @@ Measurements: `research/experiments/harness_replay_5090/README.md`.
   replay cell are cold (median 5-6 graphs, +0.2 s); the first monitor of a process captures 56-59 graphs and takes
   3.3-3.8 s, which sets the maximum decision latency (52-69 env steps).
 - A new subgoal needs the executor's Qwen3-4B text encoder (`set_prompt` 30 ms, 240 ms at a new context length),
-  but the 7.6 GB encoder does not fit next to the planner and the slimmed executor (2.6-3.0 GB free).
+  but the 7.6 GB encoder does not fit next to the planner and the slimmed executor (2.6-3.0 GB free). On the
+  Jetson Thor (128 GB unified memory, 80 GB available) the encoder stays resident: the executor with the encoder and
+  its FP16 source weights takes 23.06 GB, and `set_prompt` costs 110 ms (733-745 ms at a new context length, 11.9 s
+  for the first call of a process; THOR_STATUS_SUMMARY.md round `1104_h`, H2).
 
 ## Candidates
 
