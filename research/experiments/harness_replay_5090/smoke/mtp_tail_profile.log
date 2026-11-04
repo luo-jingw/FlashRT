@@ -1,0 +1,44 @@
+USDT:2026-11-04 01:17:42 2109441:2109441 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-11-04 01:17:42 2109441:2109441 SyncActivityProfilerHandler.cpp:46] profiler_stop
+USDT:2026-11-04 01:17:43 2109441:2109441 SyncActivityProfilerHandler.cpp:39] profiler_start
+USDT:2026-11-04 01:17:43 2109441:2109441 SyncActivityProfilerHandler.cpp:46] profiler_stop
+rows 512
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                                  Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+flash_rt::kernels::(anonymous namespace)::bf16_matmul_warp_kernel_g...         0.00%       0.000us         0.00%       0.000us       0.000us      20.520ms        99.55%      20.520ms      20.520ms             1  
+_ZN7cutlass13device_kernelINS_4gemm6kernel13GemmUniversalIN4cute5tu...         0.00%       0.000us         0.00%       0.000us       0.000us      38.400us         0.19%      38.400us      19.200us             2  
+void rms_norm_kernel<__nv_bfloat16>(__nv_bfloat16 const*, __nv_bflo...         0.00%       0.000us         0.00%       0.000us       0.000us      22.623us         0.11%      22.623us       5.656us             4  
+flash_rt::kernels::(anonymous namespace)::embedding_lookup_bf16_ker...         0.00%       0.000us         0.00%       0.000us       0.000us      11.969us         0.06%      11.969us      11.969us             1  
+quantize_bf16_to_nvfp4_swizzled_kernel(__nv_bfloat16 const*, unsign...         0.00%       0.000us         0.00%       0.000us       0.000us       8.672us         0.04%       8.672us       8.672us             1  
+concat2_bf16_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, __n...         0.00%       0.000us         0.00%       0.000us       0.000us       7.616us         0.04%       7.616us       7.616us             1  
+flash_rt::kernels::(anonymous namespace)::partial_rope_qk_bf16_kern...         0.00%       0.000us         0.00%       0.000us       0.000us       3.200us         0.02%       3.200us       3.200us             1  
+                                        Memcpy DtoD (Device -> Device)         0.00%       0.000us         0.00%       0.000us       0.000us       1.312us         0.01%       1.312us       1.312us             1  
+                                               Activity Buffer Request         7.95%       1.776ms         7.95%       1.776ms       1.776ms       0.000us         0.00%       0.000us       0.000us             1  
+                                                      cudaLaunchKernel         0.33%      74.204us         0.33%      74.204us       6.746us       0.000us         0.00%       0.000us       0.000us            11  
+                                                cudaDeviceGetAttribute         0.28%      63.117us         0.28%      63.117us      31.558us       0.000us         0.00%       0.000us       0.000us             2  
+                                      cudaGetDriverEntryPointByVersion         0.01%       2.830us         0.01%       2.830us       0.236us       0.000us         0.00%       0.000us       0.000us            12  
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 22.343ms
+Self CUDA time total: 20.614ms
+
+rows 2048
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                                  Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+flash_rt::kernels::(anonymous namespace)::bf16_matmul_warp_kernel_g...         0.00%       0.000us         0.00%       0.000us       0.000us      82.392ms        99.72%      82.392ms      82.392ms             1  
+void rms_norm_kernel<__nv_bfloat16>(__nv_bfloat16 const*, __nv_bflo...         0.00%       0.000us         0.00%       0.000us       0.000us      66.177us         0.08%      66.177us      16.544us             4  
+flash_rt::kernels::(anonymous namespace)::embedding_lookup_bf16_ker...         0.00%       0.000us         0.00%       0.000us       0.000us      53.217us         0.06%      53.217us      53.217us             1  
+_ZN7cutlass13device_kernelINS_4gemm6kernel13GemmUniversalIN4cute5tu...         0.00%       0.000us         0.00%       0.000us       0.000us      43.167us         0.05%      43.167us      21.584us             2  
+concat2_bf16_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, __n...         0.00%       0.000us         0.00%       0.000us       0.000us      30.464us         0.04%      30.464us      30.464us             1  
+quantize_bf16_to_nvfp4_swizzled_kernel(__nv_bfloat16 const*, unsign...         0.00%       0.000us         0.00%       0.000us       0.000us      23.616us         0.03%      23.616us      23.616us             1  
+flash_rt::kernels::(anonymous namespace)::partial_rope_qk_bf16_kern...         0.00%       0.000us         0.00%       0.000us       0.000us       8.960us         0.01%       8.960us       8.960us             1  
+                                        Memcpy DtoD (Device -> Device)         0.00%       0.000us         0.00%       0.000us       0.000us       2.336us         0.00%       2.336us       2.336us             1  
+                                               Activity Buffer Request         1.94%       1.635ms         1.94%       1.635ms       1.635ms       0.000us         0.00%       0.000us       0.000us             1  
+                                                      cudaLaunchKernel         0.07%      61.964us         0.07%      61.964us       5.633us       0.000us         0.00%       0.000us       0.000us            11  
+                                                cudaDeviceGetAttribute         0.00%       0.678us         0.00%       0.678us       0.339us       0.000us         0.00%       0.000us       0.000us             2  
+                                      cudaGetDriverEntryPointByVersion         0.00%       1.994us         0.00%       1.994us       0.166us       0.000us         0.00%       0.000us       0.000us            12  
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 84.220ms
+Self CUDA time total: 82.620ms
+

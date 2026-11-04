@@ -78,7 +78,15 @@ contains `mtp.safetensors` is loaded separately via the
 converted FP8 → BF16 → NVFP4 once at load (no FP8 in the hot path).
 BF16/native MTP checkpoints keep BF16 projection weights by default for
 better drafter alignment; set `FLASHRT_QWEN36_MTP_KEEP_BF16=0` to force
-the lower-memory NVFP4-converted path. Without the env var, MTP is None
+the lower-memory NVFP4-converted path. On the long-context route the
+drafter's K/V cache is filled with the prompt's last rows after the
+prefill (`FLASHRT_QWEN36_LONG_MTP_PREFILL_TAIL`), using the BF16 k/v
+projections when the head keeps them and the NVFP4-converted ones (in
+chunks of the activation scratch's `max_seq` rows) for an FP8-source
+head. On recorded Qwen3.8-27B planner calls (RTX 5090, K = 3) the tail
+raises the tokens per main-model forward from 2.13 to 2.60 (monitor) and
+from 1.52 to 2.61 (decompose); see
+`research/experiments/harness_replay_5090/README.md`. Without the env var, MTP is None
 and speculative decode is disabled (pure single-token decode still
 works at ~36 tok/s).
 
