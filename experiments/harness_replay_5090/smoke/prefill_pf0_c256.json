@@ -1,0 +1,116 @@
+{
+ "prefill_graph": "0",
+ "prefill_chunk": "256",
+ "rows": [
+  {
+   "file": "ep0_wrist224.jsonl",
+   "kind": "decompose",
+   "step": 0,
+   "same_reply": true,
+   "output_tokens": 21,
+   "recorded_tokens": 21,
+   "text": "{\"subgoals\":[\"turn on the stove and put the moka pot on it\"],\"ordered\":false}",
+   "recorded_text": "{\"subgoals\":[\"turn on the stove and put the moka pot on it\"],\"ordered\":false}"
+  },
+  {
+   "file": "ep0_wrist224.jsonl",
+   "kind": "monitor",
+   "step": 80,
+   "same_reply": false,
+   "output_tokens": 58,
+   "recorded_tokens": 63,
+   "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The moka pot is still on the table near the black frying pan, not on the grey stove burner, and the stove does not appear turned on yet. The robot is positioned near the stove and can continue the task.\"}",
+   "recorded_text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the round burner and black knob is visible, and the moka pot is still on the table near the frying pan rather than on the stove. The robot appears to be approaching the stove area, so the subgoal is still achievable.\"}"
+  },
+  {
+   "file": "ep0_wrist224.jsonl",
+   "kind": "monitor",
+   "step": 160,
+   "same_reply": false,
+   "output_tokens": 52,
+   "recorded_tokens": 51,
+   "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is positioned at the black stove knob and appears to be attempting to turn on the stove, but the moka pot is still on the table and not yet placed on the stove.\"}",
+   "recorded_text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is positioned at the black stove knob and appears to be attempting to turn on the stove, but the moka pot is still on the table and not yet on the stove.\"}"
+  },
+  {
+   "file": "ep0_wrist224.jsonl",
+   "kind": "monitor",
+   "step": 240,
+   "same_reply": false,
+   "output_tokens": 48,
+   "recorded_tokens": 47,
+   "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The robot is interacting with the black stove knob, which is part of turning on the stove, but the moka pot is still on the table and not yet placed on the stove",
+   "recorded_text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is positioned on the black stove knob and appears to be turning it, but the moka pot is still on the table and not yet on the stove.\"}"
+  },
+  {
+   "file": "ep0_wrist224.jsonl",
+   "kind": "monitor",
+   "step": 320,
+   "same_reply": false,
+   "output_tokens": 50,
+   "recorded_tokens": 50,
+   "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the red spiral burner is on, but the silver moka pot is still on the table next to the black frying pan and has not been placed on the stove yet.\"}",
+   "recorded_text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the red spiral burner is visibly on, but the moka pot is still on the table next to the black frying pan and has not been placed on the stove yet.\"}"
+  },
+  {
+   "file": "ep0_wrist224.jsonl",
+   "kind": "monitor",
+   "step": 400,
+   "same_reply": true,
+   "output_tokens": 50,
+   "recorded_tokens": 50,
+   "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the red spiral burner appears turned on, but the moka pot is still on the table next to the black frying pan and has not been placed on the stove yet.\"}",
+   "recorded_text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the red spiral burner appears turned on, but the moka pot is still on the table next to the black frying pan and has not been placed on the stove yet.\"}"
+  },
+  {
+   "file": "ep0_wrist224.jsonl",
+   "kind": "monitor",
+   "step": 480,
+   "same_reply": false,
+   "output_tokens": 49,
+   "recorded_tokens": 49,
+   "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the red spiral burner appears turned on, but the moka pot is still on the table near the black frying pan and has not been placed on the stove yet.\"}",
+   "recorded_text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the red spiral burner appears turned on, but the moka pot is still on the table near the black frying pan and has not yet been placed on the stove.\"}"
+  },
+  {
+   "file": "ep0_wrist224.jsonl",
+   "kind": "monitor",
+   "step": 560,
+   "same_reply": true,
+   "output_tokens": 49,
+   "recorded_tokens": 49,
+   "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the red spiral burner appears turned on, but the moka pot is still on the table near the black frying pan and has not been placed on the stove yet.\"}",
+   "recorded_text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the red spiral burner appears turned on, but the moka pot is still on the table near the black frying pan and has not been placed on the stove yet.\"}"
+  },
+  {
+   "file": "ep0_wrist224.jsonl",
+   "kind": "monitor",
+   "step": 640,
+   "same_reply": false,
+   "output_tokens": 47,
+   "recorded_tokens": 52,
+   "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the red spiral burner is visibly on, but the moka pot is still on the table near the black frying pan and not yet placed on the stove.\"}",
+   "recorded_text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove burner with red rings is visibly on, and the robot is positioned at the silver moka pot near the black frying pan, but the moka pot is not yet on the stove.\"}"
+  },
+  {
+   "file": "ep0_wrist224.jsonl",
+   "kind": "monitor",
+   "step": 720,
+   "same_reply": false,
+   "output_tokens": 38,
+   "recorded_tokens": 58,
+   "text": "{\"status\":\"complete\",\"action\":\"next\",\"reason\":\"The moka pot is placed on the stove burner, and the burner shows a red glowing ring indicating the stove is turned on.\"}",
+   "recorded_text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The moka pot is on the grey stove with the red spiral burner, and the robot is positioned at the moka pot/stove area, but there is no clear visual confirmation that the stove has been turned on yet.\"}"
+  },
+  {
+   "file": "ep0_wrist224.jsonl",
+   "kind": "monitor",
+   "step": 800,
+   "same_reply": false,
+   "output_tokens": 53,
+   "recorded_tokens": 53,
+   "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The moka pot is positioned on the grey stove burner and the red burner ring appears active, but the gripper is still at the moka pot, so the placement is not clearly finished yet.\"}",
+   "recorded_text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The moka pot is positioned on the stove burner and the gripper is still near it, but there is no clear visual confirmation that the stove has been turned on or that the placement is finalized.\"}"
+  }
+ ]
+}
