@@ -1,0 +1,17 @@
+probe after start: cycles 29, accepted 36, same True
+probe after synth:0 tail=0/-: cycles 29, accepted 36, same True
+probe after synth:0 tail=auto/cublaslt: cycles 29, accepted 36, same True
+probe after synth:0 tail=full/cublaslt: cycles 29, accepted 36, same True
+probe after synth:0 tail=auto/warp: cycles 29, accepted 36, same True
+probe after synth:4096 tail=0/-: cycles 29, accepted 36, same True
+probe after synth:4096 tail=auto/cublaslt: cycles 29, accepted 36, same True
+probe after synth:4096 tail=full/cublaslt: cycles 29, accepted 36, same True
+probe after synth:4096 tail=auto/warp: cycles 29, accepted 36, same True
+probe after synth:8192 tail=0/-: cycles 29, accepted 36, same True
+probe after synth:8192 tail=auto/cublaslt: cycles 29, accepted 36, same True
+probe after synth:8192 tail=full/cublaslt: cycles 33, accepted 32, same True
+probe after synth:8192 tail=auto/warp: cycles 33, accepted 32, same True
+probe after synth:16384 tail=0/-: cycles 33, accepted 32, same True
+probe after synth:16384 tail=auto/cublaslt: cycles 33, accepted 32, same True
+probe after synth:16384 tail=full/cublaslt: cycles 48, accepted 15, same True
+probe after synth:16384 tail=auto/warp: cycles 48, accepted 15, same True

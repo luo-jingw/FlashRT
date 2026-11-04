@@ -4247,13 +4247,18 @@ class Qwen36TorchFrontendRtx:
     def _prefill_mtp_tail_kv_nvfp4(
             self, prev_h_rows, token_ids, pos_start: int,
             cache_base_pos: int) -> bool:
-        """Populate MTP prompt-tail K/V cache without full MTP decode."""
+        """Populate MTP prompt-tail K/V cache without full MTP decode.
+
+        One batched pass over the tail rows. The k/v projections use the
+        BF16 shadow weights when the MTP head keeps them (BF16-source
+        head), otherwise the packed NVFP4 weights (FP8-source head).
+        """
         import torch
 
         from flash_rt import flash_rt_kernels as fvk
 
         mtp = self._weights.ptrs.get('mtp')
-        if mtp is None or 'k_proj_w_bf16' not in mtp:
+        if mtp is None:
             return False
         rows = int(token_ids.numel())
         if rows <= 0:
@@ -4302,14 +4307,44 @@ class Qwen36TorchFrontendRtx:
             x_norm.data_ptr(), rows, hidden, eps, s,
         )
 
-        fvk.bf16_matmul_qwen36_bf16(
-            x_norm.data_ptr(), int(mtp['k_proj_w_bf16']),
-            k_proj.data_ptr(), rows, 4 * 256, hidden, s,
-        )
-        fvk.bf16_matmul_qwen36_bf16(
-            x_norm.data_ptr(), int(mtp['v_proj_w_bf16']),
-            v_proj.data_ptr(), rows, 4 * 256, hidden, s,
-        )
+        if 'k_proj_w_bf16' in mtp:
+            fvk.bf16_matmul_qwen36_bf16(
+                x_norm.data_ptr(), int(mtp['k_proj_w_bf16']),
+                k_proj.data_ptr(), rows, 4 * 256, hidden, s,
+            )
+            fvk.bf16_matmul_qwen36_bf16(
+                x_norm.data_ptr(), int(mtp['v_proj_w_bf16']),
+                v_proj.data_ptr(), rows, 4 * 256, hidden, s,
+            )
+        else:
+            # The NVFP4 activation scratch holds ``self.max_seq`` rows (the
+            # BF16 working window in long-ctx mode, 2048 by default), fewer
+            # than a long prompt tail: quantize and project in chunks of
+            # that many rows.
+            ap_5120, sf_5120, _ = self._nvfp4_scratch[(1024, 5120)]
+            step = int(ap_5120.shape[0])
+            for r0 in range(0, rows, step):
+                n = min(step, rows - r0)
+                fvk.quantize_bf16_to_nvfp4_swizzled(
+                    x_norm[r0:r0 + n].data_ptr(), ap_5120.data_ptr(),
+                    sf_5120.data_ptr(), n, hidden, s,
+                )
+                fvk.fp4_w4a16_gemm_sm120_bf16out(
+                    ap_5120.data_ptr(), int(mtp['k_proj_packed']),
+                    k_proj[r0:r0 + n].data_ptr(),
+                    n, 4 * 256, hidden,
+                    sf_5120.data_ptr(), int(mtp['k_proj_sf']),
+                    float(mtp['k_proj_alpha']),
+                    s,
+                )
+                fvk.fp4_w4a16_gemm_sm120_bf16out(
+                    ap_5120.data_ptr(), int(mtp['v_proj_packed']),
+                    v_proj[r0:r0 + n].data_ptr(),
+                    n, 4 * 256, hidden,
+                    sf_5120.data_ptr(), int(mtp['v_proj_sf']),
+                    float(mtp['v_proj_alpha']),
+                    s,
+                )
         fvk.rms_norm(
             k_proj.view(rows * 4, 256).data_ptr(),
             int(mtp['k_norm_eff_w']),
@@ -8833,7 +8868,8 @@ class Qwen36TorchFrontendRtx:
         if raw.lower() != 'auto':
             return max(0, int(raw))
         mtp = self._weights.ptrs.get('mtp') if self._weights else None
-        if not isinstance(mtp, dict) or 'k_proj_w_bf16' not in mtp:
+        if not isinstance(mtp, dict) or not (
+                'k_proj_w_bf16' in mtp or 'k_proj_packed' in mtp):
             return 0
         prompt_len = int(prompt_len)
         if prompt_len >= 128 and prompt_len < 512:
