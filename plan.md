@@ -3176,3 +3176,157 @@ call of the window (`research/experiments/colocation_qwen27b_5090/README.md`, "H
   off, `FLASHRT_QWEN36_TQ_PREFILL_GRAPH=1` in both contexts except `coop` (eager 256-token chunks; prio and green25
   long are the Phase 2 windows): executor p50 / p99 / miss, planner call ms and output CRC, against the monkeypatched
   cells.
+
+# Plan: replay of the VoLoAgent Full-loop master workload with the ImageWAM executor (RTX 5090)
+
+Plan Status: completed
+
+## Problem
+
+Current state:
+
+- Co-location has been measured under a stress workload only: executor every 50 ms, planner back-to-back with a
+  602 / 8 110-token prompt and 64 output tokens (`research/experiments/colocation_qwen27b_5090/`).
+- The agent harness in `/home/jingwu/workspace/bear/code` runs VoLoAgent's Full loop (`scripts/volo_tool/eval_agent.sh`:
+  `--mode subgoal --failure-monitor vlm --recovery-mode replan_tools --check-interval 80 --use-front-camera`):
+  - the evaluation client executes 8 actions per policy query at 15 Hz (`scripts/volo_tool/robolab_run.py:193`), so
+    one query every 533 ms of sim time;
+  - the proxy runs the master call synchronously before the policy query
+    (`third_party/VoLoAgent/vlm_orchestrator/proxy.py:614`, `:828`); the sim waits;
+  - master calls: one subgoal decomposition at episode start; a monitoring decision every 80 env steps
+    (`failure_handlers/vlm.py:430-439`); a replan right after a `replan` decision or a `next` on the last subgoal, at
+    most 3 per episode (`strategies/subgoal_base.py:56`, `:1222-1285`); each call is one system and one user message,
+    no history, temperature 0, `max_tokens` 512 (replan 1024), JSON reply;
+  - images at full resolution, JPEG: decomposition = front 864×480 + exterior 1280×720 + wrist; monitor = BEFORE
+    (episode start) and NOW of the same three, 6 images; replan = BEFORE and NOW front;
+  - the policy's instruction is the current subgoal, so it changes on each advance and replan.
+- The harness's recorded calls (`<OUT>/orchestrator/*/vlm_calls.jsonl`) are not available on this machine; the wrist
+  resolution the master receives (224×224 or 1280×720) is not determinable from the code.
+- `Qwen36VlTorchFrontendRtx.generate` decodes `max_new_tokens` tokens and truncates at the first EOS afterwards.
+- `planner_qwen27b.Planner` builds the frontend with `max_image_tokens=1024`; a monitor call has 2 698 (wrist 224) or
+  4 330 (wrist 1280×720) image tokens (32 px per token after the 2×2 merge).
+- The co-located executor runs with its text encoder freed (6.30 instead of 22.96 GB); a new instruction cannot be
+  encoded on the GPU in that state.
+
+Problem: the planner's and executor's timing under the harness's frequencies and call contents is unmeasured.
+
+Goal: measured, with ImageWAM LIBERO fp8 as the executor and zero-shot Qwen3.8-27B NVFP4 as the master:
+(1) per call type: prompt, image and output tokens; ViT, prefill, decode and call ms alone;
+(2) per episode under the harness's synchronous protocol: model time per episode against its 15 Hz sim time;
+(3) under a real-time schedule at the same frequencies (executor every 533 ms, master calls concurrent): executor
+latency against one control step (66.7 ms) and one chunk (533 ms), master decision latency in env steps, for in-process
+`prio`, `green50` and `coop`;
+(4) the cost of switching the executor's instruction.
+
+## Structure
+
+- `research/experiments/harness_replay_5090/volo_calls.py`: the master call contents. System prompts and user-message
+  templates copied verbatim from VoLoAgent with source references; image preparation to the harness resolutions from
+  LIBERO frames (resized to the target height, centered on a black canvas of the target size).
+- `research/experiments/harness_replay_5090/record_calls.py`: the Full-loop decision logic (decompose, monitor every 80
+  steps, replan on `replan` or a last-subgoal `next`, at most 3) run on the planner alone; writes one calls file per
+  episode in the shape of the harness's `vlm_calls.jsonl` (messages, reply).
+- `research/experiments/harness_replay_5090/replay_bench.py`: replays a calls file with the executor in the same
+  process: `sync` (one thread: master call, then executor query) and `realtime` (executor thread on a 15 Hz clock,
+  planner thread starting each call at its step's time) with sharing `prio`, `green50` or `coop`.
+- `research/experiments/harness_replay_5090/run_replay.sh`, `README.md`, `calls/`, `cells/`.
+- Reused unchanged: `colocation_qwen27b_5090/planner_qwen27b.py` (checkpoint paths, environment settings,
+  `PlannerStreams`), `colocation_qwen27b_5090/exec_slim.py` (`slim_executor`), `colocation_qwen27b_5090/coop_gate.py`
+  (`CoopGate`, `ExecutorClock`, `install`), `colocation_5090/green_partition.py` (`GreenPartition`),
+  `benchmarks/_imagewam_libero_frames.py`.
+- No FlashRT source changes.
+
+## State Ownership
+
+- Episode decision state (subgoal list, current index, replan count, step of the last check): `record_calls.py`, one
+  episode at a time; the replay reads only the calls file.
+- Calls files: written once by `record_calls.py`, read-only afterwards.
+- Executor instruction: set once per replay process before the executor is slimmed; switching is measured separately
+  (Phase 4).
+
+## Interface
+
+- `volo_calls.py`:
+  - `CallSpec` (dataclass): `kind: Literal["decompose", "monitor", "replan"]`, `step: int`, `system: str`,
+    `user_parts: list[TextPart | ImagePart]`, `max_tokens: int`.
+  - `HarnessFrames` (dataclass): `front` 864×480, `exterior` 1280×720, `wrist` 224×224 or 1280×720 (PIL images).
+  - `harness_frames(episode: int, step: int, wrist: int) -> HarnessFrames`.
+  - `decompose_call(task: str, f: HarnessFrames) -> CallSpec`;
+    `monitor_call(task: str, subgoals: list[str], idx: int, before: HarnessFrames, now: HarnessFrames, step: int) -> CallSpec`;
+    `replan_call(task: str, original: list[str], before: HarnessFrames, now: HarnessFrames, step: int) -> CallSpec`.
+- `python record_calls.py EPISODE WRIST OUT_JSONL`: one row per call: `kind`, `step`, `messages` (image paths),
+  `max_tokens`, `output_text`, `output_tokens` (before EOS), `parse_ok`, `decision`, alone timings.
+- `python replay_bench.py {sync|realtime} SHARE CALLS_JSONL OUT_JSON` (`SHARE` in `none`, `prio`, `green50`, `coop`):
+  per-call timings, per-release executor records, summary.
+- A replayed call runs `fe.generate(messages, max_new_tokens=output_tokens + 1)`, so its decode length equals the
+  recorded reply through EOS.
+
+## Flow
+
+- Record: planner alone, whole device. Per LIBERO-10 episode (800 env steps, frames taken from the episode video at
+  `step × (n_frames − 1) / 800`): decompose at step 0 → parse subgoals (failure → the instruction as the only subgoal,
+  as VoLoAgent does) → at steps 80, 160, …, 800: monitor → parse the decision → `next` advances the subgoal; `replan`,
+  or `next` on the last subgoal, issues the replan call at the same step (count < 3) and replaces the subgoals → rows
+  written in call order.
+- Sync replay: query points every 8 steps; at a point that holds recorded calls, run them in order, then the executor
+  query. Totals: master ms, executor ms per episode, against 800 / 15 = 53.3 s of sim time.
+- Real-time replay: executor released every 8 / 15 s (533.3 ms) on the wall clock; planner thread starts each call at
+  `step / 15` s after the episode start or when the previous call returns, whichever is later. Executor latency is
+  measured from release to completion; decision latency = call end − its step's time, in env steps.
+
+## Code Mapping
+
+- Call contents: `research/experiments/harness_replay_5090/volo_calls.py`.
+- Recording: `research/experiments/harness_replay_5090/record_calls.py` → `calls/ep<E>_wrist<W>.jsonl` (+ images).
+- Replay: `research/experiments/harness_replay_5090/replay_bench.py` → `cells/<mode>_<share>_ep<E>_wrist<W>.json`.
+- Grid runner: `research/experiments/harness_replay_5090/run_replay.sh`.
+- Results: `research/experiments/harness_replay_5090/README.md`; a section in
+  `research/reports/planner_executor_colocation_5090.{md,html}`; `issues.md` / `opportunities.md` for open items.
+
+## Implementation Phases
+
+### Phase 1 — Call contents and recorded calls
+
+Phase Status: completed
+
+- Goal: the three call types built from VoLoAgent's texts; recorded calls for LIBERO-10 episodes 0, 43 and 188 (three tasks) × wrist
+  {224, 1280×720}; alone timings.
+- Modified files: new `volo_calls.py`, `record_calls.py`.
+- Observation: per call: prompt / image / output tokens, `parse_ok`, decision; ViT / prefill / decode / call ms; per
+  call type, the decode time at the `max_tokens` cap (what the frontend spends without an EOS stop).
+
+### Phase 2 — Synchronous replay
+
+Phase Status: completed
+
+- Goal: the harness's protocol: master call, then executor query, in one thread.
+- Modified files: new `replay_bench.py` (`sync`), `run_replay.sh`.
+- Observation: per episode: master ms (by call kind), executor ms, call count, against 53.3 s of sim time; per-call ms
+  with the executor resident against the alone timings.
+
+### Phase 3 — Real-time replay
+
+Phase Status: completed
+
+- Goal: the same calls and frequencies on a wall-clock schedule, executor and planner concurrent.
+- Modified files: `replay_bench.py` (`realtime`), `run_replay.sh`.
+- Observation: per cell (`prio`, `green50`, `coop` × wrist {224, 1280×720}, episodes 0, 43, 188): executor p50 / p99 / max
+  latency and misses against 66.7 ms and 533 ms; master call ms and decision latency in env steps; free memory.
+- `coop`: the executor loop calls `ExecutorClock.stop()` (`colocation_qwen27b_5090/coop_gate.py`) after an episode's
+  last query, so planner calls still running then are not gated against a release that never comes.
+
+### Phase 4 — Executor instruction switch; results
+
+Phase Status: completed
+
+- Goal: the cost of giving the executor a new subgoal; results recorded.
+- Modified files: `replay_bench.py` (an `instruction` measurement), README, report and page, `issues.md`,
+  `opportunities.md`.
+- Observation: `set_prompt` ms for the decomposed subgoals with the text encoder resident, the executor's memory with
+  and without the encoder, and whether the planner, encoder and executor fit together in 32 GB.
+
+## Related, not in this plan
+
+- An EOS stop in `Qwen36VlTorchFrontendRtx.generate` (needed for serving calls of unknown length).
+- OpenAI-compatible and openpi-protocol servers around the FlashRT frontends; closed-loop runs in LIBERO or RoboLab.
+- Replaying the harness's own `vlm_calls.jsonl` once available.

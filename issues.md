@@ -1476,3 +1476,66 @@ a 5 704-token monitor call (`smoke/first_call_pf1_fix_*.json`, `smoke/first_call
 The co-location cells with the prefill graph (`research/experiments/colocation_qwen27b_5090/`) ran fixed prompts
 whose prefill graphs were captured in the warm-up calls before the measured window; ISSUE-105's flips were calls that
 captured graphs inside the window.
+
+# ISSUE-109
+
+Status: open
+
+Area: `Qwen36TorchFrontendRtx._generate_long_ctx_speculative_KN_nvfp4` (NVFP4, FP8 KV cache), greedy output against
+the MTP draft length K
+
+## Observation
+
+Greedy decode is meant to give the same tokens for every draft length K (the main model's argmax decides every
+token). On the planner (LoRA-merged Qwen3.8-27B master, official Qwen3.8-27B-FP8 MTP head), 25 of 26 prompts give the
+same output crc for K = 1, 3, 5, 7 and the length table; the synthetic 16 315-token prompt gives a different output with
+K = 1 (crc 816102686, 13 tokens before EOS) than with K = 3, 5, 7 and the table (crc 972381506, 11 tokens)
+(`research/experiments/harness_replay_5090/cells/mtp_speedup.json`).
+
+## Evidence
+
+K = 1 verifies two tokens per main-model forward (Kv = 2); the other runs verify 4 to 8. The verify forward at a
+given position therefore runs different Kv shapes, and the positions at which a forward starts differ between K.
+
+## Hypotheses
+
+- The Kv-dependent verify path (FP8 KV staging, attention split, GEMM tiling at M = Kv) gives argmax ties or
+  near-ties a different winner at this length; the outputs differ from the first such token on.
+
+## Next Experiment
+
+Decode the 16 315-token prompt with K = 1 and K = 3 and record per-token argmax and top-2 logit margin; find the first
+differing position and compare the logits of the Kv = 2 and Kv = 4 forwards at that position.
+
+# ISSUE-110
+
+Status: open
+
+Area: `Qwen36TorchFrontendRtx` long-context prefill (NVFP4, FP8 KV cache), chunk length
+`FLASHRT_QWEN36_TQ_PREFILL_CHUNK`
+
+## Observation
+
+The planner's greedy reply to the same recorded VoLoAgent calls depends on the prefill chunk length. Episode 0
+(wrist 224, 11 calls), planner alone: the eager prefill with the default chunk gives the recorded reply (recorded
+with the prefill graph, default chunk) on 11 of 11 calls; with 256-token chunks, 8 of 11 replies change wording and
+one monitor decision changes from `in_progress / continue` to `complete / next` (step 720)
+(`research/experiments/harness_replay_5090/smoke/prefill_pf0_c{256,def}.json`). The `coop` replay cells, which need
+256-token chunks, match 4 of 33 recorded replies; the other cells 33 of 33.
+
+## Evidence
+
+Same weights, prompt, decode path and draft length; only the prefill chunking differs. The changed replies stay
+fluent and on topic, so the prefill result is not broken but numerically different.
+
+## Hypotheses
+
+- A chunk boundary changes the attention split over the FP8 KV prefix (rows of earlier chunks are read back from the
+  FP8 cache, rows of the current chunk from BF16), and the GEMM shapes of the linear-attention and MLP layers; the
+  hidden state at the last prompt position differs enough to flip near-tied tokens.
+
+## Next Experiment
+
+For one changed call, compare the last-position logits (top-2 margin) and the per-layer hidden state of the prefill
+with 256-token chunks against the default chunk; repeat with the BF16 KV route to separate FP8 KV readback from
+chunked GEMM shapes.

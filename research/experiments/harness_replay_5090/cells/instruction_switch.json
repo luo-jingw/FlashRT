@@ -1,0 +1,52 @@
+{
+ "allocated_with_encoder_GB": 22.55491072,
+ "calls": [
+  {
+   "instruction": "turn on the stove and put the moka pot on it",
+   "repeat": 0,
+   "ms": 751.4343610382639
+  },
+  {
+   "instruction": "Place the black bowl into the open bottom drawer of the grey cabinet and close that drawer",
+   "repeat": 0,
+   "ms": 240.41941401083022
+  },
+  {
+   "instruction": "put the red-and-white alphabet soup carton in the woven basket with the silver rim",
+   "repeat": 0,
+   "ms": 30.652565008495003
+  },
+  {
+   "instruction": "put the red tomato sauce bottle in the woven basket with the silver rim",
+   "repeat": 0,
+   "ms": 244.0448480192572
+  },
+  {
+   "instruction": "turn on the stove and put the moka pot on it",
+   "repeat": 1,
+   "ms": 30.77191096963361
+  },
+  {
+   "instruction": "Place the black bowl into the open bottom drawer of the grey cabinet and close that drawer",
+   "repeat": 1,
+   "ms": 29.885984025895596
+  },
+  {
+   "instruction": "put the red-and-white alphabet soup carton in the woven basket with the silver rim",
+   "repeat": 1,
+   "ms": 29.771896020974964
+  },
+  {
+   "instruction": "put the red tomato sauce bottle in the woven basket with the silver rim",
+   "repeat": 1,
+   "ms": 29.818449052982032
+  }
+ ],
+ "allocated_slim_GB": 6.299404288,
+ "files": [
+  "calls/ep0_wrist224.jsonl",
+  "calls/ep43_wrist224.jsonl",
+  "calls/ep188_wrist224.jsonl"
+ ],
+ "median_ms": 30.712237989064306
+}

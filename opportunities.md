@@ -1709,3 +1709,63 @@ Experiment 1 result (`docs/imagewam_rtx5090_batched_m_step.md`, `benchmarks/imag
 ## Order
 
 Candidate 1 experiment 1 → candidate 1 experiment 2 → candidates 2 and 3.
+
+# OPT-039: MTP speculative decode on the planner (LoRA-merged Qwen3.8-27B master, RTX 5090)
+
+Status: proposed, not started.
+
+Area: `flash_rt/frontends/torch/qwen36_rtx.py` (`_generate_long_ctx_speculative_KN_nvfp4`,
+`_long_tq_effective_k`, `_long_mtp_prefill_tail_for_prompt`, `_prefill_mtp_tail_kv_nvfp4`),
+`flash_rt/frontends/torch/_qwen36_rtx_nvfp4_weights.py` (`extract_mtp_weights_nvfp4`).
+
+## Observation (`research/experiments/harness_replay_5090/cells/mtp_speedup.json`)
+
+- The merged master checkpoint has no MTP tensors (its config still declares one MTP layer); the drafter is the MTP
+  head of the official Qwen3.8-27B-FP8 release, trained against the base model.
+- One main-model forward costs 19.4-19.9 ms up to 8 k context and 22.4 ms at 16 k, nearly independent of the number
+  of verified tokens (Kv = 1: 19.9 ms, Kv = 8: 23.7 ms at 4 k); one MTP draft step costs 0.97 ms.
+- Recorded harness monitor calls (20 calls, 4 079 prompt tokens): 2.13 tokens per main-model forward at K = 3,
+  decode 1.74x faster than a single-token loop costed from the Kv = 1 forward; K = 5 / 7 accept slightly more but
+  are slower. Decompose calls (2 calls, 21-26 tokens): 1.52 tokens per forward at the table's K = 6 (1.10x); K = 1 is
+  fastest there (1.34x). Synthetic planning prompts: 2.5-2.9 tokens per forward, 1.95-2.15x.
+- On RTX the FP8-source MTP loader keeps no BF16 projection copies, so `_long_mtp_prefill_tail_for_prompt` returns 0
+  and the drafter starts each request without any prompt context (Spark and Thor have a quantized tail prefill).
+
+## Candidates
+
+1. MTP prompt-tail prefill on RTX for the FP8-source head (quantized tail prefill as on Spark / Thor, or BF16 copies
+   of the seven MTP projections). Observation: accepted drafts per cycle and decode ms on the recorded calls; prefill
+   ms added by the tail.
+2. Draft length by call kind or by measured acceptance instead of the prompt-length table (decompose prefers K = 1,
+   monitor K = 3 in this workload). Observation: decode ms per call kind.
+3. An MTP head adapted to the LoRA master (training the MTP layer on the master's own hidden states and outputs).
+   Observation: tokens per forward on the recorded calls.
+
+# OPT-040: Serving the planner at the VoLoAgent harness's call pattern (RTX 5090)
+
+Status: proposed, not started.
+
+Area: `flash_rt/frontends/torch/qwen36_vl_rtx.py` (`generate`), `flash_rt/frontends/torch/qwen36_rtx.py` (lazy graph
+capture by prompt length and decode position), `flash_rt/frontends/torch/imagewam_thor.py` (`set_prompt`).
+Measurements: `research/experiments/harness_replay_5090/README.md`.
+
+## Observation
+
+- `generate` has no EOS stop and decodes `max_new_tokens`: a monitor call with the harness's `max_tokens` 512 costs
+  11.2-11.4 s instead of 1.02-1.27 s, a decompose call 16-17 s instead of 0.65-0.71 s.
+- Every new prompt length and decode position captures graphs during the call: 23-26 of 29-30 monitor calls per
+  replay cell are cold (median 5-6 graphs, +0.2 s); the first monitor of a process captures 56-59 graphs and takes
+  3.3-3.8 s, which sets the maximum decision latency (52-69 env steps).
+- A new subgoal needs the executor's Qwen3-4B text encoder (`set_prompt` 30 ms, 240 ms at a new context length),
+  but the 7.6 GB encoder does not fit next to the planner and the slimmed executor (2.6-3.0 GB free).
+
+## Candidates
+
+1. EOS stop in the speculative decode loop (check the accepted tokens of each cycle against the EOS ids).
+   Observation: call ms at `max_tokens` 512 against the replay's EOS-length calls.
+2. Graph capture ahead of time for prompt-length buckets and their decode positions (pad the prompt to a bucket, or
+   capture a bucket's graphs at startup); keep the graph cache large enough for one episode's lengths.
+   Observation: cold-call count and monitor max per replay cell.
+3. An instruction path for the executor without the resident encoder: encode new subgoals in a separate process or
+   on the CPU, a quantized encoder that fits in the free memory, or embeddings cached for a finite subgoal set.
+   Observation: subgoal-to-executor latency and memory headroom with the planner resident.
