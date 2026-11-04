@@ -1,0 +1,75 @@
+frontend rtx_thor_vit Qwen36VlRtxWithThorVision Qwen36TorchFrontendRtx gpu NVIDIA GeForce RTX 5090 peak_GiB 22.44
+kind spec_k n prompt_tokens vit_ms prefill_ms decode_ms wall_ms warmup_wall_ms cycles ms_per_cycle tok_per_forward same_text
+decompose 6 2 2131.00 64.66 174.99 248.69 497.79 1535.29 8.50 29.26 4.49 0/2
+decompose 3 2 2131.00 64.88 175.18 265.25 514.68 1196.55 11.00 24.11 3.45 0/2
+monitor 6 20 4079.50 129.14 317.16 658.79 1116.81 1250.44 27.00 24.41 2.68 1/20
+monitor 3 20 4079.50 128.97 317.28 658.81 1114.93 1115.40 27.00 24.41 2.68 1/20
+name spec_k max_new_tokens cycles decode_ms ms_per_cycle prefill_ms wall_ms same_text
+ep0_wrist224.jsonl:decompose@0 6 39 9 263.1 29.24 174.4 511.4 False
+ep0_wrist224.jsonl:decompose@0 3 39 11 265.2 24.11 174.8 513.7 False
+ep0_wrist224.jsonl:monitor@80 6 79 30 732.3 24.41 315.4 1189.7 False
+ep0_wrist224.jsonl:monitor@80 3 79 30 731.0 24.37 315.8 1186.4 False
+ep0_wrist224.jsonl:monitor@160 6 58 21 511.8 24.37 315.9 969.7 False
+ep0_wrist224.jsonl:monitor@160 3 58 21 512.1 24.39 316.1 968.1 False
+ep0_wrist224.jsonl:monitor@240 6 70 27 658.7 24.40 316.2 1115.9 False
+ep0_wrist224.jsonl:monitor@240 3 70 27 658.7 24.39 316.6 1114.3 False
+ep0_wrist224.jsonl:monitor@320 6 69 27 658.9 24.40 316.6 1117.7 False
+ep0_wrist224.jsonl:monitor@320 3 69 27 658.9 24.41 316.6 1115.6 False
+ep0_wrist224.jsonl:monitor@400 6 91 33 805.1 24.40 316.9 1264.9 False
+ep0_wrist224.jsonl:monitor@400 3 91 33 805.6 24.41 317.1 1262.9 False
+ep0_wrist224.jsonl:monitor@480 6 68 24 585.8 24.41 317.2 1042.6 False
+ep0_wrist224.jsonl:monitor@480 3 68 24 586.2 24.42 317.0 1043.3 False
+ep0_wrist224.jsonl:monitor@560 6 69 25 610.3 24.41 317.2 1066.5 False
+ep0_wrist224.jsonl:monitor@560 3 69 25 610.6 24.42 317.2 1068.0 False
+ep0_wrist224.jsonl:monitor@640 6 91 31 756.8 24.41 317.1 1216.3 False
+ep0_wrist224.jsonl:monitor@640 3 91 31 757.1 24.42 317.3 1214.3 False
+ep0_wrist224.jsonl:monitor@720 6 84 33 805.2 24.40 316.9 1264.4 False
+ep0_wrist224.jsonl:monitor@720 3 84 33 805.4 24.41 317.0 1262.7 False
+ep0_wrist224.jsonl:monitor@800 6 91 34 829.8 24.41 317.1 1287.5 False
+ep0_wrist224.jsonl:monitor@800 3 91 34 829.5 24.40 317.2 1287.2 False
+ep43_wrist224.jsonl:decompose@0 6 39 8 234.3 29.28 175.6 484.2 False
+ep43_wrist224.jsonl:decompose@0 3 39 11 265.3 24.12 175.6 515.7 False
+ep43_wrist224.jsonl:monitor@80 6 72 25 610.4 24.41 317.0 1070.5 False
+ep43_wrist224.jsonl:monitor@80 3 72 25 609.5 24.38 317.3 1065.6 False
+ep43_wrist224.jsonl:monitor@160 6 59 23 561.8 24.43 317.2 1021.3 False
+ep43_wrist224.jsonl:monitor@160 3 59 23 561.8 24.42 317.4 1019.0 False
+ep43_wrist224.jsonl:monitor@240 6 71 25 610.7 24.43 317.2 1069.2 False
+ep43_wrist224.jsonl:monitor@240 3 71 25 609.9 24.39 317.3 1068.3 False
+ep43_wrist224.jsonl:monitor@320 6 67 23 561.8 24.43 317.9 1023.0 False
+ep43_wrist224.jsonl:monitor@320 3 67 23 561.7 24.42 317.4 1020.2 False
+ep43_wrist224.jsonl:monitor@400 6 85 32 781.3 24.41 317.2 1240.7 False
+ep43_wrist224.jsonl:monitor@400 3 85 32 781.3 24.42 317.4 1239.8 False
+ep43_wrist224.jsonl:monitor@480 6 82 31 756.3 24.40 317.3 1215.8 False
+ep43_wrist224.jsonl:monitor@480 3 82 31 757.1 24.42 317.6 1215.8 False
+ep43_wrist224.jsonl:monitor@560 6 77 30 732.1 24.40 317.2 1191.3 False
+ep43_wrist224.jsonl:monitor@560 3 77 30 731.8 24.39 317.4 1190.2 False
+ep43_wrist224.jsonl:monitor@640 6 55 17 415.0 24.41 317.3 874.5 True
+ep43_wrist224.jsonl:monitor@640 3 55 17 415.1 24.42 317.4 873.7 True
+ep43_wrist224.jsonl:monitor@720 6 63 24 585.9 24.41 317.3 1045.8 False
+ep43_wrist224.jsonl:monitor@720 3 63 24 586.2 24.43 317.4 1044.6 False
+ep43_wrist224.jsonl:monitor@800 6 80 28 683.4 24.41 317.5 1143.3 False
+ep43_wrist224.jsonl:monitor@800 3 80 28 682.9 24.39 317.5 1142.5 False
+name reference_decision run_decision equal
+ep0_wrist224.jsonl:decompose@0 ('turn on the stove', 'pick up the moka pot', 'place the moka pot on the stove') ('turn on the stove', 'put the moka pot on the stove') False
+ep0_wrist224.jsonl:monitor@80 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@160 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@240 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@320 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@400 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@480 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@560 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@640 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@720 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@800 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:decompose@0 ('pick up the black bowl', 'place the black bowl in the open bottom drawer', 'close the bottom drawer') ('pick up the black bowl from the table', 'place the black bowl into the open bottom drawer of the cabinet', 'close the bottom drawer of the cabinet') False
+ep43_wrist224.jsonl:monitor@80 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@160 ('in_progress', 'continue') ('in_progress', 'grasp_tool') False
+ep43_wrist224.jsonl:monitor@240 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@320 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@400 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@480 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@560 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@640 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@720 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@800 ('in_progress', 'replan') ('in_progress', 'continue') False
+decisions equal 18/22, unparsable 0

@@ -1,0 +1,75 @@
+frontend rtx Qwen36VlTorchFrontendRtx Qwen36TorchFrontendRtx gpu NVIDIA GeForce RTX 5090 peak_GiB 22.08
+kind spec_k n prompt_tokens vit_ms prefill_ms decode_ms wall_ms warmup_wall_ms cycles ms_per_cycle tok_per_forward same_text
+decompose 6 2 2131.00 41.05 173.50 321.10 546.22 1778.17 11.00 29.18 3.48 2/2
+decompose 3 2 2131.00 40.94 173.52 312.97 537.83 1265.68 13.00 24.07 2.94 2/2
+monitor 6 20 4079.50 81.49 315.15 634.29 1045.06 1162.60 26.00 24.39 2.72 20/20
+monitor 3 20 4079.50 81.28 315.30 634.46 1043.35 1042.12 26.00 24.39 2.72 20/20
+name spec_k max_new_tokens cycles decode_ms ms_per_cycle prefill_ms wall_ms same_text
+ep0_wrist224.jsonl:decompose@0 6 39 10 291.2 29.12 172.3 514.8 True
+ep0_wrist224.jsonl:decompose@0 3 39 12 288.2 24.01 172.3 511.4 True
+ep0_wrist224.jsonl:monitor@80 6 79 31 752.8 24.28 310.4 1158.1 True
+ep0_wrist224.jsonl:monitor@80 3 79 31 753.0 24.29 310.8 1156.2 True
+ep0_wrist224.jsonl:monitor@160 6 58 23 558.7 24.29 311.1 964.8 True
+ep0_wrist224.jsonl:monitor@160 3 58 23 559.0 24.31 311.1 962.4 True
+ep0_wrist224.jsonl:monitor@240 6 70 23 558.9 24.30 311.6 964.4 True
+ep0_wrist224.jsonl:monitor@240 3 70 23 560.4 24.37 311.6 963.8 True
+ep0_wrist224.jsonl:monitor@320 6 69 24 584.1 24.34 312.2 991.2 True
+ep0_wrist224.jsonl:monitor@320 3 69 24 584.2 24.34 312.5 988.7 True
+ep0_wrist224.jsonl:monitor@400 6 91 34 828.4 24.36 312.8 1236.1 True
+ep0_wrist224.jsonl:monitor@400 3 91 34 828.6 24.37 312.9 1233.5 True
+ep0_wrist224.jsonl:monitor@480 6 68 23 560.8 24.38 313.2 969.5 True
+ep0_wrist224.jsonl:monitor@480 3 68 23 561.0 24.39 313.6 966.5 True
+ep0_wrist224.jsonl:monitor@560 6 69 23 560.3 24.36 313.8 967.3 True
+ep0_wrist224.jsonl:monitor@560 3 69 23 560.3 24.36 313.9 966.3 True
+ep0_wrist224.jsonl:monitor@640 6 91 31 755.4 24.37 314.3 1163.9 True
+ep0_wrist224.jsonl:monitor@640 3 91 31 756.0 24.39 314.2 1162.4 True
+ep0_wrist224.jsonl:monitor@720 6 84 34 829.2 24.39 314.8 1239.4 True
+ep0_wrist224.jsonl:monitor@720 3 84 34 829.3 24.39 314.6 1236.6 True
+ep0_wrist224.jsonl:monitor@800 6 91 36 878.4 24.40 314.9 1286.4 True
+ep0_wrist224.jsonl:monitor@800 3 91 36 878.1 24.39 315.1 1285.9 True
+ep43_wrist224.jsonl:decompose@0 6 39 12 351.0 29.25 174.7 577.6 True
+ep43_wrist224.jsonl:decompose@0 3 39 14 337.8 24.13 174.7 564.3 True
+ep43_wrist224.jsonl:monitor@80 6 72 26 634.3 24.40 315.4 1044.3 True
+ep43_wrist224.jsonl:monitor@80 3 72 26 634.2 24.39 316.0 1043.0 True
+ep43_wrist224.jsonl:monitor@160 6 59 19 463.9 24.42 315.7 874.9 True
+ep43_wrist224.jsonl:monitor@160 3 59 19 463.9 24.41 315.5 872.8 True
+ep43_wrist224.jsonl:monitor@240 6 71 26 634.3 24.40 315.8 1045.8 True
+ep43_wrist224.jsonl:monitor@240 3 71 26 634.7 24.41 315.5 1043.7 True
+ep43_wrist224.jsonl:monitor@320 6 67 24 585.7 24.40 315.7 996.9 True
+ep43_wrist224.jsonl:monitor@320 3 67 24 586.1 24.42 315.9 994.2 True
+ep43_wrist224.jsonl:monitor@400 6 85 30 731.5 24.38 315.5 1141.6 True
+ep43_wrist224.jsonl:monitor@400 3 85 30 732.3 24.41 315.6 1141.4 True
+ep43_wrist224.jsonl:monitor@480 6 82 30 732.4 24.41 315.7 1142.7 True
+ep43_wrist224.jsonl:monitor@480 3 82 30 732.1 24.40 315.5 1141.7 True
+ep43_wrist224.jsonl:monitor@560 6 77 29 707.6 24.40 315.7 1118.5 True
+ep43_wrist224.jsonl:monitor@560 3 77 29 707.9 24.41 315.8 1115.9 True
+ep43_wrist224.jsonl:monitor@640 6 55 18 439.4 24.41 315.7 850.1 True
+ep43_wrist224.jsonl:monitor@640 3 55 18 439.1 24.39 315.8 848.6 True
+ep43_wrist224.jsonl:monitor@720 6 63 23 561.8 24.43 315.7 972.8 True
+ep43_wrist224.jsonl:monitor@720 3 63 23 561.1 24.40 315.8 971.1 True
+ep43_wrist224.jsonl:monitor@800 6 80 30 732.2 24.41 315.8 1144.0 True
+ep43_wrist224.jsonl:monitor@800 3 80 30 732.0 24.40 315.8 1142.3 True
+name reference_decision run_decision equal
+ep0_wrist224.jsonl:decompose@0 ('turn on the stove', 'pick up the moka pot', 'place the moka pot on the stove') ('turn on the stove', 'pick up the moka pot', 'place the moka pot on the stove') True
+ep0_wrist224.jsonl:monitor@80 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@160 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@240 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@320 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@400 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@480 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@560 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@640 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@720 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep0_wrist224.jsonl:monitor@800 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:decompose@0 ('pick up the black bowl', 'place the black bowl in the open bottom drawer', 'close the bottom drawer') ('pick up the black bowl', 'place the black bowl in the open bottom drawer', 'close the bottom drawer') True
+ep43_wrist224.jsonl:monitor@80 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@160 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@240 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@320 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@400 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@480 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@560 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@640 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@720 ('in_progress', 'continue') ('in_progress', 'continue') True
+ep43_wrist224.jsonl:monitor@800 ('in_progress', 'replan') ('in_progress', 'replan') True
+decisions equal 22/22, unparsable 0
