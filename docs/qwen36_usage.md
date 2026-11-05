@@ -38,7 +38,7 @@ fe = Qwen36TorchFrontendRtx(
 
 On Jetson AGX Thor (SM110), use the Thor subclass instead. It inherits
 the entire RTX API surface and overrides the hardware-specific paths
-(MTP fc M-tile kernel, batched FP8-KV XQA attention):
+(batched FP8-KV XQA attention, the K-row forward):
 
 ```python
 from flash_rt.frontends.torch.qwen36_thor import Qwen36TorchFrontendThor

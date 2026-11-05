@@ -4240,8 +4240,10 @@ class Qwen36TorchFrontendRtx:
         RTX 5090: 0.24 / 0.97 ms at 512 / 2 048 rows against 21 / 84 ms
         on the shared small-M kernel ``bf16_matmul_qwen36_bf16``; on 22
         recorded planner calls (Qwen3.8-27B) tokens per main-model
-        forward within 2 % of that kernel's, outputs unchanged.
-        Hardware-specific frontends may override with their own kernel.
+        forward within 2 % of that kernel's, outputs unchanged. The
+        Thor frontend inherits it: on a Jetson AGX Thor 0.89 / 3.46 ms
+        against 380 / 1 519 ms on the M-tile kernel it used before,
+        parsed decisions on the same calls unchanged.
         """
         from flash_rt import flash_rt_kernels as fvk
         fvk.bf16_matmul_cublaslt_bf16(

@@ -91,7 +91,9 @@ projection (rows x 10 240 -> 5 120) runs on cuBLASLt with the
 heuristic's first algorithm (`_mtp_tail_fc_matmul`): 0.24 / 0.97 ms at
 512 / 2 048 rows on the RTX 5090, against 21 / 84 ms on the shared
 small-M kernel, with tokens per forward within 2 % and identical
-outputs; the Thor frontend keeps its own M-tile kernel. Without the env var, MTP is None
+outputs. The Thor frontend inherits it: 0.89 / 3.46 ms at 512 / 2 048
+rows on a Jetson AGX Thor against 380 / 1 519 ms on the M-tile kernel
+it used before (THOR_STATUS_SUMMARY.md round `1104_h3b`). Without the env var, MTP is None
 and speculative decode is disabled (pure single-token decode still
 works at ~36 tok/s).
 
@@ -142,10 +144,11 @@ is the fraction of cycles where the full draft chain is accepted.
 ### Jetson AGX Thor numbers
 
 Same NVFP4 weights + same FP8→NVFP4 MTP head. The Thor frontend
-(`Qwen36TorchFrontendThor`) extends the RTX path with a
-hardware-isolated MTP-fc M-tile kernel (160 KB dynamic shared memory,
-gated on SM110's per-block opt-in limit) and a batched FP8-KV XQA
-attention path. Measured on a single Jetson AGX Thor (SM110,
+(`Qwen36TorchFrontendThor`) extends the RTX path with a batched FP8-KV
+XQA attention path. The table below was measured while the Thor
+frontend ran the MTP tail fc on an M-tile kernel (160 KB dynamic shared
+memory), whose cost is part of its TTFT column; the fc now runs on the
+parent's cuBLASLt GEMM (above). Measured on a single Jetson AGX Thor (SM110,
 128 GB LPDDR5X), warm-state decode, `max_new_tokens=64`, repeated text
 prompt, default `K=6`:
 

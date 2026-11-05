@@ -146,32 +146,6 @@ class Qwen36TorchFrontendThor(Qwen36TorchFrontendRtx):
         # MTP K/V cache range.
         self._attn.ensure_fa2_paged_capacity(int(self._user_max_seq))
 
-    def _mtp_tail_fc_matmul(
-            self, x_ptr: int, w_ptr: int, out_ptr: int,
-            rows: int, hidden: int, stream: int) -> None:
-        """Thor override of the MTP prompt-tail fc matmul.
-
-        At rows >= 2 dispatches an M-tile kernel that reuses the
-        (rows x 10240) W slab across an M_TILE block, cutting W
-        bandwidth by 1/M_TILE while preserving the per-output fma
-        order (bit-identical to the shared kernel). The kernel
-        requires 160 KB of dynamic shared memory per block, which
-        exceeds the SM120-class opt-in limit, so the binding is
-        gated on the device's reported capability and falls back to
-        the shared kernel on any non-zero return.
-        """
-        from flash_rt import flash_rt_kernels as fvk
-        K = hidden * 2
-        if rows >= 2 and K == 10240:
-            rc = fvk.bf16_matmul_qwen36_thor_mtp_fc_bf16(
-                x_ptr, w_ptr, out_ptr, rows, hidden, stream,
-            )
-            if rc == 0:
-                return
-        fvk.bf16_matmul_qwen36_bf16(
-            x_ptr, w_ptr, out_ptr, rows, hidden, K, stream,
-        )
-
     # ---------- Thor-native K-row scratch ----------
     #
     # The parent class allocates a number of K-row scratch buffers
@@ -936,22 +910,18 @@ class Qwen36TorchFrontendThor(Qwen36TorchFrontendRtx):
             cat_buf.data_ptr(), rows, hidden, hidden, s,
         )
 
-        # 3) FC (BF16 matmul, K_in=2*hidden=10240, N=hidden=5120).
-        # Routed through the ``_mtp_tail_fc_matmul`` hook so that
-        # hardware-specific frontends can dispatch a sibling kernel
-        # that matches the per-output fma order of the shared
-        # K=10240 generic chunked path. Thor opts into an M-tile
-        # variant (160 KB dynamic smem) via the override on this
-        # class; any non-Thor / capability-insufficient device falls
-        # back to the shared kernel transparently.
-        #
-        # Numerically-divergent shortcuts that were ruled out here:
-        #   * cuBLAS ``torch.mm`` (0.45 ms) is fast but its rounding
-        #     drops MTP AL 3.93 -> 3.20.
-        #   * Splitting fc_w along K into two K=5120 halves and
-        #     summing partials changes the fma order vs the K=10240
-        #     reduction the MTP head was calibrated against and
-        #     drops AL 3.93 -> 3.50.
+        # 3) FC (BF16 matmul, K_in=2*hidden=10240, N=hidden=5120),
+        # through the parent's ``_mtp_tail_fc_matmul`` hook (cuBLASLt,
+        # heuristic's first algorithm). Jetson AGX Thor, official
+        # Qwen3.8-27B on 22 recorded planner calls (round 1104_h3b):
+        # 0.89 / 3.46 ms at 512 / 2048 rows against 380 / 1519 ms on
+        # the M-tile kernel ``bf16_matmul_qwen36_thor_mtp_fc_bf16``;
+        # prefill 3.98 / 2.10 s against 4.36 / 3.65 s (monitor /
+        # decompose), tokens per main-model forward 2.82 against 2.76
+        # (monitor), parsed decisions unchanged. Not measured with
+        # cuBLASLt: BF16-source MTP heads (Qwen3.6); an earlier note
+        # recorded cuBLAS ``torch.mm`` here lowering AL 3.93 -> 3.20
+        # (model and prompt not recorded).
         self._mtp_tail_fc_matmul(
             cat_buf.data_ptr(), int(mtp['fc_w']),
             fc_out.data_ptr(), rows, hidden, s,
@@ -1121,11 +1091,10 @@ class Qwen36TorchFrontendThor(Qwen36TorchFrontendRtx):
         # Thor adjustment for [128, 512): parent caps mtp_tail at 128
         # to bound TTFT cost on 5090. At ctx=256-511 this gives only
         # 25-50% MTP cache coverage and AL collapses (measured ctx=256
-        # K=6 AL=1.71). On Thor the MTP fc kernel (M-tile K=10240
-        # specialised, ~70 ms at M=256) costs ~+100 ms TTFT for full
-        # coverage, but lifts decode tok/s ~1.5x (~29 -> ~45 tok/s at
-        # ctx=256), which more than pays back for any generation
-        # length >= ~16 tokens. Full coverage is the right Thor default.
+        # K=6 AL=1.71). Full coverage lifted decode tok/s ~1.5x
+        # (~29 -> ~45 tok/s at ctx=256) at ~+100 ms TTFT when the tail
+        # fc ran on the M-tile kernel; the fc now runs on cuBLASLt
+        # (~1 ms at these rows), so full coverage is the Thor default.
         prompt_len = int(prompt_len)
         if prompt_len >= 128 and prompt_len < 512:
             return prompt_len
