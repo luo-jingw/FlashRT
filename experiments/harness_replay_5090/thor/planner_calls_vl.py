@@ -1,8 +1,8 @@
 """The official Qwen3.8-27B NVFP4 planner (its own MTP head) on recorded harness calls with images, on the image
 frontend given on the command line: `rtx` = Qwen36VlTorchFrontendRtx, `thor` = Qwen36VlTorchFrontendThor (Thor rows
-H3, H3b), `rtx_thor_vit` = the RTX language model with the Thor frontend's ViT configuration (BF16 linears, SDPA),
-`thor_cublaslt_tail` = the Thor frontend whose language model runs the MTP prompt-tail fc on the RTX frontend's
-cuBLASLt GEMM instead of the Thor M-tile kernel.
+H3, H3b), `rtx_thor_vit` = the RTX language model with the Thor frontend's ViT configuration (BF16 linears, SDPA).
+Thor row H3b also ran `thor_cublaslt_tail` (the Thor language model with the RTX frontend's cuBLASLt tail fc in place
+of the Thor M-tile kernel, at commit 791b1168); the Thor frontend now inherits that tail fc, so `thor` runs it.
 Calls: the rows of calls/ep0_wrist224.jsonl and calls/ep43_wrist224.jsonl (22 calls; images are the recorded JPEGs
 under calls/). Each call decodes the official model's own reply through EOS: max_new_tokens and the reference
 text come from that model's references in cells/mtp_tail_base.json (RTX 5090). Per call and draft length in SPEC_KS
@@ -14,7 +14,7 @@ any reference reply, cut at EOS), so that a reply longer than the reference is n
 `planner_calls_vl_table.py` parses into the call's decision.
 
 usage (cwd = repository root): CK=<dir with qwen38-27b-nvfp4-official and qwen38-27b-fp8-official> OUT=<dir> \
-  python research/experiments/harness_replay_5090/thor/planner_calls_vl.py {rtx|thor|rtx_thor_vit|thor_cublaslt_tail}
+  python research/experiments/harness_replay_5090/thor/planner_calls_vl.py {rtx|thor|rtx_thor_vit}
 """
 import json
 import os
@@ -42,8 +42,6 @@ import torch  # noqa: E402
 from PIL import Image  # noqa: E402
 
 from flash_rt.frontends.torch._qwen3_vl_vision_rtx import Qwen3VlVisionRtx  # noqa: E402
-from flash_rt.frontends.torch.qwen36_rtx import Qwen36TorchFrontendRtx  # noqa: E402
-from flash_rt.frontends.torch.qwen36_thor import Qwen36TorchFrontendThor  # noqa: E402
 from flash_rt.frontends.torch.qwen36_vl_rtx import Qwen36VlTorchFrontendRtx  # noqa: E402
 from flash_rt.frontends.torch.qwen36_vl_thor import Qwen36VlTorchFrontendThor  # noqa: E402
 
@@ -55,23 +53,8 @@ class Qwen36VlRtxWithThorVision(Qwen36VlTorchFrontendRtx):
         return Qwen3VlVisionRtx(checkpoint_path, device=device, config=config, fp8=False, attention_backend='sdpa')
 
 
-class Qwen36ThorWithCublasltTail(Qwen36TorchFrontendThor):
-    """The Thor language model with the RTX frontend's MTP prompt-tail fc (cuBLASLt, max_algos=1)."""
-
-    def _mtp_tail_fc_matmul(self, x_ptr: int, w_ptr: int, out_ptr: int, rows: int, hidden: int, stream: int) -> None:
-        Qwen36TorchFrontendRtx._mtp_tail_fc_matmul(self, x_ptr, w_ptr, out_ptr, rows, hidden, stream)
-
-
-class Qwen36VlThorWithCublasltTail(Qwen36VlTorchFrontendThor):
-    """The Thor image frontend whose language model is Qwen36ThorWithCublasltTail."""
-
-    def _build_language_model(self, checkpoint_path: str, device: str, max_seq: int) -> Qwen36TorchFrontendThor:
-        return Qwen36ThorWithCublasltTail(checkpoint_path, device=device, max_seq=max_seq, quant='nvfp4',
-                                          extra_embedding_rows=self.max_image_tokens)
-
-
 FRONTENDS = {"rtx": Qwen36VlTorchFrontendRtx, "thor": Qwen36VlTorchFrontendThor,
-             "rtx_thor_vit": Qwen36VlRtxWithThorVision, "thor_cublaslt_tail": Qwen36VlThorWithCublasltTail}
+             "rtx_thor_vit": Qwen36VlRtxWithThorVision}
 
 
 @dataclass
