@@ -1,0 +1,50 @@
+loaded: Qwen36TorchFrontendRtx long_ctx_mode True mtp True prefill eager
+prefill ms timed 309.4 309.6 309.6 (median 309.6), profiled 311.8
+profiled generation (1 new token): 3095 kernels, kernel sum 311.1 ms, first-to-last span 312.0 ms; whole-model TFLOP/s at the timed median 710.3 (2 x 27e9 FLOP per prompt token)
+category kernels total_ms share
+gemm 1069 172.3 55.4%
+linear_attention 960 76.8 24.7%
+quantize_fused 615 32.6 10.5%
+attention 34 18.7 6.0%
+elementwise_copy 211 5.2 1.7%
+norm 172 3.9 1.2%
+rope 34 1.6 0.5%
+top 40 kernels: total_ms count mean_us category name
+114.59 480 238.7 gemm _ZN7cutlass13device_kernelINS_4gemm6kernel13GemmUniversalIN4cute5tupleIJiiiiEEENS1_10collective13CollectiveMmaINS1_42MainloopSm120TmaWarpSpecializedBlockScaledI
+38.82 199 195.1 gemm _ZN7cutlass13device_kernelINS_4gemm6kernel13GemmUniversalIN4cute5tupleIJiiiiEEENS1_10collective13CollectiveMmaINS1_42MainloopSm120TmaWarpSpecializedBlockScaledI
+26.06 96 271.5 linear_attention flash_rt::kernels::linear_attention::mma_fla::chunk_h_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat
+18.72 32 585.0 attention void fa2_vendor::flash_fwd_kernel<Flash_fwd_kernel_traits<256, 64, 64, 4, false, false, cutlass::bfloat16_t, Flash_kernel_traits<256, 64, 64, 4, cutlass::bfloat
+17.94 128 140.1 quantize_fused flash_rt::kernels::(anonymous namespace)::silu_mul_merged_to_nvfp4_swizzled_grouped32_kernel(__nv_bfloat16 const*, unsigned char*, unsigned char*, int, int, int
+15.37 96 160.1 linear_attention flash_rt::kernels::linear_attention::output_o_mma_fla::output_o_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16 const*, _
+11.83 96 123.2 linear_attention flash_rt::kernels::(anonymous namespace)::causal_conv1d_update_chunk_parallel_gqa_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16 const*, __nv_
+11.68 96 121.7 gemm void flash_rt::kernels::(anonymous namespace)::bf16_matmul_ab96_mtile_pair_kernel<5120, 4>(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16*, int)
+7.16 128 55.9 quantize_fused residual_add_rms_norm_to_nvfp4_swizzled_bf16_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16*, __nv_bfloat16 const*, unsigned char*, unsigned c
+6.93 96 72.2 linear_attention flash_rt::kernels::linear_attention::(anonymous namespace)::solve_tril_b64_from_kkt_gated_pack_kernel(float const*, __nv_bfloat16 const*, __nv_bfloat16 const*, 
+5.94 231 25.7 quantize_fused quantize_bf16_to_nvfp4_swizzled_kernel(__nv_bfloat16 const*, unsigned char*, unsigned char*, int, int, int, int)
+5.59 96 58.2 linear_attention flash_rt::kernels::linear_attention::(anonymous namespace)::pack_recompute_rhs_row_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16 const*, __nv
+4.94 192 25.7 gemm nvjet_sm120_tst_mma_128x120x32_6_32x120x32_tmaAB_alignCD4_bz_NNNN
+4.52 96 47.0 linear_attention void flash_rt::kernels::(anonymous namespace)::rms_norm_gated_silu_kernel<128>(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16*,
+4.26 96 44.4 linear_attention flash_rt::kernels::(anonymous namespace)::qwen36_gdn_wy_cumsum_g_kernel(__nv_bfloat16 const*, __nv_bfloat16*, int)
+3.87 172 22.5 norm void rms_norm_kernel<__nv_bfloat16>(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16*, int, float)
+2.62 130 20.1 elementwise_copy void add_out_kernel<__nv_bfloat16>(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16*, int)
+1.94 96 20.2 linear_attention flash_rt::kernels::(anonymous namespace)::qwen36_gdn_wy_norm_qk_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16*, __nv_bfloat16*, __nv_bfloat16
+1.55 34 45.7 rope flash_rt::kernels::(anonymous namespace)::partial_rope_qk_bf16_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16 const*, __
+1.26 33 38.1 elementwise_copy flash_rt::kernels::(anonymous namespace)::sigmoid_mul_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16*, int)
+1.16 32 36.4 quantize_fused rms_norm_to_nvfp4_swizzled_bf16_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, unsigned char*, unsigned char*, int, int, int, float)
+1.08 33 32.7 elementwise_copy flash_rt::kernels::(anonymous namespace)::qwen36_split_q_gate_kernel(__nv_bfloat16 const*, __nv_bfloat16*, __nv_bfloat16*, int)
+1.06 4 265.7 gemm _ZN7cutlass13device_kernelINS_4gemm6kernel13GemmUniversalIN4cute5tupleIJiiiiEEENS1_10collective13CollectiveMmaINS1_42MainloopSm120TmaWarpSpecializedBlockScaledI
+0.77 96 8.0 gemm nvjet_sm120_tss_mma_64x64x64_6_16x64x64_tmaAB_alignCD4_bz_TNNN
+0.24 1 237.2 gemm nvjet_sm120_tst_mma_128x128x64_3_64x32x64_tmaAB_alignCD4_bz_TNNN
+0.22 32 7.0 quantize_fused dequantize_fp8_static_bf16_2_kernel(__nv_fp8_e4m3 const*, __nv_fp8_e4m3 const*, __nv_bfloat16*, __nv_bfloat16*, float const*, float const*, int)
+0.20 64 3.1 quantize_fused void quantize_fp8_kernel_generic<__nv_bfloat16>(__nv_bfloat16 const*, __nv_fp8_e4m3*, float const*, int)
+0.18 1 184.7 gemm flash_rt::kernels::(anonymous namespace)::bf16_matvec_warp_kernel_generic(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16*, int, int)
+0.18 96 1.9 linear_attention flash_rt::kernels::(anonymous namespace)::qwen36_gdn_gating_strided_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, float const*, float const*, __nv_bfloat16
+0.16 96 1.6 linear_attention flash_rt::kernels::(anonymous namespace)::causal_conv1d_update_chunk_state_kernel(__nv_bfloat16 const*, __nv_bfloat16*, int, int, int, int)
+0.12 6 19.6 elementwise_copy void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<c10::BFloat16>, std::array<char*, 1ul>, false>(int, at::native::FillFunctor<c10::BFloa
+0.09 4 23.5 elementwise_copy flash_rt::kernels::(anonymous namespace)::embedding_lookup_bf16_kernel(long const*, __nv_bfloat16 const*, __nv_bfloat16*, int, int)
+0.01 2 7.2 elementwise_copy concat2_bf16_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16*, int, int, int)
+0.01 1 13.4 elementwise_copy flash_rt::kernels::(anonymous namespace)::spec_argmax_bf16_partition_kernel(__nv_bfloat16 const*, float*, int*, int, int, int)
+0.01 1 11.0 attention void fa2_vendor::flash_fwd_splitkv_kernel<Flash_fwd_kernel_traits<256, 64, 64, 4, false, false, cutlass::bfloat16_t, Flash_kernel_traits<256, 64, 64, 4, cutlass
+0.00 1 3.1 attention void fa2_vendor::flash_fwd_splitkv_combine_kernel<Flash_fwd_kernel_traits<256, 64, 64, 4, false, false, cutlass::bfloat16_t, Flash_kernel_traits<256, 64, 64, 4,
+0.00 1 2.1 elementwise_copy flash_rt::kernels::(anonymous namespace)::spec_reduce_accept_partition_kernel(float const*, int const*, long const*, long*, int*, int, int, int)
+0.00 1 1.3 elementwise_copy flash_rt::kernels::(anonymous namespace)::silu_mul_kernel(__nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16*, int)

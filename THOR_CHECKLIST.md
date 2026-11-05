@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` / `1030` 轮做完，已从本清单删除。`1104_h` 轮做完 H1、H2，`1104_h3` 轮做完 H3a、H3，`1104_h3b` 轮做完 H3b，`1104_h3c` 轮做完 H3c，已从本清单删除。目前没有待测项。另外剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` / `1030` 轮做完，已从本清单删除。`1104_h` 轮做完 H1、H2，`1104_h3` 轮做完 H3a、H3，`1104_h3b` 轮做完 H3b，`1104_h3c` 轮做完 H3c，已从本清单删除。待测的是 H6（解码每周期变慢的一段是否伴随拷贝带宽下降、空闲之后是否再出现）与 H4（monitor 长度 prefill 的逐 kernel 剖析），同一轮按 H6 → H4 的顺序做。另外剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,7 +52,57 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-目前没有待测项。
+### 本轮共同前置
+
+H6 必须是 `git pull` 之后第一个用 GPU 的进程；开始前 GPU 上没有其他计算进程（有就等，不要停别人的进程）。全程约 30 分钟。
+
+```
+cd $FLASHRT_ROOT
+git pull
+export OUT=$HOME/thor_val/$(date +%m%d)_h6h4; mkdir -p $OUT
+export CK=$HOME/thor_val/ckpt
+export PYTHONPATH=$HOME/thor_val/pydeps_tf5:$PYTHONPATH
+R=research/experiments/harness_replay_5090/thor
+python -c "from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state as r; r()" | tee $OUT/P0_clock.log
+git rev-parse HEAD | tee $OUT/P0_commit.log
+```
+
+### H6：解码变慢的一段与拷贝带宽、空闲的关系
+
+问题：`1104_h3c` 里同一形状的解码每周期在进程前 2.5 分钟是 136–137 ms，之后 87–88 ms，可读的 CPU 与 GPU 时钟都不变，prefill 只差 1.4 %（ISSUE-112）。（1）慢段里 1 GiB 设备内拷贝的带宽是否按同样比例下降；（2）稳态之后空闲 300 s，再开始时慢段是否再出现。
+
+```
+python $R/decode_cycle_drift.py thor 300 300 180 2>&1 | tee $OUT/H6_drift.log
+python -I -c 'import json, sys; [print("%s %.0f s  %.1f ms/cycle  copy %.1f GB/s  prefill %.0f  cpu %d-%d kHz  %s" % (s["phase"], s["t_s"], s["ms_per_cycle"], s["copy_gbps"], s["prefill_ms"], min(s["cpu_khz"] or [-1]), max(s["cpu_khz"] or [-1]), s["devfreq_hz"])) for s in json.load(open(sys.argv[1]))["samples"]]' $OUT/decode_cycle_drift_thor.json | tee $OUT/H6_drift_table.txt
+```
+
+带回：`H6_drift.log` 的 `loaded:` 一行与 `idle 300 s` 一行；`H6_drift_table.txt` 全部。
+
+判据：
+- 拷贝带宽：慢段（ms / 周期 120 以上）与稳态（90 以下）的 `copy` 之比，与 ms / 周期之比（约 1.56）对照。比例相近：变慢在内存侧；拷贝不变：变慢不在纯带宽上。
+- 空闲：`after` 段开头是否又出现 120 ms 以上的一段、持续多久。出现：慢段跟空闲之后的状态有关；不出现：跟进程开始有关。
+- 5090 上同一脚本（`rtx 40 20 20`）：见 `research/experiments/harness_replay_5090/thor/decode_cycle_drift_rtx_probe_table.txt`。
+
+结论去向：issues.md ISSUE-112；`THOR_STATUS_SUMMARY.md` 本轮小节；`research/experiments/harness_replay_5090/README.md` 的 Thor 每周期一段。
+
+### H4：monitor 长度 prefill 的逐 kernel 剖析
+
+问题：Thor 上 monitor 的 prefill（4 072 token）3.98 s，占一次调用的 61 %，按 2 × 27e9 FLOP / token 只合约 55 TFLOP/s（推算，OPT-040 candidate 5）。时间花在哪些 kernel 上：GEMM、注意力、线性注意力、量化各占多少；kernel 时间之和与 prefill 墙钟差多少（主机发射与空闲）；prefill graph 开与关的差别。
+
+```
+python $R/prefill_kernel_profile.py thor eager 2>&1 | tee $OUT/H4_eager.log
+python $R/prefill_kernel_profile.py thor graph 2>&1 | tee $OUT/H4_graph.log
+```
+
+带回：两个日志的全部内容（`loaded:` 一行、prefill ms、kernel 数与时间和、类别表、前 40 个 kernel）。`$OUT/prefill_kernel_profile_thor_{eager,graph}.json` 留在 `$OUT`，不必带回。任何一步失败：完整 traceback 与失败前最后 20 行。
+
+判据：
+- 类别表里占比最大的一两类，以及前 40 个 kernel 里单个占比超过 5 % 的 kernel。`other` 一类若超过 10 %，带回的前 40 行里要能看出它是哪些 kernel。
+- kernel 时间和与 prefill ms 之差：差得多，时间在主机侧（发射、同步、空闲）；差得少，时间在 kernel 本身。
+- graph 与 eager 的 prefill ms 之差；graph 模式下若 kernel 数明显少于 eager（profiler 没有记到 graph 里的 kernel），以 eager 的类别表为准。
+- 5090 上同一脚本：`research/experiments/harness_replay_5090/thor/prefill_kernel_profile_rtx_{eager,graph}.log`。
+
+结论去向：`opportunities.md` OPT-040 candidate 5；`THOR_STATUS_SUMMARY.md` 本轮小节；`research/experiments/harness_replay_5090/README.md` 的 Thor 图像回放一节。
 
 ## 已完成的轮次（不再重跑）
 
