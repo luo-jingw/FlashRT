@@ -1638,6 +1638,10 @@ Thor: replies against the RTX 5090 references, and decode ms per speculative cyc
   access pattern (many smaller weight reads per cycle) more than a streaming copy. Candidates: the EMC governor's
   frequency ramp interacting with access intensity, DRAM power-down exit latency, or SMMU / TLB state of the
   weight pages. The CPU frequency and the GPC / NVD clocks are excluded.
+- The same two states are documented for the executor (`docs/imagewam_thor_profile.md`, "Cold and soaked memory
+  states"): cold ImageWAM `infer()` is 15-20 % slower than after about 5 minutes of continuous load, the copy
+  bandwidth about 10 % lower (231-234 against 256 GB/s), GEMM up to 30 % slower, and the VDD_CPU_SOC_MSS rail stays
+  at 16-19 W instead of the soaked 21 W. The planner's decode shows the same signature with a larger factor.
 
 ## Next Experiment
 
