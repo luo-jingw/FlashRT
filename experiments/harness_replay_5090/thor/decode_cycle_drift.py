@@ -1,15 +1,16 @@
 """Decode ms per speculative cycle of the Qwen3.8-27B NVFP4 planner (official MTP head) over time in one process, with
 the clock readings the machine exposes without root and a copy-bandwidth probe. The monitor call shape (4 072 prompt
 tokens of the repository's documentation, 53 new tokens, the prompt-length table's K) is generated back to back for
-RUN_S seconds, then the process leaves the GPU idle for IDLE_S seconds, then generates back to back for AFTER_S more
-seconds. Per generation one line: phase ("run" / "after"), seconds since the first generation, prefill and decode ms
+RUN_S seconds; then, for each gap in IDLE_S (a comma-separated list of seconds), the process leaves the GPU idle for
+that gap and generates back to back for AFTER_S more seconds. Per generation one line: phase ("run", or "after<gap>s"
+for the generations after a gap), seconds since the first generation, prefill and decode ms
 (the frontend's CUDA-event windows), spec cycles, decode ms per cycle, the copy probe (device-to-device copy of a
 PROBE_BYTES buffer, read + write bytes / time, median of PROBE_REPS, GB/s), the CPU cores' current frequencies
 (cpufreq, kHz) and every devfreq device's current frequency (Hz). Output: $OUT/decode_cycle_drift_<frontend>.json.
 
 usage (cwd = repository root): CK=<dir with qwen38-27b-nvfp4-official and qwen38-27b-fp8-official> OUT=<dir> \
   python research/experiments/harness_replay_5090/thor/decode_cycle_drift.py {rtx|thor} [RUN_S [IDLE_S [AFTER_S]]]
-(defaults 300 0 0)
+(defaults 300 0 0; IDLE_S e.g. 300 or 5,15,30,60,120)
 """
 import glob
 import json
@@ -98,7 +99,7 @@ def generate_for(fe: Qwen36TorchFrontendRtx, ids: torch.Tensor, probe: CopyProbe
         print(json.dumps(asdict(s)), flush=True)
 
 
-def main(frontend: str, run_s: float, idle_s: float, after_s: float) -> None:
+def main(frontend: str, run_s: float, idle_s: list[float], after_s: float) -> None:
     fe = FRONTENDS[frontend](CK + "/qwen38-27b-nvfp4-official", device="cuda:0", max_seq=MAX_SEQ, quant="nvfp4")
     tok = fe._tokenizer
     print("loaded:", type(fe).__name__, "long_ctx_mode", fe._long_ctx_mode, "mtp",
@@ -111,11 +112,11 @@ def main(frontend: str, run_s: float, idle_s: float, after_s: float) -> None:
     samples: list = []
     t0 = time.perf_counter()
     generate_for(fe, ids, probe, "run", t0, run_s, samples)
-    if after_s > 0:
+    for gap in idle_s if after_s > 0 else []:
         torch.cuda.synchronize()
-        print(f"idle {idle_s:.0f} s", flush=True)
-        time.sleep(idle_s)
-        generate_for(fe, ids, probe, "after", t0, samples[-1].t_s + idle_s + after_s, samples)
+        print(f"idle {gap:.0f} s", flush=True)
+        time.sleep(gap)
+        generate_for(fe, ids, probe, f"after{gap:g}s", t0, samples[-1].t_s + gap + after_s, samples)
     json.dump({"frontend": frontend, "gpu": torch.cuda.get_device_name(), "prompt_tokens": PROMPT_TOKENS,
                "new_tokens": NEW_TOKENS, "run_s": run_s, "idle_s": idle_s, "after_s": after_s,
                "probe_bytes": PROBE_BYTES, "samples": [asdict(x) for x in samples]},
@@ -124,4 +125,4 @@ def main(frontend: str, run_s: float, idle_s: float, after_s: float) -> None:
 
 if __name__ == "__main__":
     args = sys.argv[2:] + ["300", "0", "0"][len(sys.argv[2:]):]
-    main(sys.argv[1], float(args[0]), float(args[1]), float(args[2]))
+    main(sys.argv[1], float(args[0]), [float(g) for g in args[1].split(",")], float(args[2]))

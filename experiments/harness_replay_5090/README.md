@@ -167,7 +167,10 @@ captures) and 24.2-24.5 ms in the other 371 (`thor/decode_cycle_drift_rtx_table.
 `1104_h3c`, the first GPU process of the round) it takes 136.4-137.0 ms from 28 s to 153 s, 95.7-99.7 ms from 172 s
 to 218 s and 87.4-88.0 ms from 232 s on, with isolated 120-249 ms generations; prefill moves 1.4 % between the slow
 and the steady part (4 033 / 3 977 ms). CPU frequencies and the readable devfreq clocks (GPC, NVD, VIC) are the same
-in all 44 readings; the EMC clock is not readable.
+in all 44 readings; the EMC clock is not readable. Round `1105_h6h4` (another GPU process ran until just before)
+had no slow part at the start; after 300 s of idle in the same process the first two generations took 137.9 / 138.3
+ms per cycle and the next 8 recovered to 87.6 ms over about 50 s, while a 1 GiB copy probe dropped only 11 % (228.6 /
+256.5 GB/s) in the first two and was back while decode still ran 94-118 ms: the slow state follows GPU idle.
 
 ## The official planner with images on the Thor image frontend (`thor/planner_calls_vl.py`)
 

@@ -1,0 +1,42 @@
+loaded: Qwen36TorchFrontendRtx long_ctx_mode True mtp True kernel modules ['flash_rt.flash_rt_kernels', 'flash_rt.flash_rt_fa2']
+prefill ms timed 307.7 307.7 (median 307.7); whole-model TFLOP/s 714.6 (2 x 27e9 FLOP per prompt token)
+wrapped generation (1 new token): wall 343.1 ms, 2676 binding calls, binding sum 305.6 ms, outside bindings 37.5 ms
+category calls total_ms share_of_binding_sum
+gemm 781 169.3 55.4%
+linear_attention 768 81.8 26.8%
+quantize_fused 615 36.1 11.8%
+norm 268 10.0 3.3%
+elementwise_copy 210 6.7 2.2%
+rope 34 1.7 0.5%
+top 50 bindings: total_ms calls mean_us category name
+116.55 480 242.8 gemm flash_rt_kernels.fp4_w4a16_gemm_sm120_bf16out_pingpong
+39.40 199 198.0 gemm flash_rt_kernels.fp4_w4a16_gemm_sm120_bf16out
+26.59 96 276.9 linear_attention flash_rt_kernels.linear_attn_gdn_wy_chunk_h_b64_bf16_mma_fla
+18.17 128 142.0 quantize_fused flash_rt_kernels.silu_mul_merged_to_nvfp4_swizzled_grouped32_bf16
+16.00 96 166.7 linear_attention flash_rt_kernels.linear_attn_gdn_wy_output_o_b64_bf16_mma_fla_rawk
+11.83 96 123.2 gemm flash_rt_kernels.bf16_matmul_qwen36_ab96_m4_pair_bf16
+11.76 96 122.5 linear_attention flash_rt_kernels.causal_conv1d_qwen36_update_chunk_parallel_gqa_bf16
+10.73 96 111.7 linear_attention flash_rt_kernels.linear_attn_gdn_wy_recompute_wu_b64_bf16_cublaslt_packed_rhs
+8.05 128 62.9 quantize_fused flash_rt_kernels.residual_add_rms_norm_to_nvfp4_swizzled_bf16
+7.50 96 78.1 linear_attention flash_rt_kernels.linear_attn_gdn_wy_solve_tril_b64_from_kkt_pack_only
+7.41 231 32.1 quantize_fused flash_rt_kernels.quantize_bf16_to_nvfp4_swizzled
+6.72 96 70.0 linear_attention flash_rt_kernels.qwen36_gdn_wy_norm_cumsum_pack_qk_bf16
+5.22 96 54.4 norm flash_rt_kernels.rms_norm_gated_silu_qwen36_bf16
+4.77 172 27.8 norm flash_rt_kernels.rms_norm
+3.36 130 25.8 elementwise_copy flash_rt_kernels.add_bf16_out
+1.69 96 17.6 linear_attention flash_rt_kernels.linear_attn_gdn_wy_kkt_b64_bf16_cublaslt_packed_k_only
+1.68 34 49.3 rope flash_rt_kernels.qwen36_partial_rope_qk_bf16
+1.50 33 45.6 elementwise_copy flash_rt_kernels.sigmoid_mul_qwen36_bf16
+1.36 32 42.5 quantize_fused flash_rt_kernels.rms_norm_to_nvfp4_swizzled_bf16
+1.27 33 38.5 elementwise_copy flash_rt_kernels.qwen36_split_q_gate_bf16
+1.09 4 273.6 gemm flash_rt_kernels.fp4_w4a16_gemm_sm120_bf16out_widen
+0.83 96 8.6 linear_attention flash_rt_kernels.qwen36_gdn_gating_strided_bf16
+0.64 64 10.1 quantize_fused flash_rt_kernels.quantize_fp8_static
+0.46 32 14.4 quantize_fused flash_rt_kernels.dequantize_fp8_static_bf16_2
+0.33 6 55.0 elementwise_copy flash_rt_kernels.gpu_copy
+0.25 1 254.2 gemm flash_rt_kernels.bf16_matmul_cublaslt_bf16
+0.20 1 198.0 gemm flash_rt_kernels.bf16_matvec_qwen36_bf16
+0.14 4 35.3 elementwise_copy flash_rt_kernels.qwen36_embedding_lookup_bf16
+0.03 2 16.2 elementwise_copy flash_rt_kernels.concat2_bf16
+0.03 1 26.6 elementwise_copy flash_rt_kernels.qwen36_spec_accept_partitioned_bf16
+0.01 1 10.4 elementwise_copy flash_rt_kernels.silu_mul_qwen36_bf16
