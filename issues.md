@@ -1595,6 +1595,11 @@ Thor: replies against the RTX 5090 references, and decode ms per speculative cyc
   `1104_h3` H3a 156.7 / 136.3 / 136.4 ms (decompose / monitor 224 / monitor 720, three runs each within 1 %);
   `1104_h3b` start 156.9 / 99.8 / 93.3 ms, end 99.0 / 88.4 / 87.7 ms; the first of the three monitor-224 runs at
   the start took 5 198 ms over 23 cycles.
+- Round `1104_h3c` (`thor/decode_cycle_drift.py thor`, the monitor shape back to back for 300 s, the first GPU
+  process after `git pull`): 136.4-137.0 ms per cycle from 28 s to 153 s, 122-129 ms at 159-166 s, 95.7-99.7 ms
+  from 172 s to 218 s, 87.4-88.0 ms from 232 s to 302 s, with isolated 120-249 ms generations at 194, 226 and 238 s.
+  Prefill of the same generations: 4 031-4 035 ms in the slow part, 3 977-4 007 ms in the steady part. The image
+  replay in the next process: monitor median 85.8 ms per cycle, 2 of 44 timed calls slower (140.2, 101.8 ms).
 
 ## Evidence
 
@@ -1610,16 +1615,31 @@ Thor: replies against the RTX 5090 references, and decode ms per speculative cyc
   shape run. GPC and NVD clocks are locked, `emc_locked` is `null`, CPU frequencies are not locked. The two scripts
   set different environments (`planner_call_shapes.py`: eager prefill, route minimum 512, `expandable_segments`;
   `planner_calls_vl.py`: prefill graph, route minimum 1, default allocator), but the same script gives both levels.
+- `1104_h3c`: all 44 readings after each generation show every CPU core at 2 601 000 kHz and the devfreq nodes at
+  `vic` 54 MHz, `gpu-gpc-0` 1 575 MHz, `gpu-nvd-0` 1 692 MHz; no readable clock differs between the slow and the
+  steady part. The Thor exposes no EMC devfreq node, and tegrastats prints no `EMC_FREQ` (ISSUE-095).
+- The slowdown selects bandwidth-bound work: decode per cycle 136.7 / 87.7 = 1.56x, prefill 4 033 / 3 977 = 1.014x.
+  ISSUE-095 shows the same pattern on the executor: the first process after idle is 14-21 ms slower for nvfp4 and
+  fp8, fp16 is unchanged.
 
 ## Hypotheses
 
 - Replies: the ViT configuration explains the decision differences; the Thor language model's kernels change wording
   and the borderline calls (ep0 monitor@720, ep43 monitor@160).
-- Per cycle: a clock that is not locked runs lower in the slow part — the memory controller (EMC, decode is
-  bandwidth-bound: 88 ms per cycle is about 199 GB/s, 136 ms about 129 GB/s) or the CPU (host work per cycle).
+- Per cycle: the memory side runs slower for the first 2.5-3.5 minutes of bandwidth-bound GPU load after idle (an
+  unlocked EMC clock that ramps with sustained demand, or another memory-side state). The CPU frequency and the GPC /
+  NVD clocks are excluded by the `1104_h3c` readings; the EMC frequency is not readable.
 
 ## Next Experiment
 
-Thor row H3c: `thor/decode_cycle_drift.py thor` generates the monitor shape back to back for 300 s in a fresh process
-and records decode ms per cycle with the CPU cpufreq and devfreq readings of each generation; the slow part, if it
-appears, is matched against the readings.
+- Interleave a copy-bandwidth probe (device-to-device copy of a buffer larger than the L2, GB/s from CUDA events)
+  with every generation of `decode_cycle_drift.py`: if the slow part is memory-side, the probe drops by the same
+  ratio in the same part.
+- Insert an idle gap (several minutes without GPU work) after the steady part in the same process and check whether
+  the slow part comes back, separating "first minutes after idle" from "first minutes of a process".
+
+## Impact
+
+Thor decode numbers taken in the first minutes of a session's GPU load are up to 1.56x the steady value
+(`1104_h3`, `1104_h3b`, `1104_h3c`). A Thor round that times decode warms up with bandwidth-bound load first, or
+brackets its rows with a repeated reference row.

@@ -1792,7 +1792,8 @@ Measurements: `research/experiments/harness_replay_5090/README.md`.
   calls, decoded to the reference length) a monitor call takes 6.97-7.02 s (median; ViT 0.27, prefill 4.36, decode
   2.31-2.35 s): 40 of 40 exceed the 5.33 s monitor interval. Prefill is 62 % of the call (30 % on the 5090). The
   language model alone (H3a) at the 5 711-token shape (wrist camera 1280x720) takes 8.56 s. With the tail fc on
-  cuBLASLt (round `1104_h3b`) monitor prefill is 3.98 s, so a monitor call is about 6.6 s (derived).
+  cuBLASLt (round `1104_h3c`, the default path) a monitor call takes 6.51-6.59 s (median; ViT 0.27, prefill 3.99,
+  decode 2.23-2.31 s), 40 of 40 above 5.33 s; decompose 3.38-3.39 s.
 - The monitor prompt is 4 079 tokens: 2 698 image tokens (six images) and about 1 380 text tokens, of which the
   system prompt (5 150 characters) is the same in all 20 recorded monitor calls of both episodes.
 

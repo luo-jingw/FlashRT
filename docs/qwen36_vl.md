@@ -47,7 +47,11 @@ the 22 recorded calls, medians per call): decompose (2 131 tokens) ViT 140, pref
 per main-model forward on monitor. Replies equal to the RTX 5090 references: 0 of 44. Parsed decisions (untimed
 160-token calls, round `1104_h3b`): 18 of 22 equal to the references, the same count as the RTX language model with
 this ViT configuration on the 5090, with the same two changes in meaning. With the MTP tail fc on cuBLASLt (now the
-Thor frontend's default, inherited from the RTX frontend) prefill is 2 102 ms (decompose) and 3 983 ms (monitor).
+Thor frontend's default, inherited from the RTX frontend; round `1104_h3c`, commit `9609be92`): decompose ViT 136,
+prefill 2 103, decode 1 122-1 136, call 3 377-3 390 ms; monitor ViT 269-270, prefill 3 986, decode 2 228-2 311, call
+6 506-6 590 ms (5.9-7.6 s per call, all above the harness's 5.33 s monitor interval); 2.81-2.82 tokens per forward on
+monitor; decisions 18 of 22. Decode ms per speculative cycle on the Thor is 136-137 ms in the first 2.5 minutes of a
+round's GPU load and 87-88 ms after it, with the readable CPU and GPU clocks unchanged (issues.md ISSUE-112).
 
 ## Requirements
 

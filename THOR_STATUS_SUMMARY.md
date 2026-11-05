@@ -783,6 +783,43 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 
 结论去向：本节；`flash_rt/frontends/torch/qwen36_thor.py`（尾部 fc 改为继承 RTX 前端的 cuBLASLt）；`research/experiments/harness_replay_5090/README.md` 的 Thor 两节；`docs/qwen36_vl.md`、`docs/qwen36_nvfp4.md`；`opportunities.md` OPT-039 candidate 5、OPT-040；issues.md ISSUE-112；`research/reports/planner_executor_colocation_5090.md` 第 8 章。`THOR_CHECKLIST.md` 的 H3b 已删除，后续为 H3c。
 
+### `1104_h3c` 轮：解码每周期随时间的变化与时钟读数；尾部 fc 改为 cuBLASLt 之后的默认路径回放（commit `9609be92`）
+
+共同条件：HEAD `9609be92`，MAXN，GPC 1 575 MHz / NVD 1 692 MHz 锁定，`emc_locked=null`；启动时 GPU 上没有其他计算进程；未改时钟、未 sudo。`$OUT` = `$HOME/thor_val/1104_h3c`。漂移脚本是 `git pull` 之后第一个用 GPU 的进程，回放在它之后的另一个进程。两个 `loaded:` 分别为 `Qwen36TorchFrontendThor long_ctx_mode True mtp True devfreq ['8188050000.vic', 'gpu-gpc-0', 'gpu-nvd-0']` 与 `Qwen36VlTorchFrontendThor Qwen36TorchFrontendThor long_ctx_mode True mtp True`。
+
+**每周期随时间**（`thor/decode_cycle_drift.py thor`，4 072 / 53 的 monitor 形状背靠背 300 s，44 次生成；每次生成后读一次 cpufreq 与 devfreq）：
+
+| 距第一次生成 | ms / 周期 | prefill ms |
+|---|---|---|
+| 21 s（含 graph 捕获） | 441.9 | 12 188 |
+| 28–153 s（19 次） | 136.4–137.0 | 4 031–4 035 |
+| 159 / 166 s | 122.1 / 129.0 | 4 033 / 4 030 |
+| 172–218 s（7 次） | 95.7–99.7，194 s 一次 248.5 | 4 016–4 029 |
+| 226 / 238 s | 148.6 / 120.0 | 4 017 / 4 009 |
+| 232–302 s（其余 12 次） | 87.4–88.0 | 3 977–4 007 |
+
+- 全部 44 次读数里 CPU 各核都是 2 601 000 kHz，devfreq 都是 `vic` 54 MHz、`gpu-gpc-0` 1 575 MHz、`gpu-nvd-0` 1 692 MHz：慢段没有伴随任何可读时钟的变化。devfreq 下没有 EMC 节点。
+- 慢段与稳态之比：解码每周期 136.7 / 87.7 = 1.56 倍，prefill 4 033 / 3 977 = 1.014 倍。变慢集中在带宽型的解码上，算力型的 prefill 几乎不变。
+- 慢段约 2.5 分钟（28–166 s），之后约 1 分钟的过渡（96–100 ms），232 s 起进入稳态，稳态里仍有孤立的尖峰（120–249 ms）。
+- 稳态 87.7 ms 每周期（K = 3，每周期约 17.5 GB）约合 200 GB/s，为纯拷贝上限 236 GB/s 的 85 %；慢段 136.7 ms 约 128 GB/s（推算）。
+
+**默认路径回放**（`thor/planner_calls_vl.py thor`，22 次录制调用，中位；spec_k 6 = 语言模型按 prompt 长度的表，3 = 上限 3）：
+
+| 调用 | spec_k | ViT ms | prefill ms | 解码 ms | 整次 ms | 周期 | ms / 周期 | 每次前向 token |
+|---|---|---|---|---|---|---|---|---|
+| decompose × 2（2 131 token） | 6 | 136 | 2 103 | 1 122 | 3 377 | 10.5 | 106.8 | 3.69 |
+| decompose × 2 | 3 | 136 | 2 104 | 1 136 | 3 390 | 13.0 | 87.3 | 2.94 |
+| monitor × 20（4 080 token） | 6 | 270 | 3 986 | 2 228 | 6 506 | 26.0 | 85.9 | 2.81 |
+| monitor × 20 | 3 | 269 | 3 986 | 2 311 | 6 590 | 25.5 | 85.8 | 2.82 |
+
+- prefill 与 `1104_h3b` 的 cuBLASLt 尾部一行一致（decompose 2 102、monitor 3 983 ms）。
+- monitor 整次 5.9–7.6 s（逐次），中位 6.51 / 6.59 s，40 次全部超过 5.33 s 的检查间隔；其中 prefill 占 61 %，解码 34–35 %，ViT 4 %。
+- 回放进程里 monitor 的每周期中位 85.8 ms，与漂移进程的稳态一致；44 次计时调用里只有 2 次偏慢（ep0 monitor@320 K = 3 为 140.2 ms，ep43 monitor@240 K = 3 为 101.8 ms），没有出现连续的慢段。
+- monitor 上表中的 spec_k 6 与 3 周期数和每次前向 token 几乎相同；decompose 上 spec_k 6 每周期 106.8 ms、每次前向 3.69 个 token，整次与 K = 3 相差 0.4 %。
+- 决策：22 次中 18 次与 5090 参考一致、1 次无法解析（ep0 monitor@720），不一致的 4 次与 `1104_h3b` 相同。
+
+结论去向：本节；issues.md ISSUE-112；`research/experiments/harness_replay_5090/README.md` 的 Thor 两节；`opportunities.md` OPT-040；`docs/qwen36_vl.md`；`research/reports/planner_executor_colocation_5090.md` 第 8 章。`THOR_CHECKLIST.md` 的 H3c 已删除。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |
