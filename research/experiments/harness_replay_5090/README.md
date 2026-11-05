@@ -23,6 +23,22 @@ Recorded calls (wrist 224 / 1280x720):
 | monitor | 4 079 / 5 711 | 2 698 / 4 330 | 38-87 (median 55-59) | 1.02 / 1.27 s | 11.2-11.4 s |
 | replan | 1 427 | 810 | 12 | 0.43 s | 32 s |
 
+Sources of the workload parameters:
+
+- Monitor every 80 env steps: VoLoAgent's `--check-interval` default (its help text: 80 steps are about 10 pi0.5
+  chunks), kept by the agent harness's `scripts/volo_tool/eval_agent.sh` (`CHECK_INTERVAL` default 80). With
+  `--env libero` VoLoAgent replaces the default by 40 steps (`vlm_orchestrator/cli.py`, LIBERO replans every 5 sim
+  steps). The VoLoAgent paper gives about 0.2 Hz (5 s).
+- 15 Hz and 8 steps per executor query: the harness's robolab evaluation client (`scripts/volo_tool/robolab_run.py`:
+  15 Hz joint position control, `CHUNK = 8`, VoLoAgent's pi0.5 chunk length). The 5.33 s and 533 ms are derived from
+  them. The executor here, ImageWAM, is evaluated on LIBERO at 20 Hz with 16 predicted and 12 executed steps by its own
+  evaluation script, which this cadence does not follow.
+- Call contents, `max_tokens`, the synchronous protocol and the event calls: VoLoAgent's source at `ad3e3c4c` for the
+  harness's configuration. Image sizes: the harness sends full-resolution images; the wrist size is not determinable
+  from its code.
+- Set here: LIBERO-10 frames in place of robolab scenes, 800 env steps per episode, replies recorded by the planner
+  itself, the planner models, the ImageWAM executor and its configuration.
+
 `Qwen36VlTorchFrontendRtx.generate` has no EOS stop: it decodes `max_new_tokens` and cuts the reply afterwards. A
 replayed call therefore decodes the recorded reply's length through EOS (`output_tokens + 1`); the last column is
 the cost of the same call with `max_tokens` as the decode budget.
