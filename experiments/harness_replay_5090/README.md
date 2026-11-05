@@ -163,7 +163,11 @@ On the Thor the language model alone exceeds the 5.33 s monitor interval at ever
 K = 3 (about 17.5 GB of weights per cycle) is about 199 GB/s, 84 % of the Thor's measured copy bandwidth (236 GB/s);
 136 ms is 55 % (derived). `thor/decode_cycle_drift.py` generates the monitor shape back to back for 300 s in one
 process with the clock readings the machine exposes; on the 5090 a cycle takes 88 ms in the first generation (graph
-captures) and 24.2-24.5 ms in the other 371 (`thor/decode_cycle_drift_rtx_table.txt`).
+captures) and 24.2-24.5 ms in the other 371 (`thor/decode_cycle_drift_rtx_table.txt`). On the Thor (round
+`1104_h3c`, the first GPU process of the round) it takes 136.4-137.0 ms from 28 s to 153 s, 95.7-99.7 ms from 172 s
+to 218 s and 87.4-88.0 ms from 232 s on, with isolated 120-249 ms generations; prefill moves 1.4 % between the slow
+and the steady part (4 033 / 3 977 ms). CPU frequencies and the readable devfreq clocks (GPC, NVD, VIC) are the same
+in all 44 readings; the EMC clock is not readable.
 
 ## The official planner with images on the Thor image frontend (`thor/planner_calls_vl.py`)
 
@@ -187,14 +191,17 @@ call; the same reply / same decision columns count calls equal to the reference:
 | | decompose x 2 | 3 | 2.94 | 140 | 3 653 | 1 435 | 5 242 | | 0/2 | |
 | | monitor x 20 | 6 | 2.76 | 269 | 4 357 | 2 352 | 7 020 | | 0/20 | 18/20 |
 | | monitor x 20 | 3 | 2.76 | 269 | 4 356 | 2 306 | 6 968 | | 0/20 | |
-| Jetson Thor, cuBLASLt tail fc (round `1104_h3b`) | decompose x 2 | | | | 2 102 | | | | | 0/2 |
-| | monitor x 20 | | 2.82 | | 3 983 | | | | | 18/20 |
+| Jetson Thor, `thor`, cuBLASLt tail fc (round `1104_h3c`) | decompose x 2 | 6 | 3.69 | 136 | 2 103 | 1 122 | 3 377 | 8 245 | 0/2 | 0/2 |
+| | decompose x 2 | 3 | 2.94 | 136 | 2 104 | 1 136 | 3 390 | 5 920 | 0/2 | |
+| | monitor x 20 | 6 | 2.81 | 270 | 3 986 | 2 228 | 6 506 | 6 972 | 0/20 | 18/20 |
+| | monitor x 20 | 3 | 2.82 | 269 | 3 986 | 2 311 | 6 590 | 6 511 | 0/20 | |
 
 - `rtx` = `Qwen36VlTorchFrontendRtx` (FP8 / FA2 ViT); `rtx_thor_vit` = the RTX language model with the Thor
   frontend's ViT configuration (BF16 linears, SDPA); `thor` = `Qwen36VlTorchFrontendThor`, which ran its M-tile tail
   fc until round `1104_h3b` and now inherits the RTX frontend's cuBLASLt tail fc (the `1104_h3b` row ran it as the
-  variant `thor_cublaslt_tail` at commit `791b1168`). Round `1104_h3b` brought back prefill, tokens per forward and
-  decisions only. Logs and tables:
+  variant `thor_cublaslt_tail` at commit `791b1168`, prefill 2 102 / 3 983 ms, monitor 2.82 tokens per forward). The
+  `1104_h3c` row is the default path at commit `9609be92`, run after the 300 s drift process of the same round;
+  monitor decode per cycle 85.8 ms (median), 2 of 44 timed calls slower (140.2, 101.8 ms). Logs and tables:
   `thor/planner_calls_vl_{rtx,rtx_thor_vit}.{json,log}`, `thor/planner_calls_vl_{rtx,rtx_thor_vit}_table.txt`.
 - The first-call column of `spec_k` 6 includes the graph captures of each new prompt length (it runs first); peak
   allocated 22.1 / 22.4 GiB (`rtx` / `rtx_thor_vit`).
@@ -202,9 +209,10 @@ call; the same reply / same decision columns count calls equal to the reference:
   3 subgoals become 2; ep43: the same 3 subgoals in longer wording), ep43 monitor@160 (`continue` -> `grasp_tool`)
   and ep43 monitor@800 (`replan` -> `continue`). Merged-feature cosine against the FP8 / FA2 default: mean
   0.9986-0.9993 (`smoke/vit_thor_config_check.log`). The BF16 / SDPA ViT takes 65 / 129 ms against 41 / 81 ms.
-- On the Thor, every monitor call exceeds the 5.33 s monitor interval (40 of 40; 6.7x the 5090); prefill is 62 % of
-  the call (30 % on the 5090), 13.8x the 5090's; ViT 3.3x, decode 3.6-3.7x. With the cuBLASLt tail fc, monitor
-  prefill is 3.98 s and the call about 6.6 s (derived), still above 5.33 s.
+- On the Thor, every monitor call exceeds the 5.33 s monitor interval (40 of 40 with either tail fc). With the
+  cuBLASLt tail fc (round `1104_h3c`) a monitor call takes 6.51 / 6.59 s (median, `spec_k` 6 / 3; 5.9-7.6 s per
+  call), 6.2-6.3x the 5090: ViT 0.27 s (4 %), prefill 3.99 s (61 %, 12.7x the 5090's), decode 2.23-2.31 s (34-35 %,
+  3.5-3.6x). With the M-tile tail fc (round `1104_h3`) it took 6.97-7.02 s, prefill 62 % of the call.
 - Thor decisions (round `1104_h3b`, both tail fc kernels): 18 of 22 equal to the references, the same count as
   `rtx_thor_vit`; the two changes in meaning (ep0 decompose 3 -> 2 subgoals, ep43 monitor@800 `replan` ->
   `continue`) are the same as `rtx_thor_vit`'s; ep43 decompose differs in wording and ep0 monitor@720 does not parse
