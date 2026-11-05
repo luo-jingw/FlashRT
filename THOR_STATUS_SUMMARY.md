@@ -820,6 +820,37 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 
 结论去向：本节；issues.md ISSUE-112；`research/experiments/harness_replay_5090/README.md` 的 Thor 两节；`opportunities.md` OPT-040；`docs/qwen36_vl.md`；`research/reports/planner_executor_colocation_5090.md` 第 8 章。`THOR_CHECKLIST.md` 的 H3c 已删除。
 
+### `1105_h6h4` 轮：解码变慢的一段与拷贝带宽、空闲；monitor 长度 prefill 的剖析（commit `ecffa16f`）
+
+共同条件：HEAD `ecffa16f`，MAXN，GPC 1 575 MHz / NVD 1 692 MHz 锁定，`emc_locked=null`（nvpmodel 的 EMC 上限 4 266 MHz）；开跑前另一个进程（thor3）在用 GPU，等它退出、GPU 空闲后开始，H6 是 `git pull` 之后第一个用 GPU 的进程；未改时钟、未 sudo。`$OUT` = `$HOME/thor_val/1105_h6h4`。`loaded:` 为 `Qwen36TorchFrontendThor long_ctx_mode True mtp True devfreq ['8188050000.vic', 'gpu-gpc-0', 'gpu-nvd-0'] run/idle/after s 300.0 300.0 180.0`。
+
+**H6**（`thor/decode_cycle_drift.py thor 300 300 180`：4 072 / 53 的 monitor 形状背靠背 300 s，进程内空闲 300 s，再背靠背 180 s；每次生成后拷贝 1 GiB 五次取中位）：
+
+| 段 | 时间 | ms / 周期 | 拷贝 GB/s | prefill ms |
+|---|---|---|---|---|
+| run，第一次生成（含 graph 捕获） | 18 s | 296.2 | 256.4 | 12 026 |
+| run（49 次） | 24–306 s | 87.4–88.1 | 248.2–259.8 | 3 976–3 982 |
+| 空闲 300 s 之后 | 613 / 620 s | 137.9 / 138.3 | 229.9 / 227.3 | 4 041 / 4 042 |
+| | 626–669 s（8 次） | 117.8 → 108.1 → 102.1 → 98.5 → 96.0 → 94.3 → 93.9 → 93.6 | 252.8–257.7 | 3 998–4 042 |
+| | 675–790 s（20 次） | 87.5–87.8，779 s 一次 238.4 | 247.0–260.3 | 3 975–3 981 |
+
+- run 段从第一次热生成起就是稳态，没有出现 `1104_h3c` 的 136 ms 平台；这一轮开始前 GPU 一直被另一个进程使用。
+- 同一进程空闲 300 s 之后，慢段再出现：前两次生成 137.9 / 138.3 ms（稳态的 1.58 倍），之后约 50 s 内逐步回到 87.6 ms。
+- 拷贝带宽只在前两次生成里下降，降 11 %（228.6 / 256.5 GB/s）；解码还在 94–118 ms 的 8 次生成里，拷贝已回到 252.8–257.7 GB/s。prefill 在慢段多 1.6 %。
+- CPU 各核 2 601 000 kHz、devfreq 各节点在全部 80 次读数里不变。
+
+**H4**（`thor/prefill_kernel_profile.py thor {eager,graph}`）：
+
+| prefill | 计时三次 ms | 中位 ms | 剖析那次 ms | profiler 记到的 kernel |
+|---|---|---|---|---|
+| eager | 3 982.9 / 3 984.4 / 3 984.9 | 3 984.4 | 4 020.7 | 0 |
+| graph | 3 978.2 / 3 977.4 / 3 976.9 | 3 977.4 | 4 014.9 | 0 |
+
+- Thor 上的 torch.profiler 没有记到任何 CUDA kernel（两种模式都是 0），类别表为空；5090 上同一脚本记到 3 095 个。
+- prefill graph 开与关只差 0.2 %（3 977 / 3 984 ms）：prefill 不受主机发射限制。按 2 × 27e9 FLOP / token 合 55.2–55.3 TFLOP/s（推算）。
+
+结论去向：本节；issues.md ISSUE-112；`research/experiments/harness_replay_5090/README.md` 的 Thor 每周期一段与图像回放一节；`opportunities.md` OPT-040 candidate 5。`THOR_CHECKLIST.md` 的 H6、H4 已删除，后续为 H4b、H7。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

@@ -1813,3 +1813,7 @@ Measurements: `research/experiments/harness_replay_5090/README.md`.
 5. Prefill throughput on the Thor: with the cuBLASLt tail fc, prefill costs 0.98-0.99 ms per prompt token (round
    `1104_h3b`), about 55 TFLOP/s for 2 x 27e9 FLOP per token (derived), and is 60 % of a monitor call. Observation: a
    per-kernel profile of one 4 079-token prefill on the Thor (GEMM, attention, linear attention, quantize shares).
+   Round `1105_h6h4`: eager and graph prefill take 3 984 / 3 977 ms (median of three), so prefill on the Thor is not
+   bound by host launches; torch.profiler records no CUDA kernels on the Thor. `thor/prefill_binding_times.py` times
+   every kernel binding with device synchronization instead (RTX 5090: binding sum 305.6 of 307.7 ms; GEMM 55 %,
+   linear attention 27 %, quantize-fused 12 %; FA2 is held by reference and falls in the 37.5 ms outside bindings).

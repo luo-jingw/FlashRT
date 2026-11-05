@@ -1579,8 +1579,7 @@ in-process cells then exit with status 0.
 
 # ISSUE-112
 
-Status: open, non-blocking (the reply difference is explained; the decode ms per cycle at the start of a process is
-not)
+Status: open, non-blocking (the reply difference is explained; the slower decode after GPU idle is not)
 
 Area: `flash_rt/frontends/torch/qwen36_vl_thor.py` (`Qwen36VlTorchFrontendThor`) and `qwen36_thor.py` on Jetson
 Thor: replies against the RTX 5090 references, and decode ms per speculative cycle over a session
@@ -1601,6 +1600,9 @@ Thor: replies against the RTX 5090 references, and decode ms per speculative cyc
   Prefill of the same generations: 4 031-4 035 ms in the slow part, 3 977-4 007 ms in the steady part. The image
   replay in the next process: monitor median 85.8 ms per cycle, 2 of 44 timed calls slower (140.2, 101.8 ms).
 
+- Round `1105_h6h4` (H6, `decode_cycle_drift.py thor 300 300 180`, another process had used the GPU until just
+  before): 87.4-88.1 ms per cycle from the first warm generation on; after 300 s of idle in the same process
+  137.9 / 138.3 ms, then 117.8 -> 93.6 ms over 8 generations (about 50 s), then 87.5-87.8 ms.
 ## Evidence
 
 - On the 5090, the RTX language model with the Thor frontend's ViT configuration (BF16 linears, SDPA;
@@ -1622,21 +1624,26 @@ Thor: replies against the RTX 5090 references, and decode ms per speculative cyc
   ISSUE-095 shows the same pattern on the executor: the first process after idle is 14-21 ms slower for nvfp4 and
   fp8, fp16 is unchanged.
 
+- `1105_h6h4`: the 1 GiB copy probe is 228.6 GB/s in the first two slow generations against 256.5 GB/s steady
+  (-11 %), and back to 252.8-257.7 GB/s while decode is still at 93.6-117.8 ms per cycle; prefill is 1.6 % slower.
+  The slow state follows an idle period (it appears after 300 s of idle in a running process and not at the start of
+  a process that followed another GPU process), not the start of a process.
 ## Hypotheses
 
 - Replies: the ViT configuration explains the decision differences; the Thor language model's kernels change wording
   and the borderline calls (ep0 monitor@720, ep43 monitor@160).
-- Per cycle: the memory side runs slower for the first 2.5-3.5 minutes of bandwidth-bound GPU load after idle (an
-  unlocked EMC clock that ramps with sustained demand, or another memory-side state). The CPU frequency and the GPC /
-  NVD clocks are excluded by the `1104_h3c` readings; the EMC frequency is not readable.
+- Per cycle: a memory-side state that the Thor enters during GPU idle and leaves over about a minute of load. A lower
+  memory clock alone would lower the streaming copy by the same ratio as decode; the copy drops 11 % for about 13 s
+  while decode is 1.58x slower and stays above steady after the copy has recovered, so the state affects the decode
+  access pattern (many smaller weight reads per cycle) more than a streaming copy. Candidates: the EMC governor's
+  frequency ramp interacting with access intensity, DRAM power-down exit latency, or SMMU / TLB state of the
+  weight pages. The CPU frequency and the GPC / NVD clocks are excluded.
 
 ## Next Experiment
 
-- Interleave a copy-bandwidth probe (device-to-device copy of a buffer larger than the L2, GB/s from CUDA events)
-  with every generation of `decode_cycle_drift.py`: if the slow part is memory-side, the probe drops by the same
-  ratio in the same part.
-- Insert an idle gap (several minutes without GPU work) after the steady part in the same process and check whether
-  the slow part comes back, separating "first minutes after idle" from "first minutes of a process".
+- Thor row H7: idle gaps of 5, 15, 30, 60 and 120 s in one process after a warm run, each followed by 60 s of back to
+  back generation: the shortest gap after which the slow state appears. The planner's calls are seconds apart, so
+  a threshold below the call interval would slow every call that follows an idle GPU.
 
 ## Impact
 
