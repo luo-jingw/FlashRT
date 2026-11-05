@@ -44,7 +44,10 @@ configuration changes 42 of 44 greedy replies on the 22 recorded harness calls a
 Measured on a Jetson AGX Thor (THOR_STATUS_SUMMARY.md round `1104_h3`; official Qwen3.8-27B NVFP4 with its MTP head,
 the 22 recorded calls, medians per call): decompose (2 131 tokens) ViT 140, prefill 3 652, decode 1 365-1 435, call
 5 173-5 242 ms; monitor (4 079 tokens) ViT 269, prefill 4 356, decode 2 306-2 352, call 6 968-7 020 ms; 2.76 tokens
-per main-model forward on monitor. Replies equal to the RTX 5090 references: 0 of 44.
+per main-model forward on monitor. Replies equal to the RTX 5090 references: 0 of 44. Parsed decisions (untimed
+160-token calls, round `1104_h3b`): 18 of 22 equal to the references, the same count as the RTX language model with
+this ViT configuration on the 5090, with the same two changes in meaning. With the MTP tail fc on cuBLASLt (now the
+Thor frontend's default, inherited from the RTX frontend) prefill is 2 102 ms (decompose) and 3 983 ms (monitor).
 
 ## Requirements
 

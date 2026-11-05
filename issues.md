@@ -1579,46 +1579,47 @@ in-process cells then exit with status 0.
 
 # ISSUE-112
 
-Status: open, non-blocking
+Status: open, non-blocking (the reply difference is explained; the decode ms per cycle at the start of a process is
+not)
 
-Area: `flash_rt/frontends/torch/qwen36_vl_thor.py` (`Qwen36VlTorchFrontendThor`) on Jetson Thor: replies against the
-RTX 5090 references, and decode ms per speculative cycle
+Area: `flash_rt/frontends/torch/qwen36_vl_thor.py` (`Qwen36VlTorchFrontendThor`) and `qwen36_thor.py` on Jetson
+Thor: replies against the RTX 5090 references, and decode ms per speculative cycle over a session
 
 ## Observation
 
-- In round `1104_h3` (H3), all 44 timed replies of the official Qwen3.8-27B NVFP4 on the 22 recorded harness calls
-  differ from the RTX 5090 references (`cells/mtp_tail_base.json`, decoded on `Qwen36VlTorchFrontendRtx` with the
-  FP8 / FA2 ViT). The Thor replies were not saved, so their decisions are unknown.
-- Decode ms per cycle on the Thor disagree between two scripts at the same prompt length and K = 3: 136 ms in H3a
-  (`planner_call_shapes.py`, monitor 4 072 tokens, 53 new tokens, 22 cycles) against about 90 ms derived from H3's
-  medians (decode 2 306 ms, reply 71.5 tokens, 2.76 tokens per forward).
+- Round `1104_h3` (H3): all 44 timed replies of the official Qwen3.8-27B NVFP4 on the 22 recorded harness calls
+  differ from the RTX 5090 references (decoded on `Qwen36VlTorchFrontendRtx` with the FP8 / FA2 ViT).
+- Round `1104_h3b`: parsed decisions from untimed 160-token calls equal the references in 18 of 22 calls, 1 reply
+  does not parse; the same four calls differ with the M-tile and the cuBLASLt tail fc.
+- Decode ms per cycle at K = 3 on the same shapes is 136-157 ms in one part of a session and 88-100 ms in another:
+  `1104_h3` H3a 156.7 / 136.3 / 136.4 ms (decompose / monitor 224 / monitor 720, three runs each within 1 %);
+  `1104_h3b` start 156.9 / 99.8 / 93.3 ms, end 99.0 / 88.4 / 87.7 ms; the first of the three monitor-224 runs at
+  the start took 5 198 ms over 23 cycles.
 
 ## Evidence
 
 - On the 5090, the RTX language model with the Thor frontend's ViT configuration (BF16 linears, SDPA;
-  `thor/planner_calls_vl.py rtx_thor_vit`, `thor/planner_calls_vl_rtx_thor_vit_table.txt`) changes 42 of 44 replies;
-  decisions from untimed 160-token calls equal the references in 18 of 22 calls. The four others are both decompose
-  calls (ep0: 3 subgoals become 2; ep43: same 3 subgoals in longer wording), ep43 monitor@160 (`continue` →
-  `grasp_tool`) and ep43 monitor@800 (`replan` → `continue`). The FP8 / FA2 run with the same decision pass gives
-  44 / 44 replies and 22 / 22 decisions equal (`thor/planner_calls_vl_rtx_table.txt`).
-- H3a tokens per forward on the Thor differ from the 5090 on the same text prompts (1.71 / 2.36 / 2.89 against
-  1.85 / 2.60 / 2.48), so the Thor language model's greedy tokens also differ on text-only input.
-- H3 per-row spec cycles and H3a's three runs per shape were not brought back.
-- The two scripts set different environments: `planner_call_shapes.py` (H3a) runs the prefill eagerly
-  (`FLASHRT_QWEN36_TQ_PREFILL_GRAPH` unset), with `FLASHRT_QWEN36_LONG_CTX_ROUTE_MIN_SEQ=512` and
-  `expandable_segments:True`; `planner_calls_vl.py` (H3) uses the prefill graph, route minimum 1 and the default
-  allocator. The switch only selects the prefill path (`qwen36_rtx.py`, `use_prefill_graph`), and the two prefill
-  times agree (monitor 4 408 / 4 357 ms); on the 5090 both scripts give 24.3-24.4 ms per cycle.
+  `thor/planner_calls_vl_rtx_thor_vit_table.txt`) changes 42 of 44 replies and 4 of 22 decisions; the FP8 / FA2 run
+  with the same decision pass keeps 44 / 44 and 22 / 22 (`thor/planner_calls_vl_rtx_table.txt`).
+- The decisions that change in meaning on the Thor (ep0 decompose: 3 subgoals become 2; ep43 monitor@800: `replan`
+  becomes `continue`) change the same way in `rtx_thor_vit`. The other two Thor differences are ep43 decompose (same
+  subgoals, longer wording) and ep0 monitor@720 (not parseable); ep43 monitor@160, which `rtx_thor_vit` changes to
+  `grasp_tool`, equals the reference on the Thor.
+- Per cycle: in `1104_h3` the H3a shapes ran first after the checkpoint conversion, the image replay after them
+  (about 90 ms per cycle derived from its medians); in `1104_h3b` the slow part is the first shape of the first
+  shape run. GPC and NVD clocks are locked, `emc_locked` is `null`, CPU frequencies are not locked. The two scripts
+  set different environments (`planner_call_shapes.py`: eager prefill, route minimum 512, `expandable_segments`;
+  `planner_calls_vl.py`: prefill graph, route minimum 1, default allocator), but the same script gives both levels.
 
 ## Hypotheses
 
-- The replies differ mainly because of the ViT configuration (BF16 / SDPA against FP8 / FA2): on the 5090 it alone
-  changes 42 of 44 replies; the Thor language model's kernels change the remaining tokens.
-- The per-cycle gap is a session effect (clock or another GPU process during H3a, which ran right after the
-  conversion) or a difference between the two scripts' decode windows; the bracketed rerun decides.
+- Replies: the ViT configuration explains the decision differences; the Thor language model's kernels change wording
+  and the borderline calls (ep0 monitor@720, ep43 monitor@160).
+- Per cycle: a clock that is not locked runs lower in the slow part — the memory controller (EMC, decode is
+  bandwidth-bound: 88 ms per cycle is about 199 GB/s, 136 ms about 129 GB/s) or the CPU (host work per cycle).
 
 ## Next Experiment
 
-Thor row H3b: print H3's per-row cycles from the existing JSON; rerun H3a before and after; rerun H3 with reply texts
-and the decision pass (`planner_calls_vl_table.py`), and compare the Thor decisions with the 5090's FP8 / FA2
-references and with `rtx_thor_vit` (same ViT configuration).
+Thor row H3c: `thor/decode_cycle_drift.py thor` generates the monitor shape back to back for 300 s in a fresh process
+and records decode ms per cycle with the CPU cpufreq and devfreq readings of each generation; the slow part, if it
+appears, is matched against the readings.

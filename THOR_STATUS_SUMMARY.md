@@ -742,6 +742,47 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 
 结论去向：本节；`research/experiments/harness_replay_5090/README.md` 的 Thor 两节；`research/reports/planner_executor_colocation_5090.md` 第 8 章；`docs/qwen36_vl.md` 的 Thor 一节；`opportunities.md` OPT-039、OPT-040；issues.md ISSUE-112；`plan.md` "image input for the 27B planner on Jetson Thor" Phase 3。`THOR_CHECKLIST.md` 的 H3a、H3 已删除，后续为 H3b。
 
+### `1104_h3b` 轮：27B 规划器在 Thor 上的决策、每周期耗时的核对、MTP 尾部 fc（commit `791b1168`）
+
+共同条件：HEAD `791b1168`，MAXN，GPC 1 575 MHz / NVD 1 692 MHz 锁定，`emc_locked=null`；启动时 GPU 上没有其他计算进程；未改时钟、未 sudo。`$OUT` = `$HOME/thor_val/1104_h3b`。两次回放的 `loaded:` 分别为 `Qwen36VlTorchFrontendThor Qwen36TorchFrontendThor` 与 `Qwen36VlThorWithCublasltTail Qwen36ThorWithCublasltTail`，均 `long_ctx_mode True mtp True`。
+
+**决策**（`thor/planner_calls_vl.py` 每次调用额外一次 160 token 的不计时调用，由 `planner_calls_vl_table.py` 解析成决策）：Thor 版前端（M-tile 尾部）与 cuBLASLt 尾部两次回放都是 22 次中 18 次与 5090 参考一致、1 次无法解析，不一致的 4 次两边相同：
+
+- ep0 decompose：3 个子目标变成 2 个（"put the moka pot on the stove"）；
+- ep0 monitor@720：回复无法解析；
+- ep43 decompose：3 个子目标相同，措辞不同；
+- ep43 monitor@800：参考为 `replan`，Thor 为 `continue`。
+
+5090 上同样 ViT 配置的 `rtx_thor_vit` 也是 18 / 22，其中 ep0 decompose 与 ep43 monitor@800 的变化与 Thor 相同；ep43 monitor@160 在 Thor 上与参考一致（`rtx_thor_vit` 为 `grasp_tool`）。
+
+**尾部 fc 的 kernel**（`thor/mtp_tail_fc_kernels.py`，随机权重，rows × 10 240 → 5 120，20 次中位，ms）：
+
+| 行数 | M-tile（`bf16_matmul_qwen36_thor_mtp_fc_bf16`） | warp（`bf16_matmul_qwen36_bf16`） | cuBLASLt（`max_algos=1`） | 输出最大差 |
+|---:|---:|---:|---:|---:|
+| 512 | 379.7 | 728.3 | 0.890 | 3.1e-2 |
+| 2 048 | 1 518.6 | 2 913.3 | 3.464 | 3.1e-2 |
+| 4 071 | 3 018.9 | 5 791.1 | 14.720 | 6.3e-2 |
+
+**两种尾部的回放**（22 次录制调用，中位）：prefill decompose 3 649 → 2 102 ms、monitor 4 360 → 3 983 ms；monitor 每次前向 2.76 → 2.82 个 token；决策都是 18 / 22。
+
+- prefill 减少的 1 547 / 377 ms 与 kernel 计时之差（2 048 / 512 行：1 515 / 379 ms）一致。
+- 换用 cuBLASLt 后，每个 prompt token 的 prefill 为 0.98–0.99 ms（decompose 2 102 ms / 2 131 token，monitor 3 983 / 4 079）。
+- 两次回放的解码与整次调用中位本轮没有带回；按 prefill 之差推算 monitor 整次约 6.6 s，仍超过 5.33 s（推算）。
+
+**每周期**（`thor/planner_call_shapes.py thor` 在本轮开头与结尾各一次；`1104_h3` 的 H3a 每个形状三次的 decode ms / 周期数为 2 194 / 14、2 998 / 22、2 453–2 479 / 18，三次之间相差 1 % 以内）：
+
+| 形状 | `1104_h3` H3a ms / 周期 | 本轮开头 | 本轮结尾 |
+|---|---:|---:|---:|
+| decompose | 156.7 | 156.9 | 99.0 |
+| monitor 腕部 224 | 136.3 | 99.8（三次中第一次 5 198 ms / 23 周期） | 88.4 |
+| monitor 腕部 720 | 136.4 | 93.3 | 87.7 |
+
+- 开头与结尾最多相差 1.6 倍，大于要核对的差距，本轮的每周期数不作为分母。
+- 稳态为 88–100 ms；136–157 ms 出现在进程的前一段（`1104_h3` 的 H3a 整段、本轮开头的第一个形状）。88 ms 每周期（K = 3，每周期约 17.5 GB）约合 199 GB/s，为纯拷贝上限 236 GB/s 的 84 %（推算）。
+- `emc_locked=null`，CPU 频率不锁；前一段变慢的原因未查明（issues.md ISSUE-112）。
+
+结论去向：本节；`flash_rt/frontends/torch/qwen36_thor.py`（尾部 fc 改为继承 RTX 前端的 cuBLASLt）；`research/experiments/harness_replay_5090/README.md` 的 Thor 两节；`docs/qwen36_vl.md`、`docs/qwen36_nvfp4.md`；`opportunities.md` OPT-039 candidate 5、OPT-040；issues.md ISSUE-112；`research/reports/planner_executor_colocation_5090.md` 第 8 章。`THOR_CHECKLIST.md` 的 H3b 已删除，后续为 H3c。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |
