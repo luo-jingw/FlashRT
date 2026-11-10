@@ -1,0 +1,22 @@
+ep0_wrist224: 10 monitor calls, prompt 4076, boundary B 2641, aligned 2048, capsule build ms aligned 241, exact 295
+  step   80 gen/eos   1173ms | non/eos   1171ms | non/sto    559ms | non/dec    558ms | ali/eos    973ms | ali/sto    363ms | ali/dec    362ms | exa/eos    883ms txt | exa/sto    272ms | exa/dec    318ms
+  step  160 gen/eos    975ms | non/eos    975ms | non/sto    533ms | non/dec    533ms | ali/eos    778ms | ali/sto    339ms | ali/dec    337ms | exa/eos    758ms txt | exa/sto    322ms | exa/dec    322ms
+  step  240 gen/eos    976ms | non/eos    972ms | non/sto    534ms | non/dec    533ms | ali/eos    775ms | ali/sto    338ms | ali/dec    336ms | exa/eos    785ms txt | exa/sto    294ms | exa/dec    293ms
+  step  320 gen/eos    999ms | non/eos    999ms | non/sto    533ms | non/dec    533ms | ali/eos    801ms | ali/sto    338ms | ali/dec    338ms | exa/eos    807ms txt | exa/sto    295ms | exa/dec    292ms
+  step  400 gen/eos   1244ms | non/eos   1244ms | non/sto    534ms | non/dec    534ms | ali/eos   1047ms | ali/sto    338ms | ali/dec    335ms | exa/eos   1030ms txt | exa/sto    321ms | exa/dec    317ms
+  step  480 gen/eos    975ms | non/eos    994ms | non/sto    532ms | non/dec    531ms | ali/eos    799ms | ali/sto    336ms | ali/dec    334ms | exa/eos    835ms txt | exa/sto    322ms | exa/dec    318ms
+  step  560 gen/eos    974ms | non/eos    969ms | non/sto    532ms | non/dec    533ms | ali/eos    773ms | ali/sto    338ms | ali/dec    337ms | exa/eos    785ms txt | exa/sto    294ms | exa/dec    295ms
+  step  640 gen/eos   1170ms | non/eos   1171ms | non/sto    533ms | non/dec    533ms | ali/eos    974ms | ali/sto    338ms | ali/dec    336ms | exa/eos   1004ms txt | exa/sto    295ms | exa/dec    319ms
+  step  720 gen/eos   1246ms | non/eos   1244ms | non/sto    532ms | non/dec    529ms | ali/eos   1049ms | ali/sto    338ms | ali/dec    333ms | exa/eos   1083ms txt | exa/sto    346ms | exa/dec    341ms
+  step  800 gen/eos   1295ms | non/eos   1293ms | non/sto    532ms | non/dec    529ms | ali/eos   1097ms | ali/sto    338ms | ali/dec    335ms | exa/eos   1030ms txt | exa/sto    319ms | exa/dec    318ms
+ep43_wrist224: 10 monitor calls, prompt 4083, boundary B 2641, aligned 2048, capsule build ms aligned 241, exact 298
+  step   80 gen/eos   1049ms | non/eos   1069ms | non/sto    509ms | non/dec    508ms | ali/eos    872ms | ali/sto    312ms | ali/dec    311ms | exa/eos    882ms txt | exa/sto    322ms | exa/dec    267ms DIFF
+  step  160 gen/eos    876ms | non/eos    877ms | non/sto    533ms | non/dec    531ms | ali/eos    680ms | ali/sto    338ms | ali/dec    335ms | exa/eos    731ms txt | exa/sto    295ms | exa/dec    297ms
+  step  240 gen/eos   1048ms | non/eos   1044ms | non/sto    556ms | non/dec    555ms | ali/eos    851ms | ali/sto    363ms | ali/dec    361ms | exa/eos    806ms txt | exa/sto    297ms | exa/dec    270ms DIFF
+  step  320 gen/eos   1001ms | non/eos   1000ms | non/sto    533ms | non/dec    530ms | ali/eos    804ms | ali/sto    339ms | ali/dec    335ms | exa/eos    782ms txt | exa/sto    297ms | exa/dec    296ms
+  step  400 gen/eos   1147ms | non/eos   1147ms | non/sto    533ms | non/dec    529ms | ali/eos    950ms | ali/sto    335ms | ali/dec    333ms | exa/eos    858ms txt | exa/sto    271ms | exa/dec    270ms
+  step  480 gen/eos   1148ms | non/eos   1147ms | non/sto    533ms | non/dec    531ms | ali/eos    951ms | ali/sto    337ms | ali/dec    334ms | exa/eos    959ms txt | exa/sto    298ms | exa/dec    295ms
+  step  560 gen/eos   1121ms | non/eos   1119ms | non/sto    558ms | non/dec    556ms | ali/eos    925ms | ali/sto    363ms | ali/dec    358ms | exa/eos    910ms DIFF txt | exa/sto    420ms DIFF | exa/dec    341ms DIFF
+  step  640 gen/eos    855ms | non/eos    851ms | non/sto    535ms | non/dec    531ms | ali/eos    655ms | ali/sto    338ms | ali/dec    336ms | exa/eos    689ms txt | exa/sto    296ms | exa/dec    291ms
+  step  720 gen/eos    975ms | non/eos    977ms | non/sto    533ms | non/dec    531ms | ali/eos    780ms | ali/sto    338ms | ali/dec    332ms | exa/eos    710ms txt | exa/sto    296ms | exa/dec    294ms
+  step  800 gen/eos   1146ms | non/eos   1143ms | non/sto    558ms | non/dec    554ms | ali/eos    946ms | ali/sto    362ms | ali/dec    355ms | exa/eos    953ms DIFF txt | exa/sto    297ms DIFF | exa/dec    296ms DIFF
