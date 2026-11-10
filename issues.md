@@ -1654,3 +1654,31 @@ Thor: replies against the RTX 5090 references, and decode ms per speculative cyc
 Thor decode numbers taken in the first minutes of a session's GPU load are up to 1.56x the steady value
 (`1104_h3`, `1104_h3b`, `1104_h3c`). A Thor round that times decode warms up with bandwidth-bound load first, or
 brackets its rows with a repeated reference row.
+
+# ISSUE-113
+
+Status: open, non-blocking
+
+Area: `research/topics/long-horizon-planner-executor/` — paper metadata and numbers not verified on a primary page in
+the first survey round (2026-11-09); the entries are marked † in its `papers.md`.
+
+## Observation
+
+- Numbers given only in figures (no value in the text): Hi Robot against flat π0 (Fig. 5, Fig. 8); π0.5 §V-E (Fig.
+  13); OneTwoVLA per task (Fig. 6); Gemini Robotics 1.5 per task (Fig. 17 / 41); Slow Brain, Fast Planner latency
+  sweep (Fig. 6); VLA-OS per-paradigm LIBERO-Long values.
+- Not read in full: Long-VLA (PDF over the fetch limit, no HTML; L-CALVIN chain length and values unknown); DualVLN on
+  Jetson Thor (OpenReview Ei1Wgdo2I0 blocks automated access; abstract only, observation age undefined).
+- Instruction given to flat OpenVLA in RoboCerebra's comparison is not stated; Tri-System π0.5 Table 1 column
+  alignment for Tidy Desk is inferred.
+- Titles written without a primary-page check in this round: AsyncDriver, SmolVLA, Orion (and the Orion DOI); full
+  titles of Think at 5 Hz Act at 20 Hz, VLA-Corrector and LiteVLA-H were not recorded.
+- Venues not confirmed from the arXiv comment field: VLA-OS (NeurIPS 2025 page only), OxyGen (HTML page says NeurIPS
+  2026).
+- The edge isolation study (2601.07600) and Understanding Asynchronous Inference (2605.08168) were reused from earlier
+  surveys without reopening.
+
+## Next Experiment
+
+Open each primary page (arXiv abs / HTML, proceedings) and either replace the † entry with the verified value or
+state that the value is figure-only.
