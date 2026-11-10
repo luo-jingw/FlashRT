@@ -1,4 +1,6 @@
-# Paper PDFs and their text extractions stay local; papers/README.md lists the sources.
-papers/*/
+# Paper PDFs and their text extractions stay local; each topic's papers/README.md lists the sources.
+topics/*/papers/*/
 # Discussion notes stay local.
 Literature Review for the Discussion.md
+# Topic reading notes are part of each survey (the root .gitignore ignores dev-local notes/ directories).
+!topics/*/notes/
