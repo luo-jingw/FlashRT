@@ -79,7 +79,7 @@ class CellResult:
     runs: list
 
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
 
 
 def prompt_ids(tok, kind: str, n: int) -> torch.Tensor:

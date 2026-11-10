@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from PIL import Image
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "benchmarks"))
 from _imagewam_libero_frames import _episode_video, _suite_root, read_video_frame  # noqa: E402
 
@@ -46,7 +46,7 @@ def build_prompts(data_root: str, tokenizer=None) -> list[E2EPrompt]:
     wrist = _frame(data_root, "libero_10", "observation.images.wrist_image", 0, 30)
     goal = _frame(data_root, "libero_goal", "observation.images.image", 0, 0)
     logo = Image.open(os.path.join(REPO, "FlashRT.png")).convert("RGB")
-    chart = Image.open(os.path.join(REPO, "research/experiments/actiondit_representation/preview.png")).convert("RGB")
+    chart = Image.open(os.path.join(REPO, "research/topics/wam-inference-acceleration/experiments/actiondit_representation/preview.png")).convert("RGB")
     return [
         E2EPrompt("text_quantum", "text", _user("Explain quantum entanglement in one short paragraph."), None),
         E2EPrompt("text_robot_plan", "text", _user("A robot must put a bowl in a drawer and close it. "

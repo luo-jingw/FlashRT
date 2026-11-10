@@ -11,7 +11,7 @@ wrap). Printed: prefill ms, the wrapped generation's wall ms, the category table
 the binding name) and the TOP bindings. Output: $OUT/prefill_binding_times_<frontend>.json.
 
 usage (cwd = repository root): CK=<dir with qwen38-27b-nvfp4-official and qwen38-27b-fp8-official> OUT=<dir> \
-  python research/experiments/harness_replay_5090/thor/prefill_binding_times.py {rtx|thor}
+  python research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/prefill_binding_times.py {rtx|thor}
 """
 import glob
 import json

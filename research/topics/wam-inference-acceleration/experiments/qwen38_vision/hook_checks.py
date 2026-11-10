@@ -55,7 +55,7 @@ import torch  # noqa: E402
 from flash_rt.frontends.torch._qwen36_mrope import text_rope_rows  # noqa: E402
 from flash_rt.frontends.torch.qwen36_rtx import Qwen36TorchFrontendRtx  # noqa: E402
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
 
 
 def doc_ids(tok, n: int) -> torch.Tensor:

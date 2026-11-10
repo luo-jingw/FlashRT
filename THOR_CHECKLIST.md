@@ -62,7 +62,7 @@ git pull
 export OUT=$HOME/thor_val/$(date +%m%d)_h7h4b; mkdir -p $OUT
 export CK=$HOME/thor_val/ckpt
 export PYTHONPATH=$HOME/thor_val/pydeps_tf5:$PYTHONPATH
-R=research/experiments/harness_replay_5090/thor
+R=research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor
 python -c "from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state as r; r()" | tee $OUT/P0_clock.log
 git rev-parse HEAD | tee $OUT/P0_commit.log
 ```
@@ -81,9 +81,9 @@ python -I -c 'import json, sys; [print("%s %.0f s  %.1f ms/cycle  copy %.1f GB/s
 判据：
 - 每个 `after<gap>s` 段的第一、二次生成的 ms / 周期，与 `run` 段的稳态（约 87.6）比较；高于 100 的最短 gap 就是阈值。
 - 各段开头的 `copy` 与稳态（约 256 GB/s）比较。
-- 5090 上同一脚本：见 `research/experiments/harness_replay_5090/thor/decode_cycle_drift_rtx_probe_table.txt`（空闲 20 s 前后都是 24.2–24.3 ms）。
+- 5090 上同一脚本：见 `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/decode_cycle_drift_rtx_probe_table.txt`（空闲 20 s 前后都是 24.2–24.3 ms）。
 
-结论去向：issues.md ISSUE-112；`THOR_STATUS_SUMMARY.md` 本轮小节；`research/experiments/harness_replay_5090/README.md` 的 Thor 每周期一段。
+结论去向：issues.md ISSUE-112；`THOR_STATUS_SUMMARY.md` 本轮小节；`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md` 的 Thor 每周期一段。
 
 ### H4b：monitor 长度 prefill 按 kernel 绑定计时
 
@@ -98,9 +98,9 @@ python $R/prefill_binding_times.py thor 2>&1 | tee $OUT/H4b_bindings.log
 判据：
 - 类别表里占比最大的一两类；前 50 个绑定里单个超过 5 % 的。
 - 绑定以外的时间：包含注意力后端在初始化时持有的函数（5090 上的 FA2）与 torch 算子；它大于 10 % 时，单独写出来。
-- 与 5090 同一脚本对照：`research/experiments/harness_replay_5090/thor/prefill_binding_times_rtx.log`（prefill 307.7 ms，绑定和 305.6 ms，GEMM 55 %、线性注意力 27 %、量化 12 %）；同名绑定 Thor / 5090 的倍数。
+- 与 5090 同一脚本对照：`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/prefill_binding_times_rtx.log`（prefill 307.7 ms，绑定和 305.6 ms，GEMM 55 %、线性注意力 27 %、量化 12 %）；同名绑定 Thor / 5090 的倍数。
 
-结论去向：`opportunities.md` OPT-040 candidate 5；`THOR_STATUS_SUMMARY.md` 本轮小节；`research/experiments/harness_replay_5090/README.md` 的 Thor 图像回放一节。
+结论去向：`opportunities.md` OPT-040 candidate 5；`THOR_STATUS_SUMMARY.md` 本轮小节；`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md` 的 Thor 图像回放一节。
 
 ## 已完成的轮次（不再重跑）
 

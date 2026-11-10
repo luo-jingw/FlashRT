@@ -14,7 +14,7 @@ any reference reply, cut at EOS), so that a reply longer than the reference is n
 `planner_calls_vl_table.py` parses into the call's decision.
 
 usage (cwd = repository root): CK=<dir with qwen38-27b-nvfp4-official and qwen38-27b-fp8-official> OUT=<dir> \
-  python research/experiments/harness_replay_5090/thor/planner_calls_vl.py {rtx|thor|rtx_thor_vit}
+  python research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/planner_calls_vl.py {rtx|thor|rtx_thor_vit}
 """
 import json
 import os

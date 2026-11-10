@@ -1721,7 +1721,7 @@ Area: `flash_rt/frontends/torch/qwen36_rtx.py` (`_generate_long_ctx_speculative_
 
 ## Observation
 
-`research/experiments/harness_replay_5090/cells/mtp_tail_{master,base}.json`, 22 recorded harness calls (ep0, ep43,
+`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/cells/mtp_tail_{master,base}.json`, 22 recorded harness calls (ep0, ep43,
 wrist 224), each model decoding to its own EOS; tokens per main-model forward / decode ms per call, K = 3, tail fc on
 cuBLASLt:
 
@@ -1754,7 +1754,7 @@ cuBLASLt:
 2. Done: the tail fc projection on cuBLASLt (`_mtp_tail_fc_matmul`, `max_algos=1`; on Thor see candidate 5).
    Official model on the 22 calls: tokens per forward equal to the grid's cuBLASLt cells, prefill
    311 / 172 ms (monitor / decompose) against 338 / 258 ms on the small-M kernel, replies unchanged
-   (`research/experiments/harness_replay_5090/thor/planner_calls_vl_rtx.json`). Not measured: the Spark frontend,
+   (`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/planner_calls_vl_rtx.json`). Not measured: the Spark frontend,
    which inherits the hook, and BF16-source MTP heads (Qwen3.6), whose tail also runs through it.
 3. Done: `generate(spec_k=...)` on the image frontend (below 6 caps the prompt-length table). Official model:
    decompose 312 ms at K = 3 against 320 ms at the table's K = 6, monitor unchanged (the table gives 3); the master
@@ -1773,7 +1773,7 @@ Status: proposed, not started.
 
 Area: `flash_rt/frontends/torch/qwen36_vl_rtx.py` (`generate`), `flash_rt/frontends/torch/qwen36_rtx.py` (lazy graph
 capture by prompt length and decode position), `flash_rt/frontends/torch/imagewam_thor.py` (`set_prompt`).
-Measurements: `research/experiments/harness_replay_5090/README.md`.
+Measurements: `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md`.
 
 ## Observation
 

@@ -5,7 +5,7 @@ cuBLASLt with the heuristic's first algorithm (`bf16_matmul_cublaslt_bf16`, max_
 default). Median of 20 timed calls after 3 warm-ups (CUDA events), and the largest absolute difference of each
 output from the warp kernel's.
 
-usage (cwd = repository root): python research/experiments/harness_replay_5090/thor/mtp_tail_fc_kernels.py
+usage (cwd = repository root): python research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/mtp_tail_fc_kernels.py
 """
 import torch
 

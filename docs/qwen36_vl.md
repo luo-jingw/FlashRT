@@ -20,7 +20,7 @@ language-model path of `Qwen36TorchFrontendRtx`. Video input is not supported.
 - The language model's forward code is unchanged.
 - Draft length: `generate(..., spec_k=K)` passes K to the language model's speculative generation; K below 6 caps its
   prompt-length table (`_long_tq_effective_k`), 6 (the default) or more takes the table. On 22 recorded VoLoAgent
-  harness calls (official Qwen3.8-27B with its MTP head; `research/experiments/harness_replay_5090/thor/
+  harness calls (official Qwen3.8-27B with its MTP head; `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/
   planner_calls_vl_rtx.json`), the table gives K = 6 for decompose (2 130 tokens) and K = 3 for monitor (4 076):
   decompose decode 320 ms at K = 6 and 312 ms at K = 3, monitor 652 ms at both; replies identical.
 
@@ -36,10 +36,10 @@ different components, chosen in the construction methods `_build_language_model`
 
 On the RTX 5090, this ViT configuration against the FP8 / FA2 default on the three images of a recorded decompose call:
 merged-feature cosine mean 0.9986-0.9993 (min 0.962-0.996), 1.2-1.7x the time per image
-(`research/experiments/harness_replay_5090/smoke/vit_thor_config_check.log`; on SM120 its linears run
+(`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/smoke/vit_thor_config_check.log`; on SM120 its linears run
 `w16a16_gemm_sm120_bf16`, on Thor the Qwen3-VL module's cuBLASLt GEMM). With the RTX language model, this ViT
 configuration changes 42 of 44 greedy replies on the 22 recorded harness calls and 4 of 22 parsed decisions
-(`research/experiments/harness_replay_5090/README.md`).
+(`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md`).
 
 Measured on a Jetson AGX Thor (THOR_STATUS_SUMMARY.md round `1104_h3`; official Qwen3.8-27B NVFP4 with its MTP head,
 the 22 recorded calls, medians per call): decompose (2 131 tokens) ViT 140, prefill 3 652, decode 1 365-1 435, call
@@ -60,7 +60,7 @@ round's GPU load and 87-88 ms after it, with the readable CPU and GPU clocks unc
   `flash_rt_kernels`).
 - Checkpoint: one directory with the compressed-tensors NVFP4 language model and the BF16 `model.visual.*` tensors in
   `model.safetensors`, plus `config.json`, tokenizer and processor files. A block-128 FP8 release converts with
-  `research/experiments/qwen38_distill_bench/fp8_to_nvfp4_ct.py` (MLP and full-attention projections to NVFP4,
+  `research/topics/wam-inference-acceleration/experiments/qwen38_distill_bench/fp8_to_nvfp4_ct.py` (MLP and full-attention projections to NVFP4,
   linear-attention projections to BF16).
 - MTP head for speculative decode: `FLASHRT_QWEN36_MTP_CKPT_DIR`, as for the text frontend.
 - Prefill route: below `FLASHRT_QWEN36_LONG_CTX_ROUTE_MIN_SEQ` (default 512) a prompt is prefilled one token at a
@@ -85,7 +85,7 @@ print(r.text, r.timings_ms)
 
 ## Measured (RTX 5090, Qwen3.8-27B LoRA-merged checkpoint, 2026-11-03)
 
-Component parity against transformers 5.17 (`research/experiments/qwen38_vision/`):
+Component parity against transformers 5.17 (`research/topics/wam-inference-acceleration/experiments/qwen38_vision/`):
 
 | check | result |
 |---|---|

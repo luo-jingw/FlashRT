@@ -7,7 +7,7 @@ generations (the frontend's prefill / decode CUDA-event windows, spec cycles, ac
 on the hardware only, tokens per forward on the text.
 
 usage (cwd = repository root): CK=<dir with qwen38-27b-nvfp4-official and qwen38-27b-fp8-official> OUT=<dir> \
-  python research/experiments/harness_replay_5090/thor/planner_call_shapes.py {rtx|thor}
+  python research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/planner_call_shapes.py {rtx|thor}
 """
 import glob
 import json

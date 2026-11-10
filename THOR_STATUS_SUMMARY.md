@@ -534,7 +534,7 @@ HEAD `6526118`，未重编。`STEPS="0 3 4"` 全部 `rc=0`。MAXN，`emc_locked=
 
 ### `1028` 轮：Y0–Y4 快慢模型共享 Thor 的 GPU（commit `43f11f9`）
 
-共同条件：HEAD `43f11f9`，MAXN，GPC / NVD 锁定，`emc_locked=null`；未改时钟、未 sudo。`nvidia-smi` 字段为 `[N/A]`，全程 `NO_SMI=1`。执行器为 ImageWAM fp8（`DROP_TEXT_ENCODER=1`），规划器为 Qwen3-VL-2B bf16，每次调用生成 32 个 token；transformers 5.17.0 装在独立目录 `$HOME/thor_val/pydeps_tf5`、经 `PYTHONPATH` 前置（torch 2.9.1+cu130、torchvision 0.24.1 为环境原有）。脚本与 5090 对照在 `research/experiments/colocation_5090/`。
+共同条件：HEAD `43f11f9`，MAXN，GPC / NVD 锁定，`emc_locked=null`；未改时钟、未 sudo。`nvidia-smi` 字段为 `[N/A]`，全程 `NO_SMI=1`。执行器为 ImageWAM fp8（`DROP_TEXT_ENCODER=1`），规划器为 Qwen3-VL-2B bf16，每次调用生成 32 个 token；transformers 5.17.0 装在独立目录 `$HOME/thor_val/pydeps_tf5`、经 `PYTHONPATH` 前置（torch 2.9.1+cu130、torchvision 0.24.1 为环境原有）。脚本与 5090 对照在 `research/topics/wam-inference-acceleration/experiments/colocation_5090/`。
 
 **Y0 / Y1 环境与 SM 划分手段。** MPS 可用（设好 `CUDA_MPS_PIPE_DIRECTORY` 后 `cuda under mps ok True`）。Thor GPU 有 20 个 SM；green context 请求 2 / 4 / 8 个 SM 都得到 8 / 12 的划分（粒度 8 SM），两组上 8192³ BF16 matmul 为 16.7 / 12.0 ms，比值 1.39，接近 SM 数之比 12 / 8 = 1.5，kernel 被限制在各自的组里。
 
@@ -587,7 +587,7 @@ HEAD `6526118`，未重编。`STEPS="0 3 4"` 全部 `rc=0`。MAXN，`emc_locked=
 
 **Y5 未得到结果。** `overlap_trace.py` 的 alone trace 里没有 CUDA kernel 事件，overlap 阶段两次都在 `cuGraphLaunch` / `CUDAGraph::replay` 处 segfault（issues.md ISSUE-099）。mps25 两格的 segfault 记在 issues.md ISSUE-100。
 
-结论去向：本节；`research/experiments/colocation_5090/README.md` 的 Thor 一节；issues.md ISSUE-098–100。`THOR_CHECKLIST.md` 的 `1028` 轮已删除。
+结论去向：本节；`research/topics/wam-inference-acceleration/experiments/colocation_5090/README.md` 的 Thor 一节；issues.md ISSUE-098–100。`THOR_CHECKLIST.md` 的 `1028` 轮已删除。
 
 ### `1029` 轮：Z0–Z2 短执行器配置（nvfp4、2 步）下的共享与同 SM 数的分母（commit `b5155eb`）
 
@@ -634,7 +634,7 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 - 进程内的格（prio、green25）在计时窗口内 `alloc` 计数为 1，其余格为 0；规划器每格调用 4–11 次。
 - `p100_ctx16000_prio` 在结果写出后、进程退出时报 `c10::Error`，调用栈在 `conv3d` / `slow_conv_dilated3d_cuda`（规划器线程退出时仍在跑视觉编码），不影响该格结果。
 
-结论去向：本节；`research/experiments/colocation_5090/README.md` 的 Thor 一节；issues.md ISSUE-098。长上下文 prio / green25 四格的 JSON 在 Thor 的 `$HOME/thor_val/1029/cells/`，停顿定位在 `1029b`。
+结论去向：本节；`research/topics/wam-inference-acceleration/experiments/colocation_5090/README.md` 的 Thor 一节；issues.md ISSUE-098。长上下文 prio / green25 四格的 JSON 在 Thor 的 `$HOME/thor_val/1029/cells/`，停顿定位在 `1029b`。
 
 **`1029b`（commit `63a0064`，环境同上）。** Z3：`stall_timeline.py` 读四个长上下文格。每次规划器调用恰有一次秒级停顿，落在 prefill 区间的后段：green25 在 prefill 开始后约 5.7–5.8 s，长 2.39–2.43 s；prio 在约 6.4 s（周期 100）/ 9.7 s（周期 50）处，长 1.24–1.25 s。按各格单次调用与解码的 p50 推算的 prefill 长度（green25 约 8.0 s，prio 约 10.9 s），停顿都在 prefill 结束时结束（推算）。最后一次调用之后偶有记为 `between` 的错过。Z4：纯拷贝负载在执行器旁边拿到 227.7 GB/s（执行器在 12 个 SM 上）与 223.3 GB/s（执行器在 4 个 SM 上），单独时约 236 GB/s；执行器 p99 103.3 / 383.6 ms，与 Z1 一致。
 
@@ -675,7 +675,7 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 - 长上下文格的秒级停顿全部落在与 prefill 重叠的调用里（prefill 组 p99 0.94–2.4 s）。
 - 几个长上下文格的"不重叠"组 p99 也到秒级（green25 1217 / 387 ms）：计时窗口结束时正在进行的那次规划器调用没有写进 `planner_records`，与它重叠的调用被算成了不重叠（统计口径的缺口，不是新现象）。
 
-结论去向：本节；issues.md ISSUE-098；`research/experiments/colocation_5090/README.md` 的 Thor 一节。
+结论去向：本节；issues.md ISSUE-098；`research/topics/wam-inference-acceleration/experiments/colocation_5090/README.md` 的 Thor 一节。
 
 ### `1104_h` 轮：H1 按 harness 节奏共置，H2 执行器换指令（commit `2d2adb75`）
 
@@ -709,7 +709,7 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 - tegrastats 整段平均：RAM 46 964 MB，VDD_GPU 15.8 W。
 - prio 与 green25 两格在结果写出后、进程退出时以 134 退出（`terminate called without an active exception`；`malloc(): unsorted double linked list corrupted`），不影响该格结果（issues.md ISSUE-111）。
 
-结论去向：本节；`opportunities.md` OPT-040；`research/experiments/colocation_5090/README.md` 的 Thor 一节；`research/reports/planner_executor_colocation_5090.md` 第 5 章痛点 5 与第 8 章；issues.md ISSUE-098、ISSUE-111。`THOR_CHECKLIST.md` 的 H1、H2 已删除。
+结论去向：本节；`opportunities.md` OPT-040；`research/topics/wam-inference-acceleration/experiments/colocation_5090/README.md` 的 Thor 一节；`research/topics/wam-inference-acceleration/reports/planner_executor_colocation_5090.md` 第 5 章痛点 5 与第 8 章；issues.md ISSUE-098、ISSUE-111。`THOR_CHECKLIST.md` 的 H1、H2 已删除。
 
 ### `1104_h3` 轮：H3a 27B 规划器语言模型按 harness 调用长度的耗时，H3 带图像回放（Thor 版图像前端）
 
@@ -740,7 +740,7 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 - decompose 每个 prompt token 的 prefill（1.71 ms）是 monitor（1.07 ms）的 1.6 倍；两者的 MTP 尾部分别为 2 048 和 512 行。按 prefill = a × prompt token + b × 尾部行数拟合 H3 的两种调用：a ≈ 0.97 ms，b ≈ 0.77 ms（2 048 行约 1.6 s，推算）；同一组系数对 H3a 三个形状的偏差在 3 % 以内。Thor 的尾部 fc 用 M-tile kernel（`Qwen36TorchFrontendThor._mtp_tail_fc_matmul`）。
 - 每周期的两组数不一致：H3a monitor 每周期 136 ms；H3 monitor 按解码中位 2 306 ms、回复中位 71.5 个 token、每次前向 2.76 个 token 推算约 25.5 个周期、每周期约 90 ms（推算，逐行周期数本轮没有带回；ISSUE-112）。
 
-结论去向：本节；`research/experiments/harness_replay_5090/README.md` 的 Thor 两节；`research/reports/planner_executor_colocation_5090.md` 第 8 章；`docs/qwen36_vl.md` 的 Thor 一节；`opportunities.md` OPT-039、OPT-040；issues.md ISSUE-112；`plan.md` "image input for the 27B planner on Jetson Thor" Phase 3。`THOR_CHECKLIST.md` 的 H3a、H3 已删除，后续为 H3b。
+结论去向：本节；`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md` 的 Thor 两节；`research/topics/wam-inference-acceleration/reports/planner_executor_colocation_5090.md` 第 8 章；`docs/qwen36_vl.md` 的 Thor 一节；`opportunities.md` OPT-039、OPT-040；issues.md ISSUE-112；`plan.md` "image input for the 27B planner on Jetson Thor" Phase 3。`THOR_CHECKLIST.md` 的 H3a、H3 已删除，后续为 H3b。
 
 ### `1104_h3b` 轮：27B 规划器在 Thor 上的决策、每周期耗时的核对、MTP 尾部 fc（commit `791b1168`）
 
@@ -781,7 +781,7 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 - 稳态为 88–100 ms；136–157 ms 出现在进程的前一段（`1104_h3` 的 H3a 整段、本轮开头的第一个形状）。88 ms 每周期（K = 3，每周期约 17.5 GB）约合 199 GB/s，为纯拷贝上限 236 GB/s 的 84 %（推算）。
 - `emc_locked=null`，CPU 频率不锁；前一段变慢的原因未查明（issues.md ISSUE-112）。
 
-结论去向：本节；`flash_rt/frontends/torch/qwen36_thor.py`（尾部 fc 改为继承 RTX 前端的 cuBLASLt）；`research/experiments/harness_replay_5090/README.md` 的 Thor 两节；`docs/qwen36_vl.md`、`docs/qwen36_nvfp4.md`；`opportunities.md` OPT-039 candidate 5、OPT-040；issues.md ISSUE-112；`research/reports/planner_executor_colocation_5090.md` 第 8 章。`THOR_CHECKLIST.md` 的 H3b 已删除，后续为 H3c。
+结论去向：本节；`flash_rt/frontends/torch/qwen36_thor.py`（尾部 fc 改为继承 RTX 前端的 cuBLASLt）；`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md` 的 Thor 两节；`docs/qwen36_vl.md`、`docs/qwen36_nvfp4.md`；`opportunities.md` OPT-039 candidate 5、OPT-040；issues.md ISSUE-112；`research/topics/wam-inference-acceleration/reports/planner_executor_colocation_5090.md` 第 8 章。`THOR_CHECKLIST.md` 的 H3b 已删除，后续为 H3c。
 
 ### `1104_h3c` 轮：解码每周期随时间的变化与时钟读数；尾部 fc 改为 cuBLASLt 之后的默认路径回放（commit `9609be92`）
 
@@ -818,7 +818,7 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 - monitor 上表中的 spec_k 6 与 3 周期数和每次前向 token 几乎相同；decompose 上 spec_k 6 每周期 106.8 ms、每次前向 3.69 个 token，整次与 K = 3 相差 0.4 %。
 - 决策：22 次中 18 次与 5090 参考一致、1 次无法解析（ep0 monitor@720），不一致的 4 次与 `1104_h3b` 相同。
 
-结论去向：本节；issues.md ISSUE-112；`research/experiments/harness_replay_5090/README.md` 的 Thor 两节；`opportunities.md` OPT-040；`docs/qwen36_vl.md`；`research/reports/planner_executor_colocation_5090.md` 第 8 章。`THOR_CHECKLIST.md` 的 H3c 已删除。
+结论去向：本节；issues.md ISSUE-112；`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md` 的 Thor 两节；`opportunities.md` OPT-040；`docs/qwen36_vl.md`；`research/topics/wam-inference-acceleration/reports/planner_executor_colocation_5090.md` 第 8 章。`THOR_CHECKLIST.md` 的 H3c 已删除。
 
 ### `1105_h6h4` 轮：解码变慢的一段与拷贝带宽、空闲；monitor 长度 prefill 的剖析（commit `ecffa16f`）
 
@@ -849,7 +849,7 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 - Thor 上的 torch.profiler 没有记到任何 CUDA kernel（两种模式都是 0），类别表为空；5090 上同一脚本记到 3 095 个。
 - prefill graph 开与关只差 0.2 %（3 977 / 3 984 ms）：prefill 不受主机发射限制。按 2 × 27e9 FLOP / token 合 55.2–55.3 TFLOP/s（推算）。
 
-结论去向：本节；issues.md ISSUE-112；`research/experiments/harness_replay_5090/README.md` 的 Thor 每周期一段与图像回放一节；`opportunities.md` OPT-040 candidate 5。`THOR_CHECKLIST.md` 的 H6、H4 已删除，后续为 H4b、H7。
+结论去向：本节；issues.md ISSUE-112；`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md` 的 Thor 每周期一段与图像回放一节；`opportunities.md` OPT-040 candidate 5。`THOR_CHECKLIST.md` 的 H6、H4 已删除，后续为 H4b、H7。
 
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 

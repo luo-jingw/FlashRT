@@ -2756,7 +2756,7 @@ plan.
 - `flash_rt/frontends/torch/_qwen3_vl_vision_rtx.py` (`Qwen3VlVisionRtx`) and
   `_qwen3_vl_geometry.py`: reused; changed only if Phase 1 or 2 finds a
   mismatch.
-- `research/experiments/qwen38_distill_bench/fp8_to_nvfp4_ct.py`: keeps the
+- `research/topics/wam-inference-acceleration/experiments/qwen38_distill_bench/fp8_to_nvfp4_ct.py`: keeps the
   vision tower (BF16) in the converted checkpoint, so one directory holds the
   language model and the ViT.
 
@@ -2849,8 +2849,8 @@ extra_embedding_rows=max_image_tokens)` -> base RoPE tables copied after
 | `text_rope_rows` | `flash_rt/frontends/torch/_qwen36_mrope.py` (new) |
 | `Qwen36VlTorchFrontendRtx`, `VlGeneration` | `flash_rt/frontends/torch/qwen36_vl_rtx.py` (new) |
 | ViT, geometry (reused) | `flash_rt/frontends/torch/_qwen3_vl_vision_rtx.py`, `_qwen3_vl_geometry.py` |
-| converter keeps `model.visual.*` | `research/experiments/qwen38_distill_bench/fp8_to_nvfp4_ct.py` |
-| validation scripts and results | `research/experiments/qwen38_vision/` (new) |
+| converter keeps `model.visual.*` | `research/topics/wam-inference-acceleration/experiments/qwen38_distill_bench/fp8_to_nvfp4_ct.py` |
+| validation scripts and results | `research/topics/wam-inference-acceleration/experiments/qwen38_vision/` (new) |
 
 ## Implementation Phases
 
@@ -2860,14 +2860,14 @@ Phase Status: completed
 
 - Goal: `Qwen3VlVisionRtx` on the Qwen3.8 vision tower matches HF
   `Qwen3_5VisionModel` (BF16 weights from the same checkpoint).
-- Modified files: `research/experiments/qwen38_vision/vit_parity.py` (new);
+- Modified files: `research/topics/wam-inference-acceleration/experiments/qwen38_vision/vit_parity.py` (new);
   `_qwen3_vl_vision_rtx.py` / `_qwen3_vl_geometry.py` only on a found
   mismatch; `fp8_to_nvfp4_ct.py` (keep `model.visual.*`).
 - Observation: on LIBERO frames at native size and resized to non-square
   sizes (several grids), and two images in one prompt: cosine, max abs and
   relative L2 of the merged features (pooler output) against HF, FP8 and
   BF16-GEMM modes of `Qwen3VlVisionRtx`; ViT latency per image.
-- Result (`research/experiments/qwen38_vision/vit_parity_5090.json`): no code
+- Result (`research/topics/wam-inference-acceleration/experiments/qwen38_vision/vit_parity_5090.json`): no code
   change to the ViT or geometry. Merged features vs HF over six cases (grids
   32x32, 20x28, 30x40, 46x136, two 32x32 images): BF16 GEMMs cosine
   0.99902-0.99976, rel. L2 0.022-0.044; FP8 GEMMs cosine 0.99592-0.99835,
@@ -2883,13 +2883,13 @@ Phase Status: completed
 
 - Goal: position ids and cos/sin rows equal to HF for image prompts.
 - Modified files: `flash_rt/frontends/torch/_qwen36_mrope.py` (new);
-  `research/experiments/qwen38_vision/mrope_parity.py` (new).
+  `research/topics/wam-inference-acceleration/experiments/qwen38_vision/mrope_parity.py` (new).
 - Observation: `mrope_position_ids` vs HF `Qwen3_5Model.get_rope_index` on
   processor outputs (text-only, one image, two images, image between text):
   exact equality and the rope delta. `text_rope_rows` vs HF
   `Qwen3_5TextRotaryEmbedding` for the same ids: max abs difference; for
   equal axes, equality with `_rope_cos_table` rows.
-- Result (`research/experiments/qwen38_vision/mrope_parity_5090.json`): on
+- Result (`research/topics/wam-inference-acceleration/experiments/qwen38_vision/mrope_parity_5090.json`): on
   five prompts (text only; one image; two images; text-image-text-image-text;
   one 640x480 image; S 20-536, grids 32x32 and 30x40) the position ids equal
   HF's and the deltas agree (0, -240, -480, -480, -280); `text_rope_rows`
@@ -2905,7 +2905,7 @@ Phase Status: completed
   behavior unchanged.
 - Modified files: `flash_rt/frontends/torch/qwen36_rtx.py`,
   `flash_rt/frontends/torch/_qwen36_rtx_nvfp4_weights.py`;
-  `research/experiments/qwen38_vision/hook_checks.py` (new).
+  `research/topics/wam-inference-acceleration/experiments/qwen38_vision/hook_checks.py` (new).
 - Observation, on the Qwen3.8 NVFP4 checkpoint at 1k and 4k context:
   (a) `extra_embedding_rows` 0 vs N: generated tokens identical, GPU memory
   delta reported; (b) reserved rows filled with the embeddings of real
@@ -2915,7 +2915,7 @@ Phase Status: completed
   first-token logit cosine against the unshifted run; (d) after
   `reset_rope_rows`, tokens identical to a fresh run; (e)
   `context_bench.py` prefill and decode within run-to-run noise.
-- Result (`research/experiments/qwen38_vision/hook_{baseline,hooks}_5090.json`,
+- Result (`research/topics/wam-inference-acceleration/experiments/qwen38_vision/hook_{baseline,hooks}_5090.json`,
   doc prompts, 64 greedy MTP-spec tokens): (a), (b), (d) identical tokens at
   1k and 4k; reserved 4096 rows cost 0.039 GiB; prefill / decode 76.4 / 712.9
   ms (1k) and 308.7 / 849.1 ms (4k) vs 76.3 / 711.3 and 308.5 / 845.7 ms
@@ -2935,12 +2935,12 @@ Phase Status: completed
 
 - Goal: `Qwen36VlTorchFrontendRtx.generate` with images.
 - Modified files: `flash_rt/frontends/torch/qwen36_vl_rtx.py` (new);
-  `research/experiments/qwen38_vision/vl_bench.py` (new).
+  `research/topics/wam-inference-acceleration/experiments/qwen38_vision/vl_bench.py` (new).
 - Observation: answers for LIBERO frames and a few non-robot images printed
   verbatim; timings per stage (preprocess, ViT, prefill, decode) and image
   token counts at two `max_pixels` settings; GPU memory peak. No numerical
   end-to-end reference in this phase.
-- Result (`research/experiments/qwen38_vision/vl_bench_route{512,1}*`): the
+- Result (`research/topics/wam-inference-acceleration/experiments/qwen38_vision/vl_bench_route{512,1}*`): the
   frontend runs text-only and image prompts. With the default long-route
   threshold (512 tokens), single-image prompts (S 277-283) take the BF16
   one-token-at-a-time prefill: 19.7-20.2 s. With
@@ -2971,14 +2971,14 @@ Phase Status: completed
   transformers 5.17 on the same RTX 5090, run in its own process before the
   FlashRT run (both do not fit at once); layers offloaded to CPU memory if a
   prompt does not fit. Requires `accelerate` in the `flashrt` environment.
-- Modified files: `research/experiments/qwen38_vision/hf_reference.py`
+- Modified files: `research/topics/wam-inference-acceleration/experiments/qwen38_vision/hf_reference.py`
   (new; saves first-step logits and greedy tokens per prompt),
-  `research/experiments/qwen38_vision/e2e_compare.py` (new).
+  `research/topics/wam-inference-acceleration/experiments/qwen38_vision/e2e_compare.py` (new).
 - Observation, same prompt set for both: text-only prompts and image prompts
   (LIBERO frames, non-robot images, two images in one prompt); per prompt
   first-token logit cosine, top-1 / top-5 agreement, length of the identical
   greedy prefix over 64 tokens; HF peak memory and whether offload was used.
-- Result (`research/experiments/qwen38_vision/e2e_compare*_5090.json`): the
+- Result (`research/topics/wam-inference-acceleration/experiments/qwen38_vision/e2e_compare*_5090.json`): the
   FP8 checkpoint does not fit the RTX 5090 in transformers (load stops at
   30.66 GiB allocated), and transformers' FP8 matmul needs the `kernels`
   package; the reference therefore dequantizes the FP8 weights to BF16 at
@@ -3012,8 +3012,8 @@ Plan Status: completed
 
 ## Problem
 
-Current state (measured 2026-11-03, `research/experiments/colocation_qwen27b_5090/`,
-`research/reports/planner_executor_colocation_5090.md`):
+Current state (measured 2026-11-03, `research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/`,
+`research/topics/wam-inference-acceleration/reports/planner_executor_colocation_5090.md`):
 
 - A Qwen3.8-27B NVFP4 planner (`Qwen36VlTorchFrontendRtx`) and the ImageWAM fp8 executor
   (`ImageWAMTorchFrontendThor`) in one process, two Python threads, miss 80-92% of the
@@ -3057,7 +3057,7 @@ again, with planner output unchanged, (5) the cause of the executor's 28.2 ms is
   streams unchanged.
 - `flash_rt/frontends/torch/_qwen36_rtx_nvfp4_weights.py`: load-time conversion kernels run on
   the current torch stream instead of stream 0.
-- `research/experiments/colocation_qwen27b_5090/`: measurement only; the monkeypatch flags stay,
+- `research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/`: measurement only; the monkeypatch flags stay,
   default off.
 
 ## State Ownership
@@ -3092,8 +3092,8 @@ in thread-local mode, so the executor thread's CUDA calls neither fail nor enter
   `flash_rt/frontends/torch/_qwen3_vl_vision_rtx.py` (1), `flash_rt/frontends/torch/imagewam_thor.py`
   (`_record_graph`).
 - Load stream: `flash_rt/frontends/torch/_qwen36_rtx_nvfp4_weights.py`.
-- Measurements: `research/experiments/colocation_qwen27b_5090/` (cells, README), report and page
-  `research/reports/planner_executor_colocation_5090.{md,html}`; issues ISSUE-103 / ISSUE-104.
+- Measurements: `research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/` (cells, README), report and page
+  `research/topics/wam-inference-acceleration/reports/planner_executor_colocation_5090.{md,html}`; issues ISSUE-103 / ISSUE-104.
 
 ## Implementation
 
@@ -3168,7 +3168,7 @@ Phase Status: completed
 Result: with both monkeypatches off, every compared cell reproduces the monkeypatched one (p99 within 0.1-1.3 ms,
 same miss rates, planner call within 0-50 ms): prio short 0.1 %, green25 short / long 0.1 / 0 %, green50 short / long
 0 / 0.1 %, coop short / long 0 %, prio long 44.4 % (no SM limit). The 0.1 % are single ticks during the planner's first
-call of the window (`research/experiments/colocation_qwen27b_5090/README.md`, "Host-side fixes in FlashRT").
+call of the window (`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/README.md`, "Host-side fixes in FlashRT").
 
 - Goal: re-measure the co-location cells with the unmodified frontends.
 - Modified files: research cells, README, report and page.
@@ -3186,7 +3186,7 @@ Plan Status: completed
 Current state:
 
 - Co-location has been measured under a stress workload only: executor every 50 ms, planner back-to-back with a
-  602 / 8 110-token prompt and 64 output tokens (`research/experiments/colocation_qwen27b_5090/`).
+  602 / 8 110-token prompt and 64 output tokens (`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/`).
 - The agent harness in `/home/jingwu/workspace/bear/code` runs VoLoAgent's Full loop (`scripts/volo_tool/eval_agent.sh`:
   `--mode subgoal --failure-monitor vlm --recovery-mode replan_tools --check-interval 80 --use-front-camera`):
   - the evaluation client executes 8 actions per policy query at 15 Hz (`scripts/volo_tool/robolab_run.py:193`), so
@@ -3220,16 +3220,16 @@ latency against one control step (66.7 ms) and one chunk (533 ms), master decisi
 
 ## Structure
 
-- `research/experiments/harness_replay_5090/volo_calls.py`: the master call contents. System prompts and user-message
+- `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/volo_calls.py`: the master call contents. System prompts and user-message
   templates copied verbatim from VoLoAgent with source references; image preparation to the harness resolutions from
   LIBERO frames (resized to the target height, centered on a black canvas of the target size).
-- `research/experiments/harness_replay_5090/record_calls.py`: the Full-loop decision logic (decompose, monitor every 80
+- `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/record_calls.py`: the Full-loop decision logic (decompose, monitor every 80
   steps, replan on `replan` or a last-subgoal `next`, at most 3) run on the planner alone; writes one calls file per
   episode in the shape of the harness's `vlm_calls.jsonl` (messages, reply).
-- `research/experiments/harness_replay_5090/replay_bench.py`: replays a calls file with the executor in the same
+- `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/replay_bench.py`: replays a calls file with the executor in the same
   process: `sync` (one thread: master call, then executor query) and `realtime` (executor thread on a 15 Hz clock,
   planner thread starting each call at its step's time) with sharing `prio`, `green50` or `coop`.
-- `research/experiments/harness_replay_5090/run_replay.sh`, `README.md`, `calls/`, `cells/`.
+- `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/run_replay.sh`, `README.md`, `calls/`, `cells/`.
 - Reused unchanged: `colocation_qwen27b_5090/planner_qwen27b.py` (checkpoint paths, environment settings,
   `PlannerStreams`), `colocation_qwen27b_5090/exec_slim.py` (`slim_executor`), `colocation_qwen27b_5090/coop_gate.py`
   (`CoopGate`, `ExecutorClock`, `install`), `colocation_5090/green_partition.py` (`GreenPartition`),
@@ -3276,12 +3276,12 @@ latency against one control step (66.7 ms) and one chunk (533 ms), master decisi
 
 ## Code Mapping
 
-- Call contents: `research/experiments/harness_replay_5090/volo_calls.py`.
-- Recording: `research/experiments/harness_replay_5090/record_calls.py` → `calls/ep<E>_wrist<W>.jsonl` (+ images).
-- Replay: `research/experiments/harness_replay_5090/replay_bench.py` → `cells/<mode>_<share>_ep<E>_wrist<W>.json`.
-- Grid runner: `research/experiments/harness_replay_5090/run_replay.sh`.
-- Results: `research/experiments/harness_replay_5090/README.md`; a section in
-  `research/reports/planner_executor_colocation_5090.{md,html}`; `issues.md` / `opportunities.md` for open items.
+- Call contents: `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/volo_calls.py`.
+- Recording: `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/record_calls.py` → `calls/ep<E>_wrist<W>.jsonl` (+ images).
+- Replay: `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/replay_bench.py` → `cells/<mode>_<share>_ep<E>_wrist<W>.json`.
+- Grid runner: `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/run_replay.sh`.
+- Results: `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md`; a section in
+  `research/topics/wam-inference-acceleration/reports/planner_executor_colocation_5090.{md,html}`; `issues.md` / `opportunities.md` for open items.
 
 ## Implementation Phases
 
@@ -3362,7 +3362,7 @@ draft length.
   the language model and the ViT.
 - `flash_rt/frontends/torch/qwen36_vl_thor.py` (new), `Qwen36VlTorchFrontendThor(Qwen36VlTorchFrontendRtx)`: overrides
   the two construction methods only.
-- `research/experiments/harness_replay_5090/thor/planner_calls_vl.py` (new): the recorded calls on either frontend.
+- `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/planner_calls_vl.py` (new): the recorded calls on either frontend.
 
 ## State Ownership
 
@@ -3381,7 +3381,7 @@ draft length.
 - `Qwen36VlTorchFrontendThor`: `_build_language_model` returns `Qwen36TorchFrontendThor(..., quant='nvfp4',
   extra_embedding_rows=max_image_tokens)`; `_build_vision` returns `Qwen3VlVisionRtx(..., fp8=False,
   attention_backend='sdpa')`.
-- `python research/experiments/harness_replay_5090/thor/planner_calls_vl.py {rtx|thor}` (env `CK`, `OUT`) →
+- `python research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/planner_calls_vl.py {rtx|thor}` (env `CK`, `OUT`) →
   `$OUT/planner_calls_vl_{rtx|thor}.json`: per (call, spec_k) a `CallRecord`.
 
 ## Flow
@@ -3395,9 +3395,9 @@ and one timed `generate` with `max_new_tokens` = the official model's reply thro
 
 - `flash_rt/frontends/torch/qwen36_vl_rtx.py`: construction methods, `spec_k`.
 - `flash_rt/frontends/torch/qwen36_vl_thor.py`: the Thor class.
-- `research/experiments/harness_replay_5090/thor/planner_calls_vl.py`, `thor/planner_calls_vl_rtx.{json,log}`,
+- `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/planner_calls_vl.py`, `thor/planner_calls_vl_rtx.{json,log}`,
   `smoke/vit_thor_config_check.{py,log}`.
-- Records: `docs/qwen36_vl.md`, `research/experiments/harness_replay_5090/README.md`, `THOR_CHECKLIST.md` (H3),
+- Records: `docs/qwen36_vl.md`, `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md`, `THOR_CHECKLIST.md` (H3),
   `opportunities.md` OPT-039.
 
 ## Implementation Phases

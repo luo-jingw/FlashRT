@@ -41,7 +41,7 @@ from PIL import Image  # noqa: E402
 from flash_rt.frontends.torch import _qwen3_vl_geometry as geo  # noqa: E402
 from flash_rt.frontends.torch.qwen36_vl_rtx import Qwen36VlTorchFrontendRtx  # noqa: E402
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "benchmarks"))
 from _imagewam_libero_frames import _episode_video, _suite_root, read_video_frame  # noqa: E402
 
@@ -49,7 +49,7 @@ root = _suite_root(args.data_root, "libero_10")
 agent = Image.fromarray(read_video_frame(_episode_video(root, "observation.images.image", 0), 30))
 wrist = Image.fromarray(read_video_frame(_episode_video(root, "observation.images.wrist_image", 0), 30))
 logo = Image.open(os.path.join(REPO, "FlashRT.png")).convert("RGB")
-chart = Image.open(os.path.join(REPO, "research/experiments/actiondit_representation/preview.png")).convert("RGB")
+chart = Image.open(os.path.join(REPO, "research/topics/wam-inference-acceleration/experiments/actiondit_representation/preview.png")).convert("RGB")
 
 
 def user(*content) -> list:

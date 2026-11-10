@@ -7,7 +7,7 @@ taken from its untimed long-budget decision calls ("decisions"), which are not t
 Decode ms per cycle is decode ms / spec cycles of each timed call (JSON files written before the script stored reply
 texts have no "decisions"; their decision table is skipped).
 
-usage: python research/experiments/harness_replay_5090/thor/planner_calls_vl_table.py <planner_calls_vl_*.json>
+usage: python research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/planner_calls_vl_table.py <planner_calls_vl_*.json>
 """
 import json
 import os

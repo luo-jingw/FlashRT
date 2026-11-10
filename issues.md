@@ -1106,7 +1106,7 @@ Read the counting code against the capture order; count the differing linears be
 
 Status: open, non-blocking
 
-Area: `research/experiments/colocation_5090/colocation_bench.py` (`green<P>`, `prio`) on Jetson Thor
+Area: `research/topics/wam-inference-acceleration/experiments/colocation_5090/colocation_bench.py` (`green<P>`, `prio`) on Jetson Thor
 
 ## Observation
 
@@ -1114,7 +1114,7 @@ In the `1028` Thor round, with a 16k-token planner context, an in-process green-
 
 ## Evidence
 
-THOR_STATUS_SUMMARY.md round `1028` (Y4); Thor `$HOME/thor_val/1028/cells/*.json` (local to the Thor); `research/experiments/colocation_5090/README.md` R5 for the 5090 cells.
+THOR_STATUS_SUMMARY.md round `1028` (Y4); Thor `$HOME/thor_val/1028/cells/*.json` (local to the Thor); `research/topics/wam-inference-acceleration/experiments/colocation_5090/README.md` R5 for the 5090 cells.
 
 ## Hypotheses
 
@@ -1141,7 +1141,7 @@ chunk deadline the stall decides which sharing modes are usable on the Thor.
 
 Status: open, non-blocking
 
-Area: `research/experiments/colocation_5090/overlap_trace.py` on Jetson Thor
+Area: `research/topics/wam-inference-acceleration/experiments/colocation_5090/overlap_trace.py` on Jetson Thor
 
 ## Observation
 
@@ -1163,7 +1163,7 @@ Run the alone phase with eager kernels only (one `a @ a` under the profiler) to 
 
 Status: open, non-blocking
 
-Area: `research/experiments/colocation_5090/run_thor.sh` (`mps25`) on Jetson Thor
+Area: `research/topics/wam-inference-acceleration/experiments/colocation_5090/run_thor.sh` (`mps25`) on Jetson Thor
 
 ## Observation
 
@@ -1219,7 +1219,7 @@ The first run loaded pip `nvidia-cublas` 13.6.1.10. The later runs loaded 13.1.1
 
 ## Measurements (2026-11-03, `nvidia-cublas` 13.6.1.10 restored)
 
-`research/experiments/colocation_qwen27b_5090/cells/cublas_restored/pi05_check.py`, two processes: `infer()` P50 24.97 and 25.02 ms. Actions: 0.0040 max abs between the two processes, 0.0089 and 0.0049 against the first run of the day (`pi05_env13.6*.npz`, `pi05_cublas13.6_before.npz`).
+`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/cells/cublas_restored/pi05_check.py`, two processes: `infer()` P50 24.97 and 25.02 ms. Actions: 0.0040 max abs between the two processes, 0.0089 and 0.0049 against the first run of the day (`pi05_env13.6*.npz`, `pi05_cublas13.6_before.npz`).
 
 ## Hypotheses
 
@@ -1239,7 +1239,7 @@ Area: ImageWAM LIBERO fp8 executor tick time on the RTX 5090 with the current `f
 
 On 2026-11-03 the ImageWAM fp8 LIBERO tick (`stage_inputs` + graph replay, 10 steps, VAE in the graph) takes 28.2 ms
 (CUDA events, 100 ticks, GPU idle otherwise), whether the graph is the one `set_prompt` captured or a recapture on a
-side stream (`research/experiments/colocation_qwen27b_5090/cells/exec_capture_check.json`). `docs/imagewam_rtx5090_profile.md`
+side stream (`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/cells/exec_capture_check.json`). `docs/imagewam_rtx5090_profile.md`
 records `infer()` P50 23.85 ms for the same configuration at `a21507e`, and the 2026-10 co-location study measured
 24.8 ms per tick.
 
@@ -1260,7 +1260,7 @@ machine (24.95 -> 27.0-28.8 ms) after the same rebuild. SM clocks during the run
 - Kernel library swapped into `flash_rt/`, one session, `exec_capture_check.py` (100 ticks): every pair of
   `flash_rt_kernels` (current `build_full/`, pre-merge, slim of 2026-10-11) and `flash_rt_fa2` (2026-11-03, 2026-10-12)
   gives 28.0-28.2 ms, the current pair run first and last 28.0 / 28.0-28.2
-  (`research/experiments/colocation_qwen27b_5090/cells/so_compare/`, `run_so_compare.sh`).
+  (`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/cells/so_compare/`, `run_so_compare.sh`).
 - `benchmarks/imagewam_module_operator_profile.py fp8` on the current tree: `infer()` P50 28.17 ms against 23.85 ms in
   `docs/imagewam_rtx5090_profile.md`. Eager kernel time 26.59 against 22.47 ms: GEMM 14.5 against 10.86 ms and the
   attention GEMMs about 0.4 ms more; conv 2.43 / 2.41, norm 2.08 / 2.08, elementwise 1.72 / 1.70, quant/cast
@@ -1281,7 +1281,7 @@ The flashrt env had pip `nvidia-cublas` 13.6.1.10 and `nvidia-cuda-nvrtc` 13.3.3
 uninstalling those two wheels at 01:05 left conda's 13.4.1.3. Both wheels were reinstalled at their earlier versions
 with `pip install --no-deps "nvidia-cublas==13.6.1.10" "nvidia-cuda-nvrtc==13.3.33"`; processes load
 `site-packages/nvidia/cu13/lib/libcublas{,Lt}.so.13` again. Measured after the restore
-(`research/experiments/colocation_qwen27b_5090/cells/cublas_restored/`):
+(`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/cells/cublas_restored/`):
 
 | Measurement | 13.4.1.3 (conda) | 13.6.1.10 (pip, restored) |
 |---|---|---|
@@ -1291,7 +1291,7 @@ with `pip install --no-deps "nvidia-cublas==13.6.1.10" "nvidia-cuda-nvrtc==13.3.
 | same, conv / norm / elementwise | 2.43 / 2.08 / 1.62 ms | 2.40 / 2.09 / 1.61 ms |
 | Pi0.5 `infer()` P50 (ISSUE-102) | 27.0-28.8 ms | 24.97 / 25.02 ms |
 
-The co-location measurements of 2026-11-03 (`research/experiments/colocation_qwen27b_5090/cells/`) ran under 13.4.1.3.
+The co-location measurements of 2026-11-03 (`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/cells/`) ran under 13.4.1.3.
 
 # ISSUE-104
 
@@ -1305,7 +1305,7 @@ Constructing the frontend inside `with torch.cuda.stream(side_stream):` produces
 (for example `<{"juga\n<{"juga><function|...` instead of `{"done":[],"next":"Move the gripper to grasp the tomato sauce
 can."}`), with the same checkpoint and prompt. Constructed on the default stream, the same frontend called later
 under a side stream, and with its graph and snapshot streams replaced by side streams, gives the correct output
-(`research/experiments/colocation_qwen27b_5090/stream_check.py`, `smoke/stream_check_*.json`).
+(`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/stream_check.py`, `smoke/stream_check_*.json`).
 
 ## Evidence
 
@@ -1331,7 +1331,7 @@ The load-time conversion kernels in `_qwen36_rtx_nvfp4_weights.py` (`nvfp4_sf_li
 run on the current torch stream. Before the change, a side-stream construction left 48 of the 1 482 language-model
 weight buffers different from a default-stream construction (most of them all zero) and produced garbage; after it, the
 byte-sum digest of all 1 482 buffers equals the default-stream one and the three outputs are identical
-(`research/experiments/colocation_qwen27b_5090/smoke/stream_check_{plain,side}_{prefix,fix}.json`).
+(`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/smoke/stream_check_{plain,side}_{prefix,fix}.json`).
 
 # ISSUE-105
 
@@ -1343,7 +1343,7 @@ Area: Qwen3.8-27B planner output under in-process co-location with the ImageWAM 
 
 In `prio` short-context co-location with the planner's per-cycle readback outside the GIL, one planner call in about 60
 produces a different token sequence from all the others (same prompt, greedy): 1 of 63 calls
-(`research/experiments/colocation_qwen27b_5090/cells/hostfix/short_prio_p1.json`, binding fix) and 1 of 61
+(`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/cells/hostfix/short_prio_p1.json`, binding fix) and 1 of 61
 (`cells/short_prio_nogil.json`, research monkeypatch). The planner alone (5 calls per context), `prio` with the GIL-held
 readback (76 calls) and the green-context cells (19-57 calls) give one sequence each.
 
@@ -1393,7 +1393,7 @@ With a fixed action noise, the executor's actions are bit-identical to the refer
 `green25` (about 1 200 ticks per window, 6 windows), and in two short-context `prio` windows; in two long-context `prio`
 windows 3 and 6 of about 1 120 ticks differ, by up to 4.4e-3 and 4.9e-3 (max abs, normalized actions), and in a short
 `prio` window under py-spy sampling 3 of 1 181 ticks differ by up to 4.4e-3
-(`research/experiments/colocation_qwen27b_5090/cells/hostfix/*_prio_p2w*.json`, `exec_action_check`).
+(`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/cells/hostfix/*_prio_p2w*.json`, `exec_action_check`).
 
 ## Evidence
 
@@ -1429,7 +1429,7 @@ With cuBLAS 13.6.1.10, the executor graph recaptured on the green partition's st
 the whole-device reference (`fe.infer` on the default stream, same fixed noise) by 4.73e-3 (green25 short), 2.81e-3
 (green25 long) and 2.95e-3 (green50 short and long), max abs, normalized actions. The difference is there in the check
 right after the recapture, before the planner starts, and every tick of the window shows the same maximum
-(`research/experiments/colocation_qwen27b_5090/cells/cublas136/cur_*_green*.json`, `exec_action_check`). With cuBLAS
+(`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/cells/cublas136/cur_*_green*.json`, `exec_action_check`). With cuBLAS
 13.4.1.3 the same check gave 0 under `green25` (`cells/hostfix/`).
 
 ## Evidence
@@ -1461,7 +1461,7 @@ With the prefill graph on, the first call at a prompt length not seen before in 
 (`{"user": "I want to 100% natural, 100% organic, ...` instead of `{"subgoals":["put the red-and-white alphabet soup
 carton in the woven basket ...`); the same messages called again give the correct reply. With the prefill graph off,
 the first call is already correct. Seen on every new prompt length of the recorded VoLoAgent calls (decompose 2 126 /
-2 942 tokens, monitor 4 072-5 726, replan 1 427) (`research/experiments/harness_replay_5090/calls/`, `text_equal`;
+2 942 tokens, monitor 4 072-5 726, replan 1 427) (`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/calls/`, `text_equal`;
 `smoke/first_call_pf{0,1}.json`).
 
 ## Evidence
@@ -1478,7 +1478,7 @@ after a capture as after a cache hit (`flash_rt/frontends/torch/qwen36_rtx.py`).
 graph on, the first call equals the later calls and the prefill-graph-off output for a 2 126-token decompose call and
 a 5 704-token monitor call (`smoke/first_call_pf1_fix_*.json`, `smoke/first_call_pf0_*.json`).
 
-The co-location cells with the prefill graph (`research/experiments/colocation_qwen27b_5090/`) ran fixed prompts
+The co-location cells with the prefill graph (`research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/`) ran fixed prompts
 whose prefill graphs were captured in the warm-up calls before the measured window; ISSUE-105's flips were calls that
 captured graphs inside the window.
 
@@ -1495,7 +1495,7 @@ Greedy decode is meant to give the same tokens for every draft length K (the mai
 token). On the planner (LoRA-merged Qwen3.8-27B master, official Qwen3.8-27B-FP8 MTP head), 25 of 26 prompts give the
 same output crc for K = 1, 3, 5, 7 and the length table; the synthetic 16 315-token prompt gives a different output with
 K = 1 (crc 816102686, 13 tokens before EOS) than with K = 3, 5, 7 and the table (crc 972381506, 11 tokens)
-(`research/experiments/harness_replay_5090/cells/mtp_speedup.json`).
+(`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/cells/mtp_speedup.json`).
 
 ## Evidence
 
@@ -1525,7 +1525,7 @@ The planner's greedy reply to the same recorded VoLoAgent calls depends on the p
 (wrist 224, 11 calls), planner alone: the eager prefill with the default chunk gives the recorded reply (recorded
 with the prefill graph, default chunk) on 11 of 11 calls; with 256-token chunks, 8 of 11 replies change wording and
 one monitor decision changes from `in_progress / continue` to `complete / next` (step 720)
-(`research/experiments/harness_replay_5090/smoke/prefill_pf0_c{256,def}.json`). The `coop` replay cells, which need
+(`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/smoke/prefill_pf0_c{256,def}.json`). The `coop` replay cells, which need
 256-token chunks, match 4 of 33 recorded replies; the other cells 33 of 33.
 
 ## Evidence
@@ -1549,7 +1549,7 @@ chunked GEMM shapes.
 
 Status: open, non-blocking
 
-Area: `research/experiments/colocation_5090/colocation_bench.py` process exit on Jetson Thor (in-process planner
+Area: `research/topics/wam-inference-acceleration/experiments/colocation_5090/colocation_bench.py` process exit on Jetson Thor (in-process planner
 thread modes)
 
 ## Observation
