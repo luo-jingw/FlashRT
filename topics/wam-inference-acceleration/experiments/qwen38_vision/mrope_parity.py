@@ -25,7 +25,7 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5Model, Qwen3_5Te
 from flash_rt.frontends.torch import _qwen3_vl_geometry as geo
 from flash_rt.frontends.torch._qwen36_mrope import text_rope_rows
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "benchmarks"))
 from _imagewam_libero_frames import _episode_video, _suite_root, read_video_frame  # noqa: E402
 

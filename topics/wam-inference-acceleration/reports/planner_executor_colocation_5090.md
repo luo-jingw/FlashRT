@@ -1,6 +1,6 @@
 # 规划器与执行器同卡共置：Qwen3.8-27B 规划器 + ImageWAM 执行器（RTX 5090，FlashRT）
 
-问题：一个 27B 的 VLM 规划器和一个 20 Hz 的 WAM 执行器放在同一块 32 GB 的 RTX 5090 上、都用 FlashRT 推理时，执行器在哪里丢截止期，经过哪种资源（主机侧发射路径、SM、显存带宽、显存容量、功耗），每种保护手段让规划器付出多少。原始数据、脚本和完整表格在 `research/experiments/colocation_qwen27b_5090/`（`README.md`、`report_tables.md`、`cells_summary.md`）；相关系统文献在 `research/reports/gpu_sharing_colocation_literature.md`。
+问题：一个 27B 的 VLM 规划器和一个 20 Hz 的 WAM 执行器放在同一块 32 GB 的 RTX 5090 上、都用 FlashRT 推理时，执行器在哪里丢截止期，经过哪种资源（主机侧发射路径、SM、显存带宽、显存容量、功耗），每种保护手段让规划器付出多少。原始数据、脚本和完整表格在 `research/topics/wam-inference-acceleration/experiments/colocation_qwen27b_5090/`（`README.md`、`report_tables.md`、`cells_summary.md`）；相关系统文献在 `research/topics/wam-inference-acceleration/reports/gpu_sharing_colocation_literature.md`。
 
 ## 0. 结论
 
@@ -217,7 +217,7 @@
 | 88 个 SM 上纯拷贝负载（1.44 TB/s），执行器在其余 82 个 SM | 106.8 | 3.04× |
 
 - 规划器解码是带宽型负载，SM 隔离之后仍让执行器慢 7–20%；同一块卡上把带宽打满的纯拷贝负载能让执行器慢 1.85–3.0 倍，占的 SM 越多，抢走的带宽越多。
-- 在 5090 的 1.5 TB/s 下，这部分干扰还在截止期之内。Jetson AGX Thor 只有约 273 GB/s：此前在 Thor 上，2B 规划器在 SM 隔离后已经让执行器慢 1.8–2.1 倍（`research/experiments/colocation_5090/README.md`），而 27B 解码的带宽需求更大。
+- 在 5090 的 1.5 TB/s 下，这部分干扰还在截止期之内。Jetson AGX Thor 只有约 273 GB/s：此前在 Thor 上，2B 规划器在 SM 隔离后已经让执行器慢 1.8–2.1 倍（`research/topics/wam-inference-acceleration/experiments/colocation_5090/README.md`），而 27B 解码的带宽需求更大。
 
 ### 4.4 功耗与频率
 
@@ -242,7 +242,7 @@
   - 规划器 prefill 缓冲降到 1024 行后，剩 1.4–1.5 GB。
 - 执行器释放了文本编码器，就不能在线编码新的子任务指令。把规划器输出的新指令交给执行器，需要：
   - 重新放回 Qwen3-4B（约 8 GB）；
-  - 用它编码一条新指令，120.7 ms（`research/experiments/colocation_5090/README.md` R3）；
+  - 用它编码一条新指令，120.7 ms（`research/topics/wam-inference-acceleration/experiments/colocation_5090/README.md` R3）；
   - 新的文本长度还要重新捕获 graph。
 
 ## 5. 痛点

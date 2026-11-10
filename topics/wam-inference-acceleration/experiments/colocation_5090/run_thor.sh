@@ -11,7 +11,7 @@ set -u
 : "${OUT:?set OUT}"
 STAGE=${1:?probe or grid}
 HERE="$(cd "$(dirname "$0")" && pwd)"
-export FLASHRT_ROOT="${FLASHRT_ROOT:-$(cd "$HERE/../../.." && pwd)}"
+export FLASHRT_ROOT="${FLASHRT_ROOT:-$(cd "$HERE/../../../../.." && pwd)}"
 export DATASET_STATS_PATH="${DATASET_STATS_PATH:-$(dirname "$CKPT_PATH")/dataset_stats.json}"
 export DROP_TEXT_ENCODER=1
 D=${DURATION:-60}

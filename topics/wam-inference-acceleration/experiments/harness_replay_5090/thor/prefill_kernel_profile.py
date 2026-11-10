@@ -10,7 +10,7 @@ the first-to-last kernel span of the profiled generation, the category table, an
 Output: $OUT/prefill_kernel_profile_<frontend>_<graph|eager>.json (every kernel name with count and total ms).
 
 usage (cwd = repository root): CK=<dir with qwen38-27b-nvfp4-official and qwen38-27b-fp8-official> OUT=<dir> \
-  python research/experiments/harness_replay_5090/thor/prefill_kernel_profile.py {rtx|thor} {graph|eager}
+  python research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/prefill_kernel_profile.py {rtx|thor} {graph|eager}
 """
 import glob
 import json

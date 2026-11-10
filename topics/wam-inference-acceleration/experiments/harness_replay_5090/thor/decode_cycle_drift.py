@@ -9,7 +9,7 @@ PROBE_BYTES buffer, read + write bytes / time, median of PROBE_REPS, GB/s), the 
 (cpufreq, kHz) and every devfreq device's current frequency (Hz). Output: $OUT/decode_cycle_drift_<frontend>.json.
 
 usage (cwd = repository root): CK=<dir with qwen38-27b-nvfp4-official and qwen38-27b-fp8-official> OUT=<dir> \
-  python research/experiments/harness_replay_5090/thor/decode_cycle_drift.py {rtx|thor} [RUN_S [IDLE_S [AFTER_S]]]
+  python research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/decode_cycle_drift.py {rtx|thor} [RUN_S [IDLE_S [AFTER_S]]]
 (defaults 300 0 0; IDLE_S e.g. 300 or 5,15,30,60,120)
 """
 import glob
