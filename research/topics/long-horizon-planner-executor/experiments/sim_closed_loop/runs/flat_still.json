@@ -1,0 +1,611 @@
+[
+ {
+  "mode": "flat_still",
+  "task": 0,
+  "episode": 0,
+  "instruction": "put both the alphabet soup and the tomato sauce in the basket",
+  "success": false,
+  "control_steps": 700,
+  "executor_queries": 70,
+  "planner_ms": 0.0,
+  "switch_ms": 4946.857959992485,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "max_steps",
+  "video": "flat_still_t0_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 4946.857959992485,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": false,
+     "encode_cpu_ms": 4731.231022014981,
+     "set_prompt_ms": 215.62693797750399
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 0,
+  "episode": 1,
+  "instruction": "put both the alphabet soup and the tomato sauce in the basket",
+  "success": false,
+  "control_steps": 700,
+  "executor_queries": 70,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2958769802935421,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "max_steps",
+  "video": "flat_still_t0_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2958769802935421,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0009019859135150909,
+     "set_prompt_ms": 1.294974994380027
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 1,
+  "episode": 0,
+  "instruction": "put both the cream cheese box and the butter in the basket",
+  "success": true,
+  "control_steps": 269,
+  "executor_queries": 27,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2163200008217245,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t1_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2163200008217245,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0012290256563574076,
+     "set_prompt_ms": 1.2150909751653671
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 1,
+  "episode": 1,
+  "instruction": "put both the cream cheese box and the butter in the basket",
+  "success": true,
+  "control_steps": 273,
+  "executor_queries": 28,
+  "planner_ms": 0.0,
+  "switch_ms": 1.244195009348914,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t1_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.244195009348914,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0011730007827281952,
+     "set_prompt_ms": 1.2430220085661858
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 2,
+  "episode": 0,
+  "instruction": "turn on the stove and put the moka pot on it",
+  "success": true,
+  "control_steps": 245,
+  "executor_queries": 25,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2571370170917362,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t2_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2571370170917362,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0011090014595538378,
+     "set_prompt_ms": 1.2560280156321824
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 2,
+  "episode": 1,
+  "instruction": "turn on the stove and put the moka pot on it",
+  "success": true,
+  "control_steps": 253,
+  "executor_queries": 26,
+  "planner_ms": 0.0,
+  "switch_ms": 1.095888001145795,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t2_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.095888001145795,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.001154985511675477,
+     "set_prompt_ms": 1.0947330156341195
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 2,
+  "episode": 2,
+  "instruction": "turn on the stove and put the moka pot on it",
+  "success": true,
+  "control_steps": 254,
+  "executor_queries": 26,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2502789904829115,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t2_e2/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2502789904829115,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0010730000212788582,
+     "set_prompt_ms": 1.2492059904616326
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 3,
+  "episode": 0,
+  "instruction": "put the black bowl in the bottom drawer of the cabinet and close it",
+  "success": true,
+  "control_steps": 225,
+  "executor_queries": 23,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2937369756400585,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t3_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2937369756400585,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0011399970389902592,
+     "set_prompt_ms": 1.2925969786010683
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 3,
+  "episode": 1,
+  "instruction": "put the black bowl in the bottom drawer of the cabinet and close it",
+  "success": true,
+  "control_steps": 209,
+  "executor_queries": 21,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2590060068760067,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t3_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2590060068760067,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0011709926184266806,
+     "set_prompt_ms": 1.25783501425758
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 4,
+  "episode": 0,
+  "instruction": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+  "success": true,
+  "control_steps": 228,
+  "executor_queries": 23,
+  "planner_ms": 0.0,
+  "switch_ms": 1.25376001233235,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t4_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.25376001233235,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0010500079952180386,
+     "set_prompt_ms": 1.252710004337132
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 4,
+  "episode": 1,
+  "instruction": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+  "success": true,
+  "control_steps": 207,
+  "executor_queries": 21,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2505470076575875,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t4_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2505470076575875,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0009299837984144688,
+     "set_prompt_ms": 1.249617023859173
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 5,
+  "episode": 0,
+  "instruction": "pick up the book and place it in the back compartment of the caddy",
+  "success": true,
+  "control_steps": 175,
+  "executor_queries": 18,
+  "planner_ms": 0.0,
+  "switch_ms": 1.1200630106031895,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t5_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.1200630106031895,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0010570220183581114,
+     "set_prompt_ms": 1.1190059885848314
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 5,
+  "episode": 1,
+  "instruction": "pick up the book and place it in the back compartment of the caddy",
+  "success": true,
+  "control_steps": 179,
+  "executor_queries": 18,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2748849985655397,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t5_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2748849985655397,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0011420052032917738,
+     "set_prompt_ms": 1.273742993362248
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 6,
+  "episode": 0,
+  "instruction": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+  "success": true,
+  "control_steps": 208,
+  "executor_queries": 21,
+  "planner_ms": 0.0,
+  "switch_ms": 1.0954499884974211,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t6_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.0954499884974211,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.000867003109306097,
+     "set_prompt_ms": 1.094582985388115
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 6,
+  "episode": 1,
+  "instruction": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+  "success": true,
+  "control_steps": 197,
+  "executor_queries": 20,
+  "planner_ms": 0.0,
+  "switch_ms": 1.28641098854132,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t6_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.28641098854132,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0011489901226013899,
+     "set_prompt_ms": 1.2852619984187186
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 7,
+  "episode": 0,
+  "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+  "success": true,
+  "control_steps": 242,
+  "executor_queries": 25,
+  "planner_ms": 0.0,
+  "switch_ms": 1.0911709978245199,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t7_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.0911709978245199,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.001033011358231306,
+     "set_prompt_ms": 1.0901379864662886
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 7,
+  "episode": 1,
+  "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+  "success": true,
+  "control_steps": 251,
+  "executor_queries": 26,
+  "planner_ms": 0.0,
+  "switch_ms": 1.214007003000006,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t7_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.214007003000006,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.00109401298686862,
+     "set_prompt_ms": 1.2129129900131375
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 8,
+  "episode": 0,
+  "instruction": "put both moka pots on the stove",
+  "success": true,
+  "control_steps": 358,
+  "executor_queries": 36,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2553159904200584,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t8_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2553159904200584,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.001047999830916524,
+     "set_prompt_ms": 1.2542679905891418
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 8,
+  "episode": 1,
+  "instruction": "put both moka pots on the stove",
+  "success": true,
+  "control_steps": 452,
+  "executor_queries": 46,
+  "planner_ms": 0.0,
+  "switch_ms": 1.240121986484155,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t8_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.240121986484155,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0010500079952180386,
+     "set_prompt_ms": 1.239071978488937
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 9,
+  "episode": 0,
+  "instruction": "put the yellow and white mug in the microwave and close it",
+  "success": true,
+  "control_steps": 239,
+  "executor_queries": 24,
+  "planner_ms": 0.0,
+  "switch_ms": 1.260971010196954,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t9_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.260971010196954,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0011570227798074484,
+     "set_prompt_ms": 1.2598139874171466
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_still",
+  "task": 9,
+  "episode": 1,
+  "instruction": "put the yellow and white mug in the microwave and close it",
+  "success": true,
+  "control_steps": 236,
+  "executor_queries": 24,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2560389877762645,
+  "subgoals_initial": [
+   "stay still and do not move"
+  ],
+  "end_reason": "success",
+  "video": "flat_still_t9_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2560389877762645,
+    "detail": {
+     "instruction": "stay still and do not move",
+     "cached": true,
+     "encode_cpu_ms": 0.0008459901437163353,
+     "set_prompt_ms": 1.2551929976325482
+    }
+   }
+  ]
+ }
+]

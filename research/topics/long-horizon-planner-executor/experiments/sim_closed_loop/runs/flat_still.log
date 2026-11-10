@@ -1,0 +1,97 @@
+[robosuite WARNING] No private macro file found! (__init__.py:7)
+[robosuite WARNING] It is recommended to use a private macro file (__init__.py:8)
+[robosuite WARNING] To setup, run: python /home/jingwu/workspace/FlashRT/tmp/libero_venv/lib/python3.12/site-packages/robosuite/scripts/setup_macros.py (__init__.py:9)
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+  autotune: tested 8 algos, best=3 (110.822 us)
+  autotune: tested 8 algos, best=6 (5.0688 us)
+  autotune: tested 8 algos, best=0 (9.6352 us)
+  autotune: tested 8 algos, best=0 (245.424 us)
+  autotune: tested 8 algos, best=2 (238.15 us)
+  autotune: tested 8 algos, best=0 (121.04 us)
+  autotune: tested 8 algos, best=0 (146.134 us)
+  autotune: tested 8 algos, best=0 (2.816 us)
+  autotune: tested 8 algos, best=0 (116.131 us)
+  autotune: tested 8 algos, best=1 (5.9488 us)
+  autotune: tested 8 algos, best=1 (46.6848 us)
+  autotune: tested 8 algos, best=0 (10.5248 us)
+  autotune: tested 8 algos, best=0 (80.4384 us)
+  autotune: tested 8 algos, best=0 (291.155 us)
+  autotune: tested 8 algos, best=3 (4.3968 us)
+  autotune: tested 8 algos, best=3 (132.493 us)
+  autotune: tested 8 algos, best=2 (474.483 us)
+  autotune: tested 8 algos, best=0 (9.8016 us)
+  autotune: tested 8 algos, best=0 (234.298 us)
+  autotune: tested 8 algos, best=5 (37.8176 us)
+  autotune: tested 8 algos, best=2 (6.7712 us)
+  autotune: tested 8 algos, best=1 (311.434 us)
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+[info] using task orders [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights:  36%|███▌      | 144/398 [00:00<00:00, 1439.43it/s]Loading weights:  72%|███████▏  | 288/398 [00:00<00:00, 1355.26it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 1861.84it/s]
+  autotune: tested 8 algos, best=0 (15.4592 us)
+loaded: executor slim SlimReport(text_encoder_freed=False, sources_freed=140, sources_freed_GB=8.619, allocated_before_GB=14.996, allocated_after_GB=6.377, reserved_after_GB=6.711), allocated 6.38 GB, reserved 6.71 GB
+  autotune: tested 8 algos, best=0 (14.9984 us)
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 0 ep 0: F (max_steps) steps 700, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 4.9 s, wall 19 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 0 ep 1: F (max_steps) steps 700, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 12 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 1 ep 0: S (success) steps 269, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 6 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 1 ep 1: S (success) steps 273, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 6 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 2 ep 0: S (success) steps 245, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 5 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 2 ep 1: S (success) steps 253, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 4 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 2 ep 2: S (success) steps 254, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 5 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 3 ep 0: S (success) steps 225, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 5 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 3 ep 1: S (success) steps 209, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 5 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 4 ep 0: S (success) steps 228, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 8 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 4 ep 1: S (success) steps 207, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 8 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 5 ep 0: S (success) steps 175, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 5 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 5 ep 1: S (success) steps 179, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 5 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 6 ep 0: S (success) steps 208, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 6 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 6 ep 1: S (success) steps 197, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 6 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 7 ep 0: S (success) steps 242, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 5 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 7 ep 1: S (success) steps 251, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 5 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 8 ep 0: S (success) steps 358, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 6 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 8 ep 1: S (success) steps 452, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 8 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 9 ep 0: S (success) steps 239, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 6 s
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+[Warning]: datasets path /home/jingwu/workspace/FlashRT/tmp/ImageWAM/third_party/LIBERO/libero/libero/../datasets does not exist!
+flat_still task 9 ep 1: S (success) steps 236, subgoals ['stay still and do not move'], planner calls 0 [] 0.0 s, switches 0.0 s, wall 5 s

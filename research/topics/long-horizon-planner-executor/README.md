@@ -2,7 +2,7 @@
 
 长时程机器人任务中的"规划器 + 执行器"双模型系统：为什么长时程任务要用两个模型，两模型放在同一块 Jetson AGX Thor 上时有哪些普通 LLM 服务没有的挑战，用什么目标指标衡量，以及这些挑战可能怎么解决。
 
-- 状态：第一轮综述完成（快照 2026-11-09）；monitor 调用实验（RTX 5090）完成，Thor 实测待做（2026-11-10）
+- 状态：第一轮综述完成（快照 2026-11-09）；monitor 调用实验与 LIBERO 仿真闭环（RTX 5090）完成，Thor 实测待做（2026-11-10）
 - 最后更新：2026-11-10
 
 ## 范围
@@ -29,7 +29,7 @@ long-horizon manipulation, hierarchical VLA, planner–executor, dual-system, as
 | [survey.md](survey.md) | 动机（长时程定义、同执行器对照、反证、为什么两个模型）、延迟代价的三条途径与指标、边缘 SoC 的带宽与 EMC 现象、系统论文的写法、开放问题、阅读顺序 |
 | [papers.md](papers.md) | 论文目录，按 A 动机 / B 延迟代价 / C 系统现象 / D 写法参照分节 |
 | `notes/` | 精读笔记：[2026-vla-xpu-characterization.md](notes/2026-vla-xpu-characterization.md) |
-| `experiments/` | [monitor_call](experiments/monitor_call/README.md)：monitor 调用的固定前缀（61–65 % 的输入）与决策位置（第 9–11 个 token），复用前缀 + action 闭合即停后到决策可用的时间（RTX 5090），以及不对齐的前缀边界翻转干预决策 |
+| `experiments/` | [monitor_call](experiments/monitor_call/README.md)：monitor 调用的固定前缀（61–65 % 的输入）与决策位置（第 9–11 个 token），复用前缀 + action 闭合即停后到决策可用的时间（RTX 5090），以及不对齐的前缀边界翻转干预决策；[sim_closed_loop](experiments/sim_closed_loop/README.md)：规划器 + ImageWAM 在 LIBERO 仿真里的闭环（21 个回合 × 5 种模式，带标注视频）：执行器几乎不读指令，规划器的失败来自看错，同步协议下机器人约 20 % 的时间在等规划器 |
 | `reports/` | 汇报材料（尚无） |
 
 ## 相关记录

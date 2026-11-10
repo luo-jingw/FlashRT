@@ -1,0 +1,611 @@
+[
+ {
+  "mode": "flat_other",
+  "task": 0,
+  "episode": 0,
+  "instruction": "put both the alphabet soup and the tomato sauce in the basket",
+  "success": false,
+  "control_steps": 700,
+  "executor_queries": 70,
+  "planner_ms": 0.0,
+  "switch_ms": 4658.8406399823725,
+  "subgoals_initial": [
+   "put both the cream cheese box and the butter in the basket"
+  ],
+  "end_reason": "max_steps",
+  "video": "flat_other_t0_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 4658.8406399823725,
+    "detail": {
+     "instruction": "put both the cream cheese box and the butter in the basket",
+     "cached": false,
+     "encode_cpu_ms": 4656.920681998599,
+     "set_prompt_ms": 1.9199579837732017
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 0,
+  "episode": 1,
+  "instruction": "put both the alphabet soup and the tomato sauce in the basket",
+  "success": false,
+  "control_steps": 700,
+  "executor_queries": 70,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2336999934632331,
+  "subgoals_initial": [
+   "put both the cream cheese box and the butter in the basket"
+  ],
+  "end_reason": "max_steps",
+  "video": "flat_other_t0_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2336999934632331,
+    "detail": {
+     "instruction": "put both the cream cheese box and the butter in the basket",
+     "cached": true,
+     "encode_cpu_ms": 0.0007080088835209608,
+     "set_prompt_ms": 1.2329919845797122
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 1,
+  "episode": 0,
+  "instruction": "put both the cream cheese box and the butter in the basket",
+  "success": true,
+  "control_steps": 282,
+  "executor_queries": 29,
+  "planner_ms": 0.0,
+  "switch_ms": 5202.124033006839,
+  "subgoals_initial": [
+   "turn on the stove and put the moka pot on it"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t1_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5202.124033006839,
+    "detail": {
+     "instruction": "turn on the stove and put the moka pot on it",
+     "cached": false,
+     "encode_cpu_ms": 5201.067300018622,
+     "set_prompt_ms": 1.0567329882178456
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 1,
+  "episode": 1,
+  "instruction": "put both the cream cheese box and the butter in the basket",
+  "success": true,
+  "control_steps": 330,
+  "executor_queries": 33,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2551359832286835,
+  "subgoals_initial": [
+   "turn on the stove and put the moka pot on it"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t1_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2551359832286835,
+    "detail": {
+     "instruction": "turn on the stove and put the moka pot on it",
+     "cached": true,
+     "encode_cpu_ms": 0.0010759977158159018,
+     "set_prompt_ms": 1.2540599855128676
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 2,
+  "episode": 0,
+  "instruction": "turn on the stove and put the moka pot on it",
+  "success": true,
+  "control_steps": 231,
+  "executor_queries": 24,
+  "planner_ms": 0.0,
+  "switch_ms": 5209.911423997255,
+  "subgoals_initial": [
+   "put the black bowl in the bottom drawer of the cabinet and close it"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t2_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5209.911423997255,
+    "detail": {
+     "instruction": "put the black bowl in the bottom drawer of the cabinet and close it",
+     "cached": false,
+     "encode_cpu_ms": 4989.667516987538,
+     "set_prompt_ms": 220.24390700971708
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 2,
+  "episode": 1,
+  "instruction": "turn on the stove and put the moka pot on it",
+  "success": true,
+  "control_steps": 248,
+  "executor_queries": 25,
+  "planner_ms": 0.0,
+  "switch_ms": 1.5300810046028346,
+  "subgoals_initial": [
+   "put the black bowl in the bottom drawer of the cabinet and close it"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t2_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.5300810046028346,
+    "detail": {
+     "instruction": "put the black bowl in the bottom drawer of the cabinet and close it",
+     "cached": true,
+     "encode_cpu_ms": 0.0011269876267760992,
+     "set_prompt_ms": 1.5289540169760585
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 2,
+  "episode": 2,
+  "instruction": "turn on the stove and put the moka pot on it",
+  "success": true,
+  "control_steps": 259,
+  "executor_queries": 26,
+  "planner_ms": 0.0,
+  "switch_ms": 1.3052390131633729,
+  "subgoals_initial": [
+   "put the black bowl in the bottom drawer of the cabinet and close it"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t2_e2/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.3052390131633729,
+    "detail": {
+     "instruction": "put the black bowl in the bottom drawer of the cabinet and close it",
+     "cached": true,
+     "encode_cpu_ms": 0.0013120006769895554,
+     "set_prompt_ms": 1.3039270124863833
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 3,
+  "episode": 0,
+  "instruction": "put the black bowl in the bottom drawer of the cabinet and close it",
+  "success": true,
+  "control_steps": 226,
+  "executor_queries": 23,
+  "planner_ms": 0.0,
+  "switch_ms": 5425.777476018993,
+  "subgoals_initial": [
+   "put the white mug on the left plate and put the yellow and white mug on the right plate"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t3_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5425.777476018993,
+    "detail": {
+     "instruction": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+     "cached": false,
+     "encode_cpu_ms": 5206.574572017416,
+     "set_prompt_ms": 219.20290400157683
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 3,
+  "episode": 1,
+  "instruction": "put the black bowl in the bottom drawer of the cabinet and close it",
+  "success": true,
+  "control_steps": 215,
+  "executor_queries": 22,
+  "planner_ms": 0.0,
+  "switch_ms": 1.5037139819469303,
+  "subgoals_initial": [
+   "put the white mug on the left plate and put the yellow and white mug on the right plate"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t3_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.5037139819469303,
+    "detail": {
+     "instruction": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+     "cached": true,
+     "encode_cpu_ms": 0.0012289965525269508,
+     "set_prompt_ms": 1.5024849853944033
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 4,
+  "episode": 0,
+  "instruction": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+  "success": true,
+  "control_steps": 225,
+  "executor_queries": 23,
+  "planner_ms": 0.0,
+  "switch_ms": 5208.063430007314,
+  "subgoals_initial": [
+   "pick up the book and place it in the back compartment of the caddy"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t4_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5208.063430007314,
+    "detail": {
+     "instruction": "pick up the book and place it in the back compartment of the caddy",
+     "cached": false,
+     "encode_cpu_ms": 4989.091930998256,
+     "set_prompt_ms": 218.97149900905788
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 4,
+  "episode": 1,
+  "instruction": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+  "success": true,
+  "control_steps": 206,
+  "executor_queries": 21,
+  "planner_ms": 0.0,
+  "switch_ms": 1.5074060065671802,
+  "subgoals_initial": [
+   "pick up the book and place it in the back compartment of the caddy"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t4_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.5074060065671802,
+    "detail": {
+     "instruction": "pick up the book and place it in the back compartment of the caddy",
+     "cached": true,
+     "encode_cpu_ms": 0.0014649995137006044,
+     "set_prompt_ms": 1.5059410070534796
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 5,
+  "episode": 0,
+  "instruction": "pick up the book and place it in the back compartment of the caddy",
+  "success": true,
+  "control_steps": 166,
+  "executor_queries": 17,
+  "planner_ms": 0.0,
+  "switch_ms": 6237.006586976349,
+  "subgoals_initial": [
+   "put the white mug on the plate and put the chocolate pudding to the right of the plate"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t5_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 6237.006586976349,
+    "detail": {
+     "instruction": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+     "cached": false,
+     "encode_cpu_ms": 6015.364350983873,
+     "set_prompt_ms": 221.64223599247634
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 5,
+  "episode": 1,
+  "instruction": "pick up the book and place it in the back compartment of the caddy",
+  "success": true,
+  "control_steps": 166,
+  "executor_queries": 17,
+  "planner_ms": 0.0,
+  "switch_ms": 1.4310340047813952,
+  "subgoals_initial": [
+   "put the white mug on the plate and put the chocolate pudding to the right of the plate"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t5_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.4310340047813952,
+    "detail": {
+     "instruction": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+     "cached": true,
+     "encode_cpu_ms": 0.0016859848983585835,
+     "set_prompt_ms": 1.4293480198830366
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 6,
+  "episode": 0,
+  "instruction": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+  "success": true,
+  "control_steps": 203,
+  "executor_queries": 21,
+  "planner_ms": 0.0,
+  "switch_ms": 5242.693748994498,
+  "subgoals_initial": [
+   "put both the alphabet soup and the cream cheese box in the basket"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t6_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5242.693748994498,
+    "detail": {
+     "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+     "cached": false,
+     "encode_cpu_ms": 5020.613546977984,
+     "set_prompt_ms": 222.0802020165138
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 6,
+  "episode": 1,
+  "instruction": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+  "success": true,
+  "control_steps": 215,
+  "executor_queries": 22,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2935679988004267,
+  "subgoals_initial": [
+   "put both the alphabet soup and the cream cheese box in the basket"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t6_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2935679988004267,
+    "detail": {
+     "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+     "cached": true,
+     "encode_cpu_ms": 0.0013700046110898256,
+     "set_prompt_ms": 1.292197994189337
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 7,
+  "episode": 0,
+  "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+  "success": true,
+  "control_steps": 252,
+  "executor_queries": 26,
+  "planner_ms": 0.0,
+  "switch_ms": 4847.544537013164,
+  "subgoals_initial": [
+   "put both moka pots on the stove"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t7_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 4847.544537013164,
+    "detail": {
+     "instruction": "put both moka pots on the stove",
+     "cached": false,
+     "encode_cpu_ms": 4627.585326001281,
+     "set_prompt_ms": 219.95921101188287
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 7,
+  "episode": 1,
+  "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+  "success": true,
+  "control_steps": 247,
+  "executor_queries": 25,
+  "planner_ms": 0.0,
+  "switch_ms": 1.3176759821362793,
+  "subgoals_initial": [
+   "put both moka pots on the stove"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t7_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.3176759821362793,
+    "detail": {
+     "instruction": "put both moka pots on the stove",
+     "cached": true,
+     "encode_cpu_ms": 0.0012069940567016602,
+     "set_prompt_ms": 1.3164689880795777
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 8,
+  "episode": 0,
+  "instruction": "put both moka pots on the stove",
+  "success": true,
+  "control_steps": 539,
+  "executor_queries": 54,
+  "planner_ms": 0.0,
+  "switch_ms": 5814.856303011766,
+  "subgoals_initial": [
+   "put the yellow and white mug in the microwave and close it"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t8_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5814.856303011766,
+    "detail": {
+     "instruction": "put the yellow and white mug in the microwave and close it",
+     "cached": false,
+     "encode_cpu_ms": 5813.805593003053,
+     "set_prompt_ms": 1.0507100087124854
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 8,
+  "episode": 1,
+  "instruction": "put both moka pots on the stove",
+  "success": true,
+  "control_steps": 369,
+  "executor_queries": 37,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2739170051645488,
+  "subgoals_initial": [
+   "put the yellow and white mug in the microwave and close it"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t8_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2739170051645488,
+    "detail": {
+     "instruction": "put the yellow and white mug in the microwave and close it",
+     "cached": true,
+     "encode_cpu_ms": 0.0012519885785877705,
+     "set_prompt_ms": 1.272665016585961
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 9,
+  "episode": 0,
+  "instruction": "put the yellow and white mug in the microwave and close it",
+  "success": true,
+  "control_steps": 271,
+  "executor_queries": 28,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2348819873295724,
+  "subgoals_initial": [
+   "put both the alphabet soup and the tomato sauce in the basket"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t9_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2348819873295724,
+    "detail": {
+     "instruction": "put both the alphabet soup and the tomato sauce in the basket",
+     "cached": true,
+     "encode_cpu_ms": 0.001267995685338974,
+     "set_prompt_ms": 1.2336139916442335
+    }
+   }
+  ]
+ },
+ {
+  "mode": "flat_other",
+  "task": 9,
+  "episode": 1,
+  "instruction": "put the yellow and white mug in the microwave and close it",
+  "success": true,
+  "control_steps": 249,
+  "executor_queries": 25,
+  "planner_ms": 0.0,
+  "switch_ms": 1.2309169978834689,
+  "subgoals_initial": [
+   "put both the alphabet soup and the tomato sauce in the basket"
+  ],
+  "end_reason": "success",
+  "video": "flat_other_t9_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.2309169978834689,
+    "detail": {
+     "instruction": "put both the alphabet soup and the tomato sauce in the basket",
+     "cached": true,
+     "encode_cpu_ms": 0.001021981006488204,
+     "set_prompt_ms": 1.2298950168769807
+    }
+   }
+  ]
+ }
+]
