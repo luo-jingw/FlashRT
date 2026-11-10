@@ -186,7 +186,10 @@ and the steady part (4 033 / 3 977 ms). CPU frequencies and the readable devfreq
 in all 44 readings; the EMC clock is not readable. Round `1105_h6h4` (another GPU process ran until just before)
 had no slow part at the start; after 300 s of idle in the same process the first two generations took 137.9 / 138.3
 ms per cycle and the next 8 recovered to 87.6 ms over about 50 s, while a 1 GiB copy probe dropped only 11 % (228.6 /
-256.5 GB/s) in the first two and was back while decode still ran 94-118 ms: the slow state follows GPU idle.
+256.5 GB/s) in the first two and was back while decode still ran 94-118 ms: the slow state follows GPU idle. Round
+`1110_h7h4bh8` (H7) inserted idle gaps of 5 / 15 / 30 / 60 / 120 s: none reproduced the plateau (first two
+generations 87.0-87.3 ms after 5-60 s apart from one 164.9 ms, 96.7 / 95.4 ms after 120 s), so gaps shorter than the
+monitor interval do not trigger it.
 
 ## The official planner with images on the Thor image frontend (`thor/planner_calls_vl.py`)
 
@@ -243,6 +246,12 @@ call; the same reply / same decision columns count calls equal to the reference:
   kernel 728 / 2 913 / 5 791 ms, cuBLASLt 0.89 / 3.46 / 14.7 ms; on the 5090 (`thor/mtp_tail_fc_kernels_rtx.log`)
   cuBLASLt 0.24 / 0.97 / 1.98 ms, the M-tile kernel unavailable. With cuBLASLt the Thor prefill is 0.98-0.99 ms per
   prompt token on both call kinds.
+- Thor prefill by kernel binding (round `1110_h7h4bh8`, H4b, `thor/prefill_binding_times.py thor`): 3 981.9 ms,
+  binding sum 4 047.3 ms; linear attention 57.1 % (28x the 5090's), GEMM 18.5 % (4.4x), xqa attention 8.3 %; one
+  binding reported as `gdn_chunk` takes 2 235 ms, 55 % of the prefill (`opportunities.md` OPT-040 candidate 5).
+- With the monitor prefix restored from a capsule and decode stopped when the `action` value closes, a Thor monitor
+  call takes 2.61 s instead of 6.40 s (round `1110_h7h4bh8`, H8;
+  `../../../long-horizon-planner-executor/experiments/monitor_call/README.md`).
 
 ## Files
 

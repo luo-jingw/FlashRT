@@ -1613,6 +1613,10 @@ Thor: replies against the RTX 5090 references, and decode ms per speculative cyc
 - Round `1105_h6h4` (H6, `decode_cycle_drift.py thor 300 300 180`, another process had used the GPU until just
   before): 87.4-88.1 ms per cycle from the first warm generation on; after 300 s of idle in the same process
   137.9 / 138.3 ms, then 117.8 -> 93.6 ms over 8 generations (about 50 s), then 87.5-87.8 ms.
+- Round `1110_h7h4bh8` (H7, `decode_cycle_drift.py thor 120 5,15,30,60,120 60`, GPU idle before the start): steady
+  about 87.2 ms per cycle; the first / second generation after each idle gap: 5 s 87.3 / 164.9, 15 s 87.2 / 87.1,
+  30 s 87.0 / 87.1 (third 95.8), 60 s 87.1 / 87.1, 120 s 96.7 / 95.4 ms (prefill 4 048 against about 3 980 ms). No
+  gap from 5 s to 120 s reproduced the 138 ms plateau that followed 300 s of idle.
 ## Evidence
 
 - On the 5090, the RTX language model with the Thor frontend's ViT configuration (BF16 linears, SDPA;
@@ -1655,9 +1659,10 @@ Thor: replies against the RTX 5090 references, and decode ms per speculative cyc
 
 ## Next Experiment
 
-- Thor row H7: idle gaps of 5, 15, 30, 60 and 120 s in one process after a warm run, each followed by 60 s of back to
-  back generation: the shortest gap after which the slow state appears. The planner's calls are seconds apart, so
-  a threshold below the call interval would slow every call that follows an idle GPU.
+- H7 (round `1110_h7h4bh8`) found no threshold between 5 s and 120 s: idle gaps shorter than the planner's call
+  interval do not put decode into the slow state; 120 s gives 1.09-1.11x. Remaining: gaps of 180 and 300 s, each
+  repeated three times in one process, to tell whether the 300 s plateau of `1105_h6h4` recurs; and the same gaps
+  with a periodic executor load running during the idle, to tell whether a co-located executor keeps the state warm.
 
 ## Impact
 
@@ -1692,3 +1697,49 @@ the first survey round (2026-11-09); the entries are marked † in its `papers.m
 
 Open each primary page (arXiv abs / HTML, proceedings) and either replace the † entry with the verified value or
 state that the value is figure-only.
+
+# ISSUE-114
+
+Status: open, non-blocking
+
+Area: `flash_rt/frontends/torch/qwen36_vl_thor.py` (`Qwen36VlTorchFrontendThor`) and `qwen36_thor.py` on Jetson Thor:
+replies of the same prompt in one process are not always token-identical.
+
+## Observation
+
+- Round `1110_h7h4bh8` (H8, `monitor_call/monitor_call_bench.py thor own`, official Qwen3.8-27B NVFP4, 20 monitor
+  calls): the reference reply of each call is the model's own 160-token `generate`; a second `generate` of the same
+  call later in the same process equals it in 15 of 20 calls. The agent path without a capsule equals it in 14 / 20,
+  with the aligned capsule 12 / 20, with the capsule cut at the first NOW image 15 / 20. The parsed action equals the
+  reference in 20 / 20 for every full-reply and stop-at-action cell.
+- RTX 5090, same script and model (`monitor_call_rtx_official.json`): `generate`, no capsule and aligned capsule are
+  20 / 20; the capsule cut at the first NOW image is 0 / 20.
+
+## Evidence
+
+- The reference and the second `generate` run the same code on the same inputs; the difference is between two runs,
+  not between paths.
+- The per-call replies are in `$OUT/monitor_call_thor_official.json` on the Thor (not copied back), so which calls
+  differ and at which token is not known here.
+
+## Hypotheses
+
+- A kernel on the Thor path whose result depends on scheduling (atomics, split-K reductions, or an attention
+  reduction such as xqa) changes low bits of a logit; a greedy tie or near-tie then flips one token and the rest of
+  the reply follows. The 5090 path is reproducible on the same prompts.
+- The decision is set within the first 13-16 tokens and was unchanged in all 20 calls, so the varying tokens are more
+  likely in the `reason` text; this is not verified.
+
+## Next Experiment
+
+- From the JSON: per call, the first differing token position of each cell against the reference, and whether the
+  same calls differ in every cell.
+- On the Thor: the same call generated five times in one process, logging the top-2 logit margin at the first
+  differing position; then the same with the attention and GEMM kernels switched one at a time to a deterministic
+  variant where one exists.
+
+## Impact
+
+On the Thor, "same reply as the reference" from a single reference run cannot separate a path's own numerical change
+from run-to-run variation. Thor comparisons of reply text need a run-to-run baseline cell (here `generate` against
+`generate`); decision equality is the comparison that this round supports.

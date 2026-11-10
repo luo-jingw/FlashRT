@@ -851,6 +851,64 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 
 结论去向：本节；issues.md ISSUE-112；`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md` 的 Thor 每周期一段与图像回放一节；`opportunities.md` OPT-040 candidate 5。`THOR_CHECKLIST.md` 的 H6、H4 已删除，后续为 H4b、H7。
 
+### `1110_h7h4bh8` 轮：H7 空闲多久之后解码变慢，H4b prefill 按 kernel 绑定计时，H8 monitor 调用复用固定前缀、action 闭合即停（commit `3c93584e`）
+
+共同条件：HEAD `3c93584e`，MAXN，GPC / NVD 锁定，`emc_locked=null`；开跑前另一个进程（thor3）在用 GPU，等它退出、GPU 空闲后开始；未改时钟、未 sudo。`$OUT` = `$HOME/thor_val/1110_h7h4bh8`。`monitor_call_thor_official.json`（sha256 `d3003501…6f2f37`）留在 `$OUT`，未带回。
+
+**H7**（`thor/decode_cycle_drift.py thor 120 5,15,30,60,120 60`：monitor 形状背靠背 120 s，之后依次空闲 5 / 15 / 30 / 60 / 120 s、每次空闲后背靠背 60 s）。`loaded:` 为 `Qwen36TorchFrontendThor long_ctx_mode True mtp True devfreq ['8188050000.vic', 'gpu-gpc-0', 'gpu-nvd-0'] run/idle/after s 120.0 [5.0, 15.0, 30.0, 60.0, 120.0] 60.0`。run 段稳态约 87.2 ms / 周期，拷贝约 256 GB/s。
+
+| 空闲 | 之后第 1 次 ms / 周期 | 第 2 次 | 高于 100 |
+|---|---|---|---|
+| 5 s | 87.3 | 164.9 | 第 2 次 |
+| 15 s | 87.2 | 87.1 | 否 |
+| 30 s | 87.0 | 87.1 | 否（第 3 次 95.8） |
+| 60 s | 87.1 | 87.1 | 否 |
+| 120 s | 96.7 | 95.4 | 否（prefill 4 048 ms） |
+
+- 5–120 s 的空闲之后都没有出现 `1105_h6h4` 空闲 300 s 之后的 138 ms 平台。唯一高于 100 ms 的是 5 s 空闲之后的第二次生成（164.9 ms），此外报告摘要里还有一次 134.1 ms；它们与 `1104_h3c`、`1105_h6h4` 稳态里的孤立尖峰（120–249 ms）同一量级。
+- 120 s 之后前两次是稳态的 1.11 / 1.09 倍，prefill 高 1.7 %。
+- 按清单判据，5–120 s 里没有阈值。
+
+**H4b**（`thor/prefill_binding_times.py thor`，4 079 token 的 monitor prefill，每个 `flash_rt_kernels` 绑定前后同步计时）。`loaded:` 为 `Qwen36TorchFrontendThor long_ctx_mode True mtp True kernel modules ['flash_rt.flash_rt_kernels']`。
+
+- prefill 计时 3 983.4 / 3 980.4 ms（中位 3 981.9），按 2 × 27e9 FLOP / token 合 55.2 TFLOP/s（推算）。
+- 包装后的一次生成：墙钟 4 085.7 ms，2 647 次绑定调用，绑定时间和 4 047.3 ms，绑定以外 38.4 ms（0.9 %）。
+
+| 类别 | Thor 占比 | Thor ms（推算） | RTX 5090 ms | Thor / 5090 |
+|---|---|---|---|---|
+| 线性注意力 | 57.1 % | 2 311 | 81.8 | 28× |
+| GEMM | 18.5 % | 749 | 169.3 | 4.4× |
+| 注意力（xqa） | 8.3 % | 336 | –（5090 为 FA2，在绑定以外） | – |
+| 逐元素 / 拷贝 | 6.2 % | 251 | 6.7 | 37× |
+| 量化融合 | 6.1 % | 247 | 36.1 | 6.8× |
+| norm | 3.1 % | 125 | 10.0 | 12.5× |
+| rope | 0.5 % | 20 | 1.7 | 12× |
+
+- Thor ms 是占比乘绑定时间和（推算）；5090 列是 `harness_replay_5090/thor/prefill_binding_times_rtx.log`。
+- 单个绑定：报告里记作 `gdn_chunk` 的一个绑定 2 235 ms（绑定时间和的 55 %）；xqa 338 ms；两个 fp4 GEMM 319 + 267 ms；`quantize_nvfp4` 245 ms。5090 上线性注意力最大的绑定是 `linear_attn_gdn_wy_chunk_h_b64_bf16_mma_fla`（26.6 ms），fp4 GEMM 两个合计 156 ms。`gdn_chunk` 的完整绑定名在 `$OUT/H4b_bindings.log` 的前 50 表里，未带回；如果它就是这个 chunk_h 绑定，倍数约 84×，而 GEMM 约 3.8×（推算）。
+
+**H8**（`monitor_call/monitor_call_bench.py thor own`，官方 Qwen3.8-27B NVFP4，ep0 / ep43 腕部 224 的 20 次 monitor 调用；参考回复为同一进程里模型自己的 160 token `generate`）。各格到决策可用的中位（ms），与 RTX 5090 同一脚本（`monitor_call_rtx_official.json`）对照：
+
+| 前缀 | 解码 | Thor | RTX 5090 | Thor / 5090 | 与 5.33 s | 回复相同 | action 相同 |
+|---|---|---|---|---|---|---|---|
+| generate | 整段 | 6 358 | 1 048 | 6.1× | 高于 | 15/20 | 20/20 |
+| 无复用 | 整段 | 6 397 | 1 057 | 6.1× | 高于 | 14/20 | 20/20 |
+| 无复用 | 闭合即停 | 4 694 | 533 | 8.8× | 低于 | – | 20/20 |
+| 无复用 | 预知长度 | 4 685 | 532 | 8.8× | 低于 | – | 19/20 |
+| 对齐 | 整段 | 4 351 | 861 | 5.1× | 低于 | 12/20 | 20/20 |
+| 对齐 | 闭合即停 | 2 608 | 338 | 7.7× | 低于 | – | 20/20 |
+| 对齐 | 预知长度 | 2 598 | 335 | 7.8× | 低于 | – | 20/20 |
+| 完整 | 整段 | 3 767 | 847 | 4.4× | 低于 | 15/20 | 20/20 |
+| 完整 | 闭合即停 | 2 024 | 297 | 6.8× | 低于 | – | 20/20 |
+| 完整 | 预知长度 | 2 015 | 296 | 6.8× | 低于 | – | 19/20 |
+
+- 对齐复用 + 闭合即停 2 608 ms，与推算的约 2.6 s 一致，低于 5.33 s；相对无复用整段（6 397 ms）为 2.45 倍（5090 为 3.1 倍）。
+- 对齐复用的 prefill / 无复用 = 2 024 / 3 981 = 0.51，token 之比（4 076 − 2 048）/ 4 076 = 0.50；复用时 ViT 134 ms，无复用 266 ms。
+- 回复相同：第二次 `generate` 与参考只有 15 / 20 相同，无复用 14 / 20，对齐 12 / 20，完整 15 / 20；5090 上 generate、无复用、对齐都是 20 / 20。Thor 上同一提示词两次生成的回复不总相同（issues.md ISSUE-114），所以这一轮的回复计数分不出 capsule 本身的影响。
+- 整段与闭合即停的 action 全部 20 / 20；两个"预知长度"格各有 1 次不同。参考回复的决策分布不在报告里：若 20 次都是 `continue`，action 列不检验干预决策的变化（issues.md ISSUE-110）。
+
+结论去向：本节；issues.md ISSUE-112、ISSUE-114；`opportunities.md` OPT-040 candidate 4、5；`research/topics/long-horizon-planner-executor/experiments/monitor_call/README.md` 的 Thor 一节；`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md` 的 Thor 每周期一段与图像回放一节。`THOR_CHECKLIST.md` 的 H7、H4b、H8 已删除。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

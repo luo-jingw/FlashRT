@@ -1810,6 +1810,12 @@ Measurements: `research/topics/wam-inference-acceleration/experiments/harness_re
 4. Prefill reuse across calls: keep the K/V of the prompt prefix that is identical in every call (the system prompt)
    and prefill only the rest; order the prompt so that the shared part comes first. Observation: monitor prefill ms on
    the Thor against round `1104_h3b`.
+   Measured (`research/topics/long-horizon-planner-executor/experiments/monitor_call/README.md`): the system prompt and
+   the three BEFORE images are 61-65 % of a monitor prompt and constant within an episode. A capsule of that prefix cut
+   at the 2 048-token prefill chunk, restored before each monitor call, together with stopping decode when the
+   `action` value closes, gives on the RTX 5090 (official model) 1 057 -> 338 ms from call start to decision with
+   20 / 20 replies unchanged, and on the Thor (round `1110_h7h4bh8`, H8) 6 397 -> 2 608 ms, below the 5.33 s monitor
+   interval, with 20 / 20 actions unchanged (Thor replies are not reproducible run to run, issues.md ISSUE-114).
 5. Prefill throughput on the Thor: with the cuBLASLt tail fc, prefill costs 0.98-0.99 ms per prompt token (round
    `1104_h3b`), about 55 TFLOP/s for 2 x 27e9 FLOP per token (derived), and is 60 % of a monitor call. Observation: a
    per-kernel profile of one 4 079-token prefill on the Thor (GEMM, attention, linear attention, quantize shares).
@@ -1817,3 +1823,9 @@ Measurements: `research/topics/wam-inference-acceleration/experiments/harness_re
    bound by host launches; torch.profiler records no CUDA kernels on the Thor. `thor/prefill_binding_times.py` times
    every kernel binding with device synchronization instead (RTX 5090: binding sum 305.6 of 307.7 ms; GEMM 55 %,
    linear attention 27 %, quantize-fused 12 %; FA2 is held by reference and falls in the 37.5 ms outside bindings).
+   Thor (round `1110_h7h4bh8`, H4b): prefill 3 981.9 ms, binding sum 4 047.3 ms, outside bindings 38.4 ms (0.9 %);
+   linear attention 57.1 %, GEMM 18.5 %, attention (xqa) 8.3 %, elementwise / copy 6.2 %, quantize-fused 6.1 %, norm
+   3.1 %. One binding reported as `gdn_chunk` takes 2 235 ms (55 %); against the 5090 the linear-attention category is
+   28x and GEMM 4.4x (derived from shares). The next observation is that binding's full name and its 5090 time
+   (`$OUT/H4b_bindings.log`, top-50 table): a linear-attention chunk kernel on the Thor that ran at the GEMM ratio would
+   bring prefill to about 1.8-1.9 s (derived).

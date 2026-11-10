@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` / `1030` 轮做完，已从本清单删除。`1104_h` 轮做完 H1、H2，`1104_h3` 轮做完 H3a、H3，`1104_h3b` 轮做完 H3b，`1104_h3c` 轮做完 H3c，`1105_h6h4` 轮做完 H6、H4，已从本清单删除。待测的是 H7（空闲多久之后解码变慢）、H4b（monitor 长度 prefill 按 kernel 绑定计时）与 H8（monitor 调用复用固定前缀、action 闭合即停），同一轮按 H7 → H4b → H8 的顺序做。另外剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` / `1030` 轮做完，已从本清单删除。`1104_h` 轮做完 H1、H2，`1104_h3` 轮做完 H3a、H3，`1104_h3b` 轮做完 H3b，`1104_h3c` 轮做完 H3c，`1105_h6h4` 轮做完 H6、H4，`1110_h7h4bh8` 轮做完 H7、H4b、H8，已从本清单删除。另外剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,81 +52,11 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-### 本轮共同前置
-
-开始前 GPU 上没有其他计算进程（有就等，不要停别人的进程）。H7、H4b 约 20 分钟，H8 约 30 分钟。
-
-```
-cd $FLASHRT_ROOT
-git pull
-export OUT=$HOME/thor_val/$(date +%m%d)_h7h4bh8; mkdir -p $OUT
-export CK=$HOME/thor_val/ckpt
-export PYTHONPATH=$HOME/thor_val/pydeps_tf5:$PYTHONPATH
-R=research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor
-python -c "from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state as r; r()" | tee $OUT/P0_clock.log
-git rev-parse HEAD | tee $OUT/P0_commit.log
-```
-
-### H7：空闲多久之后解码变慢
-
-问题：`1105_h6h4` 里同一进程空闲 300 s 之后，解码每周期前两次生成是 138 ms（稳态 87.6 ms），约 50 s 后恢复；拷贝带宽只降 11 %（ISSUE-112）。规划器两次调用之间只隔几秒：最短空闲多久就会进入慢状态。
-
-```
-python $R/decode_cycle_drift.py thor 120 5,15,30,60,120 60 2>&1 | tee $OUT/H7_drift.log
-python -I -c 'import json, sys; [print("%s %.0f s  %.1f ms/cycle  copy %.1f GB/s  prefill %.0f  cpu %d-%d kHz  %s" % (s["phase"], s["t_s"], s["ms_per_cycle"], s["copy_gbps"], s["prefill_ms"], min(s["cpu_khz"] or [-1]), max(s["cpu_khz"] or [-1]), s["devfreq_hz"])) for s in json.load(open(sys.argv[1]))["samples"]]' $OUT/decode_cycle_drift_thor.json | tee $OUT/H7_drift_table.txt
-```
-
-带回：`H7_drift.log` 的 `loaded:` 一行与各 `idle … s` 行；`H7_drift_table.txt` 全部。
-
-判据：
-- 每个 `after<gap>s` 段的第一、二次生成的 ms / 周期，与 `run` 段的稳态（约 87.6）比较；高于 100 的最短 gap 就是阈值。
-- 各段开头的 `copy` 与稳态（约 256 GB/s）比较。
-- 5090 上同一脚本：见 `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/decode_cycle_drift_rtx_probe_table.txt`（空闲 20 s 前后都是 24.2–24.3 ms）。
-
-结论去向：issues.md ISSUE-112；`THOR_STATUS_SUMMARY.md` 本轮小节；`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md` 的 Thor 每周期一段。
-
-### H4b：monitor 长度 prefill 按 kernel 绑定计时
-
-问题：Thor 上 monitor 的 prefill 3.98 s，按 2 × 27e9 FLOP / token 合约 55 TFLOP/s（推算）；`1105_h6h4` 的 torch.profiler 在 Thor 上记不到 kernel。改为把 `flash_rt_kernels` 的每个绑定包一层前后同步的计时，看时间在 GEMM、线性注意力、量化、注意力之间怎么分。
-
-```
-python $R/prefill_binding_times.py thor 2>&1 | tee $OUT/H4b_bindings.log
-```
-
-带回：`H4b_bindings.log` 全部内容（`loaded:` 一行、prefill ms、绑定调用数与时间和、绑定以外的时间、类别表、前 50 个绑定）。任何一步失败：完整 traceback 与失败前最后 20 行。
-
-判据：
-- 类别表里占比最大的一两类；前 50 个绑定里单个超过 5 % 的。
-- 绑定以外的时间：包含注意力后端在初始化时持有的函数（5090 上的 FA2）与 torch 算子；它大于 10 % 时，单独写出来。
-- 与 5090 同一脚本对照：`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/prefill_binding_times_rtx.log`（prefill 307.7 ms，绑定和 305.6 ms，GEMM 55 %、线性注意力 27 %、量化 12 %）；同名绑定 Thor / 5090 的倍数。
-
-结论去向：`opportunities.md` OPT-040 candidate 5；`THOR_STATUS_SUMMARY.md` 本轮小节；`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md` 的 Thor 图像回放一节。
-
-### H8：monitor 调用复用固定前缀、action 闭合即停
-
-问题：同一回合的 monitor 调用，系统提示与三张 BEFORE 图（2 641 / 4 076 个输入 token）每次都一样；回复的 `action` 在第 9–11 个 token 就闭合，后面是 `reason`。RTX 5090 上把固定前缀存成 capsule、每次恢复后只 prefill 其余 token，并在 `action` 闭合的验证周期后停止解码，master 的 monitor 调用到决策可用由 935 ms 降到 336 ms，回复逐 token 不变。Thor 上 prefill 占整次 61 %（`1105_h6h4`：ViT 270、prefill 3 986、解码 2 228、整次 6 506 ms），推算降到约 2.6 s。实测它是否低于 monitor 间隔 5.33 s，以及前缀恢复与追加 prefill 在 Thor 前端上是否可用。
-
-```
-D=research/topics/long-horizon-planner-executor/experiments/monitor_call
-C=research/topics/wam-inference-acceleration/experiments/harness_replay_5090/calls
-PLANNER_CKPT=$CK/qwen38-27b-nvfp4-official PLANNER_MTP_DIR=$CK/qwen38-27b-fp8-official \
-  python $D/monitor_call_bench.py thor own $OUT/monitor_call_thor_official.json $C/ep0_wrist224.jsonl $C/ep43_wrist224.jsonl 2>&1 | tee $OUT/H8_monitor_call.log
-python $D/tables.py $OUT/monitor_call_thor_official.json | tee $OUT/H8_tables.md
-```
-
-带回：`H8_monitor_call.log` 全部；`H8_tables.md` 全部；能复制回来的话再带 `monitor_call_thor_official.json`（用来画图）。任何一步失败：完整 traceback 与失败前最后 20 行。
-
-判据：
-- 各格的"到决策可用"（`call` 列）与 5.33 s 比较；"对齐 / 闭合即停"一格与推算的约 2.6 s 比较。
-- 对齐复用的"回复相同"应为 20 / 20（与整段 prefill 逐 token 相同）；不是的话写出哪几次、差在哪。
-- prefill 列：对齐复用 / 无复用的比值，与 token 数之比（约 0.50）比较；ViT 列：复用时应约为一半。
-- 5090 上官方模型同一脚本：`$D/monitor_call_rtx_official.json` 与 `$D/README.md`；同名格的 Thor / 5090 倍数。
-
-结论去向：`research/topics/long-horizon-planner-executor/experiments/monitor_call/README.md` 的 Thor 一节；`THOR_STATUS_SUMMARY.md` 本轮小节。
+目前没有待测项。
 
 ## 已完成的轮次（不再重跑）
 
-逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`、`1029`、`1029b`、`1030`、`1104_h`、`1104_h3`、`1104_h3b`、`1104_h3c`、`1105_h6h4`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
+逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`、`1029`、`1029b`、`1030`、`1104_h`、`1104_h3`、`1104_h3b`、`1104_h3c`、`1105_h6h4`、`1110_h7h4bh8`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
 
 ---
 
