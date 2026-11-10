@@ -1,0 +1,2612 @@
+[
+ {
+  "mode": "planner_fast",
+  "task": 0,
+  "episode": 0,
+  "instruction": "put both the alphabet soup and the tomato sauce in the basket",
+  "success": true,
+  "control_steps": 255,
+  "executor_queries": 26,
+  "planner_ms": 3147.346231067786,
+  "switch_ms": 4738.560817000689,
+  "subgoals_initial": [
+   "put the alphabet soup carton in the woven basket with the white rim",
+   "put the tomato sauce bottle in the woven basket with the white rim"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t0_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 1924.046462023398,
+    "detail": {
+     "text": "{\"subgoals\":[\"put the alphabet soup carton in the woven basket with the white rim\",\"put the tomato sauce bottle in the woven basket with the white rim\"],\"ordered\":false}",
+     "new_tokens": 36,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 48.55586102348752,
+     "vit_ms": 82.24900701316074,
+     "inject_ms": 7.299595017684624,
+     "restore_ms": 0.0,
+     "prefill_ms": 637.5663259823341,
+     "decode_ms": 1148.375672986731,
+     "call_ms": 1924.046462023398,
+     "parse_ok": true,
+     "subgoals": [
+      "put the alphabet soup carton in the woven basket with the white rim",
+      "put the tomato sauce bottle in the woven basket with the white rim"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 253.49275299231522,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 4738.560817000689,
+    "detail": {
+     "instruction": "put the alphabet soup carton in the woven basket with the white rim",
+     "cached": false,
+     "encode_cpu_ms": 4476.859243004583,
+     "set_prompt_ms": 261.70157399610616
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 314.8336950689554,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4090,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.442073012702167,
+     "vit_ms": 40.70897900965065,
+     "inject_ms": 0.9154560102615505,
+     "restore_ms": 0.33683801302686334,
+     "prefill_ms": 160.4457900102716,
+     "decode_ms": 103.9845590130426,
+     "call_ms": 314.8336950689554,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 315.73482797830366,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4090,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.608158987248316,
+     "vit_ms": 40.644583001267165,
+     "inject_ms": 0.8553290099371225,
+     "restore_ms": 0.33141300082206726,
+     "prefill_ms": 161.4711899892427,
+     "decode_ms": 102.82415398978628,
+     "call_ms": 315.73482797830366,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 339.2384930048138,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"",
+     "new_tokens": 12,
+     "prompt_tokens": 4090,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.585174004314467,
+     "vit_ms": 41.70190999866463,
+     "inject_ms": 0.8716910087969154,
+     "restore_ms": 0.3274909977335483,
+     "prefill_ms": 161.53817597660236,
+     "decode_ms": 125.21405101870187,
+     "call_ms": 339.2384930048138,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 0,
+  "episode": 1,
+  "instruction": "put both the alphabet soup and the tomato sauce in the basket",
+  "success": false,
+  "control_steps": 700,
+  "executor_queries": 70,
+  "planner_ms": 3430.5090758716688,
+  "switch_ms": 11140.448969992576,
+  "subgoals_initial": [
+   "put the small orange-and-red carton near the red milk carton into the stone basket",
+   "put the red milk carton into the stone basket"
+  ],
+  "end_reason": "max_steps",
+  "video": "planner_fast_t0_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 610.7550859742332,
+    "detail": {
+     "text": "{\"subgoals\":[\"put the small orange-and-red carton near the red milk carton into the stone basket\",\"put the red milk carton into the stone basket\"],\"ordered\":false}",
+     "new_tokens": 35,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 5.6002429919317365,
+     "vit_ms": 40.55300299660303,
+     "inject_ms": 0.6002190057188272,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.44875498767942,
+     "decode_ms": 389.5528659923002,
+     "call_ms": 610.7550859742332,
+     "parse_ok": true,
+     "subgoals": [
+      "put the small orange-and-red carton near the red milk carton into the stone basket",
+      "put the red milk carton into the stone basket"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 247.89205598062836,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5318.179152003722,
+    "detail": {
+     "instruction": "put the small orange-and-red carton near the red milk carton into the stone basket",
+     "cached": false,
+     "encode_cpu_ms": 5078.023639012827,
+     "set_prompt_ms": 240.15551299089566
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 314.5487339643296,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4089,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.584718995029107,
+     "vit_ms": 40.97143400576897,
+     "inject_ms": 0.9080689924303442,
+     "restore_ms": 0.33205398358404636,
+     "prefill_ms": 162.5624549924396,
+     "decode_ms": 100.19000299507752,
+     "call_ms": 314.5487339643296,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 311.4067669957876,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4089,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.982574014225975,
+     "vit_ms": 40.58989498298615,
+     "inject_ms": 0.8506680023856461,
+     "restore_ms": 0.3271870082244277,
+     "prefill_ms": 160.47260400955565,
+     "decode_ms": 100.18383897840977,
+     "call_ms": 311.4067669957876,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 313.6405430268496,
+    "detail": {
+     "text": "{\"status\":\"complete\",\"action\":\"next\",\"",
+     "new_tokens": 9,
+     "prompt_tokens": 4089,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.900532004190609,
+     "vit_ms": 40.561922010965645,
+     "inject_ms": 0.7826700166333467,
+     "restore_ms": 0.32332699629478157,
+     "prefill_ms": 160.55448300903663,
+     "decode_ms": 102.51760898972861,
+     "call_ms": 313.6405430268496,
+     "parse_ok": true,
+     "decision": "next",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "switch",
+    "wall_ms": 5822.269817988854,
+    "detail": {
+     "instruction": "put the red milk carton into the stone basket",
+     "cached": false,
+     "encode_cpu_ms": 5599.061050976161,
+     "set_prompt_ms": 223.208767012693
+    }
+   },
+   {
+    "step": 320,
+    "kind": "monitor",
+    "wall_ms": 338.7442450039089,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4069,
+     "restored_tokens": 2048,
+     "preprocess_ms": 10.132363997399807,
+     "vit_ms": 42.26789498352446,
+     "inject_ms": 0.9164500224869698,
+     "restore_ms": 0.3333509957883507,
+     "prefill_ms": 159.71973800333217,
+     "decode_ms": 125.37444700137712,
+     "call_ms": 338.7442450039089,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 400,
+    "kind": "monitor",
+    "wall_ms": 310.21464298828505,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4069,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.628539013443515,
+     "vit_ms": 40.540898975450546,
+     "inject_ms": 0.8222780015785247,
+     "restore_ms": 0.32319899764843285,
+     "prefill_ms": 159.69203901477158,
+     "decode_ms": 100.20768898539245,
+     "call_ms": 310.21464298828505,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 480,
+    "kind": "monitor",
+    "wall_ms": 310.3906069882214,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4069,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.747779997065663,
+     "vit_ms": 40.533330000471324,
+     "inject_ms": 0.7847629894968122,
+     "restore_ms": 0.3231249866075814,
+     "prefill_ms": 159.79120900738053,
+     "decode_ms": 100.2104000071995,
+     "call_ms": 310.3906069882214,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 560,
+    "kind": "monitor",
+    "wall_ms": 335.94656400964595,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"",
+     "new_tokens": 12,
+     "prompt_tokens": 4069,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.77169199520722,
+     "vit_ms": 40.58475300553255,
+     "inject_ms": 0.8117329853121191,
+     "restore_ms": 0.32762502087280154,
+     "prefill_ms": 159.87430300447159,
+     "decode_ms": 125.57645799824968,
+     "call_ms": 335.94656400964595,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 640,
+    "kind": "monitor",
+    "wall_ms": 336.96983093977906,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4069,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.302821981487796,
+     "vit_ms": 40.52466599387117,
+     "inject_ms": 0.7742529851384461,
+     "restore_ms": 0.3219099889975041,
+     "prefill_ms": 159.9294240004383,
+     "decode_ms": 127.11675598984584,
+     "call_ms": 336.96983093977906,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 1,
+  "episode": 0,
+  "instruction": "put both the cream cheese box and the butter in the basket",
+  "success": true,
+  "control_steps": 239,
+  "executor_queries": 24,
+  "planner_ms": 1329.3808870075736,
+  "switch_ms": 5143.927450990304,
+  "subgoals_initial": [
+   "put the cream cheese box in the basket",
+   "put the butter in the basket"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t1_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 431.6604169725906,
+    "detail": {
+     "text": "{\"subgoals\":[\"put the cream cheese box in the basket\",\"put the butter in the basket\"],\"ordered\":false}",
+     "new_tokens": 24,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 5.842665996169671,
+     "vit_ms": 40.518134977901354,
+     "inject_ms": 0.606738991336897,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.57763399579562,
+     "decode_ms": 210.11524301138707,
+     "call_ms": 431.6604169725906,
+     "parse_ok": true,
+     "subgoals": [
+      "put the cream cheese box in the basket",
+      "put the butter in the basket"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 246.49178999243304,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5143.927450990304,
+    "detail": {
+     "instruction": "put the cream cheese box in the basket",
+     "cached": false,
+     "encode_cpu_ms": 4907.744361000368,
+     "set_prompt_ms": 236.18308998993598
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 338.0516840261407,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"",
+     "new_tokens": 12,
+     "prompt_tokens": 4078,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.54323899350129,
+     "vit_ms": 40.88494798634201,
+     "inject_ms": 0.9142240160144866,
+     "restore_ms": 0.3308570012450218,
+     "prefill_ms": 159.92200502660125,
+     "decode_ms": 126.45641100243665,
+     "call_ms": 338.0516840261407,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 313.17699601640925,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4078,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.987189998151734,
+     "vit_ms": 40.64958600793034,
+     "inject_ms": 0.8891579927876592,
+     "restore_ms": 0.33095100661739707,
+     "prefill_ms": 162.11347101489082,
+     "decode_ms": 100.2066399960313,
+     "call_ms": 313.17699601640925,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 1,
+  "episode": 1,
+  "instruction": "put both the cream cheese box and the butter in the basket",
+  "success": true,
+  "control_steps": 247,
+  "executor_queries": 25,
+  "planner_ms": 1639.2291890224442,
+  "switch_ms": 4895.382588001667,
+  "subgoals_initial": [
+   "put the cream cheese box in the basket",
+   "put the butter in the basket"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t1_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 402.2520150174387,
+    "detail": {
+     "text": "{\"subgoals\":[\"put the cream cheese box in the basket\",\"put the butter in the basket\"],\"ordered\":false}",
+     "new_tokens": 24,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.042689987225458,
+     "vit_ms": 40.62374902423471,
+     "inject_ms": 0.7063039811328053,
+     "restore_ms": 0.0,
+     "prefill_ms": 176.9210740167182,
+     "decode_ms": 177.9581980081275,
+     "call_ms": 402.2520150174387,
+     "parse_ok": true,
+     "subgoals": [
+      "put the cream cheese box in the basket",
+      "put the butter in the basket"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 248.13708802685142,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 0.9012969967443496,
+    "detail": {
+     "instruction": "put the cream cheese box in the basket",
+     "cached": true,
+     "encode_cpu_ms": 0.0013370008673518896,
+     "set_prompt_ms": 0.8999599958769977
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 336.46731401677243,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4078,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.291314985603094,
+     "vit_ms": 40.620207000756636,
+     "inject_ms": 0.8162590092979372,
+     "restore_ms": 0.32725301571190357,
+     "prefill_ms": 159.94110199972056,
+     "decode_ms": 125.4711780056823,
+     "call_ms": 336.46731401677243,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 338.47692495328374,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4078,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.957559999544173,
+     "vit_ms": 40.53476499393582,
+     "inject_ms": 0.778393994551152,
+     "restore_ms": 0.3239839861635119,
+     "prefill_ms": 162.5591899792198,
+     "decode_ms": 125.32303199986927,
+     "call_ms": 338.47692495328374,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 313.8958470080979,
+    "detail": {
+     "text": "{\"status\":\"complete\",\"action\":\"next\",\"reason",
+     "new_tokens": 10,
+     "prompt_tokens": 4078,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.486106981057674,
+     "vit_ms": 41.72477300744504,
+     "inject_ms": 0.9493549878243357,
+     "restore_ms": 0.3300700045656413,
+     "prefill_ms": 160.95575800864026,
+     "decode_ms": 100.44978401856497,
+     "call_ms": 313.8958470080979,
+     "parse_ok": true,
+     "decision": "next",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "switch",
+    "wall_ms": 4894.481291004922,
+    "detail": {
+     "instruction": "put the butter in the basket",
+     "cached": false,
+     "encode_cpu_ms": 4659.325132000959,
+     "set_prompt_ms": 235.1561590039637
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 2,
+  "episode": 0,
+  "instruction": "turn on the stove and put the moka pot on it",
+  "success": true,
+  "control_steps": 247,
+  "executor_queries": 25,
+  "planner_ms": 2624.551009008428,
+  "switch_ms": 5198.6142130044755,
+  "subgoals_initial": [
+   "turn on the stove and put the moka pot on it"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t2_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 448.5936430282891,
+    "detail": {
+     "text": "{\"subgoals\":[\"turn on the stove and put the moka pot on it\"],\"ordered\":false}",
+     "new_tokens": 21,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.731198023771867,
+     "vit_ms": 43.174619000637904,
+     "inject_ms": 0.7276799879036844,
+     "restore_ms": 0.0,
+     "prefill_ms": 173.76239600707777,
+     "decode_ms": 224.19775000889786,
+     "call_ms": 448.5936430282891,
+     "parse_ok": true,
+     "subgoals": [
+      "turn on the stove and put the moka pot on it"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 568.2153579837177,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5198.6142130044755,
+    "detail": {
+     "instruction": "turn on the stove and put the moka pot on it",
+     "cached": false,
+     "encode_cpu_ms": 5197.281933011254,
+     "set_prompt_ms": 1.3322799932211637
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 898.4546849678736,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4072,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.412243991391733,
+     "vit_ms": 40.79041798831895,
+     "inject_ms": 0.8498209936078638,
+     "restore_ms": 0.3265779814682901,
+     "prefill_ms": 494.61038800654933,
+     "decode_ms": 352.46523600653745,
+     "call_ms": 898.4546849678736,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 373.893472016789,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4072,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.94424199941568,
+     "vit_ms": 40.798163012368605,
+     "inject_ms": 0.9092569816857576,
+     "restore_ms": 0.32851501600816846,
+     "prefill_ms": 162.2068769938778,
+     "decode_ms": 160.706418013433,
+     "call_ms": 373.893472016789,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 335.39385101175867,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4072,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.918076026020572,
+     "vit_ms": 40.877549996366724,
+     "inject_ms": 0.9596259915269911,
+     "restore_ms": 0.32950699096545577,
+     "prefill_ms": 161.77906398661435,
+     "decode_ms": 122.53002802026458,
+     "call_ms": 335.39385101175867,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 2,
+  "episode": 1,
+  "instruction": "turn on the stove and put the moka pot on it",
+  "success": true,
+  "control_steps": 240,
+  "executor_queries": 24,
+  "planner_ms": 1409.1861219785642,
+  "switch_ms": 0.8618099964223802,
+  "subgoals_initial": [
+   "turn on the stove and put the moka pot on it"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t2_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 517.9218349512666,
+    "detail": {
+     "text": "{\"subgoals\":[\"turn on the stove and put the moka pot on it\"],\"ordered\":false}",
+     "new_tokens": 21,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 5.9278270055074245,
+     "vit_ms": 40.518833993701264,
+     "inject_ms": 0.6047829810995609,
+     "restore_ms": 0.0,
+     "prefill_ms": 173.70580398710445,
+     "decode_ms": 297.16458698385395,
+     "call_ms": 517.9218349512666,
+     "parse_ok": true,
+     "subgoals": [
+      "turn on the stove and put the moka pot on it"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 245.69770999369211,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 0.8618099964223802,
+    "detail": {
+     "instruction": "turn on the stove and put the moka pot on it",
+     "cached": true,
+     "encode_cpu_ms": 0.0013220123946666718,
+     "set_prompt_ms": 0.8604879840277135
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 310.45664302655496,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4072,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.727356005692855,
+     "vit_ms": 40.684584993869066,
+     "inject_ms": 0.9014530223794281,
+     "restore_ms": 0.3350490005686879,
+     "prefill_ms": 160.66412199870683,
+     "decode_ms": 99.14407800533809,
+     "call_ms": 310.45664302655496,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 335.10993400705047,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4072,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.107398014748469,
+     "vit_ms": 40.60660698451102,
+     "inject_ms": 0.8160370052792132,
+     "restore_ms": 0.32728599035181105,
+     "prefill_ms": 160.7409580028616,
+     "decode_ms": 123.51164800929837,
+     "call_ms": 335.10993400705047,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 2,
+  "episode": 2,
+  "instruction": "turn on the stove and put the moka pot on it",
+  "success": true,
+  "control_steps": 255,
+  "executor_queries": 26,
+  "planner_ms": 1866.442920989357,
+  "switch_ms": 0.9965069766622037,
+  "subgoals_initial": [
+   "turn on the stove and put the moka pot on it"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t2_e2/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 577.4166779883672,
+    "detail": {
+     "text": "{\"subgoals\":[\"turn on the stove and put the moka pot on it\"],\"ordered\":false}",
+     "new_tokens": 21,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.038925988832489,
+     "vit_ms": 40.517226996598765,
+     "inject_ms": 0.6133030110504478,
+     "restore_ms": 0.0,
+     "prefill_ms": 173.74540300806984,
+     "decode_ms": 356.5018189838156,
+     "call_ms": 577.4166779883672,
+     "parse_ok": true,
+     "subgoals": [
+      "turn on the stove and put the moka pot on it"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 245.85910298628733,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 0.9965069766622037,
+    "detail": {
+     "instruction": "turn on the stove and put the moka pot on it",
+     "cached": true,
+     "encode_cpu_ms": 0.0013959943316876888,
+     "set_prompt_ms": 0.995110982330516
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 373.1908980116714,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4072,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.288998000556603,
+     "vit_ms": 40.75173300225288,
+     "inject_ms": 0.9366880112793297,
+     "restore_ms": 0.33689700649119914,
+     "prefill_ms": 161.64801898412406,
+     "decode_ms": 160.2285630069673,
+     "call_ms": 373.1908980116714,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 335.7169200317003,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4072,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.965468005044386,
+     "vit_ms": 41.988534008851275,
+     "inject_ms": 0.9557390003465116,
+     "restore_ms": 0.332331022946164,
+     "prefill_ms": 160.9171960153617,
+     "decode_ms": 122.55765197915025,
+     "call_ms": 335.7169200317003,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 334.2593219713308,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4072,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.953835989814252,
+     "vit_ms": 40.7145329809282,
+     "inject_ms": 0.9103239863179624,
+     "restore_ms": 0.3307150036562234,
+     "prefill_ms": 160.72225500829518,
+     "decode_ms": 122.62765900231898,
+     "call_ms": 334.2593219713308,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 3,
+  "episode": 0,
+  "instruction": "put the black bowl in the bottom drawer of the cabinet and close it",
+  "success": true,
+  "control_steps": 216,
+  "executor_queries": 22,
+  "planner_ms": 1616.7105319327675,
+  "switch_ms": 3555.3992180211935,
+  "subgoals_initial": [
+   "Open the bottom drawer of the grey cabinet with the black handles",
+   "Place the black bowl into the open bottom drawer of the grey cabinet",
+   "Close the bottom drawer of the grey cabinet"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t3_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 640.1881100027822,
+    "detail": {
+     "text": "{\"subgoals\":[\"Open the bottom drawer of the grey cabinet with the black handles\",\"Place the black bowl into the open bottom drawer of the grey cabinet\",\"Close the bottom drawer of the grey cabinet\"],\"ordered\":true}",
+     "new_tokens": 44,
+     "prompt_tokens": 2128,
+     "restored_tokens": 0,
+     "preprocess_ms": 5.931463005254045,
+     "vit_ms": 40.46995201497339,
+     "inject_ms": 0.5955859960522503,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.78852899512276,
+     "decode_ms": 418.40257999137975,
+     "call_ms": 640.1881100027822,
+     "parse_ok": true,
+     "subgoals": [
+      "Open the bottom drawer of the grey cabinet with the black handles",
+      "Place the black bowl into the open bottom drawer of the grey cabinet",
+      "Close the bottom drawer of the grey cabinet"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 251.9946820102632,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 3555.3992180211935,
+    "detail": {
+     "instruction": "Open the bottom drawer of the grey cabinet with the black handles",
+     "cached": false,
+     "encode_cpu_ms": 3554.05278300168,
+     "set_prompt_ms": 1.3464350195135921
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 361.3332689856179,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"",
+     "new_tokens": 12,
+     "prompt_tokens": 4104,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.472023986745626,
+     "vit_ms": 40.61479098163545,
+     "inject_ms": 0.801299000158906,
+     "restore_ms": 0.3279510128777474,
+     "prefill_ms": 184.87199500668794,
+     "decode_ms": 125.24520899751224,
+     "call_ms": 361.3332689856179,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 363.1944709341042,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4104,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.363705001305789,
+     "vit_ms": 40.60563797247596,
+     "inject_ms": 0.7844569918233901,
+     "restore_ms": 0.3259219811297953,
+     "prefill_ms": 184.9651999946218,
+     "decode_ms": 127.14954899274744,
+     "call_ms": 363.1944709341042,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 3,
+  "episode": 1,
+  "instruction": "put the black bowl in the bottom drawer of the cabinet and close it",
+  "success": true,
+  "control_steps": 215,
+  "executor_queries": 22,
+  "planner_ms": 1384.303026017733,
+  "switch_ms": 5834.126084984746,
+  "subgoals_initial": [
+   "Place the black bowl into the bottom drawer of the grey cabinet and close the drawer"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t3_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 489.73727200063877,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the black bowl into the bottom drawer of the grey cabinet and close the drawer\"],\"ordered\":false}",
+     "new_tokens": 25,
+     "prompt_tokens": 2128,
+     "restored_tokens": 0,
+     "preprocess_ms": 5.465633003041148,
+     "vit_ms": 40.54498401819728,
+     "inject_ms": 0.6249119760468602,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.85204100375995,
+     "decode_ms": 268.2497019995935,
+     "call_ms": 489.73727200063877,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the black bowl into the bottom drawer of the grey cabinet and close the drawer"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 246.24540001968853,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5834.126084984746,
+    "detail": {
+     "instruction": "Place the black bowl into the bottom drawer of the grey cabinet and close the drawer",
+     "cached": false,
+     "encode_cpu_ms": 5594.567352003651,
+     "set_prompt_ms": 239.5587329810951
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 311.0683570266701,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4078,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.600499004591256,
+     "vit_ms": 40.7872200012207,
+     "inject_ms": 0.8305850205942988,
+     "restore_ms": 0.3333000058773905,
+     "prefill_ms": 160.07805499248207,
+     "decode_ms": 99.43869800190441,
+     "call_ms": 311.0683570266701,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 337.2519969707355,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4078,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.101072006160393,
+     "vit_ms": 40.58554698713124,
+     "inject_ms": 0.7881889760028571,
+     "restore_ms": 0.32693499815650284,
+     "prefill_ms": 160.10488200117834,
+     "decode_ms": 126.34537200210616,
+     "call_ms": 337.2519969707355,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 4,
+  "episode": 0,
+  "instruction": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+  "success": true,
+  "control_steps": 219,
+  "executor_queries": 22,
+  "planner_ms": 1616.6438699583523,
+  "switch_ms": 5848.0323319963645,
+  "subgoals_initial": [
+   "put the yellow and white mug on the plate near the yellow and white mug",
+   "put the grey mug with the white handle on the plate near the grey mug with the white handle"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t4_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 698.3995960035827,
+    "detail": {
+     "text": "{\"subgoals\":[\"put the yellow and white mug on the plate near the yellow and white mug\",\"put the grey mug with the white handle on the plate near the grey mug with the white handle\"],\"ordered\":false}",
+     "new_tokens": 44,
+     "prompt_tokens": 2133,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.143937003798783,
+     "vit_ms": 40.546082018408924,
+     "inject_ms": 0.6221990042831749,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.69453997910023,
+     "decode_ms": 476.3928379979916,
+     "call_ms": 698.3995960035827,
+     "parse_ok": true,
+     "subgoals": [
+      "put the yellow and white mug on the plate near the yellow and white mug",
+      "put the grey mug with the white handle on the plate near the grey mug with the white handle"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 249.86696400446817,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5848.0323319963645,
+    "detail": {
+     "instruction": "put the yellow and white mug on the plate near the yellow and white mug",
+     "cached": false,
+     "encode_cpu_ms": 5613.309457985451,
+     "set_prompt_ms": 234.72287401091307
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 334.760584984906,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4105,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.151520993327722,
+     "vit_ms": 42.09621500922367,
+     "inject_ms": 0.9560790203977376,
+     "restore_ms": 0.32947398722171783,
+     "prefill_ms": 181.98913798551075,
+     "decode_ms": 100.23815798922442,
+     "call_ms": 334.760584984906,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 333.6167249653954,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4105,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.706976998131722,
+     "vit_ms": 40.6260039890185,
+     "inject_ms": 0.8407279965467751,
+     "restore_ms": 0.3278139920439571,
+     "prefill_ms": 181.9815360067878,
+     "decode_ms": 100.13366598286666,
+     "call_ms": 333.6167249653954,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 4,
+  "episode": 1,
+  "instruction": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+  "success": true,
+  "control_steps": 220,
+  "executor_queries": 22,
+  "planner_ms": 1486.4789910207037,
+  "switch_ms": 1.1036130017600954,
+  "subgoals_initial": [
+   "put the yellow and white mug on the plate near the yellow and white mug",
+   "put the grey mug on the plate near the grey mug"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t4_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 522.4055839644279,
+    "detail": {
+     "text": "{\"subgoals\":[\"put the yellow and white mug on the plate near the yellow and white mug\",\"put the grey mug on the plate near the grey mug\"],\"ordered\":false}",
+     "new_tokens": 36,
+     "prompt_tokens": 2133,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.383597996318713,
+     "vit_ms": 40.61942300177179,
+     "inject_ms": 0.6507049838546664,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.78438199032098,
+     "decode_ms": 299.9674759921618,
+     "call_ms": 522.4055839644279,
+     "parse_ok": true,
+     "subgoals": [
+      "put the yellow and white mug on the plate near the yellow and white mug",
+      "put the grey mug on the plate near the grey mug"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 246.97239900706336,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.1036130017600954,
+    "detail": {
+     "instruction": "put the yellow and white mug on the plate near the yellow and white mug",
+     "cached": true,
+     "encode_cpu_ms": 0.001607026206329465,
+     "set_prompt_ms": 1.102005975553766
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 357.2472800442483,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"",
+     "new_tokens": 12,
+     "prompt_tokens": 4097,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.342505014501512,
+     "vit_ms": 40.60819500591606,
+     "inject_ms": 0.8087239984888583,
+     "restore_ms": 0.3271400055382401,
+     "prefill_ms": 181.00011101341806,
+     "decode_ms": 125.1606050063856,
+     "call_ms": 357.2472800442483,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 359.85372800496407,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4097,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.246367000741884,
+     "vit_ms": 40.61058099614456,
+     "inject_ms": 0.8032979967538267,
+     "restore_ms": 0.32691401429474354,
+     "prefill_ms": 181.3281610084232,
+     "decode_ms": 127.53840698860586,
+     "call_ms": 359.85372800496407,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 5,
+  "episode": 0,
+  "instruction": "pick up the book and place it in the back compartment of the caddy",
+  "success": true,
+  "control_steps": 170,
+  "executor_queries": 17,
+  "planner_ms": 1413.7150630704127,
+  "switch_ms": 5978.595077001955,
+  "subgoals_initial": [
+   "Pick up the black book and place it in the back compartment of the brown caddy"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t5_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 491.0808300192002,
+    "detail": {
+     "text": "{\"subgoals\":[\"Pick up the black book and place it in the back compartment of the brown caddy\"],\"ordered\":false}",
+     "new_tokens": 26,
+     "prompt_tokens": 2129,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.16581502254121,
+     "vit_ms": 41.56895200139843,
+     "inject_ms": 0.7260109996423125,
+     "restore_ms": 0.0,
+     "prefill_ms": 176.09578199335374,
+     "decode_ms": 266.52427000226453,
+     "call_ms": 491.0808300192002,
+     "parse_ok": true,
+     "subgoals": [
+      "Pick up the black book and place it in the back compartment of the brown caddy"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 249.82157401973382,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5978.595077001955,
+    "detail": {
+     "instruction": "Pick up the black book and place it in the back compartment of the brown caddy",
+     "cached": false,
+     "encode_cpu_ms": 5757.709778001299,
+     "set_prompt_ms": 220.88529900065623
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 336.6586950724013,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"",
+     "new_tokens": 12,
+     "prompt_tokens": 4080,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.735848027048633,
+     "vit_ms": 40.846593998139724,
+     "inject_ms": 0.865006004460156,
+     "restore_ms": 0.32610801281407475,
+     "prefill_ms": 159.9838340189308,
+     "decode_ms": 124.90130501100793,
+     "call_ms": 336.6586950724013,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 336.1539639590774,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"",
+     "new_tokens": 12,
+     "prompt_tokens": 4080,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.414581989403814,
+     "vit_ms": 40.60271100024693,
+     "inject_ms": 0.8464699785690755,
+     "restore_ms": 0.32606199965812266,
+     "prefill_ms": 160.1945500005968,
+     "decode_ms": 124.76958899060264,
+     "call_ms": 336.1539639590774,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 5,
+  "episode": 1,
+  "instruction": "pick up the book and place it in the back compartment of the caddy",
+  "success": true,
+  "control_steps": 177,
+  "executor_queries": 18,
+  "planner_ms": 1330.7319519517478,
+  "switch_ms": 1.057068002410233,
+  "subgoals_initial": [
+   "Pick up the black book and place it in the back compartment of the brown caddy"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t5_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 431.4366080216132,
+    "detail": {
+     "text": "{\"subgoals\":[\"Pick up the black book and place it in the back compartment of the brown caddy\"],\"ordered\":false}",
+     "new_tokens": 26,
+     "prompt_tokens": 2129,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.1104350024834275,
+     "vit_ms": 40.49420700175688,
+     "inject_ms": 0.6182960059959441,
+     "restore_ms": 0.0,
+     "prefill_ms": 176.85481600346975,
+     "decode_ms": 207.3588540079072,
+     "call_ms": 431.4366080216132,
+     "parse_ok": true,
+     "subgoals": [
+      "Pick up the black book and place it in the back compartment of the brown caddy"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 248.14536698977463,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.057068002410233,
+    "detail": {
+     "instruction": "Pick up the black book and place it in the back compartment of the brown caddy",
+     "cached": true,
+     "encode_cpu_ms": 0.0012580130714923143,
+     "set_prompt_ms": 1.0558099893387407
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 312.0171759510413,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4080,
+     "restored_tokens": 2048,
+     "preprocess_ms": 10.327519994461909,
+     "vit_ms": 40.68618800374679,
+     "inject_ms": 0.7954549801070243,
+     "restore_ms": 0.3245779953431338,
+     "prefill_ms": 160.1751979906112,
+     "decode_ms": 99.70823698677123,
+     "call_ms": 312.0171759510413,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 339.13280098931864,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"",
+     "new_tokens": 12,
+     "prompt_tokens": 4080,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.931632986990735,
+     "vit_ms": 42.825123004149646,
+     "inject_ms": 0.958422984695062,
+     "restore_ms": 0.3299890086054802,
+     "prefill_ms": 160.16883999691345,
+     "decode_ms": 124.91879300796427,
+     "call_ms": 339.13280098931864,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 6,
+  "episode": 0,
+  "instruction": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+  "success": true,
+  "control_steps": 213,
+  "executor_queries": 22,
+  "planner_ms": 1395.2408179175109,
+  "switch_ms": 10470.371455972781,
+  "subgoals_initial": [
+   "Place the white mug on the red-rimmed plate",
+   "Place the chocolate pudding to the right of the red-rimmed plate"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t6_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 520.9455179865472,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the white mug on the red-rimmed plate\",\"Place the chocolate pudding to the right of the red-rimmed plate\"],\"ordered\":false}",
+     "new_tokens": 35,
+     "prompt_tokens": 2132,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.242517993086949,
+     "vit_ms": 40.60296498937532,
+     "inject_ms": 0.7265100139193237,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.94720700778998,
+     "decode_ms": 298.4263179823756,
+     "call_ms": 520.9455179865472,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the white mug on the red-rimmed plate",
+      "Place the chocolate pudding to the right of the red-rimmed plate"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 247.7347319945693,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5820.474611973623,
+    "detail": {
+     "instruction": "Place the white mug on the red-rimmed plate",
+     "cached": false,
+     "encode_cpu_ms": 5587.9946219793055,
+     "set_prompt_ms": 232.4799899943173
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 313.5945399699267,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4095,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.990070015192032,
+     "vit_ms": 40.85593597847037,
+     "inject_ms": 0.8801079820841551,
+     "restore_ms": 0.3301690157968551,
+     "prefill_ms": 161.0952289775014,
+     "decode_ms": 100.4430280008819,
+     "call_ms": 313.5945399699267,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 312.96602796646766,
+    "detail": {
+     "text": "{\"status\":\"complete\",\"action\":\"next\",\"reason\":\"",
+     "new_tokens": 11,
+     "prompt_tokens": 4095,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.588090993929654,
+     "vit_ms": 40.66402598982677,
+     "inject_ms": 0.8238180016633123,
+     "restore_ms": 0.33029098995029926,
+     "prefill_ms": 161.12152999266982,
+     "decode_ms": 100.43827199842781,
+     "call_ms": 312.96602796646766,
+     "parse_ok": true,
+     "decision": "next",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "switch",
+    "wall_ms": 4649.896843999159,
+    "detail": {
+     "instruction": "Place the chocolate pudding to the right of the red-rimmed plate",
+     "cached": false,
+     "encode_cpu_ms": 4648.619095998583,
+     "set_prompt_ms": 1.2777480005752295
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 6,
+  "episode": 1,
+  "instruction": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+  "success": true,
+  "control_steps": 202,
+  "executor_queries": 21,
+  "planner_ms": 1555.135388043709,
+  "switch_ms": 7974.0080629708245,
+  "subgoals_initial": [
+   "Place the white mug on the plate with red rim near the bottom of the table",
+   "Place the chocolate pudding bar to the right of the plate with red rim"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t6_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 610.3548330138437,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the white mug on the plate with red rim near the bottom of the table\",\"Place the chocolate pudding bar to the right of the plate with red rim\"],\"ordered\":false}",
+     "new_tokens": 40,
+     "prompt_tokens": 2132,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.316045997664332,
+     "vit_ms": 40.5332240043208,
+     "inject_ms": 0.6118780001997948,
+     "restore_ms": 0.0,
+     "prefill_ms": 177.2635820088908,
+     "decode_ms": 385.630103002768,
+     "call_ms": 610.3548330138437,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the white mug on the plate with red rim near the bottom of the table",
+      "Place the chocolate pudding bar to the right of the plate with red rim"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 249.87810099264607,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 4382.006784988334,
+    "detail": {
+     "instruction": "Place the white mug on the plate with red rim near the bottom of the table",
+     "cached": false,
+     "encode_cpu_ms": 4380.677971988916,
+     "set_prompt_ms": 1.3288129994180053
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 359.34832200291567,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4100,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.716069995192811,
+     "vit_ms": 40.60490301344544,
+     "inject_ms": 0.7883000071160495,
+     "restore_ms": 0.3240779915358871,
+     "prefill_ms": 182.53008899046108,
+     "decode_ms": 125.3848820051644,
+     "call_ms": 359.34832200291567,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 335.5541320343036,
+    "detail": {
+     "text": "{\"status\":\"complete\",\"action\":\"next\",\"reason",
+     "new_tokens": 10,
+     "prompt_tokens": 4100,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.853957017185166,
+     "vit_ms": 40.639540005940944,
+     "inject_ms": 0.8229940140154213,
+     "restore_ms": 0.3254739858675748,
+     "prefill_ms": 182.52601000131108,
+     "decode_ms": 101.38615700998344,
+     "call_ms": 335.5541320343036,
+     "parse_ok": true,
+     "decision": "next",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "switch",
+    "wall_ms": 3592.00127798249,
+    "detail": {
+     "instruction": "Place the chocolate pudding bar to the right of the plate with red rim",
+     "cached": false,
+     "encode_cpu_ms": 3590.7497619919013,
+     "set_prompt_ms": 1.251515990588814
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 7,
+  "episode": 0,
+  "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+  "success": true,
+  "control_steps": 233,
+  "executor_queries": 24,
+  "planner_ms": 1295.974686043337,
+  "switch_ms": 4103.819115989609,
+  "subgoals_initial": [
+   "put both the alphabet soup and the cream cheese box in the basket"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t7_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 402.59019398945384,
+    "detail": {
+     "text": "{\"subgoals\":[\"put both the alphabet soup and the cream cheese box in the basket\"],\"ordered\":false}",
+     "new_tokens": 22,
+     "prompt_tokens": 2127,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.3440070080105215,
+     "vit_ms": 40.57750999345444,
+     "inject_ms": 0.6038259889464825,
+     "restore_ms": 0.0,
+     "prefill_ms": 175.22383001050912,
+     "decode_ms": 179.84102098853327,
+     "call_ms": 402.59019398945384,
+     "parse_ok": true,
+     "subgoals": [
+      "put both the alphabet soup and the cream cheese box in the basket"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 247.37079101032577,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 4103.819115989609,
+    "detail": {
+     "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+     "cached": false,
+     "encode_cpu_ms": 3860.671640984947,
+     "set_prompt_ms": 243.14747500466183
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 310.64207101007923,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4074,
+     "restored_tokens": 2048,
+     "preprocess_ms": 10.2372590044979,
+     "vit_ms": 40.83430202445015,
+     "inject_ms": 0.8796470065135509,
+     "restore_ms": 0.32868998823687434,
+     "prefill_ms": 159.98449898324907,
+     "decode_ms": 98.37767400313169,
+     "call_ms": 310.64207101007923,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 335.37163003347814,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4074,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.537420002743602,
+     "vit_ms": 40.64371102140285,
+     "inject_ms": 0.8190429944079369,
+     "restore_ms": 0.44158601667732,
+     "prefill_ms": 160.09995798231103,
+     "decode_ms": 123.8299120159354,
+     "call_ms": 335.37163003347814,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 7,
+  "episode": 1,
+  "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+  "success": true,
+  "control_steps": 235,
+  "executor_queries": 24,
+  "planner_ms": 1276.5077160438523,
+  "switch_ms": 1.0224400029983371,
+  "subgoals_initial": [
+   "put both the alphabet soup and the cream cheese box in the basket"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t7_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 402.33234901097603,
+    "detail": {
+     "text": "{\"subgoals\":[\"put both the alphabet soup and the cream cheese box in the basket\"],\"ordered\":false}",
+     "new_tokens": 22,
+     "prompt_tokens": 2127,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.527433986775577,
+     "vit_ms": 42.353610013378784,
+     "inject_ms": 1.0294899984728545,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.73890399560332,
+     "decode_ms": 177.6829110167455,
+     "call_ms": 402.33234901097603,
+     "parse_ok": true,
+     "subgoals": [
+      "put both the alphabet soup and the cream cheese box in the basket"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 249.37393801519647,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.0224400029983371,
+    "detail": {
+     "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+     "cached": true,
+     "encode_cpu_ms": 0.0013629905879497528,
+     "set_prompt_ms": 1.0210770124103874
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 312.3682080185972,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4074,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.695568005554378,
+     "vit_ms": 40.638684993609786,
+     "inject_ms": 0.7791940006427467,
+     "restore_ms": 0.32503900001756847,
+     "prefill_ms": 160.5825599981472,
+     "decode_ms": 100.34716202062555,
+     "call_ms": 312.3682080185972,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 312.43322099908255,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4074,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.732411010190845,
+     "vit_ms": 40.665103995706886,
+     "inject_ms": 0.8738079923205078,
+     "restore_ms": 0.33231201814487576,
+     "prefill_ms": 162.03837600187398,
+     "decode_ms": 98.79120998084545,
+     "call_ms": 312.43322099908255,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 8,
+  "episode": 0,
+  "instruction": "put both moka pots on the stove",
+  "success": false,
+  "control_steps": 700,
+  "executor_queries": 70,
+  "planner_ms": 4299.8211959784385,
+  "switch_ms": 11010.101374995429,
+  "subgoals_initial": [
+   "Place the moka pot with the black handle near the red-hot stove onto the red-hot stove",
+   "Place the other moka pot with the black handle onto the red-hot stove"
+  ],
+  "end_reason": "max_steps",
+  "video": "planner_fast_t8_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 1471.7958459514193,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the moka pot with the black handle near the red-hot stove onto the red-hot stove\",\"Place the other moka pot with the black handle onto the red-hot stove\"],\"ordered\":false}",
+     "new_tokens": 44,
+     "prompt_tokens": 2122,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.427833985071629,
+     "vit_ms": 40.550078003434464,
+     "inject_ms": 0.648140994599089,
+     "restore_ms": 0.0,
+     "prefill_ms": 230.65247098566033,
+     "decode_ms": 1193.5173219826538,
+     "call_ms": 1471.7958459514193,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the moka pot with the black handle near the red-hot stove onto the red-hot stove",
+      "Place the other moka pot with the black handle onto the red-hot stove"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 247.0743349986151,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5528.80975100561,
+    "detail": {
+     "instruction": "Place the moka pot with the black handle near the red-hot stove onto the red-hot stove",
+     "cached": false,
+     "encode_cpu_ms": 5294.556861015735,
+     "set_prompt_ms": 234.25288998987526
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 340.38265197887085,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4094,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.795819991268218,
+     "vit_ms": 40.90987399104051,
+     "inject_ms": 0.9161040070466697,
+     "restore_ms": 0.3319089883007109,
+     "prefill_ms": 163.11202599899843,
+     "decode_ms": 125.31691900221631,
+     "call_ms": 340.38265197887085,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 313.8287850015331,
+    "detail": {
+     "text": "{\"status\":\"complete\",\"action\":\"next\",\"reason\":\"",
+     "new_tokens": 11,
+     "prompt_tokens": 4094,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.345335983904079,
+     "vit_ms": 40.7354400085751,
+     "inject_ms": 0.9837780089583248,
+     "restore_ms": 0.3333910135552287,
+     "prefill_ms": 163.00264900201,
+     "decode_ms": 100.42819098453037,
+     "call_ms": 313.8287850015331,
+     "parse_ok": true,
+     "decision": "next",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "switch",
+    "wall_ms": 5481.291623989819,
+    "detail": {
+     "instruction": "Place the other moka pot with the black handle onto the red-hot stove",
+     "cached": false,
+     "encode_cpu_ms": 5479.8792119836435,
+     "set_prompt_ms": 1.4124120061751455
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 337.3914950643666,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4071,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.730216010008007,
+     "vit_ms": 40.603754023322836,
+     "inject_ms": 0.7753870158921927,
+     "restore_ms": 0.32357301097363234,
+     "prefill_ms": 162.0867720048409,
+     "decode_ms": 124.87179299932905,
+     "call_ms": 337.3914950643666,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 320,
+    "kind": "monitor",
+    "wall_ms": 313.31073798355646,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4071,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.958432008512318,
+     "vit_ms": 40.70987700833939,
+     "inject_ms": 0.8850449812598526,
+     "restore_ms": 0.32756701693870127,
+     "prefill_ms": 162.0699109917041,
+     "decode_ms": 100.35990597680211,
+     "call_ms": 313.31073798355646,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 400,
+    "kind": "monitor",
+    "wall_ms": 313.53226499049924,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason",
+     "new_tokens": 11,
+     "prompt_tokens": 4071,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.9526730007492,
+     "vit_ms": 40.65274598542601,
+     "inject_ms": 0.8117580146063119,
+     "restore_ms": 0.32665100297890604,
+     "prefill_ms": 162.321712996345,
+     "decode_ms": 100.4667239903938,
+     "call_ms": 313.53226499049924,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 480,
+    "kind": "monitor",
+    "wall_ms": 312.2022859752178,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4071,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.733210997888818,
+     "vit_ms": 40.60736298561096,
+     "inject_ms": 0.7950470026116818,
+     "restore_ms": 0.32499502412974834,
+     "prefill_ms": 161.50953597389162,
+     "decode_ms": 100.23213399108499,
+     "call_ms": 312.2022859752178,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 560,
+    "kind": "monitor",
+    "wall_ms": 313.5060310305562,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4071,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.860949019435793,
+     "vit_ms": 40.686602995265275,
+     "inject_ms": 0.8422849932685494,
+     "restore_ms": 0.3266969870310277,
+     "prefill_ms": 161.82355102500878,
+     "decode_ms": 100.96594601054676,
+     "call_ms": 313.5060310305562,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 640,
+    "kind": "monitor",
+    "wall_ms": 336.7967630038038,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"",
+     "new_tokens": 12,
+     "prompt_tokens": 4071,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.036707982886583,
+     "vit_ms": 40.6616149994079,
+     "inject_ms": 0.8146319887600839,
+     "restore_ms": 0.32501001260243356,
+     "prefill_ms": 161.6660700237844,
+     "decode_ms": 124.29272799636237,
+     "call_ms": 336.7967630038038,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 8,
+  "episode": 1,
+  "instruction": "put both moka pots on the stove",
+  "success": true,
+  "control_steps": 366,
+  "executor_queries": 37,
+  "planner_ms": 2319.1399299248587,
+  "switch_ms": 10661.472842039075,
+  "subgoals_initial": [
+   "Place the moka pot with the black handle near the red burner onto the red burner on the grey stove base",
+   "Place the other moka pot with the black handle onto the grey stove base beside the red burner"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t8_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 725.2525630174205,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the moka pot with the black handle near the red burner onto the red burner on the grey stove base\",\"Place the other moka pot with the black handle onto the grey stove base beside the red burner\"],\"ordered\":false}",
+     "new_tokens": 51,
+     "prompt_tokens": 2122,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.0281210171524435,
+     "vit_ms": 40.57626498979516,
+     "inject_ms": 0.5958359979558736,
+     "restore_ms": 0.0,
+     "prefill_ms": 176.46091800997965,
+     "decode_ms": 501.59142300253734,
+     "call_ms": 725.2525630174205,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the moka pot with the black handle near the red burner onto the red burner on the grey stove base",
+      "Place the other moka pot with the black handle onto the grey stove base beside the red burner"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 247.02324299141765,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5058.8126630173065,
+    "detail": {
+     "instruction": "Place the moka pot with the black handle near the red burner onto the red burner on the grey stove base",
+     "cached": false,
+     "encode_cpu_ms": 4827.321991004283,
+     "set_prompt_ms": 231.49067201302387
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 335.8553549624048,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4101,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.525706002023071,
+     "vit_ms": 40.83068299223669,
+     "inject_ms": 0.8790059946477413,
+     "restore_ms": 0.32795500010252,
+     "prefill_ms": 184.1061909799464,
+     "decode_ms": 100.18581399344839,
+     "call_ms": 335.8553549624048,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 360.71274999994785,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"",
+     "new_tokens": 12,
+     "prompt_tokens": 4101,
+     "restored_tokens": 2048,
+     "preprocess_ms": 8.441853016847745,
+     "vit_ms": 40.66786399926059,
+     "inject_ms": 0.8872849866747856,
+     "restore_ms": 0.3307339793536812,
+     "prefill_ms": 182.85485199885443,
+     "decode_ms": 127.53016201895662,
+     "call_ms": 360.71274999994785,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 336.99637197423726,
+    "detail": {
+     "text": "{\"status\":\"complete\",\"action\":\"next\",\"reason\":\"",
+     "new_tokens": 11,
+     "prompt_tokens": 4101,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.048309992067516,
+     "vit_ms": 40.60219298116863,
+     "inject_ms": 0.8342630171682686,
+     "restore_ms": 0.32934898626990616,
+     "prefill_ms": 183.82139599998482,
+     "decode_ms": 102.36086099757813,
+     "call_ms": 336.99637197423726,
+     "parse_ok": true,
+     "decision": "next",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "switch",
+    "wall_ms": 5602.660179021768,
+    "detail": {
+     "instruction": "Place the other moka pot with the black handle onto the grey stove base beside the red burner",
+     "cached": false,
+     "encode_cpu_ms": 5601.3858880032785,
+     "set_prompt_ms": 1.2742910184897482
+    }
+   },
+   {
+    "step": 320,
+    "kind": "monitor",
+    "wall_ms": 313.2996469794307,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4075,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.134017978794873,
+     "vit_ms": 40.6258059956599,
+     "inject_ms": 0.8222699980251491,
+     "restore_ms": 0.3269459994044155,
+     "prefill_ms": 162.62597200693563,
+     "decode_ms": 99.76463500061072,
+     "call_ms": 313.2996469794307,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 9,
+  "episode": 0,
+  "instruction": "put the yellow and white mug in the microwave and close it",
+  "success": true,
+  "control_steps": 241,
+  "executor_queries": 25,
+  "planner_ms": 1707.9430219600908,
+  "switch_ms": 4896.890857024118,
+  "subgoals_initial": [
+   "Place the yellow-and-white mug into the black microwave and close the microwave door"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t9_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 519.310402974952,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the yellow-and-white mug into the black microwave and close the microwave door\"],\"ordered\":false}",
+     "new_tokens": 24,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.2647919985465705,
+     "vit_ms": 40.666968998266384,
+     "inject_ms": 0.6857379921711981,
+     "restore_ms": 0.0,
+     "prefill_ms": 176.89748300472274,
+     "decode_ms": 294.7954209812451,
+     "call_ms": 519.310402974952,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the yellow-and-white mug into the black microwave and close the microwave door"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 250.4292449739296,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 4896.890857024118,
+    "detail": {
+     "instruction": "Place the yellow-and-white mug into the black microwave and close the microwave door",
+     "cached": false,
+     "encode_cpu_ms": 4895.497129007708,
+     "set_prompt_ms": 1.393728016410023
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 311.69536800007336,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4075,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.380567993503064,
+     "vit_ms": 40.614722995087504,
+     "inject_ms": 0.7882450008764863,
+     "restore_ms": 0.3270820016041398,
+     "prefill_ms": 160.129561991198,
+     "decode_ms": 100.45518801780418,
+     "call_ms": 311.69536800007336,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 313.2855989970267,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4075,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.624089987482876,
+     "vit_ms": 40.67506000865251,
+     "inject_ms": 0.7975419866852462,
+     "restore_ms": 0.3266569983679801,
+     "prefill_ms": 161.16200500982814,
+     "decode_ms": 100.70024500600994,
+     "call_ms": 313.2855989970267,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 313.2224070141092,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4075,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.271983988583088,
+     "vit_ms": 40.66233499906957,
+     "inject_ms": 0.8135790121741593,
+     "restore_ms": 0.32694998662918806,
+     "prefill_ms": 162.3521800211165,
+     "decode_ms": 99.79537900653668,
+     "call_ms": 313.2224070141092,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_fast",
+  "task": 9,
+  "episode": 1,
+  "instruction": "put the yellow and white mug in the microwave and close it",
+  "success": true,
+  "control_steps": 228,
+  "executor_queries": 23,
+  "planner_ms": 1416.3360779930372,
+  "switch_ms": 4783.934603998205,
+  "subgoals_initial": [
+   "Place the yellow-and-white mug into the open microwave and close the microwave door"
+  ],
+  "end_reason": "success",
+  "video": "planner_fast_t9_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 539.385900949128,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the yellow-and-white mug into the open microwave and close the microwave door\"],\"ordered\":false}",
+     "new_tokens": 24,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.043518980732188,
+     "vit_ms": 40.53379799006507,
+     "inject_ms": 0.6180630007293075,
+     "restore_ms": 0.0,
+     "prefill_ms": 177.41647697403096,
+     "decode_ms": 314.77404400357045,
+     "call_ms": 539.385900949128,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the yellow-and-white mug into the open microwave and close the microwave door"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "monitor_prefix",
+    "wall_ms": 249.4560359918978,
+    "detail": {
+     "tokens": 2048
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 4783.934603998205,
+    "detail": {
+     "instruction": "Place the yellow-and-white mug into the open microwave and close the microwave door",
+     "cached": false,
+     "encode_cpu_ms": 4782.7717079781,
+     "set_prompt_ms": 1.1628960201051086
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 313.948806055123,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4075,
+     "restored_tokens": 2048,
+     "preprocess_ms": 9.849358000792563,
+     "vit_ms": 40.722167992498726,
+     "inject_ms": 0.8899820095393807,
+     "restore_ms": 0.3310580214019865,
+     "prefill_ms": 162.34834102215245,
+     "decode_ms": 99.80789900873788,
+     "call_ms": 313.948806055123,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 313.5453349968884,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"",
+     "new_tokens": 10,
+     "prompt_tokens": 4075,
+     "restored_tokens": 2048,
+     "preprocess_ms": 10.22096601082012,
+     "vit_ms": 41.85280099045485,
+     "inject_ms": 0.8889779855962843,
+     "restore_ms": 0.3290559980086982,
+     "prefill_ms": 160.27518300688826,
+     "decode_ms": 99.9783510051202,
+     "call_ms": 313.5453349968884,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ }
+]

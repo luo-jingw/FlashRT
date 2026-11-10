@@ -1,0 +1,2444 @@
+[
+ {
+  "mode": "planner_eos",
+  "task": 0,
+  "episode": 0,
+  "instruction": "put both the alphabet soup and the tomato sauce in the basket",
+  "success": true,
+  "control_steps": 255,
+  "executor_queries": 26,
+  "planner_ms": 4670.892041001935,
+  "switch_ms": 5367.734436993487,
+  "subgoals_initial": [
+   "put the alphabet soup carton in the woven basket with the white rim",
+   "put the tomato sauce bottle in the woven basket with the white rim"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t0_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 1830.0512610003352,
+    "detail": {
+     "text": "{\"subgoals\":[\"put the alphabet soup carton in the woven basket with the white rim\",\"put the tomato sauce bottle in the woven basket with the white rim\"],\"ordered\":false}",
+     "new_tokens": 36,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 36.03079801541753,
+     "vit_ms": 64.10171097377315,
+     "inject_ms": 0.7758460124023259,
+     "restore_ms": 0.0,
+     "prefill_ms": 595.3732960042544,
+     "decode_ms": 1133.7696099944878,
+     "call_ms": 1830.0512610003352,
+     "parse_ok": true,
+     "subgoals": [
+      "put the alphabet soup carton in the woven basket with the white rim",
+      "put the tomato sauce bottle in the woven basket with the white rim"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5367.734436993487,
+    "detail": {
+     "instruction": "put the alphabet soup carton in the woven basket with the white rim",
+     "cached": false,
+     "encode_cpu_ms": 5134.185674018227,
+     "set_prompt_ms": 233.54876297526062
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 862.9262959875632,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the yellow-orange alphabet soup carton and is moving it toward the woven basket with the white rim, but the carton is not yet clearly placed inside the basket.\"}",
+     "new_tokens": 49,
+     "prompt_tokens": 4090,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.58088698098436,
+     "vit_ms": 80.35086299059913,
+     "inject_ms": 0.891756993951276,
+     "restore_ms": 0.0,
+     "prefill_ms": 310.66731602186337,
+     "decode_ms": 461.4354730001651,
+     "call_ms": 862.9262959875632,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 1025.7180190237705,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The alphabet soup carton is still on the table near the red milk carton and blue box, not in the woven basket with the white rim. The gripper appears to be near the basket and can continue working on placing the correct carton.\"}",
+     "new_tokens": 60,
+     "prompt_tokens": 4090,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.477718995185569,
+     "vit_ms": 80.20760901854374,
+     "inject_ms": 0.86474500130862,
+     "restore_ms": 0.0,
+     "prefill_ms": 312.7501039998606,
+     "decode_ms": 622.417842008872,
+     "call_ms": 1025.7180190237705,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 952.1964649902657,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The red-and-white alphabet soup carton is still on the table near the other cartons, not in the woven basket with the white rim. The robot is near the basket and can continue working on placing the correct carton there.\"}",
+     "new_tokens": 58,
+     "prompt_tokens": 4090,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.93120199907571,
+     "vit_ms": 80.49055299488828,
+     "inject_ms": 0.924753985600546,
+     "restore_ms": 0.0,
+     "prefill_ms": 313.3527349855285,
+     "decode_ms": 548.4972210251726,
+     "call_ms": 952.1964649902657,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 0,
+  "episode": 1,
+  "instruction": "put both the alphabet soup and the tomato sauce in the basket",
+  "success": false,
+  "control_steps": 700,
+  "executor_queries": 70,
+  "planner_ms": 8005.888726911508,
+  "switch_ms": 11543.430362013169,
+  "subgoals_initial": [
+   "put the small orange-and-red carton near the red milk carton into the stone basket",
+   "put the red milk carton into the stone basket"
+  ],
+  "end_reason": "max_steps",
+  "video": "planner_eos_t0_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 609.3244170187972,
+    "detail": {
+     "text": "{\"subgoals\":[\"put the small orange-and-red carton near the red milk carton into the stone basket\",\"put the red milk carton into the stone basket\"],\"ordered\":false}",
+     "new_tokens": 35,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 5.888496991246939,
+     "vit_ms": 40.425104001769796,
+     "inject_ms": 0.687748019117862,
+     "restore_ms": 0.0,
+     "prefill_ms": 175.24341700482182,
+     "decode_ms": 387.07965100184083,
+     "call_ms": 609.3244170187972,
+     "parse_ok": true,
+     "subgoals": [
+      "put the small orange-and-red carton near the red milk carton into the stone basket",
+      "put the red milk carton into the stone basket"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5756.729825021466,
+    "detail": {
+     "instruction": "put the small orange-and-red carton near the red milk carton into the stone basket",
+     "cached": false,
+     "encode_cpu_ms": 5528.356493014144,
+     "set_prompt_ms": 228.37333200732246
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 928.7032280117273,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The small orange-and-red carton near the red milk carton is still on the table, not in the stone basket. The gripper is near the correct small carton and can continue the subgoal.\"}",
+     "new_tokens": 52,
+     "prompt_tokens": 4089,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.555682016070932,
+     "vit_ms": 81.53960999334231,
+     "inject_ms": 0.9202209766954184,
+     "restore_ms": 0.0,
+     "prefill_ms": 312.27350802510045,
+     "decode_ms": 524.4142070005182,
+     "call_ms": 928.7032280117273,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 877.7914729726035,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The small orange-and-red carton near the red milk carton is still on the table and not yet in the stone basket; the gripper appears empty and the task remains achievable.\"}",
+     "new_tokens": 48,
+     "prompt_tokens": 4089,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.862279006280005,
+     "vit_ms": 80.13548600138165,
+     "inject_ms": 0.8324669906869531,
+     "restore_ms": 0.0,
+     "prefill_ms": 313.2411989790853,
+     "decode_ms": 474.7200419951696,
+     "call_ms": 877.7914729726035,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 754.8053359496407,
+    "detail": {
+     "text": "{\"status\":\"complete\",\"action\":\"next\",\"reason\":\"The small orange-and-red carton that was near the red milk carton is now visible inside the stone basket, so the current subgoal is done.\"}",
+     "new_tokens": 41,
+     "prompt_tokens": 4089,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.262864012271166,
+     "vit_ms": 81.43233199371025,
+     "inject_ms": 0.9080619784072042,
+     "restore_ms": 0.0,
+     "prefill_ms": 312.5881359737832,
+     "decode_ms": 350.6139419914689,
+     "call_ms": 754.8053359496407,
+     "parse_ok": true,
+     "decision": "next",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "switch",
+    "wall_ms": 5786.700536991702,
+    "detail": {
+     "instruction": "put the red milk carton into the stone basket",
+     "cached": false,
+     "encode_cpu_ms": 5557.600025989814,
+     "set_prompt_ms": 229.10051100188866
+    }
+   },
+   {
+    "step": 320,
+    "kind": "monitor",
+    "wall_ms": 951.9211500301026,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The red milk carton is still on the table near the blue can and orange bottle, not inside the stone basket. The gripper appears empty and the target remains reachable, so the robot should continue placing the red milk carton into the stone basket.\"}",
+     "new_tokens": 62,
+     "prompt_tokens": 4069,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.1452710039448,
+     "vit_ms": 80.2995230187662,
+     "inject_ms": 0.845467991894111,
+     "restore_ms": 0.0,
+     "prefill_ms": 312.5363659928553,
+     "decode_ms": 549.0945220226422,
+     "call_ms": 951.9211500301026,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 400,
+    "kind": "monitor",
+    "wall_ms": 901.3778889784589,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The red milk carton is still on the table near the blue can and orange bottle, not inside the stone basket. The robot appears to be approaching the correct red milk carton, so the subgoal is still achievable.\"}",
+     "new_tokens": 56,
+     "prompt_tokens": 4069,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.439031982561573,
+     "vit_ms": 80.2856009977404,
+     "inject_ms": 0.9092709806282073,
+     "restore_ms": 0.0,
+     "prefill_ms": 312.51106201671064,
+     "decode_ms": 499.2329230008181,
+     "call_ms": 901.3778889784589,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 480,
+    "kind": "monitor",
+    "wall_ms": 1050.642529007746,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The red milk carton is still on the table near the blue can and orange bottle, not inside the stone basket. The gripper is near the red-green can rather than the milk carton, but no wrong object is clearly held, so the subgoal remains achievable.\"}",
+     "new_tokens": 66,
+     "prompt_tokens": 4069,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.153202001471072,
+     "vit_ms": 81.9653990038205,
+     "inject_ms": 0.8924220164772123,
+     "restore_ms": 0.0,
+     "prefill_ms": 310.6240159831941,
+     "decode_ms": 648.007490002783,
+     "call_ms": 1050.642529007746,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 560,
+    "kind": "monitor",
+    "wall_ms": 927.9121539439075,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is positioned around the red milk carton with the cow graphic, and the stone basket is visible nearby, but the carton has not yet been placed in the basket.\"}",
+     "new_tokens": 48,
+     "prompt_tokens": 4069,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.815210981993005,
+     "vit_ms": 80.34884798689745,
+     "inject_ms": 0.906820991076529,
+     "restore_ms": 0.0,
+     "prefill_ms": 312.75215800269507,
+     "decode_ms": 525.0891159812454,
+     "call_ms": 927.9121539439075,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 640,
+    "kind": "monitor",
+    "wall_ms": 1003.4105509985238,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The red milk carton is still on the table near the orange bottle and has not been placed in the stone basket yet; the robot appears to be holding the red-green can and can continue working toward the correct carton placement.\"}",
+     "new_tokens": 57,
+     "prompt_tokens": 4069,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.96550400648266,
+     "vit_ms": 80.37907900870778,
+     "inject_ms": 0.886680994881317,
+     "restore_ms": 0.0,
+     "prefill_ms": 312.9197899834253,
+     "decode_ms": 600.2594970050268,
+     "call_ms": 1003.4105509985238,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 1,
+  "episode": 0,
+  "instruction": "put both the cream cheese box and the butter in the basket",
+  "success": true,
+  "control_steps": 239,
+  "executor_queries": 24,
+  "planner_ms": 2358.550458069658,
+  "switch_ms": 5402.230274979956,
+  "subgoals_initial": [
+   "put the cream cheese box in the basket",
+   "put the butter in the basket"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t1_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 429.218634031713,
+    "detail": {
+     "text": "{\"subgoals\":[\"put the cream cheese box in the basket\",\"put the butter in the basket\"],\"ordered\":false}",
+     "new_tokens": 24,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 5.993622995447367,
+     "vit_ms": 40.367546025663614,
+     "inject_ms": 0.6406070024240762,
+     "restore_ms": 0.0,
+     "prefill_ms": 173.5565320122987,
+     "decode_ms": 208.66032599587925,
+     "call_ms": 429.218634031713,
+     "parse_ok": true,
+     "subgoals": [
+      "put the cream cheese box in the basket",
+      "put the butter in the basket"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5402.230274979956,
+    "detail": {
+     "instruction": "put the cream cheese box in the basket",
+     "cached": false,
+     "encode_cpu_ms": 5168.803451990243,
+     "set_prompt_ms": 233.4268229897134
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 852.2782540239859,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the cream cheese box with the blue oval label, and the basket is visible nearby, but the box has not yet been placed in the basket.\"}",
+     "new_tokens": 47,
+     "prompt_tokens": 4078,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.424053016118705,
+     "vit_ms": 80.56923301774077,
+     "inject_ms": 0.9042210003826767,
+     "restore_ms": 0.0,
+     "prefill_ms": 310.85288399481215,
+     "decode_ms": 450.52786299493164,
+     "call_ms": 852.2782540239859,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 1077.053570013959,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The cream cheese box is the small orange-and-white carton near the red milk carton, and it is still on the table rather than in the stone-textured basket. The gripper is near the basket and can continue working toward placing the cream cheese box in the basket.\"}",
+     "new_tokens": 67,
+     "prompt_tokens": 4078,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.906520990421996,
+     "vit_ms": 80.2373900078237,
+     "inject_ms": 0.7856320007704198,
+     "restore_ms": 0.0,
+     "prefill_ms": 313.1192430155352,
+     "decode_ms": 674.0047839994077,
+     "call_ms": 1077.053570013959,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 1,
+  "episode": 1,
+  "instruction": "put both the cream cheese box and the butter in the basket",
+  "success": true,
+  "control_steps": 247,
+  "executor_queries": 25,
+  "planner_ms": 2735.111857939046,
+  "switch_ms": 4477.940153970849,
+  "subgoals_initial": [
+   "put the cream cheese box in the basket",
+   "put the butter in the basket"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t1_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 399.4388319842983,
+    "detail": {
+     "text": "{\"subgoals\":[\"put the cream cheese box in the basket\",\"put the butter in the basket\"],\"ordered\":false}",
+     "new_tokens": 24,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 5.821224011015147,
+     "vit_ms": 40.334602002985775,
+     "inject_ms": 0.5908999883104116,
+     "restore_ms": 0.0,
+     "prefill_ms": 175.37605299730785,
+     "decode_ms": 177.31605298467912,
+     "call_ms": 399.4388319842983,
+     "parse_ok": true,
+     "subgoals": [
+      "put the cream cheese box in the basket",
+      "put the butter in the basket"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.007374987239018,
+    "detail": {
+     "instruction": "put the cream cheese box in the basket",
+     "cached": true,
+     "encode_cpu_ms": 0.001414999132975936,
+     "set_prompt_ms": 1.0059599881060421
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 729.2071999690961,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the blue cream cheese box, but it has not yet been placed in the stone-textured basket.\"}",
+     "new_tokens": 38,
+     "prompt_tokens": 4078,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.223147004377097,
+     "vit_ms": 81.55384397832677,
+     "inject_ms": 0.907078996533528,
+     "restore_ms": 0.0,
+     "prefill_ms": 312.37810497987084,
+     "decode_ms": 325.1450250099879,
+     "call_ms": 729.2071999690961,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 878.685981995659,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The cream cheese box is still on the table near the basket and has not been placed in the basket yet; the gripper appears empty and the subgoal remains achievable.\"}",
+     "new_tokens": 47,
+     "prompt_tokens": 4078,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.419787005754188,
+     "vit_ms": 81.40404600999318,
+     "inject_ms": 0.873456010594964,
+     "restore_ms": 0.0,
+     "prefill_ms": 311.32987097953446,
+     "decode_ms": 475.65882198978215,
+     "call_ms": 878.685981995659,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 727.7798439899925,
+    "detail": {
+     "text": "{\"status\":\"complete\",\"action\":\"next\",\"reason\":\"The red-and-white cream cheese box is visible inside the stone-patterned basket, so the current subgoal is done.\"}",
+     "new_tokens": 36,
+     "prompt_tokens": 4078,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.913197001675144,
+     "vit_ms": 80.31008599209599,
+     "inject_ms": 0.820802990347147,
+     "restore_ms": 0.0,
+     "prefill_ms": 313.7310650199652,
+     "decode_ms": 324.00469298590906,
+     "call_ms": 727.7798439899925,
+     "parse_ok": true,
+     "decision": "next",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "switch",
+    "wall_ms": 4476.93277898361,
+    "detail": {
+     "instruction": "put the butter in the basket",
+     "cached": false,
+     "encode_cpu_ms": 4247.106052003801,
+     "set_prompt_ms": 229.82672697980888
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 2,
+  "episode": 0,
+  "instruction": "turn on the stove and put the moka pot on it",
+  "success": true,
+  "control_steps": 247,
+  "executor_queries": 25,
+  "planner_ms": 6067.405784939183,
+  "switch_ms": 4105.687288014451,
+  "subgoals_initial": [
+   "turn on the stove and put the moka pot on it"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t2_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 442.97001403174363,
+    "detail": {
+     "text": "{\"subgoals\":[\"turn on the stove and put the moka pot on it\"],\"ordered\":false}",
+     "new_tokens": 21,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.119550991570577,
+     "vit_ms": 40.734927024459466,
+     "inject_ms": 0.7614520145580173,
+     "restore_ms": 0.0,
+     "prefill_ms": 172.42749099386856,
+     "decode_ms": 222.926593007287,
+     "call_ms": 442.97001403174363,
+     "parse_ok": true,
+     "subgoals": [
+      "turn on the stove and put the moka pot on it"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 4105.687288014451,
+    "detail": {
+     "instruction": "turn on the stove and put the moka pot on it",
+     "cached": false,
+     "encode_cpu_ms": 4104.21116600628,
+     "set_prompt_ms": 1.4761220081709325
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 2630.8826159511227,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The robot is reaching for the black stove knob and the moka pot is still on the table, not yet on the stove. The correct objects are being approached and the subgoal remains achievable.\"}",
+     "new_tokens": 52,
+     "prompt_tokens": 4072,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.206678019836545,
+     "vit_ms": 80.45759800006635,
+     "inject_ms": 0.8261079783551395,
+     "restore_ms": 0.0,
+     "prefill_ms": 642.8503389761318,
+     "decode_ms": 1897.541892976733,
+     "call_ms": 2630.8826159511227,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 1192.4895579868462,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the red spiral burner appears turned on, but the moka pot is still on the table near the black frying pan and has not been placed on the stove yet.\"}",
+     "new_tokens": 49,
+     "prompt_tokens": 4072,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.21231200825423,
+     "vit_ms": 80.54821100085974,
+     "inject_ms": 0.837766972836107,
+     "restore_ms": 0.0,
+     "prefill_ms": 312.5674450129736,
+     "decode_ms": 790.3238229919225,
+     "call_ms": 1192.4895579868462,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 1801.0635969694704,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The moka pot is on the stove and the red burner rings indicate the stove is on, but the gripper is still positioned on the moka pot/stove area, so the placement action has not clearly finished yet.\"}",
+     "new_tokens": 58,
+     "prompt_tokens": 4072,
+     "restored_tokens": 0,
+     "preprocess_ms": 10.010308003984392,
+     "vit_ms": 80.49085200764239,
+     "inject_ms": 0.8200759766623378,
+     "restore_ms": 0.0,
+     "prefill_ms": 310.594330978347,
+     "decode_ms": 1399.1480300028343,
+     "call_ms": 1801.0635969694704,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 2,
+  "episode": 1,
+  "instruction": "turn on the stove and put the moka pot on it",
+  "success": true,
+  "control_steps": 240,
+  "executor_queries": 24,
+  "planner_ms": 2632.725989969913,
+  "switch_ms": 1.1329799890518188,
+  "subgoals_initial": [
+   "turn on the stove and put the moka pot on it"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t2_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 516.6535579774063,
+    "detail": {
+     "text": "{\"subgoals\":[\"turn on the stove and put the moka pot on it\"],\"ordered\":false}",
+     "new_tokens": 21,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.257323984755203,
+     "vit_ms": 40.51935800816864,
+     "inject_ms": 0.6473620014730841,
+     "restore_ms": 0.0,
+     "prefill_ms": 173.39321499457583,
+     "decode_ms": 295.83629898843355,
+     "call_ms": 516.6535579774063,
+     "parse_ok": true,
+     "subgoals": [
+      "turn on the stove and put the moka pot on it"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.1329799890518188,
+    "detail": {
+     "instruction": "turn on the stove and put the moka pot on it",
+     "cached": true,
+     "encode_cpu_ms": 0.001587992301210761,
+     "set_prompt_ms": 1.131391996750608
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 1200.778543978231,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the red spiral burner is on, but the moka pot is still on the table next to the stove and has not been placed on it yet.\"}",
+     "new_tokens": 46,
+     "prompt_tokens": 4072,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.077865979634225,
+     "vit_ms": 80.48071400844492,
+     "inject_ms": 0.8491089974995703,
+     "restore_ms": 0.0,
+     "prefill_ms": 312.0222720026504,
+     "decode_ms": 798.3485829900019,
+     "call_ms": 1200.778543978231,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 915.2938880142756,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with red spiral markings appears turned on, but the silver moka pot is still on the table near the black frying pan and not yet placed on the stove.\"}",
+     "new_tokens": 47,
+     "prompt_tokens": 4072,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.801828982541338,
+     "vit_ms": 80.56046601268463,
+     "inject_ms": 0.8688149973750114,
+     "restore_ms": 0.0,
+     "prefill_ms": 310.95624502631836,
+     "decode_ms": 514.1065329953562,
+     "call_ms": 915.2938880142756,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 2,
+  "episode": 2,
+  "instruction": "turn on the stove and put the moka pot on it",
+  "success": true,
+  "control_steps": 255,
+  "executor_queries": 26,
+  "planner_ms": 3838.894390006317,
+  "switch_ms": 1.1009790177922696,
+  "subgoals_initial": [
+   "turn on the stove and put the moka pot on it"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t2_e2/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 574.2124810349196,
+    "detail": {
+     "text": "{\"subgoals\":[\"turn on the stove and put the moka pot on it\"],\"ordered\":false}",
+     "new_tokens": 21,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 5.8851949870586395,
+     "vit_ms": 40.35008102073334,
+     "inject_ms": 0.5860920064151287,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.81960100121796,
+     "decode_ms": 352.57151201949455,
+     "call_ms": 574.2124810349196,
+     "parse_ok": true,
+     "subgoals": [
+      "turn on the stove and put the moka pot on it"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.1009790177922696,
+    "detail": {
+     "instruction": "turn on the stove and put the moka pot on it",
+     "cached": true,
+     "encode_cpu_ms": 0.0017660204321146011,
+     "set_prompt_ms": 1.099212997360155
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 1243.1727730145212,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The robot is reaching toward the black stove knob and the moka pot is still on the table near the black frying pan, not yet on the silver stove burner. The correct objects are present and the subgoal remains achievable.\"}",
+     "new_tokens": 58,
+     "prompt_tokens": 4072,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.210976015310735,
+     "vit_ms": 80.48369098105468,
+     "inject_ms": 0.8698920137248933,
+     "restore_ms": 0.0,
+     "prefill_ms": 313.08224800159223,
+     "decode_ms": 839.5259660028387,
+     "call_ms": 1243.1727730145212,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 906.6967249673326,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The stove with the red spiral burner appears turned on, but the moka pot is still on the table near the black frying pan and has not been placed on the stove yet.\"}",
+     "new_tokens": 49,
+     "prompt_tokens": 4072,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.557355991797522,
+     "vit_ms": 80.57006899616681,
+     "inject_ms": 0.8340420026797801,
+     "restore_ms": 0.0,
+     "prefill_ms": 312.8329069877509,
+     "decode_ms": 503.90235098893754,
+     "call_ms": 906.6967249673326,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 1114.8124109895434,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The moka pot is on the grey stove burner and the red burner ring appears active, but the gripper is still positioned at the moka pot, so the placement/turn-on action is not clearly finished yet.\"}",
+     "new_tokens": 57,
+     "prompt_tokens": 4072,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.677650999743491,
+     "vit_ms": 80.54131199605763,
+     "inject_ms": 0.8433219918515533,
+     "restore_ms": 0.0,
+     "prefill_ms": 313.4005360188894,
+     "decode_ms": 711.3495899830014,
+     "call_ms": 1114.8124109895434,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 3,
+  "episode": 0,
+  "instruction": "put the black bowl in the bottom drawer of the cabinet and close it",
+  "success": true,
+  "control_steps": 216,
+  "executor_queries": 22,
+  "planner_ms": 3042.101243045181,
+  "switch_ms": 5091.321515996242,
+  "subgoals_initial": [
+   "Open the bottom drawer of the grey cabinet with the black handles",
+   "Place the black bowl into the open bottom drawer of the grey cabinet",
+   "Close the bottom drawer of the grey cabinet"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t3_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 637.828190025175,
+    "detail": {
+     "text": "{\"subgoals\":[\"Open the bottom drawer of the grey cabinet with the black handles\",\"Place the black bowl into the open bottom drawer of the grey cabinet\",\"Close the bottom drawer of the grey cabinet\"],\"ordered\":true}",
+     "new_tokens": 44,
+     "prompt_tokens": 2128,
+     "restored_tokens": 0,
+     "preprocess_ms": 5.745288013713434,
+     "vit_ms": 40.59811800834723,
+     "inject_ms": 0.7741580193396658,
+     "restore_ms": 0.0,
+     "prefill_ms": 173.84887899970636,
+     "decode_ms": 416.8617469840683,
+     "call_ms": 637.828190025175,
+     "parse_ok": true,
+     "subgoals": [
+      "Open the bottom drawer of the grey cabinet with the black handles",
+      "Place the black bowl into the open bottom drawer of the grey cabinet",
+      "Close the bottom drawer of the grey cabinet"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5091.321515996242,
+    "detail": {
+     "instruction": "Open the bottom drawer of the grey cabinet with the black handles",
+     "cached": false,
+     "encode_cpu_ms": 5089.998667011969,
+     "set_prompt_ms": 1.3228489842731506
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 1177.2939370130189,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The bottom drawer of the grey cabinet with black handles is already open, but the robot is currently positioned over the black bowl and has not yet completed or confirmed the drawer-opening subgoal in a way that clearly advances the task; the correct next work remains achievable.\"}",
+     "new_tokens": 65,
+     "prompt_tokens": 4104,
+     "restored_tokens": 0,
+     "preprocess_ms": 10.806499980390072,
+     "vit_ms": 80.44880599481985,
+     "inject_ms": 0.9053700196091086,
+     "restore_ms": 0.0,
+     "prefill_ms": 338.9176380005665,
+     "decode_ms": 746.2156230176333,
+     "call_ms": 1177.2939370130189,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 1226.9791160069872,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The bottom drawer of the grey cabinet with black handles is open, but the black bowl is still on top of the drawer rather than inside it, and the current subgoal only requires the drawer to be open. The drawer appears open enough to continue toward placing the bowl inside.\"}",
+     "new_tokens": 68,
+     "prompt_tokens": 4104,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.117378009250388,
+     "vit_ms": 80.49936901079491,
+     "inject_ms": 0.8534030057489872,
+     "restore_ms": 0.0,
+     "prefill_ms": 339.6882859815378,
+     "decode_ms": 796.8206799996551,
+     "call_ms": 1226.9791160069872,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 3,
+  "episode": 1,
+  "instruction": "put the black bowl in the bottom drawer of the cabinet and close it",
+  "success": true,
+  "control_steps": 215,
+  "executor_queries": 22,
+  "planner_ms": 2303.94852894824,
+  "switch_ms": 5294.925843976671,
+  "subgoals_initial": [
+   "Place the black bowl into the bottom drawer of the grey cabinet and close the drawer"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t3_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 488.90742400544696,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the black bowl into the bottom drawer of the grey cabinet and close the drawer\"],\"ordered\":false}",
+     "new_tokens": 25,
+     "prompt_tokens": 2128,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.251982995308936,
+     "vit_ms": 40.443566016620025,
+     "inject_ms": 0.6990130059421062,
+     "restore_ms": 0.0,
+     "prefill_ms": 176.04390199994668,
+     "decode_ms": 265.4689599876292,
+     "call_ms": 488.90742400544696,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the black bowl into the bottom drawer of the grey cabinet and close the drawer"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5294.925843976671,
+    "detail": {
+     "instruction": "Place the black bowl into the bottom drawer of the grey cabinet and close the drawer",
+     "cached": false,
+     "encode_cpu_ms": 5056.430251977872,
+     "set_prompt_ms": 238.49559199879877
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 943.7849409587216,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The robot is reaching toward the black bowl with a patterned interior, and the bowl is not yet in the bottom drawer of the grey cabinet. The correct target remains reachable and the subgoal is still achievable.\"}",
+     "new_tokens": 55,
+     "prompt_tokens": 4078,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.495659993262962,
+     "vit_ms": 80.78488797764294,
+     "inject_ms": 0.905627995962277,
+     "restore_ms": 0.0,
+     "prefill_ms": 312.2362099820748,
+     "decode_ms": 540.3625550097786,
+     "call_ms": 943.7849409587216,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 871.2561639840715,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The black bowl is positioned inside the open bottom drawer of the grey cabinet, but the drawer has not been closed yet, so the current subgoal is not complete.\"}",
+     "new_tokens": 46,
+     "prompt_tokens": 4078,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.155514999292791,
+     "vit_ms": 80.47751398407854,
+     "inject_ms": 0.8875330095179379,
+     "restore_ms": 0.0,
+     "prefill_ms": 314.66016700142063,
+     "decode_ms": 466.07543498976156,
+     "call_ms": 871.2561639840715,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 4,
+  "episode": 0,
+  "instruction": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+  "success": true,
+  "control_steps": 219,
+  "executor_queries": 22,
+  "planner_ms": 2666.3757259957492,
+  "switch_ms": 5080.735912983073,
+  "subgoals_initial": [
+   "put the yellow and white mug on the plate near the yellow and white mug",
+   "put the grey mug with the white handle on the plate near the grey mug with the white handle"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t4_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 696.8613870267291,
+    "detail": {
+     "text": "{\"subgoals\":[\"put the yellow and white mug on the plate near the yellow and white mug\",\"put the grey mug with the white handle on the plate near the grey mug with the white handle\"],\"ordered\":false}",
+     "new_tokens": 44,
+     "prompt_tokens": 2133,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.313034013146535,
+     "vit_ms": 40.42640799889341,
+     "inject_ms": 0.6135379953775555,
+     "restore_ms": 0.0,
+     "prefill_ms": 173.88646901235916,
+     "decode_ms": 475.6219380069524,
+     "call_ms": 696.8613870267291,
+     "parse_ok": true,
+     "subgoals": [
+      "put the yellow and white mug on the plate near the yellow and white mug",
+      "put the grey mug with the white handle on the plate near the grey mug with the white handle"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5080.735912983073,
+    "detail": {
+     "instruction": "put the yellow and white mug on the plate near the yellow and white mug",
+     "cached": false,
+     "encode_cpu_ms": 4843.520422000438,
+     "set_prompt_ms": 237.21549098263495
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 1098.4293220099062,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The yellow-and-white mug is still on the table near the red patterned mug, not yet on the plate near it. The gripper appears to be holding or moving the grey mug with the white handle, but the current subgoal target remains achievable and not complete.\"}",
+     "new_tokens": 67,
+     "prompt_tokens": 4105,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.94255900150165,
+     "vit_ms": 80.55346499895677,
+     "inject_ms": 0.8666759822517633,
+     "restore_ms": 0.0,
+     "prefill_ms": 336.61691402085125,
+     "decode_ms": 670.4497080063447,
+     "call_ms": 1098.4293220099062,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 871.085016959114,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is positioned over the yellow-and-white mug, which is the correct target, but the mug is still on the table and not yet on the plate near it.\"}",
+     "new_tokens": 48,
+     "prompt_tokens": 4105,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.714757994515821,
+     "vit_ms": 80.5676440068055,
+     "inject_ms": 0.9003779850900173,
+     "restore_ms": 0.0,
+     "prefill_ms": 334.3580709770322,
+     "decode_ms": 445.5441659956705,
+     "call_ms": 871.085016959114,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 4,
+  "episode": 1,
+  "instruction": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+  "success": true,
+  "control_steps": 220,
+  "executor_queries": 22,
+  "planner_ms": 2637.6397030835506,
+  "switch_ms": 0.9710460144560784,
+  "subgoals_initial": [
+   "put the yellow and white mug on the plate near the yellow and white mug",
+   "put the grey mug on the plate near the grey mug"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t4_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 519.244253024226,
+    "detail": {
+     "text": "{\"subgoals\":[\"put the yellow and white mug on the plate near the yellow and white mug\",\"put the grey mug on the plate near the grey mug\"],\"ordered\":false}",
+     "new_tokens": 36,
+     "prompt_tokens": 2133,
+     "restored_tokens": 0,
+     "preprocess_ms": 5.665798002155498,
+     "vit_ms": 40.40787200210616,
+     "inject_ms": 0.6795780209358782,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.09073500311933,
+     "decode_ms": 298.4002699959092,
+     "call_ms": 519.244253024226,
+     "parse_ok": true,
+     "subgoals": [
+      "put the yellow and white mug on the plate near the yellow and white mug",
+      "put the grey mug on the plate near the grey mug"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 0.9710460144560784,
+    "detail": {
+     "instruction": "put the yellow and white mug on the plate near the yellow and white mug",
+     "cached": true,
+     "encode_cpu_ms": 0.0016760022845119238,
+     "set_prompt_ms": 0.9693700121715665
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 1146.7031110369135,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The yellow-and-white mug is still on the table near the red patterned mug, not on the plate near it. The gripper appears to be holding or moving the grey mug, but the current subgoal target (yellow-and-white mug) is still reachable and the task can continue.\"}",
+     "new_tokens": 71,
+     "prompt_tokens": 4097,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.672348998719826,
+     "vit_ms": 80.45001199934632,
+     "inject_ms": 0.8380160143133253,
+     "restore_ms": 0.0,
+     "prefill_ms": 335.53357201162726,
+     "decode_ms": 720.2091620129067,
+     "call_ms": 1146.7031110369135,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 971.692339022411,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The yellow-and-white mug is still on the table near the red patterned mug, and the gripper is positioned around it but it has not yet been placed on the nearby plate with the red rim.\"}",
+     "new_tokens": 54,
+     "prompt_tokens": 4097,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.457243024371564,
+     "vit_ms": 80.64059499884024,
+     "inject_ms": 0.9243180102203041,
+     "restore_ms": 0.0,
+     "prefill_ms": 336.9430970051326,
+     "decode_ms": 543.7270859838463,
+     "call_ms": 971.692339022411,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 5,
+  "episode": 0,
+  "instruction": "pick up the book and place it in the back compartment of the caddy",
+  "success": true,
+  "control_steps": 170,
+  "executor_queries": 17,
+  "planner_ms": 2158.951847057324,
+  "switch_ms": 5340.464522014372,
+  "subgoals_initial": [
+   "Pick up the black book and place it in the back compartment of the brown caddy"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t5_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 489.82218801393174,
+    "detail": {
+     "text": "{\"subgoals\":[\"Pick up the black book and place it in the back compartment of the brown caddy\"],\"ordered\":false}",
+     "new_tokens": 26,
+     "prompt_tokens": 2129,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.560144014656544,
+     "vit_ms": 41.76721998373978,
+     "inject_ms": 0.6902590102981776,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.01100200368091,
+     "decode_ms": 266.7935630015563,
+     "call_ms": 489.82218801393174,
+     "parse_ok": true,
+     "subgoals": [
+      "Pick up the black book and place it in the back compartment of the brown caddy"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5340.464522014372,
+    "detail": {
+     "instruction": "Pick up the black book and place it in the back compartment of the brown caddy",
+     "cached": false,
+     "encode_cpu_ms": 5106.219733017497,
+     "set_prompt_ms": 234.2447889968753
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 772.783298016293,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the black book and is positioned near the brown caddy, but the book has not yet been placed in the back compartment of the caddy.\"}",
+     "new_tokens": 47,
+     "prompt_tokens": 4080,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.887243999401107,
+     "vit_ms": 80.67997300531715,
+     "inject_ms": 0.8398050267715007,
+     "restore_ms": 0.0,
+     "prefill_ms": 314.738254994154,
+     "decode_ms": 366.63802099064924,
+     "call_ms": 772.783298016293,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 896.3463610270992,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The black book is no longer on the table and the gripper is positioned at the brown caddy, but the book is not clearly visible placed in the back compartment of the caddy yet.\"}",
+     "new_tokens": 52,
+     "prompt_tokens": 4080,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.57712100353092,
+     "vit_ms": 80.46561302035116,
+     "inject_ms": 0.8196599956136197,
+     "restore_ms": 0.0,
+     "prefill_ms": 313.194565998856,
+     "decode_ms": 492.2894010087475,
+     "call_ms": 896.3463610270992,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 5,
+  "episode": 1,
+  "instruction": "pick up the book and place it in the back compartment of the caddy",
+  "success": true,
+  "control_steps": 177,
+  "executor_queries": 18,
+  "planner_ms": 2076.9686400017235,
+  "switch_ms": 1.0974320175591856,
+  "subgoals_initial": [
+   "Pick up the black book and place it in the back compartment of the brown caddy"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t5_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 430.4768120055087,
+    "detail": {
+     "text": "{\"subgoals\":[\"Pick up the black book and place it in the back compartment of the brown caddy\"],\"ordered\":false}",
+     "new_tokens": 26,
+     "prompt_tokens": 2129,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.556685984833166,
+     "vit_ms": 40.52769098780118,
+     "inject_ms": 0.73897500988096,
+     "restore_ms": 0.0,
+     "prefill_ms": 175.90853202273138,
+     "decode_ms": 206.744928000262,
+     "call_ms": 430.4768120055087,
+     "parse_ok": true,
+     "subgoals": [
+      "Pick up the black book and place it in the back compartment of the brown caddy"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 1.0974320175591856,
+    "detail": {
+     "instruction": "Pick up the black book and place it in the back compartment of the brown caddy",
+     "cached": true,
+     "encode_cpu_ms": 0.0015780096873641014,
+     "set_prompt_ms": 1.0958540078718215
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 821.926894976059,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the black book and it has not yet been placed in the back compartment of the brown caddy; the correct object is being moved toward the correct destination.\"}",
+     "new_tokens": 49,
+     "prompt_tokens": 4080,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.950380986789241,
+     "vit_ms": 80.61016397550702,
+     "inject_ms": 1.0138420038856566,
+     "restore_ms": 0.0,
+     "prefill_ms": 314.09440300194547,
+     "decode_ms": 417.2581050079316,
+     "call_ms": 821.926894976059,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 824.5649330201559,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The robot is holding the black book and positioning it over the brown caddy, but it has not clearly released the book into the back compartment yet.\"}",
+     "new_tokens": 43,
+     "prompt_tokens": 4080,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.65916900895536,
+     "vit_ms": 80.52361800218932,
+     "inject_ms": 0.8414190087933093,
+     "restore_ms": 0.0,
+     "prefill_ms": 315.91509899590164,
+     "decode_ms": 417.62562800431624,
+     "call_ms": 824.5649330201559,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 6,
+  "episode": 0,
+  "instruction": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+  "success": true,
+  "control_steps": 213,
+  "executor_queries": 22,
+  "planner_ms": 2095.653594995383,
+  "switch_ms": 11413.105585001176,
+  "subgoals_initial": [
+   "Place the white mug on the red-rimmed plate",
+   "Place the chocolate pudding to the right of the red-rimmed plate"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t6_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 519.6578450268134,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the white mug on the red-rimmed plate\",\"Place the chocolate pudding to the right of the red-rimmed plate\"],\"ordered\":false}",
+     "new_tokens": 35,
+     "prompt_tokens": 2132,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.376119010383263,
+     "vit_ms": 40.49670998938382,
+     "inject_ms": 0.6453540117945522,
+     "restore_ms": 0.0,
+     "prefill_ms": 176.5947999956552,
+     "decode_ms": 295.5448620195966,
+     "call_ms": 519.6578450268134,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the white mug on the red-rimmed plate",
+      "Place the chocolate pudding to the right of the red-rimmed plate"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 6018.576292000944,
+    "detail": {
+     "instruction": "Place the white mug on the red-rimmed plate",
+     "cached": false,
+     "encode_cpu_ms": 5775.076742982492,
+     "set_prompt_ms": 243.49954901845194
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 776.6823569545522,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The robot is holding the white textured mug and is positioned near the red-rimmed plate, but the mug has not yet been placed on the plate.\"}",
+     "new_tokens": 44,
+     "prompt_tokens": 4095,
+     "restored_tokens": 0,
+     "preprocess_ms": 10.539805982261896,
+     "vit_ms": 80.89174897759221,
+     "inject_ms": 0.967314001172781,
+     "restore_ms": 0.0,
+     "prefill_ms": 314.92918901494704,
+     "decode_ms": 369.3542989785783,
+     "call_ms": 776.6823569545522,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 799.3133930140175,
+    "detail": {
+     "text": "{\"status\":\"complete\",\"action\":\"next\",\"reason\":\"The white textured mug is visibly sitting on the red-rimmed plate, so the current placement subgoal is done.\"}",
+     "new_tokens": 36,
+     "prompt_tokens": 4095,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.486212016781792,
+     "vit_ms": 80.53106800070964,
+     "inject_ms": 0.8548900077585131,
+     "restore_ms": 0.0,
+     "prefill_ms": 316.1879839899484,
+     "decode_ms": 392.25323899881914,
+     "call_ms": 799.3133930140175,
+     "parse_ok": true,
+     "decision": "next",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "switch",
+    "wall_ms": 5394.529293000232,
+    "detail": {
+     "instruction": "Place the chocolate pudding to the right of the red-rimmed plate",
+     "cached": false,
+     "encode_cpu_ms": 5392.9990460164845,
+     "set_prompt_ms": 1.5302469837479293
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 6,
+  "episode": 1,
+  "instruction": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+  "success": true,
+  "control_steps": 202,
+  "executor_queries": 21,
+  "planner_ms": 2280.9924779867288,
+  "switch_ms": 8783.144059008919,
+  "subgoals_initial": [
+   "Place the white mug on the plate with red rim near the bottom of the table",
+   "Place the chocolate pudding bar to the right of the plate with red rim"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t6_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 609.6641290059779,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the white mug on the plate with red rim near the bottom of the table\",\"Place the chocolate pudding bar to the right of the plate with red rim\"],\"ordered\":false}",
+     "new_tokens": 40,
+     "prompt_tokens": 2132,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.585405993973836,
+     "vit_ms": 41.891211993061006,
+     "inject_ms": 0.6905950140208006,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.10153298988007,
+     "decode_ms": 386.39538301504217,
+     "call_ms": 609.6641290059779,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the white mug on the plate with red rim near the bottom of the table",
+      "Place the chocolate pudding bar to the right of the plate with red rim"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 4589.4329299917445,
+    "detail": {
+     "instruction": "Place the white mug on the plate with red rim near the bottom of the table",
+     "cached": false,
+     "encode_cpu_ms": 4587.89197599981,
+     "set_prompt_ms": 1.540953991934657
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 871.9631879939698,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The robot is holding the white textured mug and it has not yet been placed on the plate with the red rim; the target destination remains visible and reachable.\"}",
+     "new_tokens": 44,
+     "prompt_tokens": 4100,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.764185000676662,
+     "vit_ms": 80.54148199153133,
+     "inject_ms": 0.8590880024712533,
+     "restore_ms": 0.0,
+     "prefill_ms": 336.21099501033314,
+     "decode_ms": 444.5874379889574,
+     "call_ms": 871.9631879939698,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 799.3651609867811,
+    "detail": {
+     "text": "{\"status\":\"complete\",\"action\":\"next\",\"reason\":\"The white textured mug is visibly sitting on the plate with the red rim, so the current placement subgoal is done.\"}",
+     "new_tokens": 36,
+     "prompt_tokens": 4100,
+     "restored_tokens": 0,
+     "preprocess_ms": 10.218009003438056,
+     "vit_ms": 80.66605200292543,
+     "inject_ms": 0.9148950048256665,
+     "restore_ms": 0.0,
+     "prefill_ms": 337.34656698652543,
+     "decode_ms": 370.21963798906654,
+     "call_ms": 799.3651609867811,
+     "parse_ok": true,
+     "decision": "next",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "switch",
+    "wall_ms": 4193.711129017174,
+    "detail": {
+     "instruction": "Place the chocolate pudding bar to the right of the plate with red rim",
+     "cached": false,
+     "encode_cpu_ms": 4192.132522002794,
+     "set_prompt_ms": 1.5786070143803954
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 7,
+  "episode": 0,
+  "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+  "success": true,
+  "control_steps": 233,
+  "executor_queries": 24,
+  "planner_ms": 2445.725523051806,
+  "switch_ms": 5455.295184015995,
+  "subgoals_initial": [
+   "put both the alphabet soup and the cream cheese box in the basket"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t7_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 401.42097100033425,
+    "detail": {
+     "text": "{\"subgoals\":[\"put both the alphabet soup and the cream cheese box in the basket\"],\"ordered\":false}",
+     "new_tokens": 22,
+     "prompt_tokens": 2127,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.364453991409391,
+     "vit_ms": 40.59405898442492,
+     "inject_ms": 0.7070850115269423,
+     "restore_ms": 0.0,
+     "prefill_ms": 176.5357149997726,
+     "decode_ms": 177.2196580132004,
+     "call_ms": 401.42097100033425,
+     "parse_ok": true,
+     "subgoals": [
+      "put both the alphabet soup and the cream cheese box in the basket"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5455.295184015995,
+    "detail": {
+     "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+     "cached": false,
+     "encode_cpu_ms": 5218.4296209889,
+     "set_prompt_ms": 236.86556302709505
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 1021.7150580137968,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the blue-and-yellow can, which appears to be the alphabet soup can, and is moving it toward the woven basket with the metal rim. The small blue cream cheese box is still on the table, so both items are not yet in the basket.\"}",
+     "new_tokens": 68,
+     "prompt_tokens": 4074,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.940808988176286,
+     "vit_ms": 80.65916298073716,
+     "inject_ms": 0.8494000067003071,
+     "restore_ms": 0.0,
+     "prefill_ms": 314.8175720125437,
+     "decode_ms": 615.4481140256394,
+     "call_ms": 1021.7150580137968,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 1022.5894940376747,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The cream cheese box is still on the table near the gripper, and the alphabet soup can is still on the table rather than in the basket. The basket already contains a dark can, but the target cream cheese box and alphabet soup can are not clearly placed in the basket yet.\"}",
+     "new_tokens": 70,
+     "prompt_tokens": 4074,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.956429013982415,
+     "vit_ms": 82.10680101183243,
+     "inject_ms": 0.8984750020317733,
+     "restore_ms": 0.0,
+     "prefill_ms": 313.2298720011022,
+     "decode_ms": 616.3979170087259,
+     "call_ms": 1022.5894940376747,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 7,
+  "episode": 1,
+  "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+  "success": true,
+  "control_steps": 235,
+  "executor_queries": 24,
+  "planner_ms": 2371.822350018192,
+  "switch_ms": 0.9645000100135803,
+  "subgoals_initial": [
+   "put both the alphabet soup and the cream cheese box in the basket"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t7_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 399.85384498140775,
+    "detail": {
+     "text": "{\"subgoals\":[\"put both the alphabet soup and the cream cheese box in the basket\"],\"ordered\":false}",
+     "new_tokens": 22,
+     "prompt_tokens": 2127,
+     "restored_tokens": 0,
+     "preprocess_ms": 5.744580994360149,
+     "vit_ms": 40.55403498932719,
+     "inject_ms": 0.6193419976625592,
+     "restore_ms": 0.0,
+     "prefill_ms": 175.58439300046302,
+     "decode_ms": 177.35149399959482,
+     "call_ms": 399.85384498140775,
+     "parse_ok": true,
+     "subgoals": [
+      "put both the alphabet soup and the cream cheese box in the basket"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 0.9645000100135803,
+    "detail": {
+     "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+     "cached": true,
+     "encode_cpu_ms": 0.0015450059436261654,
+     "set_prompt_ms": 0.9629550040699542
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 897.8470250149257,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The robot is holding the blue-and-yellow can and moving it toward the woven basket, but the small blue cream cheese box is still on the table and neither item is clearly inside the basket yet.\"}",
+     "new_tokens": 52,
+     "prompt_tokens": 4074,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.657440998125821,
+     "vit_ms": 80.70228100405075,
+     "inject_ms": 0.9190999844577163,
+     "restore_ms": 0.0,
+     "prefill_ms": 315.0653320190031,
+     "decode_ms": 491.50287100928836,
+     "call_ms": 897.8470250149257,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 1074.1214800218586,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The red-and-green alphabet soup can is still on the table, and the small blue cream cheese box is still on the table near the orange bottle; neither is clearly in the woven basket yet. The gripper appears empty and can continue working on the correct objects.\"}",
+     "new_tokens": 66,
+     "prompt_tokens": 4074,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.993548010243103,
+     "vit_ms": 82.48996001202613,
+     "inject_ms": 0.8661540050525218,
+     "restore_ms": 0.0,
+     "prefill_ms": 313.18742598523386,
+     "decode_ms": 667.584392009303,
+     "call_ms": 1074.1214800218586,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 8,
+  "episode": 0,
+  "instruction": "put both moka pots on the stove",
+  "success": false,
+  "control_steps": 700,
+  "executor_queries": 70,
+  "planner_ms": 7875.087985798018,
+  "switch_ms": 10569.423521024873,
+  "subgoals_initial": [
+   "Place the moka pot with the black handle near the red-hot stove onto the red-hot stove",
+   "Place the other moka pot with the black handle onto the red-hot stove"
+  ],
+  "end_reason": "max_steps",
+  "video": "planner_eos_t8_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 667.7151739713736,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the moka pot with the black handle near the red-hot stove onto the red-hot stove\",\"Place the other moka pot with the black handle onto the red-hot stove\"],\"ordered\":false}",
+     "new_tokens": 44,
+     "prompt_tokens": 2122,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.650226976489648,
+     "vit_ms": 40.567121002823114,
+     "inject_ms": 0.6062299944460392,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.28556198137812,
+     "decode_ms": 445.60603401623666,
+     "call_ms": 667.7151739713736,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the moka pot with the black handle near the red-hot stove onto the red-hot stove",
+      "Place the other moka pot with the black handle onto the red-hot stove"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5152.473388006911,
+    "detail": {
+     "instruction": "Place the moka pot with the black handle near the red-hot stove onto the red-hot stove",
+     "cached": false,
+     "encode_cpu_ms": 4917.494740016991,
+     "set_prompt_ms": 234.9786479899194
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 852.3334889614489,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is reaching for the moka pot with the black handle closest to the red-hot stove, but that pot is still on the table and not yet placed on the red-hot stove.\"}",
+     "new_tokens": 52,
+     "prompt_tokens": 4094,
+     "restored_tokens": 0,
+     "preprocess_ms": 10.11358798132278,
+     "vit_ms": 82.05642900429666,
+     "inject_ms": 0.9554649877827615,
+     "restore_ms": 0.0,
+     "prefill_ms": 315.4148460016586,
+     "decode_ms": 443.7931609863881,
+     "call_ms": 852.3334889614489,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 852.7694900112692,
+    "detail": {
+     "text": "{\"status\":\"complete\",\"action\":\"next\",\"reason\":\"The moka pot with the black handle that was near the red-hot stove is now on the red-hot stove, with the gripper still near it and the other moka pot still on the table.\"}",
+     "new_tokens": 53,
+     "prompt_tokens": 4094,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.105827019084245,
+     "vit_ms": 80.78329300042242,
+     "inject_ms": 0.931481015868485,
+     "restore_ms": 0.0,
+     "prefill_ms": 316.41279597533867,
+     "decode_ms": 445.5360930005554,
+     "call_ms": 852.7694900112692,
+     "parse_ok": true,
+     "decision": "next",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "switch",
+    "wall_ms": 5416.950133017963,
+    "detail": {
+     "instruction": "Place the other moka pot with the black handle onto the red-hot stove",
+     "cached": false,
+     "encode_cpu_ms": 5415.704211016418,
+     "set_prompt_ms": 1.2459220015443861
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 923.7904799520038,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The moka pot with the black handle is on the red-hot stove, but the gripper still appears to be holding or contacting it, so the placement is not clearly released and complete yet.\"}",
+     "new_tokens": 52,
+     "prompt_tokens": 4071,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.385369980009273,
+     "vit_ms": 80.64831999945454,
+     "inject_ms": 0.8823829994071275,
+     "restore_ms": 0.0,
+     "prefill_ms": 315.49959297990426,
+     "decode_ms": 517.3748139932286,
+     "call_ms": 923.7904799520038,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 320,
+    "kind": "monitor",
+    "wall_ms": 900.8612709876616,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the moka pot with the black handle and has not yet placed it onto the red-hot stove; the other moka pot is already on the stove, so this target remains achievable.\"}",
+     "new_tokens": 55,
+     "prompt_tokens": 4071,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.284152009058744,
+     "vit_ms": 80.64792701043189,
+     "inject_ms": 0.8561909780837595,
+     "restore_ms": 0.0,
+     "prefill_ms": 315.60664699645713,
+     "decode_ms": 494.46635399363004,
+     "call_ms": 900.8612709876616,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 400,
+    "kind": "monitor",
+    "wall_ms": 850.9283919702284,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the moka pot with the black handle and has not yet placed it on the red-hot stove; the other moka pot is already on the stove, so the target remains achievable.\"}",
+     "new_tokens": 55,
+     "prompt_tokens": 4071,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.373837994644418,
+     "vit_ms": 80.5884059809614,
+     "inject_ms": 0.8373160089831799,
+     "restore_ms": 0.0,
+     "prefill_ms": 315.33217799733393,
+     "decode_ms": 444.7966539883055,
+     "call_ms": 850.9283919702284,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 480,
+    "kind": "monitor",
+    "wall_ms": 1000.4097890050616,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the moka pot with the black handle, and the red-hot stove already has one moka pot on it. The held moka pot has not yet been placed onto the red-hot stove, but the robot is still able to complete the placement.\"}",
+     "new_tokens": 68,
+     "prompt_tokens": 4071,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.286371001508087,
+     "vit_ms": 80.60291898436844,
+     "inject_ms": 0.806641997769475,
+     "restore_ms": 0.0,
+     "prefill_ms": 315.6964140071068,
+     "decode_ms": 594.0174430143088,
+     "call_ms": 1000.4097890050616,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 560,
+    "kind": "monitor",
+    "wall_ms": 924.7687579772901,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the moka pot with the black handle and has not yet placed it onto the red-hot stove; the other moka pot is already on the stove, so the target remains achievable.\"}",
+     "new_tokens": 55,
+     "prompt_tokens": 4071,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.331618988653645,
+     "vit_ms": 80.72352601448074,
+     "inject_ms": 0.9137689776252955,
+     "restore_ms": 0.0,
+     "prefill_ms": 315.1657810085453,
+     "decode_ms": 518.6340629879851,
+     "call_ms": 924.7687579772901,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   },
+   {
+    "step": 640,
+    "kind": "monitor",
+    "wall_ms": 901.5111429616809,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the moka pot with the black handle and has not yet placed it onto the red-hot stove; the other moka pot is already on the stove, so the target remains achievable.\"}",
+     "new_tokens": 55,
+     "prompt_tokens": 4071,
+     "restored_tokens": 0,
+     "preprocess_ms": 10.00587100861594,
+     "vit_ms": 83.14729799167253,
+     "inject_ms": 0.8769889827817678,
+     "restore_ms": 0.0,
+     "prefill_ms": 313.69657098548487,
+     "decode_ms": 493.7844139931258,
+     "call_ms": 901.5111429616809,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 8,
+  "episode": 1,
+  "instruction": "put both moka pots on the stove",
+  "success": true,
+  "control_steps": 366,
+  "executor_queries": 37,
+  "planner_ms": 4232.688639080152,
+  "switch_ms": 9904.01281096274,
+  "subgoals_initial": [
+   "Place the moka pot with the black handle near the red burner onto the red burner on the grey stove base",
+   "Place the other moka pot with the black handle onto the grey stove base beside the red burner"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t8_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 730.4080949979834,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the moka pot with the black handle near the red burner onto the red burner on the grey stove base\",\"Place the other moka pot with the black handle onto the grey stove base beside the red burner\"],\"ordered\":false}",
+     "new_tokens": 51,
+     "prompt_tokens": 2122,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.4956290007103235,
+     "vit_ms": 40.6365169910714,
+     "inject_ms": 0.7156750070862472,
+     "restore_ms": 0.0,
+     "prefill_ms": 176.85741098830476,
+     "decode_ms": 505.7028630108107,
+     "call_ms": 730.4080949979834,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the moka pot with the black handle near the red burner onto the red burner on the grey stove base",
+      "Place the other moka pot with the black handle onto the grey stove base beside the red burner"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 4638.91342797433,
+    "detail": {
+     "instruction": "Place the moka pot with the black handle near the red burner onto the red burner on the grey stove base",
+     "cached": false,
+     "encode_cpu_ms": 4405.074662994593,
+     "set_prompt_ms": 233.83876497973688
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 852.5833990424871,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is positioned at the moka pot with the black handle near the red burner, but that moka pot is not yet on the red burner on the grey stove base.\"}",
+     "new_tokens": 50,
+     "prompt_tokens": 4101,
+     "restored_tokens": 0,
+     "preprocess_ms": 10.10420499369502,
+     "vit_ms": 80.86518500931561,
+     "inject_ms": 0.8853330218698829,
+     "restore_ms": 0.0,
+     "prefill_ms": 338.0381570023019,
+     "decode_ms": 422.69051901530474,
+     "call_ms": 852.5833990424871,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 901.5262460161466,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The moka pot with the black handle is positioned on the red burner on the grey stove base, but the gripper is still engaged with it, so the placement is not clearly released and complete yet.\"}",
+     "new_tokens": 54,
+     "prompt_tokens": 4101,
+     "restored_tokens": 0,
+     "preprocess_ms": 8.792979002464563,
+     "vit_ms": 80.72897701640613,
+     "inject_ms": 0.9135000000242144,
+     "restore_ms": 0.0,
+     "prefill_ms": 338.60717600327916,
+     "decode_ms": 472.48361399397254,
+     "call_ms": 901.5262460161466,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 824.3657470447943,
+    "detail": {
+     "text": "{\"status\":\"complete\",\"action\":\"next\",\"reason\":\"The moka pot with the black handle is visibly positioned on the red burner on the grey stove base, so the current placement subgoal is done.\"}",
+     "new_tokens": 42,
+     "prompt_tokens": 4101,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.35022599878721,
+     "vit_ms": 80.70335898082703,
+     "inject_ms": 0.8330670243594795,
+     "restore_ms": 0.0,
+     "prefill_ms": 337.5378280179575,
+     "decode_ms": 395.94126702286303,
+     "call_ms": 824.3657470447943,
+     "parse_ok": true,
+     "decision": "next",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "switch",
+    "wall_ms": 5265.09938298841,
+    "detail": {
+     "instruction": "Place the other moka pot with the black handle onto the grey stove base beside the red burner",
+     "cached": false,
+     "encode_cpu_ms": 5263.7544030149,
+     "set_prompt_ms": 1.3449799735099077
+    }
+   },
+   {
+    "step": 320,
+    "kind": "monitor",
+    "wall_ms": 923.8051519787405,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The moka pot with the black handle is being positioned on the grey stove base near the red burner, but the gripper is still engaged and the placement is not clearly released and settled yet.\"}",
+     "new_tokens": 52,
+     "prompt_tokens": 4075,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.294001996750012,
+     "vit_ms": 80.63053898513317,
+     "inject_ms": 0.8212469983845949,
+     "restore_ms": 0.0,
+     "prefill_ms": 315.69903099443763,
+     "decode_ms": 517.360333004035,
+     "call_ms": 923.8051519787405,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 1
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 9,
+  "episode": 0,
+  "instruction": "put the yellow and white mug in the microwave and close it",
+  "success": true,
+  "control_steps": 241,
+  "executor_queries": 25,
+  "planner_ms": 3070.2849350636825,
+  "switch_ms": 4861.7619239958,
+  "subgoals_initial": [
+   "Place the yellow-and-white mug into the black microwave and close the microwave door"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t9_e0/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 519.354450982064,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the yellow-and-white mug into the black microwave and close the microwave door\"],\"ordered\":false}",
+     "new_tokens": 24,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.474797992268577,
+     "vit_ms": 40.50689798896201,
+     "inject_ms": 0.6061810126993805,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.6616449963767,
+     "decode_ms": 297.10492899175733,
+     "call_ms": 519.354450982064,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the yellow-and-white mug into the black microwave and close the microwave door"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 4861.7619239958,
+    "detail": {
+     "instruction": "Place the yellow-and-white mug into the black microwave and close the microwave door",
+     "cached": false,
+     "encode_cpu_ms": 4860.301858978346,
+     "set_prompt_ms": 1.4600650174543262
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 777.5314100144897,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the yellow-and-white mug and is positioned near the black microwave, but the mug is not yet inside the microwave and the door is not closed.\"}",
+     "new_tokens": 47,
+     "prompt_tokens": 4075,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.906733990646899,
+     "vit_ms": 82.9415830085054,
+     "inject_ms": 0.9282820101361722,
+     "restore_ms": 0.0,
+     "prefill_ms": 313.48580500343814,
+     "decode_ms": 370.26900600176305,
+     "call_ms": 777.5314100144897,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 874.9931259953883,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The yellow-and-white mug is no longer on the open table and appears to be at the black microwave area, but the microwave door is not clearly closed yet, so the subgoal is not complete.\"}",
+     "new_tokens": 53,
+     "prompt_tokens": 4075,
+     "restored_tokens": 0,
+     "preprocess_ms": 10.120056016603485,
+     "vit_ms": 80.74065897380933,
+     "inject_ms": 0.8637270075269043,
+     "restore_ms": 0.0,
+     "prefill_ms": 314.05040598474443,
+     "decode_ms": 469.2182780127041,
+     "call_ms": 874.9931259953883,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 240,
+    "kind": "monitor",
+    "wall_ms": 898.4059480717406,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The yellow-and-white mug is no longer on the open table and appears to be at or inside the black microwave area, but the microwave door is not clearly closed yet, so the subgoal is not complete.\"}",
+     "new_tokens": 55,
+     "prompt_tokens": 4075,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.37554900883697,
+     "vit_ms": 80.85149902035482,
+     "inject_ms": 0.9186050156131387,
+     "restore_ms": 0.0,
+     "prefill_ms": 316.3491010200232,
+     "decode_ms": 490.9111940069124,
+     "call_ms": 898.4059480717406,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ },
+ {
+  "mode": "planner_eos",
+  "task": 9,
+  "episode": 1,
+  "instruction": "put the yellow and white mug in the microwave and close it",
+  "success": true,
+  "control_steps": 228,
+  "executor_queries": 23,
+  "planner_ms": 2140.37289499538,
+  "switch_ms": 5507.3273779999,
+  "subgoals_initial": [
+   "Place the yellow-and-white mug into the open microwave and close the microwave door"
+  ],
+  "end_reason": "success",
+  "video": "planner_eos_t9_e1/episode.mp4",
+  "events": [
+   {
+    "step": 0,
+    "kind": "decompose",
+    "wall_ms": 539.18067397899,
+    "detail": {
+     "text": "{\"subgoals\":[\"Place the yellow-and-white mug into the open microwave and close the microwave door\"],\"ordered\":false}",
+     "new_tokens": 24,
+     "prompt_tokens": 2126,
+     "restored_tokens": 0,
+     "preprocess_ms": 6.422816979466006,
+     "vit_ms": 40.52794899325818,
+     "inject_ms": 0.6452889938373119,
+     "restore_ms": 0.0,
+     "prefill_ms": 174.71705202478915,
+     "decode_ms": 316.8675669876393,
+     "call_ms": 539.18067397899,
+     "parse_ok": true,
+     "subgoals": [
+      "Place the yellow-and-white mug into the open microwave and close the microwave door"
+     ]
+    }
+   },
+   {
+    "step": 0,
+    "kind": "switch",
+    "wall_ms": 5507.3273779999,
+    "detail": {
+     "instruction": "Place the yellow-and-white mug into the open microwave and close the microwave door",
+     "cached": false,
+     "encode_cpu_ms": 5505.95167701249,
+     "set_prompt_ms": 1.3757009874098003
+    }
+   },
+   {
+    "step": 80,
+    "kind": "monitor",
+    "wall_ms": 825.1155210309662,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The gripper is holding the yellow-and-white mug and is positioned near the open black microwave, but the mug is not yet clearly inside the microwave and the door is still open.\"}",
+     "new_tokens": 49,
+     "prompt_tokens": 4075,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.817067009862512,
+     "vit_ms": 80.66228701500222,
+     "inject_ms": 0.8791149884928018,
+     "restore_ms": 0.0,
+     "prefill_ms": 314.3851190106943,
+     "decode_ms": 419.37193300691433,
+     "call_ms": 825.1155210309662,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   },
+   {
+    "step": 160,
+    "kind": "monitor",
+    "wall_ms": 776.076699985424,
+    "detail": {
+     "text": "{\"status\":\"in_progress\",\"action\":\"continue\",\"reason\":\"The yellow-and-white mug is being positioned at the open microwave, but it is not clearly inside the microwave yet and the door is still open.\"}",
+     "new_tokens": 42,
+     "prompt_tokens": 4075,
+     "restored_tokens": 0,
+     "preprocess_ms": 9.856129996478558,
+     "vit_ms": 80.72896802332252,
+     "inject_ms": 0.8280329930130392,
+     "restore_ms": 0.0,
+     "prefill_ms": 316.1089909845032,
+     "decode_ms": 368.55457798810676,
+     "call_ms": 776.076699985424,
+     "parse_ok": true,
+     "decision": "continue",
+     "subgoal_index": 0
+    }
+   }
+  ]
+ }
+]

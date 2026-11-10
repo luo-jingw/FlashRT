@@ -1,0 +1,2 @@
+# Per-episode directories (planner input JPEGs and every episode video) stay local; videos/ keeps selected episodes.
+runs/*/
