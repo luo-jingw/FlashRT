@@ -30,6 +30,11 @@ Jetson Thor 上（官方模型）由 6.40 s 降到 2.61 s，从高于 5.33 s 的
 官方模型 3 次 `next` 里 2 次变成 `continue`、1 次 `continue` 变成 `next`，master 6 次 `next` 里 1 次变成 `continue`；对齐复用两个模型都是
 27 / 27 不变。5090 上合计 12 次干预决策，完整复用改了 6 次，对齐复用 0 次；Thor 上完整复用 3 / 3 不变。这一条仍是小样本上的观察；它说明近似手段的评估要单独看干预决策，平均的文本一致率看不出这种变化。
 
+**Finding 5：Thor 的 prefill 线性注意力改走 5090 的 `wy_lt` 分块路径后，对齐复用 + 闭合即停由 2.61 s 降到 1.77 s，
+但 47 次调用里有 3 次参考决策与 Thor 原来的路径不同。** 同一运行内，智能体路径与该运行自己的 `generate` 47 / 47 决策相同；
+变化的 3 次在该运行的每一格里都一样，原来的路径在四轮重复运行里没有改过决策，所以是换后端带来的。
+Thor 原来的路径与 5090 在同 47 次上也差 3 次（不是同 3 次）；与录制的 master 决策的一致：`wy_lt` 43 / 47，原来的路径 44 / 47，5090 43 / 47。
+
 ![monitor 调用的组成](fig_structure_rtx_master.png)
 
 ![从调用开始到决策可用（master）](fig_latency_rtx_master.png)
@@ -162,19 +167,53 @@ Thor 为 `THOR_STATUS_SUMMARY.md` `1111_h12h11h9` 轮 H11（GPU 上另有一个�
 - LoRA 合并 master、录制的回复（5090，`monitor_call_sim_rtx_master.json`）：对齐复用 + 闭合即停 316 ms，27 / 27，含 6 / 6 次 `next`；
   完整复用 26 / 27（t1e1 第 240 步 `next` → `continue`）。
 
+## 结果（Jetson Thor，prefill 线性注意力走 `wy_lt`）
+
+`THOR_STATUS_SUMMARY.md` `1111_h14h13` 轮 H13：`FLASHRT_QWEN36_THOR_LIN_PREFILL=parent`、`FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND=wy_lt`，
+H8 与 H11 的 47 次调用（ep0 / ep43 与闭环干预回合，腕部 224），参考为同一进程里模型自己的 `generate`，GPU 空闲。
+"原来的路径"为 H8 与 H11 两次运行（`native` 逐步递归，H11 时 GPU 上另有一个进程）。
+
+每格对同一运行的参考比较；"原来"一列为两次运行合起来的 47 次调用。
+
+| 前缀 | 解码 | `wy_lt` 到决策可用 ms | 原来 | prefill `wy_lt` / 原来 | 回复相同 `wy_lt` / 原来 | action 相同 `wy_lt` / 原来 |
+|---|---|---|---|---|---|---|
+| generate | 整段 | **4 769** | 6 396 | 2 284 / 3 982 | 44/47 / 41/47 | 46/47 / 47/47 |
+| 无复用 | 整段 | **4 782** | 6 471 | 2 286 / 3 983 | 41/47 / 40/47 | 46/47 / 47/47 |
+| 无复用 | 闭合即停 | **3 000** | 4 697 | 2 286 / 3 982 | – | 46/47 / 47/47 |
+| 对齐 | 整段 | **3 542** | 4 389 | 1 181 / 2 026 | 45/47 / 37/47 | 46/47 / 47/47 |
+| 对齐 | 闭合即停 | **1 768** | 2 613 | 1 181 / 2 026 | – | 46/47 / 47/47 |
+| 完整 | 整段 | **3 202** | 3 722 | 844 / 1 442 | 0/47 / 39/47 | 44/47 / 47/47 |
+| 完整 | 闭合即停 | **1 428** | 2 028 | 845 / 1 442 | – | 44/47 / 47/47 |
+
+- 对齐复用 + 闭合即停：中位 1 768 ms，范围 1 673–3 465 ms，第二大 1 934 ms；原来的路径 2 613 ms（2 516–2 852）。少 845 ms（32 %），
+  来自 prefill（−845 ms）；ViT 134 ms、解码 428 ms 不变。3 465 ms 的一次（t1e1 第 80 步）回复以一段文字开头，`action` 在第 69 个 token 才闭合。
+- 各格 46 / 47 缺的那次是 ep43 第 800 步：不计时的参考 `continue`，计时的 `generate` 与各格 `replan`；运行间差异，见下节。
+- 参考决策与原来的路径不同的 3 次：t0e1 第 240 步 `next` → `continue`，t0e1 第 480 步 `continue` → `replan`，t8e1 第 240 步
+  `continue` → `next`；`next` 仍是 3 次（t6e0 第 160 步、t6e1 第 160 步、t8e1 第 240 步）。原来的路径与 5090 不同的 3 次是 ep43 第 800 步、
+  t6e1 第 160 步、t8e1 第 240 步。
+- 完整复用：回复 0 / 47 相同、决策 3 次不同，与 5090 的完整复用同一表现；原来的路径完整复用回复 39 / 47、决策 47 / 47 相同。
+  逐步递归不依赖分块边界，WY 分块依赖：截在 2 641 与截在 2 048 时的分块不同（推断）。
+- MTP 每次尝试接受的 token：`generate` 1.77（原来 1.83，5090 1.85），对齐整段 1.72（1.78），对齐闭合即停 1.75（1.78）；解码每 token 31.5 ms（30.3）。
+- capsule：对齐 2 048 token 构建 1 391 ms（原来 2 243），完整 2 641 token 1 722 ms（2 812）。
+
 ## 运行间差异（官方 Qwen3.8-27B，ep0 / ep43 腕部 224）
 
 `reply_repeat.py`：每次调用连续 5 次 `generate`，再用 prefill 给第一次回复的第 0 个 token、action 值首 token、首个不同 token
 打 top-2 margin。
 
-| | RTX 5090 | Jetson Thor（`1111_h12h11h9` H12） |
-|---|---|---|
-| 第 2–5 次与第 1 次相同 | 80 / 80 | 44 / 80 |
-| 5 次全部相同的调用 | 20 / 20 | 7 / 20 |
-| 决策 | 95 `continue`、5 `replan`（ep43 第 800 步） | 100 `continue` |
-| action 值首 token 的 margin 中位（最小） | 3.06（0.25） | 3.25（0.50） |
+两种顺序：`back_to_back` 每次调用的 5 次重复连续执行，第 1 次紧跟上一个调用的三次打分 prefill、第 2–5 次紧跟同一提示词的生成；
+`after_previous` 每次重复之前先生成一次上一个调用（输出丢弃）。
 
-- Thor 上的差异都在 `reason` 文本或开头的围栏；决策在 Thor 上 100 / 100 次相同。
+| | RTX 5090 `back_to_back` | RTX 5090 `after_previous` | Thor `back_to_back`（`1111_h12h11h9` H12，GPU 上另有进程） | Thor `after_previous`（`1111_h14h13` H14，GPU 空闲） |
+|---|---|---|---|---|
+| 第 2–5 次与第 1 次相同 | 80 / 80 | 80 / 80 | 44 / 80 | 79 / 80 |
+| 5 次全部相同的调用 | 20 / 20 | 20 / 20 | 7 / 20 | 19 / 20 |
+| 决策 | 95 `continue`、5 `replan`（ep43 第 800 步） | 同左 | 100 `continue` | 100 `continue` |
+| action 值首 token 的 margin 中位（最小） | 3.06（0.25） | – | 3.25（0.50） | – |
+
+- Thor 上的差异都在 `reason` 文本或开头的围栏；决策在 Thor 上两种顺序都是 100 / 100 次相同。
+- H14 唯一不同的一次（ep43 第 240 步第 2 次）在第 33 个 token，打分 margin 0.75。
+- 前一次调用固定之后 Thor 的回复可重复；H12 与 H14 之间顺序与 GPU 上是否另有进程同时变了，各自的作用见 issues.md ISSUE-114。
 - 5090 上 4 次调用的 action margin 低于 0.7（`continue` 与 `re`plan 之间）；ep43 第 160 / 800 步打分 prefill 的 top-1 与生成的 token
   不同。ep43 第 800 步两台机器的决策不同（5090 `replan`，Thor `continue`），这次调用是接近平局的。
 
@@ -204,3 +243,5 @@ Thor 为 `THOR_STATUS_SUMMARY.md` `1111_h12h11h9` 轮 H11（GPU 上另有一个�
 | `reply_repeat_rtx_official.json` / `.log` | 运行间差异，RTX 5090（`back_to_back`） |
 | `reply_repeat_rtx_official_after_previous.json` / `.log` | 运行间差异，RTX 5090（`after_previous`，20 / 20 次调用 5 次全同） |
 | `reply_repeat_thor_official.json` | 运行间差异，Jetson Thor（`1111_h12h11h9` 轮 H12） |
+| `reply_repeat_thor_official_after_previous.json` | 运行间差异，Jetson Thor（`after_previous`，`1111_h14h13` 轮 H14） |
+| `monitor_call_thor_official_wylt.json` | Jetson Thor，prefill 线性注意力走 `wy_lt`，H8 与 H11 的 47 次调用（`1111_h14h13` 轮 H13） |

@@ -65,8 +65,9 @@ chunk 0；chunk 1 的中位与最小值同一量级（`gdn_variant_drift_{rtx,th
 
 `FLASHRT_QWEN36_THOR_LIN_PREFILL=parent`（`flash_rt/frontends/torch/qwen36_thor.py`）让 Thor 前端 K > `_K_save_max`
 的线性注意力层走父类 K-row 分块分支，后端由 `FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND` 决定（Thor 默认 `native`；
-设为 `wy_lt` 即本实验的 `wy_lt` 变体）。默认仍为 `thor`。它在 monitor 调用上的决策、MTP 接受率与耗时由 Thor 行 H13 测量
-（`opportunities.md` OPT-040 candidate 5）。
+设为 `wy_lt` 即本实验的 `wy_lt` 变体）。默认仍为 `thor`。monitor 调用上的实测（`THOR_STATUS_SUMMARY.md` `1111_h14h13` 轮 H13，
+47 次调用）：对齐复用 + 闭合即停 2 613 → 1 768 ms，MTP 每次尝试接受 1.83 → 1.77，参考决策与 `native` 运行差 3 次
+（`../monitor_call/README.md`，`opportunities.md` OPT-040 candidate 5）。
 
 ## 文件
 
