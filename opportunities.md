@@ -1838,6 +1838,19 @@ Measurements: `research/topics/wam-inference-acceleration/experiments/harness_re
    5090's per-layer time, not the 3.8x of the fp4 GEMMs. With the prefill of the aligned-capsule monitor call (2 026 ms,
    two chunks of which one is restored) scaled by the same 0.574, the call would go from 2.68 s to about 1.8 s
    (derived). `FLASHRT_QWEN36_THOR_LIN_PREFILL=parent` with `FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND=wy_lt` routes the
-   Thor's prefill linear-attention layers to that branch (default unchanged). Observation: Thor row H13, the H8 and
-   H11 call sets with the route: prefill and call ms, MTP accepted tokens per attempt, decisions against the `native`
-   runs of rounds `1110_h7h4bh8` and `1111_h12h11h9`.
+   Thor's prefill linear-attention layers to that branch (default unchanged).
+   Round `1111_h14h13` (H13, the route on the 47 calls of H8 and H11, GPU idle,
+   `monitor_call/monitor_call_thor_official_wylt.json`): prefill without a capsule 2 286 ms (`native` 3 982 ms),
+   with the aligned capsule 1 181 ms (2 025 ms); aligned capsule + stop at action 1 768 ms median (1 673-3 465 ms;
+   `native` on the same calls 2 613 ms, 2 516-2 852 ms), -845 ms, 32 %. The 3 465 ms call (t1e1 step 80) is a reply
+   that opens with prose and closes the action after 69 tokens. Decode per token 31.5 against 30.3 ms; MTP accepted
+   tokens per attempt 1.77 against 1.83 (`generate`), 1.75 against 1.78 (aligned + stop). Inside the run the agent
+   path keeps the decision of the run's own `generate` in 47 / 47 calls (aligned + stop and no capsule + stop). Against
+   the `native` runs the reference decision changes in 3 of 47 calls (t0e1 step 240 `next` -> `continue`, t0e1 step
+   480 `continue` -> `replan`, t8e1 step 240 `continue` -> `next`), in every cell of the run; the `native` path did not
+   change a decision between repeated runs in H8, H11, H12, H14. Thor `native` and the 5090 (`wy_lt`) differ in 3 of
+   the 47 as well (ep43 step 800, t6e1 step 160, t8e1 step 240). Agreement of the reference decision with the recorded
+   master decisions: `wy_lt` 43 / 47, `native` 44 / 47, 5090 43 / 47. The capsule cut at the first NOW image changes
+   the reply in 47 / 47 and the decision in 3 / 47 with the route (none with `native`), as on the 5090: a chunk
+   boundary at 2 641 instead of 2 048 changes the WY chunk scan's arithmetic (inference). The Thor default stays
+   `thor` until the planner's decision criterion is set (plan.md, Phase 8).

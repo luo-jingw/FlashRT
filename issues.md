@@ -1731,6 +1731,11 @@ replies of the same prompt in one process are not always token-identical.
   back per call): repetitions 2-5 equal the first in 44 of 80; all five are identical in 7 of 20 calls. RTX 5090,
   same script: 80 / 80. All 100 Thor decisions are `continue`.
 - H11 of the same round (27 closed-loop calls): the second `generate` equals the reference in 26 / 27.
+- Round `1111_h14h13` (H14, `reply_repeat.py thor after_previous`, the same 20 calls, every repetition preceded by a
+  `generate` of the previous call, GPU idle): repetitions 2-5 equal the first in 79 of 80; all five are identical in
+  19 of 20 calls. All 100 decisions are `continue`. RTX 5090, same order: 80 / 80.
+- H13 of the same round (GPU idle, prefill linear attention on `wy_lt`, 47 calls): the timed `generate` equals the
+  untimed reference `generate` of the same call in 44 / 47.
 
 ## Evidence
 
@@ -1752,25 +1757,39 @@ replies of the same prompt in one process are not always token-identical.
 - `1111_h12h11h9` H9: on the same layer inputs every correct linear-attention variant ends within cos 0.57-0.72 of the
   per-token path in the last-position logits, so a change in low bits early in the prefill moves logits by more than
   a 2.5-logit margin by the last layer.
+- GPU state per run: H8 idle, `generate` against reference 15 / 20 (the two `generate` calls follow different
+  operations); H11 and H12 with another process and MPS on the GPU; H13 and H14 idle. Idle alone (H8, H13) does not
+  make the two `generate` calls of a call equal; a fixed preceding operation on an idle GPU (H14) does, in 79 / 80.
+- H12 and H14 differ in two variables at once: the order and whether another process was on the GPU.
+- H14 against H12: the H14 reply equals the H12 first repetition in 12 of 20 calls and the H12 majority of
+  repetitions 2-5 in the other 8. The H12 first repetition followed scoring prefills, the H14 repetitions follow a
+  `generate`, so their predecessors differ.
+- H12 has single repetitions that differ in the middle of runs of identical ones (for example ep0 step 320: the
+  fourth differs, the third and fifth equal the first); the third and the fourth repetition both follow a `generate`
+  with the same reply.
+- H14's one differing repetition (ep43 step 240, the second) leaves at token 33, scored margin 0.75.
 
 ## Hypotheses
 
-- A kernel on the Thor path whose result depends on scheduling (atomics, split-K reductions, or an attention
-  reduction such as xqa) changes low bits of a logit; a greedy tie or near-tie then flips one token and the rest of
-  the reply follows. The 5090 path is reproducible on the same prompts.
 - State left by the previous call: a Thor-path buffer that a call reads before writing it (rows beyond the prompt, a
-  K-row scratch, a recurrent-state save slot) holds what the previous call left; the same predecessor gives the same
-  reply. This explains the calls where repetitions 2-5 agree with one another and not with the first; it does not
-  explain the single repetitions that differ in the middle of a run of identical ones.
-- H12 shows the decision unchanged in 100 / 100 Thor repetitions, with the varying tokens in the `reason` text or the
+  K-row scratch, a recurrent-state save slot) holds what the previous operation left; the same predecessor gives the
+  same reply. H14 (79 / 80 with a fixed predecessor) and H8 / H13 (idle GPU, different predecessors, not equal)
+  support it. It does not explain H12's single repetitions that differ between two identical neighbours.
+- A kernel on the Thor path whose result depends on scheduling (atomics, split-K or stream-K reductions, an attention
+  reduction such as xqa) changes low bits when another process shares the GPU (MPS), and a near-tie then flips one
+  token. This would explain H12's single repetitions in the middle of identical runs; H14 on an idle GPU has one such
+  repetition in 80.
+- Decisions: 100 / 100 Thor repetitions unchanged in both orders, with the varying tokens in the `reason` text or the
   fence.
 
 ## Next Experiment
 
-- H14: the H12 script with every repetition preceded by a `generate` of the previous call (`reply_repeat.py thor
-  after_previous`). Leftover state predicts five identical repetitions per call; a scheduling-dependent kernel
-  predicts differences as often as in H12.
-- Then the attention and GEMM kernels switched one at a time to a deterministic variant where one exists.
+- H15: the H12 order (`reply_repeat.py thor back_to_back`) on an idle GPU. Leftover state alone predicts repetitions
+  2-5 identical to one another in every call, with the first different in some; if repetitions 2-5 also differ
+  singly, as in H12, a source other than the predecessor exists on the idle GPU too. Comparing with H12 isolates the
+  effect of another process on the GPU, which is the co-location condition.
+- Then, if leftover state is confirmed, fill the Thor frontend's scratch and state buffers with a constant before each
+  call and find which buffer removes the dependence.
 
 ## Impact
 

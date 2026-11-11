@@ -995,6 +995,42 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 
 结论去向：本节；issues.md ISSUE-114（H12）；`opportunities.md` OPT-040 candidate 5（H9）；`research/topics/long-horizon-planner-executor/experiments/monitor_call/README.md` 的 Thor 一节（H11）；`research/topics/long-horizon-planner-executor/experiments/gdn_wy_thor/README.md`（H9）；`research/topics/long-horizon-planner-executor/thor_rationale.md`。`THOR_CHECKLIST.md` 的 H12、H11、H9 已删除。
 
+### `1111_h14h13` 轮：H14 前一次调用固定之后回复是否可重复，H13 prefill 线性注意力走 `wy_lt` 的 monitor 网格（commit `5eecfa45`）
+
+共同条件：HEAD `5eecfa45`，`emc_locked=null`；GPU **空闲**；未改时钟、未 sudo。`$OUT` = `$HOME/thor_val/1111_h14h13`。两份 JSON 已带回入库（`181e03ef`）：`monitor_call/reply_repeat_thor_official_after_previous.json`（sha256 `1312bae1…24b01b42c`）、`monitor_call/monitor_call_thor_official_wylt.json`（`e73738dc…3079f47365`）。官方 Qwen3.8-27B NVFP4。
+
+**H13**（`monitor_call/monitor_call_bench.py thor own`，`FLASHRT_QWEN36_THOR_LIN_PREFILL=parent`、`FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND=wy_lt`，`H13_env.log` 两个变量都在；H8 与 H11 的 47 次调用，腕部 224）。参考为同一进程里模型自己的 `generate`。"原来"为 `native` 路径的 H8（`1110_h7h4bh8`）与 H11（`1111_h12h11h9`）合起来的 47 次。
+
+| 前缀 | 解码 | 到决策可用中位 ms | 原来 | prefill | 原来 | action 相同 | 原来 |
+|---|---|---|---|---|---|---|---|
+| generate | 整段 | 4 769 | 6 396 | 2 284 | 3 982 | 46/47 | 47/47 |
+| 无复用 | 闭合即停 | 3 000 | 4 697 | 2 286 | 3 982 | 46/47 | 47/47 |
+| 对齐 | 闭合即停 | **1 768** | 2 613 | 1 181 | 2 026 | 46/47 | 47/47 |
+| 对齐 | 预知长度 | 1 757 | – | 1 181 | – | 46/47 | – |
+| 完整 | 闭合即停 | 1 428 | 2 028 | 845 | 1 442 | 44/47 | 47/47 |
+
+- 开关生效：无复用 prefill 2 286 ms（`native` 三轮 3 981–3 994 ms）。
+- 对齐复用 + 闭合即停：中位 1 768 ms，范围 1 673–3 465 ms，第二大 1 934 ms；同 47 次调用上 `native` 2 613 ms（2 516–2 852）。少 845 ms，全部来自 prefill（−845 ms）；ViT 134 ms、解码 428 ms 不变。3 465 ms 那次（t1e1 第 80 步）回复以一段文字开头，`action` 在第 69 个 token 闭合（`native` 那次为 17 个 token）。
+- 同一运行内：对齐 + 闭合即停、无复用 + 闭合即停与计时的 `generate` 47 / 47 决策相同；各格 46 / 47 缺的是 ep43 第 800 步，不计时的参考 `continue`、计时的 `generate` 与各格 `replan`。
+- 参考决策与 `native` 运行逐调用比较，不同 3 次：t0e1 第 240 步 `next` → `continue`，t0e1 第 480 步 `continue` → `replan`，t8e1 第 240 步 `continue` → `next`；三次在本运行的每一格里一致。`native` 在 H8、H11、H12、H14 的重复运行里没有改过决策。`native` 与 5090（`wy_lt`）在同 47 次上也差 3 次：ep43 第 800 步、t6e1 第 160 步、t8e1 第 240 步。
+- 与录制的 master 决策一致：`wy_lt` 43 / 47，`native` 44 / 47，5090 43 / 47。`next` 次数都是 3（`wy_lt`：t6e0 第 160 步、t6e1 第 160 步、t8e1 第 240 步）。
+- 完整复用（截在第一张 NOW 图）：回复 0 / 47 相同，决策 3 次不同（`native`：回复 39 / 47、决策 47 / 47），与 5090 完整复用同一表现。
+- MTP 每次尝试接受的 token：`generate` 1.77（`native` 1.83，5090 1.85），对齐闭合即停 1.75（1.78）；解码每 token 31.5 ms（30.3）。
+- capsule 构建：对齐 2 048 token 1 391 ms（`native` 2 243），完整 2 641 token 1 722 ms（2 812）。
+
+**H14**（`monitor_call/reply_repeat.py thor after_previous`，H12 的 20 次调用，每次重复之前先生成一次上一个调用）。
+
+| | H14（`after_previous`，GPU 空闲） | H12（`back_to_back`，GPU 上另有进程） | RTX 5090 两种顺序 |
+|---|---|---|---|
+| 第 2–5 次与第 1 次相同 | 79 / 80 | 44 / 80 | 80 / 80 |
+| 5 次全部相同的调用 | 19 / 20 | 7 / 20 | 20 / 20 |
+| 决策 | 100 `continue` | 100 `continue` | 95 `continue`、5 `replan` |
+
+- 唯一不同的一次：ep43 第 240 步第 2 次，第 33 个 token，打分 margin 0.75。
+- 按 H14 判据，前一次调用固定之后回复可重复，支持"前一次调用留下的状态"。H12 与 H14 之间顺序与 GPU 是否空闲同时变了；H8（GPU 空闲、两次 `generate` 前一次操作不同）为 15 / 20，所以空闲本身不能让回复相同。H12 第 2–5 次中间的单次不同（前后两次与第 1 次相同）用前一次调用的状态解释不了。
+
+结论去向：本节；`opportunities.md` OPT-040 candidate 5（H13）；issues.md ISSUE-114（H14）；`research/topics/long-horizon-planner-executor/experiments/monitor_call/README.md`；`research/topics/long-horizon-planner-executor/thor_rationale.md`；`plan.md` Phase 7 / 8。`THOR_CHECKLIST.md` 的 H14、H13 已删除，新增 H15。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |
