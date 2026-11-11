@@ -17,7 +17,8 @@ monitor 的提示词依次是系统提示、三张 BEFORE 图（回合第 0 步�
 
 **Finding 3：两者都拿掉以后，RTX 5090 上从调用开始到决策可用由 935 ms 降到 336 ms（master，腕部 224），
 1 150 ms 降到 482 ms（master，腕部 720），1 057 ms 降到 338 ms（官方模型，腕部 224），决策与回复跟原来逐 token 相同；
-Jetson Thor 上（官方模型）由 6.40 s 降到 2.61 s，从高于 5.33 s 的检查间隔变为低于它，20 次决策不变。**
+Jetson Thor 上（官方模型）由 6.40 s 降到 2.61 s，从高于 5.33 s 的检查间隔变为低于它，20 次决策不变；
+闭环干预回合的 27 次调用（含 3 次 `next`）上，两台机器都是 27 / 27 决策不变（5090 356 ms，Thor 2.68 s）。**
 做法：回合开始时把固定前缀的状态（线性注意力的递归状态、全注意力的 FP8 KV、MTP 尾部）存成一个 capsule，
 之后每次调用恢复它、只编码三张 NOW 图、只 prefill 剩下的 token；解码流按验证周期读出，`action` 的值闭合即停。
 前缀截在 prefill 分块（2 048 token）的整数倍上（"对齐复用"），结果与整段 prefill 逐 token 相同（59 / 59 次回复相同）。
@@ -25,8 +26,9 @@ Jetson Thor 上（官方模型）由 6.40 s 降到 2.61 s，从高于 5.33 s 的
 **Finding 4：前缀截在第一张 NOW 图（"完整复用"）再快 40–100 ms，但改变了全部 3 次非 `continue` 决策。**
 不对齐的前缀边界多出一个 prefill 分块切分，数值不同：master 的 57 次 `continue` 一次没变（回复文本 55 次变了），
 仅有的两次干预决策（`grasp_tool`、`next`）都变成了 `continue`；官方模型 19 次 `continue` 里 18 次不变、1 次回复变成空的 `{}`，
-唯一的 `replan` 变成了 `continue`。对齐复用下两个模型合计 79 / 79 次回复不变。样本只有 3 次干预，这一条是观察，不是统计结论；
-它说明近似手段的评估要单独看干预决策，平均的文本一致率看不出这种变化。
+唯一的 `replan` 变成了 `continue`。对齐复用下两个模型合计 79 / 79 次回复不变。闭环干预回合（5090，官方模型）上完整复用又改了
+3 次决策：3 次 `next` 里 2 次变成 `continue`，1 次 `continue` 变成 `next`；对齐复用 27 / 27 不变。合计 6 次干预里完整复用改了 5 次，
+这一条仍是小样本上的观察；它说明近似手段的评估要单独看干预决策，平均的文本一致率看不出这种变化。
 
 ![monitor 调用的组成](fig_structure_rtx_master.png)
 
@@ -135,9 +137,49 @@ capsule：对齐 2 048 token 176 MB，建一次 235–286 ms；完整 2 641 / 3 
 - 剩下的 2.6 s 里，对齐复用的 prefill（约 2.0 s）是大头。Thor 上 prefill 的 55 % 在线性注意力的 `native` 递归后端上，
   是 5090 WY 分块路径的约 32 倍（`opportunities.md` OPT-040 candidate 5）。
 
+## 结果（闭环干预回合，官方 Qwen3.8-27B，RTX 5090 与 Jetson Thor）
+
+调用：`../sim_closed_loop/calls/`，LIBERO 闭环里含 `next` 决策或失败的 6 个回合的 27 次 monitor 调用（腕部 224，4 089–4 105 token，
+`../sim_closed_loop/build_monitor_calls.py` 从运行记录与保存的画面重建）。参考回复为同一进程里模型自己的 `generate`。
+Thor 为 `THOR_STATUS_SUMMARY.md` `1111_h12h11h9` 轮 H11（GPU 上另有一个进程存在）；5090 为 `run_intervention_rtx.sh`。
+
+| 前缀 | 解码 | 5090 到决策可用 ms | Thor | Thor / 5090 | 5090 action 相同 | Thor action 相同 | 5090 / Thor 的 `next` 不变 |
+|---|---|---|---|---|---|---|---|
+| generate | 整段 | **969** | **6 472** | 6.7× | 27/27 | 27/27 | 3/3 / 3/3 |
+| 无复用 | 整段 | **992** | **6 471** | 6.5× | 27/27 | 27/27 | 3/3 / 3/3 |
+| 无复用 | 闭合即停 | **543** | **4 773** | 8.8× | 27/27 | 27/27 | 3/3 / 3/3 |
+| 对齐 | 整段 | **798** | **4 401** | 5.5× | 27/27 | 27/27 | 3/3 / 3/3 |
+| 对齐 | 闭合即停 | **356** | **2 684** | 7.5× | 27/27 | 27/27 | 3/3 / 3/3 |
+| 完整 | 整段 | **806** | **3 722** | 4.6× | 24/27 | 27/27 | 1/3 / 3/3 |
+| 完整 | 闭合即停 | **297** | **2 048** | 6.9× | 24/27 | 27/27 | 1/3 / 3/3 |
+
+- 参考决策：5090 `next` 3 次（t0e1 第 240 步、t6e0 第 160 步、t8e1 第 240 步），Thor `next` 3 次（t0e1 第 240 步、t6e0 第 160 步、
+  t6e1 第 160 步），其余 `continue`；两台机器 25 / 27 相同。闭环里做出决策的 LoRA 合并 master 在这 27 次里有 6 次 `next`。
+- 对齐复用 + 闭合即停：两台机器都是 27 / 27，Thor 最大 2 852 ms，低于 5.33 s。
+- 完整复用（5090）：t0e1 第 240 步、t8e1 第 240 步 `next` → `continue`，t6e1 第 160 步 `continue` → `next`；Thor 上同一格 27 / 27。
+- 回复文本：5090 generate / 无复用 / 对齐 27 / 27 相同，完整 0 / 27；Thor 对齐 25 / 27（运行间差异，issues.md ISSUE-114）。
+- MTP 每次尝试接受的 token：5090 1.83–1.90，Thor 1.78–1.83（generate、无复用、对齐的整段回复）。
+
+## 运行间差异（官方 Qwen3.8-27B，ep0 / ep43 腕部 224）
+
+`reply_repeat.py`：每次调用连续 5 次 `generate`，再用 prefill 给第一次回复的第 0 个 token、action 值首 token、首个不同 token
+打 top-2 margin。
+
+| | RTX 5090 | Jetson Thor（`1111_h12h11h9` H12） |
+|---|---|---|
+| 第 2–5 次与第 1 次相同 | 80 / 80 | 44 / 80 |
+| 5 次全部相同的调用 | 20 / 20 | 7 / 20 |
+| 决策 | 95 `continue`、5 `replan`（ep43 第 800 步） | 100 `continue` |
+| action 值首 token 的 margin 中位（最小） | 3.06（0.25） | 3.25（0.50） |
+
+- Thor 上的差异都在 `reason` 文本或开头的围栏；决策在 Thor 上 100 / 100 次相同。
+- 5090 上 4 次调用的 action margin 低于 0.7（`continue` 与 `re`plan 之间）；ep43 第 160 / 800 步打分 prefill 的 top-1 与生成的 token
+  不同。ep43 第 800 步两台机器的决策不同（5090 `replan`，Thor `continue`），这次调用是接近平局的。
+
 ## 范围与限制
 
-- 画面来自 LIBERO 数据集的成功演示，所以决策几乎都是 `continue`；两个模型合计干预决策只有 3 次。
+- 数据集回合（ep0 / 43 / 188）的画面来自 LIBERO 的成功演示，决策几乎都是 `continue`；闭环干预回合补了 3 次 `next`，
+  没有 `replan` 与工具动作。
   决策位置（第 9–11 个 token）由回复格式决定，与决策取值无关。
 - "闭合即停"不生成 `reason`。harness 若要记录解释，可以在执行端拿到决策之后再继续解码，放在关键路径之外；本实验没有测这一做法。
 - 只测规划器单独运行；与执行器共置时的数字见 `../../../wam-inference-acceleration/experiments/harness_replay_5090/README.md`。
@@ -153,3 +195,9 @@ capsule：对齐 2 048 token 176 MB，建一次 235–286 ms；完整 2 641 / 3 
 | `monitor_call_rtx_master.json` / `.log` | master 结果 |
 | `monitor_call_rtx_official.json` / `.log` | 官方模型结果 |
 | `monitor_call_thor_official.json` | Jetson Thor 官方模型结果（`THOR_STATUS_SUMMARY.md` `1110_h7h4bh8` 轮 H8） |
+| `run_intervention_rtx.sh` | RTX 5090 上闭环干预回合的两组运行（官方模型自己的回复；master 录制的回复） |
+| `monitor_call_sim_rtx_official.json` / `monitor_call_sim_rtx_master.json` / `monitor_call_sim_rtx.log` | 闭环干预回合，RTX 5090 |
+| `monitor_call_sim_thor_official.json` | 闭环干预回合，Jetson Thor（`1111_h12h11h9` 轮 H11） |
+| `reply_repeat.py` / `run_repeat_rtx.sh` | 运行间差异探针，`back_to_back` 与 `after_previous` 两种顺序 |
+| `reply_repeat_rtx_official.json` / `.log` | 运行间差异，RTX 5090 |
+| `reply_repeat_thor_official.json` | 运行间差异，Jetson Thor（`1111_h12h11h9` 轮 H12） |

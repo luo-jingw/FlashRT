@@ -1,0 +1,26 @@
+loaded: Qwen36VlTorchFrontendRtx Qwen36TorchFrontendRtx WY symbols: {'qwen36_gdn_wy_kkt_b64_bf16': True, 'qwen36_gdn_wy_solve_tril_b64_f32': True, 'qwen36_gdn_wy_recompute_wu_b64_bf16': True, 'qwen36_gdn_wy_chunk_h_b64_bf16': True, 'qwen36_gdn_wy_output_o_b64_bf16': True, 'linear_attn_gdn_wy_kkt_b64_bf16_cublaslt': True, 'linear_attn_gdn_wy_chunk_h_b64_bf16_mma_fla': True, 'linear_attn_gdn_wy_chunk_h_b64_bf16_cublaslt_f32gemm': True, 'linear_attn_gdn_wy_chunk_h_b64_bf16_cublaslt_f32state': True}
+captured 96 linear-attention layers, first chunk 2048 rows, reference per_token
+per_token       chunk 0: layer out cos median 1.000000 min 1.000000 (layer 0), state cos min 1.000000, ms/layer median 629.52
+per_token       chunk 1: layer out cos median 1.000000 min 1.000000 (layer 0), state cos min 1.000000, ms/layer median 625.00
+own             chunk 0: layer out cos median 0.999766 min 0.999386 (layer 50), state cos min 0.994326, ms/layer median 2.43
+own             chunk 1: layer out cos median 0.999753 min 0.999036 (layer 50), state cos min 0.996729, ms/layer median 2.43
+thor_native     chunk 0: layer out cos median 1.000000 min 0.999756 (layer 41), state cos min 0.999905, ms/layer median 14.24
+thor_native     chunk 1: layer out cos median 1.000000 min 0.999798 (layer 46), state cos min 0.999981, ms/layer median 14.18
+rtx_native      chunk 0: layer out cos median 1.000000 min 0.999755 (layer 41), state cos min 0.999905, ms/layer median 13.08
+rtx_native      chunk 1: layer out cos median 1.000000 min 0.999798 (layer 46), state cos min 0.999981, ms/layer median 13.02
+wy              chunk 0: layer out cos median 0.999766 min 0.999386 (layer 50), state cos min 0.994326, ms/layer median 22.07
+wy              chunk 1: layer out cos median 0.999754 min 0.999037 (layer 50), state cos min 0.996729, ms/layer median 21.82
+wy_lt           chunk 0: layer out cos median 0.999766 min 0.999386 (layer 50), state cos min 0.994326, ms/layer median 2.43
+wy_lt           chunk 1: layer out cos median 0.999753 min 0.999036 (layer 50), state cos min 0.996729, ms/layer median 2.43
+wy_lt_f32gemm   chunk 0: layer out cos median 0.996107 min -0.368914 (layer 1), state cos min 0.994326, ms/layer median 2.50
+wy_lt_f32gemm   chunk 1: layer out cos median 0.996503 min -0.487356 (layer 1), state cos min 0.996729, ms/layer median 2.50
+wy_lt_f32state  chunk 0: layer out cos median 0.999765 min 0.999383 (layer 50), state cos min 0.994326, ms/layer median 2.61
+wy_lt_f32state  chunk 1: layer out cos median 0.999751 min 0.999034 (layer 50), state cos min 0.996729, ms/layer median 2.60
+per_token       prompt: prefill 60570.9 ms, logits cos 1.000000, top-1 4754 equal True
+own             prompt: prefill 321.3 ms, logits cos 0.634709, top-1 71093 equal False
+thor_native     prompt: prefill 1448.2 ms, logits cos 0.696373, top-1 4754 equal True
+rtx_native      prompt: prefill 1335.9 ms, logits cos 0.722912, top-1 4754 equal True
+wy              prompt: prefill 2195.9 ms, logits cos 0.333364, top-1 220 equal False
+wy_lt           prompt: prefill 321.9 ms, logits cos 0.634709, top-1 71093 equal False
+wy_lt_f32gemm   prompt: prefill 330.1 ms, logits cos 0.581985, top-1 248046 equal False
+wy_lt_f32state  prompt: prefill 339.7 ms, logits cos 0.382932, top-1 220 equal False

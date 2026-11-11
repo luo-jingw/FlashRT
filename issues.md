@@ -1617,6 +1617,12 @@ Thor: replies against the RTX 5090 references, and decode ms per speculative cyc
   about 87.2 ms per cycle; the first / second generation after each idle gap: 5 s 87.3 / 164.9, 15 s 87.2 / 87.1,
   30 s 87.0 / 87.1 (third 95.8), 60 s 87.1 / 87.1, 120 s 96.7 / 95.4 ms (prefill 4 048 against about 3 980 ms). No
   gap from 5 s to 120 s reproduced the 138 ms plateau that followed 300 s of idle.
+- Round `1111_h10` (H10, `decode_cycle_drift.py thor 120 180,300,180,300,180,300 60`; another process, thor3's
+  python with MPS, present for the whole round): in the four segments without visible interference (prefill
+  4 023-4 046 ms) a plateau of 141.6-142.1 ms per cycle followed 2 of 2 idle gaps of 300 s and 1 of 2 gaps of 180 s;
+  it lasted 35-36 s twice and the whole 57 s window once. The other 180 s gap gave 105.9 / 100.2 ms, below 90 ms after
+  36 s. In the first two segments (prefill 4 800-6 000 ms, copy jumping between 119 and 260 GB/s) no full plateau
+  formed.
 ## Evidence
 
 - On the 5090, the RTX language model with the Thor frontend's ViT configuration (BF16 linears, SDPA;
@@ -1642,6 +1648,10 @@ Thor: replies against the RTX 5090 references, and decode ms per speculative cyc
   (-11 %), and back to 252.8-257.7 GB/s while decode is still at 93.6-117.8 ms per cycle; prefill is 1.6 % slower.
   The slow state follows an idle period (it appears after 300 s of idle in a running process and not at the start of
   a process that followed another GPU process), not the start of a process.
+- `1111_h10`: the plateau level is the same every time (141.6-142.1 ms, 1.63x the 87.2 ms steady value); copy during
+  it 234-244 GB/s against 253-260 GB/s (about -6 %), prefill +0.5 %. GPC 1 575 MHz, NVD 1 692 MHz and CPU 2 601 MHz
+  are unchanged throughout. Idle thresholds observed so far: 5-120 s 0 / 5 gaps, 180 s 1 / 2, 300 s 2 / 2 (segments
+  without visible interference; `1105_h6h4` 1 / 1 at 300 s).
 ## Hypotheses
 
 - Replies: the ViT configuration explains the decision differences; the Thor language model's kernels change wording
@@ -1656,13 +1666,16 @@ Thor: replies against the RTX 5090 references, and decode ms per speculative cyc
   states"): cold ImageWAM `infer()` is 15-20 % slower than after about 5 minutes of continuous load, the copy
   bandwidth about 10 % lower (231-234 against 256 GB/s), GEMM up to 30 % slower, and the VDD_CPU_SOC_MSS rail stays
   at 16-19 W instead of the soaked 21 W. The planner's decode shows the same signature with a larger factor.
+- A discrete level entered after 2-5 minutes without load: the plateau value repeats to 0.5 ms across three
+  occurrences. That the interfered segments of `1111_h10` formed no full plateau is consistent with another process's
+  load keeping the state warm during the idle; the other process's activity was not logged, so this is not tested.
 
 ## Next Experiment
 
-- H7 (round `1110_h7h4bh8`) found no threshold between 5 s and 120 s: idle gaps shorter than the planner's call
-  interval do not put decode into the slow state; 120 s gives 1.09-1.11x. Remaining: gaps of 180 and 300 s, each
-  repeated three times in one process, to tell whether the 300 s plateau of `1105_h6h4` recurs; and the same gaps
-  with a periodic executor load running during the idle, to tell whether a co-located executor keeps the state warm.
+- The idle threshold is between 120 and 300 s (H7, H10). Remaining: the same 180 / 300 s gaps with a periodic
+  executor load running during the idle, to tell whether a co-located executor keeps the state warm; this is part of
+  the co-location measurement with the planner process
+  (`research/topics/long-horizon-planner-executor/experiments/colocation_thor/planner_process.py`).
 
 ## Impact
 
@@ -1714,6 +1727,10 @@ replies of the same prompt in one process are not always token-identical.
   reference in 20 / 20 for every full-reply and stop-at-action cell.
 - RTX 5090, same script and model (`monitor_call_rtx_official.json`): `generate`, no capsule and aligned capsule are
   20 / 20; the capsule cut at the first NOW image is 0 / 20.
+- Round `1111_h12h11h9` (H12, `monitor_call/reply_repeat.py thor`, the same 20 calls, five `generate` calls back to
+  back per call): repetitions 2-5 equal the first in 44 of 80; all five are identical in 7 of 20 calls. RTX 5090,
+  same script: 80 / 80. All 100 Thor decisions are `continue`.
+- H11 of the same round (27 closed-loop calls): the second `generate` equals the reference in 26 / 27.
 
 ## Evidence
 
@@ -1726,20 +1743,34 @@ replies of the same prompt in one process are not always token-identical.
   set in every cell. All 20 reference decisions are `continue`.
 - The Thor long prefill runs the `native` linear-attention backend (per-step recurrent chunk scan) pinned by
   `Qwen36TorchFrontendThor.__init__`; the 5090 runs `wy_lt`.
+- H12: every difference is inside the `reason` text (characters 63-246) or at token 0 (a ```json fence or not, 4
+  calls). The top-2 margin at the first differing token, scored by one prefill, has median 0.375 logit over 13 calls;
+  at token 0 three calls have margin 2.50-4.50.
+- H12: in 7 of 20 calls repetitions 2-5 all leave the first at the same token, and in 4 of them repetitions 2-5 are
+  identical to one another. The first repetition follows the previous call's three scoring prefills (prompt plus a
+  reply prefix of a different length); repetitions 2-5 follow a `generate` of the same prompt.
+- `1111_h12h11h9` H9: on the same layer inputs every correct linear-attention variant ends within cos 0.57-0.72 of the
+  per-token path in the last-position logits, so a change in low bits early in the prefill moves logits by more than
+  a 2.5-logit margin by the last layer.
 
 ## Hypotheses
 
 - A kernel on the Thor path whose result depends on scheduling (atomics, split-K reductions, or an attention
   reduction such as xqa) changes low bits of a logit; a greedy tie or near-tie then flips one token and the rest of
   the reply follows. The 5090 path is reproducible on the same prompts.
-- The decision is set within the first 13-16 tokens and was unchanged in all 20 calls, so the varying tokens are more
-  likely in the `reason` text; this is not verified.
+- State left by the previous call: a Thor-path buffer that a call reads before writing it (rows beyond the prompt, a
+  K-row scratch, a recurrent-state save slot) holds what the previous call left; the same predecessor gives the same
+  reply. This explains the calls where repetitions 2-5 agree with one another and not with the first; it does not
+  explain the single repetitions that differ in the middle of a run of identical ones.
+- H12 shows the decision unchanged in 100 / 100 Thor repetitions, with the varying tokens in the `reason` text or the
+  fence.
 
 ## Next Experiment
 
-- On the Thor: the same call generated five times in one process, logging the top-2 logit margin at the first
-  differing position; then the same with the attention and GEMM kernels switched one at a time to a deterministic
-  variant where one exists.
+- H14: the H12 script with every repetition preceded by a `generate` of the previous call (`reply_repeat.py thor
+  after_previous`). Leftover state predicts five identical repetitions per call; a scheduling-dependent kernel
+  predicts differences as often as in H12.
+- Then the attention and GEMM kernels switched one at a time to a deterministic variant where one exists.
 
 ## Impact
 

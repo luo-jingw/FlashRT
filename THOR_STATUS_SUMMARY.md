@@ -912,6 +912,89 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 
 结论去向：本节；issues.md ISSUE-112、ISSUE-114；`opportunities.md` OPT-040 candidate 4、5；`research/topics/long-horizon-planner-executor/experiments/monitor_call/README.md` 的 Thor 一节；`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md` 的 Thor 每周期一段与图像回放一节。`THOR_CHECKLIST.md` 的 H7、H4b、H8 已删除。
 
+### `1111_h10` 轮：H10 空闲 180 s 与 300 s 之后解码是否变慢（commit `2c1f37b5`）
+
+共同条件：HEAD `2c1f37b5`，`emc_locked=null`；GPU **不空闲**：另一个进程（thor3 的 python 与 MPS）在整轮期间存在；未改时钟、未 sudo。`$OUT` = `$HOME/thor_val/1111_h10`。原始表已带回入库（`583040a2`）：`harness_replay_5090/thor/H10_drift_table.txt`（sha256 `abb84cf5…53a9995e2`）。
+
+`thor/decode_cycle_drift.py thor 120 180,300,180,300,180,300 60`：monitor 形状背靠背 120 s，之后空闲 180 / 300 s 交替各三次、每次空闲后背靠背 60 s。`loaded:` 为 `Qwen36TorchFrontendThor long_ctx_mode True mtp True devfreq ['8188050000.vic', 'gpu-gpc-0', 'gpu-nvd-0'] run/idle/after s 120.0 [180.0, 300.0, 180.0, 300.0, 180.0, 300.0] 60.0`。整轮 GPC 1 575 MHz、NVD 1 692 MHz、CPU 2 601 MHz 不变。
+
+| 段（开始 s） | 干扰 | 第 1 次 ms / 周期 | 第 2 次 | 高于 100 / 次数 | 约 142 的平台 | 回到 90 以下 | 拷贝 GB/s 中位 | prefill ms 中位 |
+|---|---|---|---|---|---|---|---|---|
+| run（40） | 有 | 653.2 | 328.9 | 7 / 7 | – | 否 | 138 | 8 292 |
+| 空闲 180 s 后（318） | 有 | 94.3 | 94.1 | 2 / 9 | 无 | +12 s | 254 | 4 851 |
+| 空闲 300 s 后（684） | 有 | 133.3 | 96.6 | 7 / 8 | 部分（96–139 交替） | 否 | 256 | 4 821 |
+| 空闲 180 s 后（923） | 无 | 105.9 | 100.2 | 2 / 10 | 无 | +36 s | 258 | 4 023 |
+| 空闲 300 s 后（1 284） | 无 | 141.6 | 141.7 | 6 / 9 | +0–35 s | +41 s 起 94–99 | 244 | 4 045 |
+| 空闲 180 s 后（1 524） | 无 | 141.8 | 141.8 | 9 / 9 | +0–36 s | 否（末次 103） | 244 | 4 046 |
+| 空闲 300 s 后（1 886） | 无 | 142.0 | 141.7 | 9 / 9 | 整段 57 s | 否 | 241 | 4 046 |
+
+- "干扰"按同段的 prefill 与拷贝判断：run 段 prefill 8 292 ms（无干扰时约 4 040）、拷贝 138 GB/s，前两次空闲之后 prefill 4 800–6 000 ms、拷贝在 119–260 GB/s 之间跳动；从 923 s 起 prefill 稳定在 4 023–4 046 ms。本轮 run 段不能作为稳态，稳态取 `1110_h7h4bh8` 的 87.2 ms 与 923 s 一段末尾的 87.0–87.1 ms。
+- 无干扰的四段里，空闲 300 s 之后 2 / 2 次出现平台，空闲 180 s 之后 1 / 2 次；`1110_h7h4bh8` 的 120 s 及更短 0 / 5 次。
+- 平台值 141.6–142.1 ms / 周期，每次相同，为稳态的 1.63 倍（`1105_h6h4` 为 138 ms）；平台期间拷贝 234–244 GB/s（稳态 253–260，低约 6 %），prefill 4 045 ms（高 0.5 %）。持续 35–36 s 后回落的 2 次，第三次在 57 s 的窗口内没有回落。
+- 有干扰的两段里没有出现完整的平台（300 s 之后一段在 96 与 139 之间交替）。
+
+结论去向：本节；issues.md ISSUE-112；`research/topics/long-horizon-planner-executor/thor_rationale.md` 3.3 节。`THOR_CHECKLIST.md` 的 H10 已删除。
+
+### `1111_h12h11h9` 轮：H12 同一调用连续生成 5 次，H11 闭环干预回合上的快路径，H9 线性注意力 prefill 各变体（commit `583040a2`）
+
+共同条件：HEAD `583040a2`（H9 之前 `git pull` 后不变），`emc_locked=null`；GPU **不空闲**：thor3 的 python 与 MPS 在开跑时存在；未改时钟、未 sudo。`$OUT` = `$HOME/thor_val/1111_h12h11h9`。三份 JSON 已带回入库（`824c85e0`）：`monitor_call/reply_repeat_thor_official.json`（sha256 `9d6c47b1…765b5d47`）、`monitor_call/monitor_call_sim_thor_official.json`（`75c90e49…7299e389`）、`gdn_wy_thor/gdn_variant_drift_thor.json`（`65719706…071c3ccda`）。官方 Qwen3.8-27B NVFP4。
+
+**H12**（`monitor_call/reply_repeat.py thor`，ep0 / ep43 腕部 224 的 20 次 monitor 调用，每次调用连续 5 次 `generate`）。RTX 5090 同一脚本（`reply_repeat_rtx_official.json`）20 次调用 × 5 次全部相同。
+
+| | Thor | RTX 5090 |
+|---|---|---|
+| 第 2–5 次与第 1 次相同 | 44 / 80 | 80 / 80 |
+| 5 次全部相同的调用 | 7 / 20 | 20 / 20 |
+| 第 2–5 次都在同一位置偏离第 1 次 | 7 / 20（其中 4 次第 2–5 次彼此完全相同） | – |
+| 决策 | 100 次全部 `continue` | 95 `continue`、5 `replan`（ep43 第 800 步） |
+| action 值首 token 的 top-2 margin 中位（最小） | 3.25（0.50，ep43 第 160 步） | 3.06（0.25，ep43 第 800 步） |
+| 首个不同 token 处的 margin 中位（最大） | 0.375（4.50），13 次调用 | – |
+
+- 所有不同都在 `reason` 文本里（第 63–246 个字符，`reason` 从第 48 / 56 个字符开始），或在第 0 个 token（有无 ```` ```json ```` 围栏，4 次调用）。
+- 第 0 个 token 上不同的 4 次调用里，3 次打分 prefill 给出的 margin 为 2.50–4.50 logit（ep0 第 160 步、ep43 第 560 / 720 步），不是接近平局的位置，1 次为 0.38（ep0 第 560 步）；ep0 第 560 步与 ep43 第 560 步第 1 次带围栏、第 2–5 次都不带。
+- "第 2–5 次都在同一位置偏离第 1 次"的 7 次调用里，第 1 次紧跟在上一次调用的三次打分 prefill 之后，第 2–5 次紧跟在同一提示词的生成之后。
+- ep43 第 800 步：Thor 上 5 次都是 `continue`，action 处 margin 1.50；5090 上 5 次都是 `replan`，margin 0.25，且打分 prefill 的 top-1 与生成的 token 不同。
+
+**H11**（`monitor_call/monitor_call_bench.py thor own`，`sim_closed_loop/calls/` 的 6 个回合、27 次 monitor 调用，腕部 224，4 093 token，常量前缀 2 641 token，对齐前缀 2 048 token）。参考为同一进程里模型自己的 `generate`。`tables.py` 在 Thor 上失败（回合名 `t0e1` 不带 `_wrist` 后缀），已修正后在入库的 JSON 上重新生成下表。
+
+| 前缀 | 解码 | 到决策可用中位 ms | 最大 | prefill | 解码 | 回复相同 | action 相同 | 其中 `next` |
+|---|---|---|---|---|---|---|---|---|
+| generate | 整段 | 6 472 | 7 070 | 3 982 | 2 131 | 26/27 | 27/27 | 3/3 |
+| 无复用 | 整段 | 6 471 | 7 048 | 3 983 | 2 126 | 26/27 | 27/27 | 3/3 |
+| 无复用 | 闭合即停 | 4 773 | 4 940 | 3 982 | 428 | – | 27/27 | 3/3 |
+| 对齐 | 整段 | 4 401 | 4 963 | 2 026 | 2 141 | 25/27 | 27/27 | 3/3 |
+| 对齐 | 闭合即停 | 2 684 | 2 852 | 2 026 | 506 | – | 27/27 | 3/3 |
+| 完整 | 整段 | 3 722 | 4 393 | 1 444 | 2 121 | 24/27 | 27/27 | 3/3 |
+| 完整 | 闭合即停 | 2 048 | 3 414 | 1 444 | 428 | – | 27/27 | 3/3 |
+| 完整 | 预知长度 | 2 049 | 2 252 | 1 444 | 427 | – | 26/27 | 3/3 |
+
+- 参考回复的决策：`continue` 24、`next` 3（t0e1 第 240 步、t6e0 第 160 步、t6e1 第 160 步）。闭环里做出这些决策的 LoRA 合并 master 在同一组调用上有 6 次 `next`；官方模型在另外 3 次（t1e1 第 240 步、t8e0 第 160 步、t8e1 第 240 步）给 `continue`。
+- 对齐复用 + 闭合即停：27 / 27 action 与参考相同，含 3 / 3 次 `next`；到决策可用中位 2 684 ms、最大 2 852 ms，低于 5.33 s；3 次 `next` 调用为 2 532 / 2 683 / 2 798 ms。
+- "完整 + 预知长度"一格缺的 1 次（t6e0 第 80 步）没有 action：那次回复与参考不同，按参考长度定的预算解码不到 `action` 闭合。
+- capsule：对齐 2 048 token 构建 2 243 ms、176 MB；完整 2 641 token 2 812 ms、195 MB。
+- 与 H8（`1110_h7h4bh8`，20 次调用）对照：对齐 + 闭合即停 2 608 → 2 684 ms（提示词 4 076 → 4 093 token）；回复相同的比例 12 / 20 → 25 / 27。
+- RTX 5090 同一组调用（`monitor_call/monitor_call_sim_rtx_official.json`，`run_intervention_rtx.sh`）：对齐 + 闭合即停 356 ms，27 / 27、`next` 3 / 3；参考决策的 `next` 为 t0e1 第 240 步、t6e0 第 160 步、t8e1 第 240 步，与 Thor 25 / 27 相同（t6e1 第 160 步、t8e1 第 240 步两台机器不同）。完整复用在 5090 上改了 3 次决策（2 次 `next` → `continue`，1 次 `continue` → `next`），在 Thor 上 27 / 27 不变。MTP 每次尝试接受的 token：Thor 1.78–1.83，5090 1.83–1.90。
+
+**H9**（`gdn_wy_thor/gdn_variant_drift.py thor`，H8 的 ep0 第 80 步 monitor 提示词 4 093 token，两块 prefill：2 048 + 2 045 行；参考为逐 token 路径 `per_token`）。逐层：在同一份层输入与递归状态上运行一层，与 `per_token` 比；两块的中位与最小值相同量级，下表取 chunk 0。prompt 级：整段 prefill 里 K > 7 的线性注意力层换成该变体（全注意力层不变），比较最后一个位置的 logits。RTX 5090 对照为 `gdn_variant_drift_rtx.json`（同一提示词、同一脚本）。
+
+| 变体 | Thor 逐层 out cos 中位 / 最小 | 5090 中位 / 最小 | Thor state cos 最小 | Thor ms / 层 | 5090 ms / 层 | Thor prefill ms | Thor top-1 = per_token | 5090 top-1 = per_token |
+|---|---|---|---|---|---|---|---|---|
+| own（Thor：`_thor_lin_K_forward`；5090：`wy_lt`） | 0.999998 / 0.9998 | 0.999766 / 0.9994 | 0.999899 | 34.7 | 2.43 | 3 994 | 是 | 否 |
+| thor_native | 0.999998 / 0.9998 | 1.000000 / 0.9998 | 0.999899 | 34.7 | 14.2 | 3 993 | 是 | 是 |
+| rtx_native（父类 K-row + `native`） | 0.999998 / 0.9998 | 1.000000 / 0.9998 | 0.999899 | 34.2 | 13.1 | 3 947 | 是 | 是 |
+| wy | 0.9416 / −0.708（39 / 48 层 < 0.99，state NaN） | 0.999766 / 0.9994 | NaN | 196.5 | 22.1 | 19 410 | 否 | 否 |
+| wy_lt | 0.999765 / 0.9994 | 0.999766 / 0.9994 | 0.994067 | 16.9 | 2.43 | 2 294 | 是 | 否 |
+| wy_lt_f32gemm | 0.9961 / −0.367（第 1 层） | 0.9961 / −0.369（第 1 层） | 0.994067 | 17.8 | 2.50 | 2 379 | 否 | 否 |
+| wy_lt_f32state | 0.999764 / 0.9994 | 0.999765 / 0.9994 | 0.994064 | 18.8 | 2.61 | 2 475 | 否 | 否 |
+
+- `wy_lt`（cuBLASLt 的 WY 分块，5090 的默认）在 Thor 上逐层与 5090 相同（中位 0.999765 / 0.999766，最小都在第 50 层 0.9994）：它与逐 token 路径的差是算法本身的差，不是 SM110 上的漂移。
+- 只在 Thor 上出错的是 `wy`（手写 mma 的 WY kernel）：39 / 48 层 cos < 0.99，最小 −0.71，递归状态出现 NaN；5090 上同一变体与 `wy_lt` 相同。
+- `wy_lt_f32gemm` 在两台机器上同样在第 1 层出错（cos −0.37），是该变体自身的问题，与机器无关。
+- Thor 上 `wy_lt` 每层 16.9 ms，`native` 34.7 ms；整段 prefill 2 294 ms，比 Thor 自己的路径（3 994 ms）少 1 700 ms（43 %）。
+- prompt 级 logits：所有逐层正确的变体与 `per_token` 的 cos 只有 0.57–0.72（Thor 自己的路径 0.573，`wy_lt` 0.629；5090 上 `native` 0.696–0.723，`wy_lt` 0.635）。逐层 cos ≥ 0.9994 的差经过 64 层后在最后的 logits 上放大成这一量级，所以 prompt 级 logits cos 区分不了 kernel 的对错；top-1 在第 0 个 token（有无围栏，`{"` 4754 与 ```` ``` ```` 71093）上随变体变化。
+
+结论去向：本节；issues.md ISSUE-114（H12）；`opportunities.md` OPT-040 candidate 5（H9）；`research/topics/long-horizon-planner-executor/experiments/monitor_call/README.md` 的 Thor 一节（H11）；`research/topics/long-horizon-planner-executor/experiments/gdn_wy_thor/README.md`（H9）；`research/topics/long-horizon-planner-executor/thor_rationale.md`。`THOR_CHECKLIST.md` 的 H12、H11、H9 已删除。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |

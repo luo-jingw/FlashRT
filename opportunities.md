@@ -1826,10 +1826,18 @@ Measurements: `research/topics/wam-inference-acceleration/experiments/harness_re
    Thor (round `1110_h7h4bh8`, H4b): prefill 3 981.9 ms, binding sum 4 047.3 ms, outside bindings 38.4 ms (0.9 %);
    linear attention 57.1 %, GEMM 18.5 %, attention (xqa) 8.3 %, elementwise / copy 6.2 %, quantize-fused 6.1 %, norm
    3.1 %. `qwen36_gdn_chunk_from_conv_smem_strided_bf16` takes 2 235 ms (96 calls, 23.3 ms each, 55 %). It is the
-   `native` per-step recurrent backend that `Qwen36TorchFrontendThor.__init__` pins because the 5090's `wy_lt`
-   (WY-decomposition chunk scan) drifts layer by layer on SM110 (class docstring: cos 0.43 by layer 63). The 5090's WY
-   path takes 69.0 ms for the same prefill (six bindings), the Thor's `native` path 32x that, against 3.8x for the fp4
-   GEMMs (derived). A WY chunk path that is accurate on SM110 and runs at the GEMM ratio (about 0.27 s) would bring the
-   monitor prefill from 3.98 s to about 2.0 s and the aligned-capsule monitor call from 2.61 s to about 1.6 s
-   (derived). Observation: per-layer cos of each WY stage (kkt, solve_tril, recompute_wu, chunk_h, output_o) against
-   `native` on the Thor, to find the stage that drifts, then prefill ms with that stage fixed.
+   `native` per-step recurrent backend of `Qwen36TorchFrontendThor._thor_lin_K_forward`, which the Thor frontend
+   runs for every prefill chunk. The 5090's WY path takes 69.0 ms for the same prefill (six bindings), the Thor's
+   `native` path 32x that, against 3.8x for the fp4 GEMMs (derived).
+   Round `1111_h12h11h9` (H9, `research/topics/long-horizon-planner-executor/experiments/gdn_wy_thor/`; one layer at a
+   time on the same inputs against the per-token path, 4 093-token monitor prompt): `wy_lt` (cuBLASLt WY chunk scan,
+   the 5090 default) through the parent K-row branch gives per-layer cos median 0.999765, minimum 0.9994 (layer 50) on
+   the Thor and 0.999766 / 0.9994 on the 5090, so it does not drift on SM110; only the hand-written `wy` kernels fail
+   on SM110 (39 of 48 layers below 0.99, state NaN). Per layer `wy_lt` takes 16.9 ms on the Thor against 34.7 ms for
+   the Thor path, and the whole prefill 2 294 ms against 3 994 ms (-1 700 ms, 43 %). `wy_lt` on the Thor is 7.0x the
+   5090's per-layer time, not the 3.8x of the fp4 GEMMs. With the prefill of the aligned-capsule monitor call (2 026 ms,
+   two chunks of which one is restored) scaled by the same 0.574, the call would go from 2.68 s to about 1.8 s
+   (derived). `FLASHRT_QWEN36_THOR_LIN_PREFILL=parent` with `FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND=wy_lt` routes the
+   Thor's prefill linear-attention layers to that branch (default unchanged). Observation: Thor row H13, the H8 and
+   H11 call sets with the route: prefill and call ms, MTP accepted tokens per attempt, decisions against the `native`
+   runs of rounds `1110_h7h4bh8` and `1111_h12h11h9`.
