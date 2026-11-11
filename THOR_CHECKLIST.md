@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` / `1030` 轮做完，已从本清单删除。`1104_h` 轮做完 H1、H2，`1104_h3` 轮做完 H3a、H3，`1104_h3b` 轮做完 H3b，`1104_h3c` 轮做完 H3c，`1105_h6h4` 轮做完 H6、H4，`1110_h7h4bh8` 轮做完 H7、H4b、H8，已从本清单删除。另外剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` / `1030` 轮做完，已从本清单删除。`1104_h` 轮做完 H1、H2，`1104_h3` 轮做完 H3a、H3，`1104_h3b` 轮做完 H3b，`1104_h3c` 轮做完 H3c，`1105_h6h4` 轮做完 H6、H4，`1110_h7h4bh8` 轮做完 H7、H4b、H8，已从本清单删除。待测的是 H10（空闲 180 s 与 300 s 之后解码是否变慢）。另外剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -52,7 +52,37 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ## 待测
 
-目前没有待测项。
+### 本轮共同前置
+
+开始前 GPU 上没有其他计算进程（有就等，不要停别人的进程）。H10 约 35 分钟。
+
+```
+cd $FLASHRT_ROOT
+git pull
+export OUT=$HOME/thor_val/$(date +%m%d)_h10; mkdir -p $OUT
+export CK=$HOME/thor_val/ckpt
+export PYTHONPATH=$HOME/thor_val/pydeps_tf5:$PYTHONPATH
+R=research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor
+python -c "from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state as r; r()" | tee $OUT/P0_clock.log
+git rev-parse HEAD | tee $OUT/P0_commit.log
+```
+
+### H10：空闲 180 s 与 300 s 之后解码是否变慢
+
+问题：`1105_h6h4` 里同一进程空闲 300 s 之后，解码每周期前两次生成 138 ms（稳态 87.6 ms），约 50 s 后恢复；`1110_h7h4bh8` 的 H7 里空闲 5–120 s 都没有再现这一平台（120 s 之后 96.7 / 95.4 ms）。180 s 与 300 s 各重复三次，看平台是否重现、是否每次都出现。
+
+```
+python $R/decode_cycle_drift.py thor 120 180,300,180,300,180,300 60 2>&1 | tee $OUT/H10_drift.log
+python -I -c 'import json, sys; [print("%s %.0f s  %.1f ms/cycle  copy %.1f GB/s  prefill %.0f  cpu %d-%d kHz  %s" % (s["phase"], s["t_s"], s["ms_per_cycle"], s["copy_gbps"], s["prefill_ms"], min(s["cpu_khz"] or [-1]), max(s["cpu_khz"] or [-1]), s["devfreq_hz"])) for s in json.load(open(sys.argv[1]))["samples"]]' $OUT/decode_cycle_drift_thor.json | tee $OUT/H10_drift_table.txt
+```
+
+带回：`H10_drift.log` 的 `loaded:` 一行；`H10_drift_table.txt` 全部（或复制回 `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/H10_drift_table.txt` 并推送，附 `sha256sum`）。
+
+判据：
+- 每次空闲之后第一、二次生成的 ms / 周期，与 `run` 段稳态（约 87.2）比较；高于 100 的次数，180 s 与 300 s 分开数。
+- 高于 100 时，回到 90 以下所用的时间（秒）；各段开头的 `copy` 与稳态（约 256 GB/s）比较。
+
+结论去向：issues.md ISSUE-112；`THOR_STATUS_SUMMARY.md` 本轮小节；`research/topics/long-horizon-planner-executor/thor_rationale.md` 3.3 节。
 
 ## 已完成的轮次（不再重跑）
 
