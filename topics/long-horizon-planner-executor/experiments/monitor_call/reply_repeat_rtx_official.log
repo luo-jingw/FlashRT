@@ -1,0 +1,20 @@
+ep0_wrist224 step 80: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 3.375 action@14 margin 4.625
+ep0_wrist224 step 160: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 2.125 action@11 margin 4.250
+ep0_wrist224 step 240: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 6.000 action@11 margin 4.625
+ep0_wrist224 step 320: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 2.250 action@11 margin 2.000
+ep0_wrist224 step 400: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 4.250 action@11 margin 3.750
+ep0_wrist224 step 480: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 3.375 action@11 margin 2.250
+ep0_wrist224 step 560: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 4.500 action@11 margin 3.625
+ep0_wrist224 step 640: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 4.500 action@14 margin 3.875
+ep0_wrist224 step 720: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 4.000 action@11 margin 3.875
+ep0_wrist224 step 800: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 4.875 action@11 margin 3.250
+ep43_wrist224 step 80: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 2.500 action@11 margin 2.875
+ep43_wrist224 step 160: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 4.375 action@11 margin 0.375 (top1!=emitted)
+ep43_wrist224 step 240: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 0.625 action@11 margin 1.625
+ep43_wrist224 step 320: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 12.625 action@11 margin 1.625
+ep43_wrist224 step 400: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 0.875 action@11 margin 0.375
+ep43_wrist224 step 480: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 5.250 action@11 margin 3.500
+ep43_wrist224 step 560: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 3.250 action@14 margin 3.625
+ep43_wrist224 step 640: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 0.375 action@11 margin 0.625
+ep43_wrist224 step 720: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['continue', 'continue', 'continue', 'continue', 'continue'], first@0 margin 1.125 action@11 margin 0.875
+ep43_wrist224 step 800: 5/5 identical, first diffs [-1, -1, -1, -1, -1], decisions ['replan', 'replan', 'replan', 'replan', 'replan'], first@0 margin 8.750 action@11 margin 0.250 (top1!=emitted)
