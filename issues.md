@@ -1719,8 +1719,13 @@ replies of the same prompt in one process are not always token-identical.
 
 - The reference and the second `generate` run the same code on the same inputs; the difference is between two runs,
   not between paths.
-- The per-call replies are in `$OUT/monitor_call_thor_official.json` on the Thor (not copied back), so which calls
-  differ and at which token is not known here.
+- Per call (`research/topics/long-horizon-planner-executor/experiments/monitor_call/monitor_call_thor_official.json`):
+  against the second `generate`, the replies of the other full-reply cells first differ at characters 69-220, inside
+  the `reason` text (which starts at character 48), except one call (aligned capsule, ep43 step 80) that differs from
+  character 0: one reply opens with a ```json fence and the other does not. The calls that differ are not the same
+  set in every cell. All 20 reference decisions are `continue`.
+- The Thor long prefill runs the `native` linear-attention backend (per-step recurrent chunk scan) pinned by
+  `Qwen36TorchFrontendThor.__init__`; the 5090 runs `wy_lt`.
 
 ## Hypotheses
 
@@ -1732,8 +1737,6 @@ replies of the same prompt in one process are not always token-identical.
 
 ## Next Experiment
 
-- From the JSON: per call, the first differing token position of each cell against the reference, and whether the
-  same calls differ in every cell.
 - On the Thor: the same call generated five times in one process, logging the top-2 logit margin at the first
   differing position; then the same with the attention and GEMM kernels switched one at a time to a deterministic
   variant where one exists.

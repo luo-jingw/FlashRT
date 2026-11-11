@@ -1825,7 +1825,11 @@ Measurements: `research/topics/wam-inference-acceleration/experiments/harness_re
    linear attention 27 %, quantize-fused 12 %; FA2 is held by reference and falls in the 37.5 ms outside bindings).
    Thor (round `1110_h7h4bh8`, H4b): prefill 3 981.9 ms, binding sum 4 047.3 ms, outside bindings 38.4 ms (0.9 %);
    linear attention 57.1 %, GEMM 18.5 %, attention (xqa) 8.3 %, elementwise / copy 6.2 %, quantize-fused 6.1 %, norm
-   3.1 %. One binding reported as `gdn_chunk` takes 2 235 ms (55 %); against the 5090 the linear-attention category is
-   28x and GEMM 4.4x (derived from shares). The next observation is that binding's full name and its 5090 time
-   (`$OUT/H4b_bindings.log`, top-50 table): a linear-attention chunk kernel on the Thor that ran at the GEMM ratio would
-   bring prefill to about 1.8-1.9 s (derived).
+   3.1 %. `qwen36_gdn_chunk_from_conv_smem_strided_bf16` takes 2 235 ms (96 calls, 23.3 ms each, 55 %). It is the
+   `native` per-step recurrent backend that `Qwen36TorchFrontendThor.__init__` pins because the 5090's `wy_lt`
+   (WY-decomposition chunk scan) drifts layer by layer on SM110 (class docstring: cos 0.43 by layer 63). The 5090's WY
+   path takes 69.0 ms for the same prefill (six bindings), the Thor's `native` path 32x that, against 3.8x for the fp4
+   GEMMs (derived). A WY chunk path that is accurate on SM110 and runs at the GEMM ratio (about 0.27 s) would bring the
+   monitor prefill from 3.98 s to about 2.0 s and the aligned-capsule monitor call from 2.61 s to about 1.6 s
+   (derived). Observation: per-layer cos of each WY stage (kkt, solve_tril, recompute_wu, chunk_h, output_o) against
+   `native` on the Thor, to find the stage that drifts, then prefill ms with that stage fixed.

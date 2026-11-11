@@ -853,7 +853,7 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 
 ### `1110_h7h4bh8` 轮：H7 空闲多久之后解码变慢，H4b prefill 按 kernel 绑定计时，H8 monitor 调用复用固定前缀、action 闭合即停（commit `3c93584e`）
 
-共同条件：HEAD `3c93584e`，MAXN，GPC / NVD 锁定，`emc_locked=null`；开跑前另一个进程（thor3）在用 GPU，等它退出、GPU 空闲后开始；未改时钟、未 sudo。`$OUT` = `$HOME/thor_val/1110_h7h4bh8`。`monitor_call_thor_official.json`（sha256 `d3003501…6f2f37`）留在 `$OUT`，未带回。
+共同条件：HEAD `3c93584e`，MAXN，GPC / NVD 锁定，`emc_locked=null`；开跑前另一个进程（thor3）在用 GPU，等它退出、GPU 空闲后开始；未改时钟、未 sudo。`$OUT` = `$HOME/thor_val/1110_h7h4bh8`。三份原始结果已带回入库（`94ec8ecc`）：`harness_replay_5090/thor/H7_drift_table.txt`、`harness_replay_5090/thor/H4b_bindings.log`、`monitor_call/monitor_call_thor_official.json`（sha256 `d3003501…6f2f37`）。
 
 **H7**（`thor/decode_cycle_drift.py thor 120 5,15,30,60,120 60`：monitor 形状背靠背 120 s，之后依次空闲 5 / 15 / 30 / 60 / 120 s、每次空闲后背靠背 60 s）。`loaded:` 为 `Qwen36TorchFrontendThor long_ctx_mode True mtp True devfreq ['8188050000.vic', 'gpu-gpc-0', 'gpu-nvd-0'] run/idle/after s 120.0 [5.0, 15.0, 30.0, 60.0, 120.0] 60.0`。run 段稳态约 87.2 ms / 周期，拷贝约 256 GB/s。
 
@@ -865,7 +865,7 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 | 60 s | 87.1 | 87.1 | 否 |
 | 120 s | 96.7 | 95.4 | 否（prefill 4 048 ms） |
 
-- 5–120 s 的空闲之后都没有出现 `1105_h6h4` 空闲 300 s 之后的 138 ms 平台。唯一高于 100 ms 的是 5 s 空闲之后的第二次生成（164.9 ms），此外报告摘要里还有一次 134.1 ms；它们与 `1104_h3c`、`1105_h6h4` 稳态里的孤立尖峰（120–249 ms）同一量级。
+- 5–120 s 的空闲之后都没有出现 `1105_h6h4` 空闲 300 s 之后的 138 ms 平台。高于 100 ms 的只有 5 s 空闲段的第二、三次生成（140 / 147 s：164.9 / 134.1 ms），同段 170 s 一次 96.6 ms；它们与 `1104_h3c`、`1105_h6h4` 稳态里的孤立尖峰（120–249 ms）同一量级。
 - 120 s 之后前两次是稳态的 1.11 / 1.09 倍，prefill 高 1.7 %。
 - 按清单判据，5–120 s 里没有阈值。
 
@@ -885,7 +885,8 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 | rope | 0.5 % | 20 | 1.7 | 12× |
 
 - Thor ms 是占比乘绑定时间和（推算）；5090 列是 `harness_replay_5090/thor/prefill_binding_times_rtx.log`。
-- 单个绑定：报告里记作 `gdn_chunk` 的一个绑定 2 235 ms（绑定时间和的 55 %）；xqa 338 ms；两个 fp4 GEMM 319 + 267 ms；`quantize_nvfp4` 245 ms。5090 上线性注意力最大的绑定是 `linear_attn_gdn_wy_chunk_h_b64_bf16_mma_fla`（26.6 ms），fp4 GEMM 两个合计 156 ms。`gdn_chunk` 的完整绑定名在 `$OUT/H4b_bindings.log` 的前 50 表里，未带回；如果它就是这个 chunk_h 绑定，倍数约 84×，而 GEMM 约 3.8×（推算）。
+- 单个绑定：`qwen36_gdn_chunk_from_conv_smem_strided_bf16` 96 次、2 235.5 ms（每次 23.3 ms，绑定时间和的 55 %）；`qwen36_flashinfer_xqa_bf16_fp8kv_spec` 337.7 ms；`fp4_w4a16_gemm_sm120_bf16out` / `_widen` 319.2 / 266.9 ms；`quantize_bf16_to_nvfp4_swizzled` 245.0 ms；`bf16_matmul_qwen36_bf16` 163.0 ms；`silu_mul_qwen36_bf16` 154.0 ms。
+- Thor 与 5090 走的是不同的线性注意力 prefill 后端：`Qwen36TorchFrontendThor.__init__` 把 `FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND` 默认设为 `native`（逐步递归的 chunk-scan kernel），因为 RTX 默认的 `wy_lt`（WY 分解分块）在 SM110 上逐层漂移（类注释：第 2 层 cos 0.999721，到第 63 层 0.43）。5090 的 WY 路径六个绑定合计 69.0 ms（`chunk_h` 26.6、`output_o` 16.0、`recompute_wu` 10.7、`solve_tril` 7.5、`norm_cumsum_pack` 6.7、`kkt` 1.7），Thor 的 `native` 一个绑定 2 235 ms，约 32 倍；fp4 GEMM 两者合计 586 / 156 ms，3.8 倍（推算）。
 
 **H8**（`monitor_call/monitor_call_bench.py thor own`，官方 Qwen3.8-27B NVFP4，ep0 / ep43 腕部 224 的 20 次 monitor 调用；参考回复为同一进程里模型自己的 160 token `generate`）。各格到决策可用的中位（ms），与 RTX 5090 同一脚本（`monitor_call_rtx_official.json`）对照：
 
@@ -905,7 +906,9 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 - 对齐复用 + 闭合即停 2 608 ms，与推算的约 2.6 s 一致，低于 5.33 s；相对无复用整段（6 397 ms）为 2.45 倍（5090 为 3.1 倍）。
 - 对齐复用的 prefill / 无复用 = 2 024 / 3 981 = 0.51，token 之比（4 076 − 2 048）/ 4 076 = 0.50；复用时 ViT 134 ms，无复用 266 ms。
 - 回复相同：第二次 `generate` 与参考只有 15 / 20 相同，无复用 14 / 20，对齐 12 / 20，完整 15 / 20；5090 上 generate、无复用、对齐都是 20 / 20。Thor 上同一提示词两次生成的回复不总相同（issues.md ISSUE-114），所以这一轮的回复计数分不出 capsule 本身的影响。
-- 整段与闭合即停的 action 全部 20 / 20；两个"预知长度"格各有 1 次不同。参考回复的决策分布不在报告里：若 20 次都是 `continue`，action 列不检验干预决策的变化（issues.md ISSUE-110）。
+- 整段与闭合即停的 action 全部 20 / 20。参考回复的 20 次决策全部是 `continue`（5090 官方模型在 ep43 第 800 步为 `replan`，Thor 上为 `continue`，issues.md ISSUE-112），所以 action 列不检验干预决策的变化（issues.md ISSUE-110）。
+- 两个"预知长度"格各有 1 次没有 action：那次回复以 ```` ```json ```` 围栏开头，按参考回复长度定的预算解码不到 `action` 闭合。
+- 与第二次 `generate` 相比，回复不同的位置在 `reason` 文本里（第 69–220 个字符；`reason` 从第 48 个字符开始），只有对齐复用的 ep43 第 80 步从第 0 个字符起就不同（有无 ```` ```json ```` 围栏）。
 
 结论去向：本节；issues.md ISSUE-112、ISSUE-114；`opportunities.md` OPT-040 candidate 4、5；`research/topics/long-horizon-planner-executor/experiments/monitor_call/README.md` 的 Thor 一节；`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/README.md` 的 Thor 每周期一段与图像回放一节。`THOR_CHECKLIST.md` 的 H7、H4b、H8 已删除。
 
