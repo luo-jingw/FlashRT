@@ -26,9 +26,9 @@ Jetson Thor 上（官方模型）由 6.40 s 降到 2.61 s，从高于 5.33 s 的
 **Finding 4：前缀截在第一张 NOW 图（"完整复用"）再快 40–100 ms，但改变了全部 3 次非 `continue` 决策。**
 不对齐的前缀边界多出一个 prefill 分块切分，数值不同：master 的 57 次 `continue` 一次没变（回复文本 55 次变了），
 仅有的两次干预决策（`grasp_tool`、`next`）都变成了 `continue`；官方模型 19 次 `continue` 里 18 次不变、1 次回复变成空的 `{}`，
-唯一的 `replan` 变成了 `continue`。对齐复用下两个模型合计 79 / 79 次回复不变。闭环干预回合（5090，官方模型）上完整复用又改了
-3 次决策：3 次 `next` 里 2 次变成 `continue`，1 次 `continue` 变成 `next`；对齐复用 27 / 27 不变。合计 6 次干预里完整复用改了 5 次，
-这一条仍是小样本上的观察；它说明近似手段的评估要单独看干预决策，平均的文本一致率看不出这种变化。
+唯一的 `replan` 变成了 `continue`。对齐复用下两个模型合计 79 / 79 次回复不变。闭环干预回合（5090）上完整复用又改了决策：
+官方模型 3 次 `next` 里 2 次变成 `continue`、1 次 `continue` 变成 `next`，master 6 次 `next` 里 1 次变成 `continue`；对齐复用两个模型都是
+27 / 27 不变。5090 上合计 12 次干预决策，完整复用改了 6 次，对齐复用 0 次；Thor 上完整复用 3 / 3 不变。这一条仍是小样本上的观察；它说明近似手段的评估要单独看干预决策，平均的文本一致率看不出这种变化。
 
 ![monitor 调用的组成](fig_structure_rtx_master.png)
 
@@ -159,6 +159,8 @@ Thor 为 `THOR_STATUS_SUMMARY.md` `1111_h12h11h9` 轮 H11（GPU 上另有一个�
 - 完整复用（5090）：t0e1 第 240 步、t8e1 第 240 步 `next` → `continue`，t6e1 第 160 步 `continue` → `next`；Thor 上同一格 27 / 27。
 - 回复文本：5090 generate / 无复用 / 对齐 27 / 27 相同，完整 0 / 27；Thor 对齐 25 / 27（运行间差异，issues.md ISSUE-114）。
 - MTP 每次尝试接受的 token：5090 1.83–1.90，Thor 1.78–1.83（generate、无复用、对齐的整段回复）。
+- LoRA 合并 master、录制的回复（5090，`monitor_call_sim_rtx_master.json`）：对齐复用 + 闭合即停 316 ms，27 / 27，含 6 / 6 次 `next`；
+  完整复用 26 / 27（t1e1 第 240 步 `next` → `continue`）。
 
 ## 运行间差异（官方 Qwen3.8-27B，ep0 / ep43 腕部 224）
 
@@ -199,5 +201,6 @@ Thor 为 `THOR_STATUS_SUMMARY.md` `1111_h12h11h9` 轮 H11（GPU 上另有一个�
 | `monitor_call_sim_rtx_official.json` / `monitor_call_sim_rtx_master.json` / `monitor_call_sim_rtx.log` | 闭环干预回合，RTX 5090 |
 | `monitor_call_sim_thor_official.json` | 闭环干预回合，Jetson Thor（`1111_h12h11h9` 轮 H11） |
 | `reply_repeat.py` / `run_repeat_rtx.sh` | 运行间差异探针，`back_to_back` 与 `after_previous` 两种顺序 |
-| `reply_repeat_rtx_official.json` / `.log` | 运行间差异，RTX 5090 |
+| `reply_repeat_rtx_official.json` / `.log` | 运行间差异，RTX 5090（`back_to_back`） |
+| `reply_repeat_rtx_official_after_previous.json` / `.log` | 运行间差异，RTX 5090（`after_previous`，20 / 20 次调用 5 次全同） |
 | `reply_repeat_thor_official.json` | 运行间差异，Jetson Thor（`1111_h12h11h9` 轮 H12） |
