@@ -3461,13 +3461,17 @@ the Thor; this plan delivers the planner process it drives.
 
 ## Interface
 
-- WY stage probe: `python gdn_wy_stage_drift.py {rtx|thor} OUT_JSON` -> per layer and per WY stage, cos and max abs
-  difference against `native`, and prefill ms per backend.
+- Linear-attention variant probe: `python gdn_variant_drift.py {rtx|thor} OUT_JSON` -> per layer, prefill chunk and
+  variant (per-token path, the frontend's own path, Thor native, parent native, WY variants), cos / max abs / relative
+  L2 of the layer output and the recurrent state against the per-token path, ms per layer; per variant the whole
+  prompt's prefill ms and last-position logits against the per-token path.
 - Repeat probe: `python reply_repeat.py {rtx|thor} OUT_JSON CALLS_JSONL...` -> per call and repetition, reply tokens,
-  first differing token position, top-2 logit margin there, decision.
-- Intervention call set: `calls/*.jsonl` in the `harness_replay_5090/calls/` format, recorded from the closed-loop
-  failure episodes; consumed by `monitor_call/monitor_call_bench.py`.
-- Planner process: `python planner_process.py thor {original|fast} OUT_JSONL CALLS_JSONL...` -> one line per call with
+  first differing token position, decision; top-2 logit margin at the first token, the action value's first token and
+  the first differing position.
+- Intervention call set: `calls/*.jsonl` in the `harness_replay_5090/calls/` format, rebuilt from the closed-loop run
+  record and its saved frames (`python build_monitor_calls.py runs/planner_eos.json calls`); consumed by
+  `monitor_call/monitor_call_bench.py`.
+- Planner process: `python planner_process.py {rtx|thor} {original|fast} OUT_JSONL CALLS_JSONL...` -> one line per call with
   call start, decision available, call end (monotonic clock), decision.
 
 ## Flow
@@ -3480,10 +3484,11 @@ co-location measurement.
 
 - H10: `research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/decode_cycle_drift.py`
   (unchanged).
-- H12: new `research/topics/long-horizon-planner-executor/experiments/thor_repeatability/reply_repeat.py`.
-- H9: new `research/topics/long-horizon-planner-executor/experiments/gdn_wy_thor/gdn_wy_stage_drift.py`.
-- H11: new `research/topics/long-horizon-planner-executor/experiments/sim_closed_loop/record_intervention_calls.py`
-  and its `calls/`; `monitor_call/monitor_call_bench.py` (unchanged).
+- H12: new `research/topics/long-horizon-planner-executor/experiments/monitor_call/reply_repeat.py` (reuses
+  `monitor_call_bench.MonitorBench`), `run_repeat_rtx.sh`.
+- H9: new `research/topics/long-horizon-planner-executor/experiments/gdn_wy_thor/gdn_variant_drift.py`, `run_rtx.sh`.
+- H11: new `research/topics/long-horizon-planner-executor/experiments/sim_closed_loop/build_monitor_calls.py` and its
+  `calls/`; `monitor_call/monitor_call_bench.py` (unchanged), `monitor_call/run_intervention_rtx.sh`.
 - Planner process: new `research/topics/long-horizon-planner-executor/experiments/colocation_thor/planner_process.py`.
 - WY fix: `csrc/kernels/` and `flash_rt/frontends/torch/qwen36_thor.py`, files fixed after H9.
 - Records: `THOR_STATUS_SUMMARY.md`, issues.md ISSUE-112 / ISSUE-114, `opportunities.md` OPT-040 candidate 5, the
@@ -3493,30 +3498,36 @@ co-location measurement.
 
 ### Phase 1 — H10: decode after 180 s and 300 s of idle
 
-Phase Status: active
+Phase Status: completed
+
+- The row is handed over; its result is recorded with Phase 5's round.
 
 - Modified files: `THOR_CHECKLIST.md`.
 - Observation: first and second generation ms per cycle after each gap against the steady value; copy GB/s.
 
 ### Phase 2 — H12 repeat probe
 
-Phase Status: pending
+Phase Status: completed
 
-- Modified files: new `thor_repeatability/reply_repeat.py`.
-- Observation: the 5090 run (expected identical repetitions) as the denominator; Thor row H12.
+- Modified files: new `monitor_call/reply_repeat.py`, `monitor_call/run_repeat_rtx.sh`.
+- Observation: the 5090 run (`monitor_call/reply_repeat_rtx_official.json`) as the denominator; Thor row H12.
+- Result (RTX 5090, official model, 20 calls x 5): all repetitions identical; margin at the action value's first
+  token median 3.06, below 0.7 in 4 calls (`continue` against `re`plan), and in 2 of them the prefill-scored top-1
+  differs from the emitted token (ep43 steps 160, 800).
 
-### Phase 3 — H9 WY stage probe
+### Phase 3 — H9 linear-attention variant probe
 
-Phase Status: pending
+Phase Status: active
 
-- Modified files: new `gdn_wy_thor/gdn_wy_stage_drift.py`.
-- Observation: the 5090 run (per-stage cos against `native`, prefill ms per backend); Thor row H9.
+- Modified files: new `gdn_wy_thor/gdn_variant_drift.py`, `gdn_wy_thor/run_rtx.sh`.
+- Observation: the 5090 run (per-layer cos against the per-token path, prefill ms per variant); Thor row H9.
 
 ### Phase 4 — H11 intervention call set
 
 Phase Status: pending
 
-- Modified files: new `sim_closed_loop/record_intervention_calls.py`, `sim_closed_loop/calls/`.
+- Modified files: new `sim_closed_loop/build_monitor_calls.py`, `sim_closed_loop/calls/`,
+  `monitor_call/run_intervention_rtx.sh`.
 - Observation: number of calls per reference decision; the 5090 `monitor_call_bench` run on the set; Thor row H11.
 
 ### Phase 5 — Thor round H9, H11, H12
@@ -3530,7 +3541,7 @@ Phase Status: pending
 
 Phase Status: pending
 
-- Modified files: new `colocation_thor/planner_process.py`.
+- Modified files: new `colocation_thor/planner_process.py` (written, not yet run).
 - Observation: a 5090 run of both arms alone (L per call, decisions); the Thor co-location numbers come from the
   co-location measurement.
 
