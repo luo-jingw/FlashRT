@@ -8,10 +8,13 @@ stream, as in the harness). Every call is one long-context prefill on the commit
 read chunk by chunk (one chunk = one verify cycle).
 
 Arms:
-  original : every call prefills its whole prompt and decodes to EOS; the decision is available at the end.
+  original : every call prefills its whole prompt and decodes to EOS.
   fast     : monitor calls restore the episode's constant prefix from a capsule (system prompt + BEFORE images, cut
              at the 2 048-token prefill chunk; built once at the episode start, after decompose) and stop decoding
              after the cycle that closes the action value; decompose and replan as in `original`.
+
+Decision available (both arms): the end of the decode cycle whose output closes the action value; a reply without an
+action value (decompose's numbered list) has it at the reply end. L_decision = decision - start, L_reply = end - start.
 
 Before the timed pass the process plays every episode once without pacing and without output (warm-up): CUDA graphs
 are captured lazily per prompt length and decode position, and a first pass over the same calls captures them, so the
@@ -79,7 +82,8 @@ class PlannerProcess:
 
     @torch.inference_mode()
     def call(self, pc: PreparedCall, kind: str, cap: tuple[dict, int] | None, stop_at_action: bool) -> dict:
-        """One call; returns stage times, tokens, decision and the monotonic / wall time the decision was available."""
+        """One call; returns stage times, tokens, decision and the monotonic / wall time the decision was available
+        (None when the reply has no action value)."""
         S = int(pc.input_ids.shape[0])
         budget = min(BUDGET[kind], MAX_SEQ - S - LOOKAHEAD_ROWS - 8)
         self.b.fe.processor.apply_chat_template(
@@ -107,11 +111,12 @@ class PlannerProcess:
         for chunk in self.b.llm.decode_long_ctx_nvfp4_committed_stream(max_new_tokens=budget, K=SPEC_K,
                                                                        stop_token_ids=self.eos):
             toks.extend(chunk)
-            if any(t in self.eos for t in chunk):
-                break
-            if stop_at_action and parse_action(self.b.tok.decode(toks, skip_special_tokens=True)) is not None:
+            if dec_s is None and parse_action(self.b.tok.decode(toks, skip_special_tokens=True)) is not None:
                 torch.cuda.synchronize()
                 dec_s, dec_wall = self.now(), time.time()
+                if stop_at_action:
+                    break
+            if any(t in self.eos for t in chunk):
                 break
         decode = sync_ms(t2)
         self.b.llm.reset_rope_rows()

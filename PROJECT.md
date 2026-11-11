@@ -388,6 +388,18 @@ Do not record token values or other secrets here.
   Everything runs in the existing power mode (MAXN) with DVFS-managed
   clocks. `flash_rt/hardware/jetson_clock_state.py` only reads and
   records that state, and latency baselines are measured in it.
+- GPU jobs on the Thor run under the board's shared exclusive lock
+  `/tmp/lingbot_va_gpu_exclusive.lock` (agreed with the co-location
+  measurement on 2026-11-11): the file is opened read-only and held with
+  `flock(LOCK_EX)` for the job's lifetime; this project never creates it.
+  `research/topics/long-horizon-planner-executor/experiments/colocation_thor/with_gpu_lock.sh`
+  wraps one command this way and prints wait / acquire / release times;
+  every GPU row of `THOR_CHECKLIST.md` runs through it. The lock does
+  not cover other users' processes; a row that needs an idle GPU still
+  checks `nvidia-smi`.
+- Thor reports state, beside the commit, the L4T release, driver, CUDA,
+  cuBLAS, torch and transformers versions and the power mode (the
+  `P0_versions.log` and `P0_clock.log` pre-steps).
 - This fork does not send pull requests to `flashrt-project/FlashRT`
   upstream. `CONTRIBUTING.md`'s upstream PR workflow does not apply to
   work done here.

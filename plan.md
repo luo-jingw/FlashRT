@@ -3501,7 +3501,9 @@ the co-location measurement.
 - Prefill route: `flash_rt/frontends/torch/qwen36_thor.py` (`FLASHRT_QWEN36_THOR_LIN_PREFILL`, read in `__init__`
   into `_thor_lin_prefill`; `_layer_forward_lin_K_nvfp4` dispatch); no kernel change.
 - H14: `monitor_call/reply_repeat.py` order argument (`back_to_back` | `after_previous`), `run_repeat_rtx.sh`.
-- H15: `THOR_CHECKLIST.md` row only (`reply_repeat.py thor back_to_back`, unchanged script).
+- H15, H15w: `THOR_CHECKLIST.md` rows only (`reply_repeat.py thor back_to_back`, unchanged script).
+- H16: `colocation_thor/planner_process.py` (decision time in both arms); shared GPU lock: new
+  `colocation_thor/with_gpu_lock.sh`.
 - Thor default route: `flash_rt/frontends/torch/qwen36_thor.py` (default of `FLASHRT_QWEN36_THOR_LIN_PREFILL` and of
   `FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND`, class docstring).
 - Records: `THOR_STATUS_SUMMARY.md`, issues.md ISSUE-112 / ISSUE-114, `opportunities.md` OPT-040 candidate 5, the
@@ -3583,13 +3585,21 @@ Phase Status: completed
   inside the run 47 / 47 decisions equal the run's `generate`; 3 of 47 reference decisions differ from the `native`
   runs (Thor `native` and the 5090 also differ in 3). H14 79 / 80 repetitions identical (H12 44 / 80).
 
-### Phase 8 — H15: the H12 order on an idle GPU
+### Phase 8 — Thor round H15, H15w, H16
 
 Phase Status: active
 
-- Modified files: `THOR_CHECKLIST.md` row H15.
-- Observation: per call, repetitions 2-5 against the first and against one another, compared with H12 (same order,
-  another process on the GPU) and H14 (fixed predecessor, idle). Result goes to issues.md ISSUE-114.
+- Modified files: `THOR_CHECKLIST.md` rows H15, H15w, H16 and the shared GPU lock in the common pre-steps; new
+  `colocation_thor/with_gpu_lock.sh`; `colocation_thor/planner_process.py` (decision time in both arms: the cycle
+  that closes the action value, so L_decision and L_reply are both recorded for the original arm); PROJECT.md (lock,
+  version record).
+- Observation: H15 / H15w, per call, repetitions 2-5 against the first and against one another on an idle GPU, with
+  the `native` route and with the `wy_lt` route, compared with H12 (same order, another process on the GPU) and H14
+  (fixed predecessor, idle); a route that repeats where `native` does not locates the leftover state in
+  `_thor_lin_K_forward` (issues.md ISSUE-114). H16, the planner process alone on the Thor over the 66 recorded calls
+  (6 recordings, wrist 224 and 720) in the arms original, fast, fast with `wy_lt`: L_decision and L_reply per call
+  kind, start lateness against the harness cadence, decisions against the 5090 run of the same script; the
+  alone baseline for the co-location measurement.
 
 ### Phase 9 — Thor default prefill route
 

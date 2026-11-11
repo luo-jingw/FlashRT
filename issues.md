@@ -1788,6 +1788,9 @@ replies of the same prompt in one process are not always token-identical.
   2-5 identical to one another in every call, with the first different in some; if repetitions 2-5 also differ
   singly, as in H12, a source other than the predecessor exists on the idle GPU too. Comparing with H12 isolates the
   effect of another process on the GPU, which is the co-location condition.
+- H15w: H15 with the prefill linear attention on the parent `wy_lt` route. If H15 shows leftover state and H15w
+  repeats 80 / 80, the state is in the Thor frontend's own prefill path (`_thor_lin_K_forward`); if both scatter
+  alike, it is in a part both routes share.
 - Then, if leftover state is confirmed, fill the Thor frontend's scratch and state buffers with a constant before each
   call and find which buffer removes the dependence.
 
