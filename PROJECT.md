@@ -362,7 +362,7 @@ package registries, model hubs, cloud APIs).
 
 | Service | Scope | Source | Notes |
 |---|---|---|---|
-| git remote `origin` | `luo-jingw/FlashRT` (personal fork) | global git identity | not `flashrt-project/FlashRT` upstream; no upstream PR is planned for this work |
+| git remote `origin` | `luo-jingw/FlashRT` (personal fork, public) | global git identity for authorship; push token read per command by a credential helper from `github_token` at the repository root | not `flashrt-project/FlashRT` upstream; no upstream PR is planned for this work; `github_token` is excluded through `.git/info/exclude` (local, not committed) and must never be added to the index |
 
 Do not assume a global or default identity applies.
 See `AGENTS.md` → Credentials and Environment Isolation.
