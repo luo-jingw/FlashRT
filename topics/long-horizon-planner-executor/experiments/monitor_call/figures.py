@@ -72,6 +72,9 @@ def fig_structure(structure: list[dict], out: str) -> None:
     fig.savefig(out)
 
 
+MONITOR_INTERVAL_S = 5.33   # 80 env steps at 15 Hz (the harness's monitor interval)
+
+
 def fig_latency(cells: list[dict], label: str, out: str) -> None:
     by = defaultdict(list)
     for c in cells:
@@ -102,6 +105,10 @@ def fig_latency(cells: list[dict], label: str, out: str) -> None:
                 bottoms.append(bottom)
                 x += 1
             x += 0.6
+        if max(bottoms) > MONITOR_INTERVAL_S:
+            ax.axhline(MONITOR_INTERVAL_S, color=INK2, linewidth=1, linestyle=(0, (4, 3)))
+            ax.text(xs[-1] + 0.4, MONITOR_INTERVAL_S - 0.08, f"monitor 间隔 {MONITOR_INTERVAL_S} s", ha="right",
+                    va="top", fontsize=9, color=INK2)
         ax.set_xticks(xs, labels, fontsize=9)
         for g, (_, bl) in enumerate(FIG_BUDGETS):
             ax.text(1 + 3.6 * g, -0.13, bl, transform=ax.get_xaxis_transform(), ha="center", fontsize=10, color=INK2)
@@ -114,7 +121,7 @@ def fig_latency(cells: list[dict], label: str, out: str) -> None:
     axes[0][0].legend(frameon=False, loc="upper right", fontsize=9)
     fig.suptitle(f"monitor 调用从开始到决策可用：复用固定前缀 × action 闭合即停（{label}）", x=0.01, ha="left",
                  fontsize=12.5, color=INK)
-    fig.text(0.01, 0.045, "对齐复用：前缀截到 prefill 分块（2 048）的整数倍，结果与整段 prefill 逐 token 相同；"
+    fig.text(0.01, 0.045, "对齐复用：前缀截到 prefill 分块（2 048）的整数倍；"
              "完整复用：前缀到第一张 NOW 图像为止。", fontsize=9, color=MUTED)
     fig.text(0.01, 0.01, "每根柱为该腕部图尺寸全部 monitor 调用的中位数（ms 标在柱顶）；解码整段回复时，决策在回复结束后才可用。",
              fontsize=9, color=MUTED)

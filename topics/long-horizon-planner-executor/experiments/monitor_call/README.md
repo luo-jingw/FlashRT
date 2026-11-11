@@ -127,11 +127,13 @@ capsule：对齐 2 048 token 176 MB，建一次 235–286 ms；完整 2 641 / 3 
   （`1104_h3c` 回放：40 / 40）。
 - Thor 上 prefill 占主导，复用省得更多：对齐复用的 prefill 是无复用的 0.51（2 024 / 3 981 ms，token 之比 0.50），ViT 134 / 266 ms；
   闭合即停省掉约 1.7 s 解码（无复用下整段与闭合即停之差，6 397 − 4 694 ms）。
-- 回复文本：Thor 上同一提示词两次 `generate` 只有 15 / 20 相同（issues.md ISSUE-114），所以 12 / 20 不能归因于 capsule；
-  这一轮能支持的比较是决策，整段与闭合即停的各格都是 20 / 20。参考回复的决策分布与逐次结果在 Thor 的
-  `monitor_call_thor_official.json` 里，尚未带回，这一节的图也待它带回后再画。
-- 剩下的 2.6 s 里，对齐复用的 prefill（约 2.0 s）是大头；Thor 上 prefill 的 55 % 在一个线性注意力绑定上
-  （`opportunities.md` OPT-040 candidate 5）。
+- 回复文本：Thor 上同一提示词两次 `generate` 只有 15 / 20 相同（issues.md ISSUE-114），所以 12 / 20 不能归因于 capsule。
+  不同之处在 `reason` 文本里（第 69–220 个字符），只有一次是开头有无 ```` ```json ```` 围栏。
+- 决策：整段与闭合即停的各格都是 20 / 20，但 Thor 上 20 次参考决策全是 `continue`，这一轮没有检验干预决策的变化。
+
+![从调用开始到决策可用（Jetson Thor，官方模型）](fig_latency_thor_official.png)
+- 剩下的 2.6 s 里，对齐复用的 prefill（约 2.0 s）是大头。Thor 上 prefill 的 55 % 在线性注意力的 `native` 递归后端上，
+  是 5090 WY 分块路径的约 32 倍（`opportunities.md` OPT-040 candidate 5）。
 
 ## 范围与限制
 
@@ -147,6 +149,7 @@ capsule：对齐 2 048 token 176 MB，建一次 235–286 ms；完整 2 641 / 3 
 | `monitor_call_bench.py` | 网格：前缀 × 解码，`{rtx|thor}` 前端，`{recorded|own}` 参考回复 |
 | `run_master.sh` / `run_official.sh` | RTX 5090 上的两组运行 |
 | `tables.py` | 结构、capsule、各格中位的表（无绘图依赖） |
-| `figures.py` | 两张图 |
+| `figures.py` | 组成图与延迟图（延迟超过 monitor 间隔时画出 5.33 s 线） |
 | `monitor_call_rtx_master.json` / `.log` | master 结果 |
 | `monitor_call_rtx_official.json` / `.log` | 官方模型结果 |
+| `monitor_call_thor_official.json` | Jetson Thor 官方模型结果（`THOR_STATUS_SUMMARY.md` `1110_h7h4bh8` 轮 H8） |
