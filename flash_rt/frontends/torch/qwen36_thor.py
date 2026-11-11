@@ -137,6 +137,20 @@ class Qwen36TorchFrontendThor(Qwen36TorchFrontendRtx):
         # their RTX default).
         os.environ.setdefault(
             "FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND", "native")
+        # Linear-attention layers at K > ``_K_save_max`` (chunked
+        # prefill): ``thor`` = ``_thor_lin_K_forward`` (per-position
+        # GDN walk); ``parent`` = the RTX K-row chunk branch with the
+        # backend ``FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND`` names. With
+        # ``wy_lt`` the parent branch measures per-layer cos 0.99977
+        # (median) against the per-token path at K=2048 on SM110, the
+        # same as on SM120, at about half the layer time (research
+        # experiment ``gdn_wy_thor``).
+        self._thor_lin_prefill = os.environ.get(
+            "FLASHRT_QWEN36_THOR_LIN_PREFILL", "thor").strip().lower()
+        if self._thor_lin_prefill not in ("thor", "parent"):
+            raise ValueError(
+                "FLASHRT_QWEN36_THOR_LIN_PREFILL must be thor or parent, "
+                f"got {self._thor_lin_prefill!r}")
         with _use_thor_attn_backend():
             super().__init__(*args, **kwargs)
         self._thor_alloc_K_row_scratch()
@@ -197,6 +211,8 @@ class Qwen36TorchFrontendThor(Qwen36TorchFrontendRtx):
             return super()._layer_forward_lin_K_nvfp4(L, h_in_K, K)
         if K > self.MAX_Q_SEQ:
             return self._thor_lin_K_dispatch(L, h_in_K, K)
+        if self._thor_lin_prefill == "parent":
+            return super()._layer_forward_lin_K_nvfp4(L, h_in_K, K)
         return self._thor_lin_K_forward(L, h_in_K, K)
 
     def _thor_lin_chunk_saves_enabled(self) -> bool:

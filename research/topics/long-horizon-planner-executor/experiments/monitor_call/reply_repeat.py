@@ -1,7 +1,11 @@
-"""Run-to-run repeatability of the planner's monitor replies in one process (Thor row H12).
+"""Run-to-run repeatability of the planner's monitor replies in one process (Thor rows H12, H14).
 
 Per recorded monitor call: REPEATS greedy `generate` calls (the reference path of `monitor_call_bench.py`, OWN_BUDGET
-new tokens, cut at EOS), then the top-2 logit margin of the next-token distribution at three positions of the first
+new tokens, cut at EOS) in one of two orders,
+  back_to_back   : the REPEATS calls one after another (the first follows the previous call's scoring prefills);
+  after_previous : before each repetition one `generate` of the previous call in the run (output discarded), so every
+                   repetition follows the same predecessor;
+then the top-2 logit margin of the next-token distribution at three positions of the first
 repetition's reply, each scored by one prefill of the prompt plus the reply tokens before that position:
   first   : position 0 (the reply's first token; a ```json fence or not);
   action  : the first token of the action value;
@@ -10,7 +14,8 @@ The prefill-scored distribution is the long-context prefill path, not the decode
 score records whether its top-1 token equals the emitted token (`top1_is_emitted`).
 
 usage (cwd anywhere; PLANNER_CKPT, PLANNER_MTP_DIR as for monitor_call_bench.py):
-  PLANNER_CKPT=DIR PLANNER_MTP_DIR=DIR python reply_repeat.py {rtx|thor} OUT_JSON CALLS_JSONL...
+  PLANNER_CKPT=DIR PLANNER_MTP_DIR=DIR python reply_repeat.py {rtx|thor} {back_to_back|after_previous} OUT_JSON
+      CALLS_JSONL...
 """
 import json
 import re
@@ -23,6 +28,7 @@ from monitor_call_bench import (LOOKAHEAD_ROWS, OWN_BUDGET, REPLAY_DIR, SPEC_K, 
                                 episode_label, parse_action)
 
 REPEATS = 5
+ORDERS = ("back_to_back", "after_previous")
 ACTION_OPEN_RE = re.compile(r'"action"\s*:\s*"[^"]')
 
 
@@ -87,8 +93,13 @@ class RepeatProbe:
                 return n - 1
         return None
 
-    def run(self, pc: PreparedCall, episode: str) -> CallRecord:
-        reps = [self.reply_tokens(pc) for _ in range(REPEATS)]
+    def run(self, pc: PreparedCall, episode: str, prev: PreparedCall | None) -> CallRecord:
+        """prev: the call run before each repetition (after_previous order), None for back_to_back."""
+        reps = []
+        for _ in range(REPEATS):
+            if prev is not None:
+                self.reply_tokens(prev)
+            reps.append(self.reply_tokens(pc))
         texts = [self.b.tok.decode(r, skip_special_tokens=True) for r in reps]
 
         def first_diff(a: list[int], b: list[int]) -> int:
@@ -110,10 +121,12 @@ class RepeatProbe:
 
 
 def main() -> None:
-    frontend, out_path, jsonls = sys.argv[1], sys.argv[2], sys.argv[3:]
+    frontend, order, out_path, jsonls = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+    assert order in ORDERS, order
     bench = MonitorBench(frontend)
     probe = RepeatProbe(bench)
     records: list[CallRecord] = []
+    prev: PreparedCall | None = None
     for jl in jsonls:
         ep = episode_label(jl)
         rows = [json.loads(line) for line in open(jl)]
@@ -122,7 +135,8 @@ def main() -> None:
         before = sorted(set.intersection(*img_sets))
         for r in mon:
             pc = bench.prepare(r, REPLAY_DIR, before)
-            rec = probe.run(pc, ep)
+            rec = probe.run(pc, ep, prev if order == "after_previous" else None)
+            prev = pc
             records.append(rec)
             same = sum(1 for d in rec.first_diff if d == -1)
             sc = " ".join(f"{s.kind}@{s.position} margin {s.margin:.3f}{'' if s.top1_is_emitted else ' (top1!=emitted)'}"
@@ -130,7 +144,7 @@ def main() -> None:
             print(f"{ep} step {rec.step}: {same}/{REPEATS} identical, first diffs {rec.first_diff}, "
                   f"decisions {rec.decisions}, {sc}", flush=True)
             with open(out_path, "w") as f:
-                json.dump({"frontend": frontend, "repeats": REPEATS, "calls": [asdict(c) for c in records]}, f,
+                json.dump({"frontend": frontend, "order": order, "repeats": REPEATS, "calls": [asdict(c) for c in records]}, f,
                           indent=1)
 
 

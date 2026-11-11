@@ -3442,9 +3442,11 @@ Rationale, evidence and the expected effect of every item: `research/topics/long
 - Current state (Jetson Thor, official Qwen3.8-27B NVFP4, monitor calls of the VoLoAgent harness, round
   `1110_h7h4bh8`): from call start to decision available 6.40 s on the original path (above the 5.33 s monitor
   interval) and 2.61 s with the prefix capsule and stop at action closure; prefill is about 2.0 s of the 2.61 s, and
-  55 % of the prefill is the `native` linear-attention backend that `Qwen36TorchFrontendThor` pins because the WY
-  backend drifts on SM110. All 20 Thor reference decisions are `continue`; Thor replies are not reproducible run to
-  run (issues.md ISSUE-114). The 27B planner has not been measured co-located with the executor on the Thor.
+  55 % of the prefill is the per-step `native` linear-attention path that `Qwen36TorchFrontendThor` runs for every
+  prefill chunk. Round `1111_h12h11h9`: the 5090's `wy_lt` chunk path is as accurate per layer on SM110 as on the
+  5090 and takes the prefill from 3 994 to 2 294 ms (H9); the fast path keeps 27 / 27 decisions on closed-loop calls
+  including 3 `next` (H11); Thor replies are not reproducible run to run, decisions are (H12, issues.md ISSUE-114).
+  The 27B planner has not been measured co-located with the executor on the Thor.
 - Goal: on the Thor, decision available below the monitor interval with the smallest robot wait, executor calls
   within their deadline under co-location, and intervention decisions equal to the original path.
 
@@ -3477,8 +3479,10 @@ the Thor; this plan delivers the planner process it drives.
 ## Flow
 
 H10 runs the existing `decode_cycle_drift.py` on the Thor. The three probes run on the 5090 first (denominator), then
-in one Thor round (H9, H11, H12). The WY fix is defined from H9's result. The planner process is handed to the
-co-location measurement.
+in one Thor round (H9, H11, H12). H9 defines the prefill change: the Thor frontend's prefill linear-attention layers
+on the parent chunk branch with `wy_lt`, selected by `FLASHRT_QWEN36_THOR_LIN_PREFILL=parent`; Thor row H13 measures
+it on the H8 and H11 call sets, H14 tests the leftover-state hypothesis of ISSUE-114. The planner process is handed
+to the co-location measurement.
 
 ## Code Mapping
 
@@ -3490,7 +3494,9 @@ co-location measurement.
 - H11: new `research/topics/long-horizon-planner-executor/experiments/sim_closed_loop/build_monitor_calls.py` and its
   `calls/`; `monitor_call/monitor_call_bench.py` (unchanged), `monitor_call/run_intervention_rtx.sh`.
 - Planner process: new `research/topics/long-horizon-planner-executor/experiments/colocation_thor/planner_process.py`.
-- WY fix: `csrc/kernels/` and `flash_rt/frontends/torch/qwen36_thor.py`, files fixed after H9.
+- Prefill route: `flash_rt/frontends/torch/qwen36_thor.py` (`FLASHRT_QWEN36_THOR_LIN_PREFILL`, read in `__init__`
+  into `_thor_lin_prefill`; `_layer_forward_lin_K_nvfp4` dispatch); no kernel change.
+- H14: `monitor_call/reply_repeat.py` order argument (`back_to_back` | `after_previous`), `run_repeat_rtx.sh`.
 - Records: `THOR_STATUS_SUMMARY.md`, issues.md ISSUE-112 / ISSUE-114, `opportunities.md` OPT-040 candidate 5, the
   experiment READMEs, `thor_rationale.md`.
 
@@ -3517,10 +3523,13 @@ Phase Status: completed
 
 ### Phase 3 — H9 linear-attention variant probe
 
-Phase Status: active
+Phase Status: completed
 
-- Modified files: new `gdn_wy_thor/gdn_variant_drift.py`, `gdn_wy_thor/run_rtx.sh`.
+- Modified files: new `gdn_wy_thor/gdn_variant_drift.py`, `gdn_wy_thor/run_rtx.sh`, `gdn_wy_thor/README.md`.
 - Observation: the 5090 run (per-layer cos against the per-token path, prefill ms per variant); Thor row H9.
+- Result (`gdn_wy_thor/README.md`): `wy_lt` per-layer cos median 0.999765 on the Thor, 0.999766 on the 5090; only the
+  hand-written `wy` fails on SM110; Thor prefill 2 294 ms with `wy_lt` against 3 994 ms; last-position logits of all
+  correct variants within cos 0.57-0.72 of the per-token path, so logits cos does not grade a kernel.
 
 ### Phase 4 — H11 intervention call set
 
@@ -3545,9 +3554,14 @@ Phase Status: pending
 - Observation: a 5090 run of both arms alone (L per call, decisions); the Thor co-location numbers come from the
   co-location measurement.
 
-### Phase 7 — WY backend on SM110
+### Phase 7 — Thor prefill linear attention on the parent chunk branch
 
 Phase Status: pending
 
-- Modified files: defined from Phase 5's H9 result (return to plan if it needs a kernel interface change).
-- Observation: per-layer cos against `native` on the Thor; monitor prefill ms; H8 decisions.
+- Modified files: `flash_rt/frontends/torch/qwen36_thor.py` (`FLASHRT_QWEN36_THOR_LIN_PREFILL=thor|parent`, default
+  `thor`; with `parent`, linear-attention layers at K > `_K_save_max` and K <= `MAX_Q_SEQ` go to the parent K-row
+  branch, whose backend `FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND` names); `THOR_CHECKLIST.md` rows H14, H13;
+  `monitor_call/reply_repeat.py` order argument.
+- Observation: Thor row H13 (prefill and call ms, MTP accepts per attempt, decisions against the `native` runs on the
+  47 calls of H8 and H11); Thor row H14 (repetitions identical per call against H12). The default changes only after
+  H13, in a separate change.
