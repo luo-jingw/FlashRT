@@ -1,0 +1,24 @@
+loaded: Qwen36VlTorchFrontendRtx Qwen36TorchFrontendRtx arm original
+warm-up pass done
+ep0_wrist224 decompose@0: start +0.01 s late, decision after 0.62 s, end 0.62 s, None
+ep0_wrist224 monitor@80: start +0.00 s late, decision after 1.44 s, end 1.44 s, continue
+ep0_wrist224 monitor@160: start +0.00 s late, decision after 1.06 s, end 1.06 s, continue
+ep0_wrist224 monitor@240: start +0.00 s late, decision after 1.21 s, end 1.21 s, continue
+ep0_wrist224 monitor@320: start +0.00 s late, decision after 1.24 s, end 1.24 s, continue
+ep0_wrist224 monitor@400: start +0.00 s late, decision after 1.51 s, end 1.51 s, continue
+ep0_wrist224 monitor@480: start +0.00 s late, decision after 1.24 s, end 1.24 s, continue
+ep0_wrist224 monitor@560: start +0.00 s late, decision after 1.21 s, end 1.21 s, continue
+ep0_wrist224 monitor@640: start +0.00 s late, decision after 1.43 s, end 1.43 s, continue
+ep0_wrist224 monitor@720: start +0.00 s late, decision after 1.51 s, end 1.51 s, continue
+ep0_wrist224 monitor@800: start +0.00 s late, decision after 1.58 s, end 1.58 s, continue
+ep43_wrist224 decompose@0: start +0.01 s late, decision after 0.69 s, end 0.69 s, None
+ep43_wrist224 monitor@80: start +0.00 s late, decision after 1.33 s, end 1.33 s, continue
+ep43_wrist224 monitor@160: start +0.00 s late, decision after 1.09 s, end 1.09 s, continue
+ep43_wrist224 monitor@240: start +0.00 s late, decision after 1.30 s, end 1.30 s, continue
+ep43_wrist224 monitor@320: start +0.00 s late, decision after 1.22 s, end 1.22 s, continue
+ep43_wrist224 monitor@400: start +0.00 s late, decision after 1.41 s, end 1.41 s, continue
+ep43_wrist224 monitor@480: start +0.00 s late, decision after 1.41 s, end 1.41 s, continue
+ep43_wrist224 monitor@560: start +0.00 s late, decision after 1.37 s, end 1.37 s, continue
+ep43_wrist224 monitor@640: start +0.00 s late, decision after 1.05 s, end 1.05 s, continue
+ep43_wrist224 monitor@720: start +0.00 s late, decision after 1.20 s, end 1.20 s, continue
+ep43_wrist224 monitor@800: start +0.00 s late, decision after 1.39 s, end 1.39 s, replan

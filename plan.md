@@ -3533,30 +3533,36 @@ Phase Status: completed
 
 ### Phase 4 — H11 intervention call set
 
-Phase Status: pending
+Phase Status: completed
 
 - Modified files: new `sim_closed_loop/build_monitor_calls.py`, `sim_closed_loop/calls/`,
   `monitor_call/run_intervention_rtx.sh`.
 - Observation: number of calls per reference decision; the 5090 `monitor_call_bench` run on the set; Thor row H11.
+- Result (`monitor_call/README.md`): aligned capsule + stop at action 27 / 27 decisions on both machines (official
+  model 3 / 3 `next`, master 6 / 6 on the 5090); the capsule cut at the first NOW image changes 3 + 1 decisions on the
+  5090 and none on the Thor.
 
 ### Phase 5 — Thor round H9, H11, H12
 
-Phase Status: pending
+Phase Status: completed
 
 - Modified files: `THOR_CHECKLIST.md`; records.
 - Observation: the rows' numbers as defined in the checklist.
+- Result: `THOR_STATUS_SUMMARY.md` rounds `1111_h10` and `1111_h12h11h9`.
 
 ### Phase 6 — planner process for the co-location measurement
 
-Phase Status: pending
+Phase Status: completed
 
-- Modified files: new `colocation_thor/planner_process.py` (written, not yet run).
+- Modified files: new `colocation_thor/planner_process.py` (warm-up pass before the timed pass), `colocation_thor/README.md`.
 - Observation: a 5090 run of both arms alone (L per call, decisions); the Thor co-location numbers come from the
   co-location measurement.
+- Result (`colocation_thor/README.md`, RTX 5090, GPU shared with another user's process during the timed pass): both
+  arms run end to end with the same decisions; monitor decision available 0.446 s (fast) and 1.312 s (original).
 
 ### Phase 7 — Thor prefill linear attention on the parent chunk branch
 
-Phase Status: pending
+Phase Status: active
 
 - Modified files: `flash_rt/frontends/torch/qwen36_thor.py` (`FLASHRT_QWEN36_THOR_LIN_PREFILL=thor|parent`, default
   `thor`; with `parent`, linear-attention layers at K > `_K_save_max` and K <= `MAX_Q_SEQ` go to the parent K-row

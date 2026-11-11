@@ -13,7 +13,12 @@ Arms:
              at the 2 048-token prefill chunk; built once at the episode start, after decompose) and stop decoding
              after the cycle that closes the action value; decompose and replan as in `original`.
 
-One JSON line per call: episode, kind, step, due / start / decision / end on the monotonic clock (s since the
+Before the timed pass the process plays every episode once without pacing and without output (warm-up): CUDA graphs
+are captured lazily per prompt length and decode position, and a first pass over the same calls captures them, so the
+timed pass holds no capture time (RTX 5090 test without warm-up: first monitor prefill 663 against 330 ms, original-arm
+decode 8-26 ms per token).
+
+One JSON line per call of the timed pass: episode, kind, step, due / start / decision / end on the monotonic clock (s since the
 process's first episode start) and on the wall clock (time.time(), for alignment with the executor's log), stage ms,
 new tokens, decision. The capsule build is one line of kind "capsule".
 
@@ -25,6 +30,7 @@ import os
 import sys
 import time
 from dataclasses import asdict, dataclass
+from typing import TextIO
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "monitor_call"))
@@ -115,7 +121,8 @@ class PlannerProcess:
                 "new_tokens": n_new, "prompt_tokens": S, "decision": parse_action(text),
                 "decision_s": dec_s, "decision_wall": dec_wall}
 
-    def episode(self, jsonl: str, out) -> None:
+    def episode(self, jsonl: str, out: TextIO | None, paced: bool) -> None:
+        """One recorded episode; paced: wait for each call's due time; out None: no output (warm-up)."""
         ep = episode_label(jsonl)
         rows = [json.loads(line) for line in open(jsonl)]
         mon = [r for r in rows if r["kind"] == "monitor"]
@@ -125,7 +132,7 @@ class PlannerProcess:
         for r in rows:
             pc = self.b.prepare(r, REPLAY_DIR, before if r["kind"] == "monitor" else [])
             due = start + (r["step"] / 80) * INTERVAL_S
-            while self.now() < due:
+            while paced and self.now() < due:
                 time.sleep(min(0.002, due - self.now()))
             t_start, w_start = self.now(), time.time()
             fast_monitor = self.arm == "fast" and r["kind"] == "monitor"
@@ -136,17 +143,19 @@ class PlannerProcess:
                             st["decision_wall"] if st["decision_wall"] is not None else w_end, w_end,
                             st["vit_ms"], st["restore_ms"], st["prefill_ms"], st["decode_ms"], st["new_tokens"],
                             st["prompt_tokens"], st["decision"])
-            out.write(json.dumps(asdict(line)) + "\n")
-            out.flush()
-            print(f"{ep} {r['kind']}@{r['step']}: start {t_start - due:+.2f} s late, decision after "
-                  f"{line.decision_s - t_start:.2f} s, end {t_end - t_start:.2f} s, {st['decision']}", flush=True)
+            if out is not None:
+                out.write(json.dumps(asdict(line)) + "\n")
+                out.flush()
+                print(f"{ep} {r['kind']}@{r['step']}: start {t_start - due:+.2f} s late, decision after "
+                      f"{line.decision_s - t_start:.2f} s, end {t_end - t_start:.2f} s, {st['decision']}", flush=True)
             if self.arm == "fast" and r["kind"] == "decompose":
                 pc0 = self.b.prepare(mon[0], REPLAY_DIR, before)
                 P = self.b.llm.capsule_aligned_len(pc0.boundary)
                 c0 = self.now()
                 capsule, ms = self.b.build_capsule(pc0, P, BUDGET["monitor"])
                 cap = (capsule, P)
-                out.write(json.dumps({"episode": ep, "kind": "capsule", "start_s": c0, "end_s": self.now(),
+                if out is not None:
+                    out.write(json.dumps({"episode": ep, "kind": "capsule", "start_s": c0, "end_s": self.now(),
                                       "build_ms": ms, "prefix_tokens": P}) + "\n")
 
 
@@ -154,10 +163,13 @@ def main() -> None:
     frontend, arm, out_path, jsonls = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
     proc = PlannerProcess(frontend, arm)
     print(f"loaded: {type(proc.b.fe).__name__} {type(proc.b.llm).__name__} arm {arm}", flush=True)
-    proc.t0 = time.monotonic()   # graphs are captured lazily: the first calls of the process include captures
+    for jl in jsonls:
+        proc.episode(jl, None, paced=False)
+    print("warm-up pass done", flush=True)
+    proc.t0 = time.monotonic()
     with open(out_path, "w") as out:
         for jl in jsonls:
-            proc.episode(jl, out)
+            proc.episode(jl, out, paced=True)
 
 
 if __name__ == "__main__":
