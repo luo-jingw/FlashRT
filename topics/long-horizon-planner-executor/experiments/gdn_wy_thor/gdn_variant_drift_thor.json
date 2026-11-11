@@ -1,0 +1,7756 @@
+{
+ "frontend": "thor",
+ "frontend_class": "Qwen36TorchFrontendThor",
+ "reference": "per_token",
+ "wy_symbols": {
+  "qwen36_gdn_wy_kkt_b64_bf16": true,
+  "qwen36_gdn_wy_solve_tril_b64_f32": true,
+  "qwen36_gdn_wy_recompute_wu_b64_bf16": true,
+  "qwen36_gdn_wy_chunk_h_b64_bf16": true,
+  "qwen36_gdn_wy_output_o_b64_bf16": true,
+  "linear_attn_gdn_wy_kkt_b64_bf16_cublaslt": true,
+  "linear_attn_gdn_wy_chunk_h_b64_bf16_mma_fla": true,
+  "linear_attn_gdn_wy_chunk_h_b64_bf16_cublaslt_f32gemm": true,
+  "linear_attn_gdn_wy_chunk_h_b64_bf16_cublaslt_f32state": true
+ },
+ "layers": [
+  {
+   "variant": "per_token",
+   "layer": 0,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2240.5327185988426
+  },
+  {
+   "variant": "own",
+   "layer": 0,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 34.60528142750263
+  },
+  {
+   "variant": "thor_native",
+   "layer": 0,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 34.847572445869446
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 0,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0078125,
+   "out_rel_l2": 5.003216574550606e-05,
+   "state_cos": 0.9999999403953552,
+   "ms": 33.91028568148613
+  },
+  {
+   "variant": "wy",
+   "layer": 0,
+   "chunk": 0,
+   "out_cos": -0.7078065276145935,
+   "out_max_abs": 802928.0,
+   "out_rel_l2": 8915.3779296875,
+   "state_cos": NaN,
+   "ms": 196.96802832186222
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 0,
+   "chunk": 0,
+   "out_cos": 0.9999159574508667,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.01303399819880724,
+   "state_cos": 0.9958512187004089,
+   "ms": 16.900796443223953
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 0,
+   "chunk": 0,
+   "out_cos": 0.9977280497550964,
+   "out_max_abs": 17.5,
+   "out_rel_l2": 0.09570198506116867,
+   "state_cos": 0.9958512187004089,
+   "ms": 17.759840935468674
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 0,
+   "chunk": 0,
+   "out_cos": 0.999914288520813,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.013161390088498592,
+   "state_cos": 0.9958531856536865,
+   "ms": 18.825441598892212
+  },
+  {
+   "variant": "per_token",
+   "layer": 1,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2225.377008318901
+  },
+  {
+   "variant": "own",
+   "layer": 1,
+   "chunk": 0,
+   "out_cos": 0.9999955892562866,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.0029894441831856966,
+   "state_cos": 0.9999861717224121,
+   "ms": 34.70946662127972
+  },
+  {
+   "variant": "thor_native",
+   "layer": 1,
+   "chunk": 0,
+   "out_cos": 0.9999955892562866,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.0029894441831856966,
+   "state_cos": 0.9999861717224121,
+   "ms": 34.708984196186066
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 1,
+   "chunk": 0,
+   "out_cos": 0.9999955892562866,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.0029894383624196053,
+   "state_cos": 0.9999861717224121,
+   "ms": 34.17041525244713
+  },
+  {
+   "variant": "wy",
+   "layer": 1,
+   "chunk": 0,
+   "out_cos": -0.5385721921920776,
+   "out_max_abs": 400.0,
+   "out_rel_l2": 1.6886862516403198,
+   "state_cos": 0.0,
+   "ms": 196.45849242806435
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 1,
+   "chunk": 0,
+   "out_cos": 0.9999662041664124,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.008277781307697296,
+   "state_cos": 0.9989259243011475,
+   "ms": 16.659727320075035
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 1,
+   "chunk": 0,
+   "out_cos": -0.36732739210128784,
+   "out_max_abs": 347.0,
+   "out_rel_l2": 1.3045872449874878,
+   "state_cos": 0.9989259243011475,
+   "ms": 17.79014617204666
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 1,
+   "chunk": 0,
+   "out_cos": 0.9999615550041199,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.008809948340058327,
+   "state_cos": 0.9989259839057922,
+   "ms": 18.758829683065414
+  },
+  {
+   "variant": "per_token",
+   "layer": 2,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2250.0992715358734
+  },
+  {
+   "variant": "own",
+   "layer": 2,
+   "chunk": 0,
+   "out_cos": 0.9999983906745911,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0018003202276304364,
+   "state_cos": 0.9999940991401672,
+   "ms": 34.66830961406231
+  },
+  {
+   "variant": "thor_native",
+   "layer": 2,
+   "chunk": 0,
+   "out_cos": 0.9999983906745911,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0018003202276304364,
+   "state_cos": 0.9999940991401672,
+   "ms": 34.61380861699581
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 2,
+   "chunk": 0,
+   "out_cos": 0.9999984502792358,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0018003210425376892,
+   "state_cos": 0.9999940991401672,
+   "ms": 34.21463631093502
+  },
+  {
+   "variant": "wy",
+   "layer": 2,
+   "chunk": 0,
+   "out_cos": 0.9882270097732544,
+   "out_max_abs": 49.0,
+   "out_rel_l2": 0.17444348335266113,
+   "state_cos": 0.005178551655262709,
+   "ms": 196.4748352766037
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 2,
+   "chunk": 0,
+   "out_cos": 0.9999713897705078,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.007725840900093317,
+   "state_cos": 0.9987115263938904,
+   "ms": 16.945213079452515
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 2,
+   "chunk": 0,
+   "out_cos": 0.998824417591095,
+   "out_max_abs": 26.0,
+   "out_rel_l2": 0.059555575251579285,
+   "state_cos": 0.9987115263938904,
+   "ms": 17.761310562491417
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 2,
+   "chunk": 0,
+   "out_cos": 0.9999712705612183,
+   "out_max_abs": 3.0,
+   "out_rel_l2": 0.0077446578070521355,
+   "state_cos": 0.9987110495567322,
+   "ms": 18.740283325314522
+  },
+  {
+   "variant": "per_token",
+   "layer": 4,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2210.086226463318
+  },
+  {
+   "variant": "own",
+   "layer": 4,
+   "chunk": 0,
+   "out_cos": 0.9999998807907104,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.77916121482849
+  },
+  {
+   "variant": "thor_native",
+   "layer": 4,
+   "chunk": 0,
+   "out_cos": 0.9999998807907104,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.67018902301788
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 4,
+   "chunk": 0,
+   "out_cos": 0.9999998807907104,
+   "out_max_abs": 0.001953125,
+   "out_rel_l2": 3.953155555791454e-06,
+   "state_cos": 1.0,
+   "ms": 34.18613784015179
+  },
+  {
+   "variant": "wy",
+   "layer": 4,
+   "chunk": 0,
+   "out_cos": 0.9956691861152649,
+   "out_max_abs": 12.75,
+   "out_rel_l2": 0.093182772397995,
+   "state_cos": 0.00030071919900365174,
+   "ms": 196.54527865350246
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 4,
+   "chunk": 0,
+   "out_cos": 0.9999950528144836,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.003170526586472988,
+   "state_cos": 0.9974703192710876,
+   "ms": 16.666624695062637
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 4,
+   "chunk": 0,
+   "out_cos": 0.9998379349708557,
+   "out_max_abs": 6.75,
+   "out_rel_l2": 0.018327226862311363,
+   "state_cos": 0.9974703192710876,
+   "ms": 17.88870058953762
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 4,
+   "chunk": 0,
+   "out_cos": 0.9999948740005493,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.00319649837911129,
+   "state_cos": 0.9974709153175354,
+   "ms": 18.758580088615417
+  },
+  {
+   "variant": "per_token",
+   "layer": 5,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2226.845243945718
+  },
+  {
+   "variant": "own",
+   "layer": 5,
+   "chunk": 0,
+   "out_cos": 0.9999976754188538,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.002123181940987706,
+   "state_cos": 0.999968945980072,
+   "ms": 34.74072739481926
+  },
+  {
+   "variant": "thor_native",
+   "layer": 5,
+   "chunk": 0,
+   "out_cos": 0.9999976754188538,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.002123181940987706,
+   "state_cos": 0.999968945980072,
+   "ms": 34.805720672011375
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 5,
+   "chunk": 0,
+   "out_cos": 0.9999976754188538,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.002123188925907016,
+   "state_cos": 0.999968945980072,
+   "ms": 34.19849090278149
+  },
+  {
+   "variant": "wy",
+   "layer": 5,
+   "chunk": 0,
+   "out_cos": 0.9977062940597534,
+   "out_max_abs": 11.5,
+   "out_rel_l2": 0.06895975768566132,
+   "state_cos": -0.0004701980797108263,
+   "ms": 196.5508945286274
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 5,
+   "chunk": 0,
+   "out_cos": 0.9999922513961792,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.003954928833991289,
+   "state_cos": 0.9944460391998291,
+   "ms": 16.95862039923668
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 5,
+   "chunk": 0,
+   "out_cos": 0.9997154474258423,
+   "out_max_abs": 5.5,
+   "out_rel_l2": 0.023854374885559082,
+   "state_cos": 0.9944460391998291,
+   "ms": 17.79048703610897
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 5,
+   "chunk": 0,
+   "out_cos": 0.9999921917915344,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0039788768626749516,
+   "state_cos": 0.9944437146186829,
+   "ms": 18.605023622512817
+  },
+  {
+   "variant": "per_token",
+   "layer": 6,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2225.421031937003
+  },
+  {
+   "variant": "own",
+   "layer": 6,
+   "chunk": 0,
+   "out_cos": 0.9999983310699463,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0018304113764315844,
+   "state_cos": 0.9999901056289673,
+   "ms": 34.727875143289566
+  },
+  {
+   "variant": "thor_native",
+   "layer": 6,
+   "chunk": 0,
+   "out_cos": 0.9999983310699463,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0018304113764315844,
+   "state_cos": 0.9999901056289673,
+   "ms": 34.658605232834816
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 6,
+   "chunk": 0,
+   "out_cos": 0.9999983310699463,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0018304113764315844,
+   "state_cos": 0.9999901056289673,
+   "ms": 34.18736159801483
+  },
+  {
+   "variant": "wy",
+   "layer": 6,
+   "chunk": 0,
+   "out_cos": 0.9930447340011597,
+   "out_max_abs": 15.5,
+   "out_rel_l2": 0.12024692445993423,
+   "state_cos": -0.0019085209351032972,
+   "ms": 196.72377593815327
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 6,
+   "chunk": 0,
+   "out_cos": 0.9999702572822571,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.00790864136070013,
+   "state_cos": 0.9950981140136719,
+   "ms": 16.971925273537636
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 6,
+   "chunk": 0,
+   "out_cos": 0.9995076656341553,
+   "out_max_abs": 7.5,
+   "out_rel_l2": 0.0321415439248085,
+   "state_cos": 0.9950981140136719,
+   "ms": 17.86222867667675
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 6,
+   "chunk": 0,
+   "out_cos": 0.9999706149101257,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.0078618498519063,
+   "state_cos": 0.9950976967811584,
+   "ms": 18.80265213549137
+  },
+  {
+   "variant": "per_token",
+   "layer": 8,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2209.196835756302
+  },
+  {
+   "variant": "own",
+   "layer": 8,
+   "chunk": 0,
+   "out_cos": 0.9999963045120239,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0027118141297250986,
+   "state_cos": 0.9999821186065674,
+   "ms": 34.7184594720602
+  },
+  {
+   "variant": "thor_native",
+   "layer": 8,
+   "chunk": 0,
+   "out_cos": 0.9999963045120239,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0027118141297250986,
+   "state_cos": 0.9999821186065674,
+   "ms": 34.81629304587841
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 8,
+   "chunk": 0,
+   "out_cos": 0.9999963045120239,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.002711812499910593,
+   "state_cos": 0.9999821186065674,
+   "ms": 34.19623151421547
+  },
+  {
+   "variant": "wy",
+   "layer": 8,
+   "chunk": 0,
+   "out_cos": 0.9942600131034851,
+   "out_max_abs": 14.5,
+   "out_rel_l2": 0.10760512948036194,
+   "state_cos": -0.004755291622132063,
+   "ms": 196.68381661176682
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 8,
+   "chunk": 0,
+   "out_cos": 0.9999845027923584,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.005568376742303371,
+   "state_cos": 0.9977287650108337,
+   "ms": 16.932664439082146
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 8,
+   "chunk": 0,
+   "out_cos": 0.9994084239006042,
+   "out_max_abs": 8.0,
+   "out_rel_l2": 0.034621164202690125,
+   "state_cos": 0.9977287650108337,
+   "ms": 17.76445098221302
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 8,
+   "chunk": 0,
+   "out_cos": 0.9999845027923584,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.005579240620136261,
+   "state_cos": 0.9977299571037292,
+   "ms": 18.847191706299782
+  },
+  {
+   "variant": "per_token",
+   "layer": 9,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2220.4178366810083
+  },
+  {
+   "variant": "own",
+   "layer": 9,
+   "chunk": 0,
+   "out_cos": 0.9999956488609314,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0030031176283955574,
+   "state_cos": 0.9999855160713196,
+   "ms": 34.68664176762104
+  },
+  {
+   "variant": "thor_native",
+   "layer": 9,
+   "chunk": 0,
+   "out_cos": 0.9999956488609314,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0030031176283955574,
+   "state_cos": 0.9999855160713196,
+   "ms": 34.762293100357056
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 9,
+   "chunk": 0,
+   "out_cos": 0.9999956488609314,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0030037304386496544,
+   "state_cos": 0.9999855160713196,
+   "ms": 34.185951575636864
+  },
+  {
+   "variant": "wy",
+   "layer": 9,
+   "chunk": 0,
+   "out_cos": 0.9929920434951782,
+   "out_max_abs": 15.5,
+   "out_rel_l2": 0.1206171065568924,
+   "state_cos": -0.00244754645973444,
+   "ms": 196.5708639472723
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 9,
+   "chunk": 0,
+   "out_cos": 0.9999849796295166,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.005524035543203354,
+   "state_cos": 0.9976642727851868,
+   "ms": 16.90802536904812
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 9,
+   "chunk": 0,
+   "out_cos": 0.9996131658554077,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.02801225520670414,
+   "state_cos": 0.9976642727851868,
+   "ms": 17.81518943607807
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 9,
+   "chunk": 0,
+   "out_cos": 0.9999849796295166,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.005511755123734474,
+   "state_cos": 0.997665524482727,
+   "ms": 18.735265359282494
+  },
+  {
+   "variant": "per_token",
+   "layer": 10,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2259.708784520626
+  },
+  {
+   "variant": "own",
+   "layer": 10,
+   "chunk": 0,
+   "out_cos": 0.999992847442627,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0037836108822375536,
+   "state_cos": 0.9999840259552002,
+   "ms": 34.62511673569679
+  },
+  {
+   "variant": "thor_native",
+   "layer": 10,
+   "chunk": 0,
+   "out_cos": 0.999992847442627,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0037836108822375536,
+   "state_cos": 0.9999840259552002,
+   "ms": 34.65279936790466
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 10,
+   "chunk": 0,
+   "out_cos": 0.999992847442627,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.003783655585721135,
+   "state_cos": 0.9999840259552002,
+   "ms": 34.20083224773407
+  },
+  {
+   "variant": "wy",
+   "layer": 10,
+   "chunk": 0,
+   "out_cos": 0.9931774139404297,
+   "out_max_abs": 33.5,
+   "out_rel_l2": 0.11763017624616623,
+   "state_cos": 0.0008160072611644864,
+   "ms": 196.49838469922543
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 10,
+   "chunk": 0,
+   "out_cos": 0.9999841451644897,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.005635904613882303,
+   "state_cos": 0.9946481585502625,
+   "ms": 16.89768210053444
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 10,
+   "chunk": 0,
+   "out_cos": 0.9995864629745483,
+   "out_max_abs": 7.0,
+   "out_rel_l2": 0.02932543121278286,
+   "state_cos": 0.9946481585502625,
+   "ms": 17.587635666131973
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 10,
+   "chunk": 0,
+   "out_cos": 0.9999840259552002,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.005654394626617432,
+   "state_cos": 0.9946500062942505,
+   "ms": 18.85482296347618
+  },
+  {
+   "variant": "per_token",
+   "layer": 12,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2222.203331068158
+  },
+  {
+   "variant": "own",
+   "layer": 12,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.59932655096054
+  },
+  {
+   "variant": "thor_native",
+   "layer": 12,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.760190173983574
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 12,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0078125,
+   "out_rel_l2": 3.92825277231168e-05,
+   "state_cos": 1.0,
+   "ms": 34.19368341565132
+  },
+  {
+   "variant": "wy",
+   "layer": 12,
+   "chunk": 0,
+   "out_cos": 0.9907763004302979,
+   "out_max_abs": 10.0,
+   "out_rel_l2": 0.13596396148204803,
+   "state_cos": 9.18276491574943e-05,
+   "ms": 196.61875069141388
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 12,
+   "chunk": 0,
+   "out_cos": 0.9999842643737793,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.00561858294531703,
+   "state_cos": 0.9962241053581238,
+   "ms": 16.946062445640564
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 12,
+   "chunk": 0,
+   "out_cos": 0.9991952180862427,
+   "out_max_abs": 6.0,
+   "out_rel_l2": 0.04060767963528633,
+   "state_cos": 0.9962241053581238,
+   "ms": 17.804080620408058
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 12,
+   "chunk": 0,
+   "out_cos": 0.9999841451644897,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.005625692196190357,
+   "state_cos": 0.9962250590324402,
+   "ms": 18.852228298783302
+  },
+  {
+   "variant": "per_token",
+   "layer": 13,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2226.081360131502
+  },
+  {
+   "variant": "own",
+   "layer": 13,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.75244715809822
+  },
+  {
+   "variant": "thor_native",
+   "layer": 13,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.65915285050869
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 13,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0078125,
+   "out_rel_l2": 4.567705764202401e-05,
+   "state_cos": 1.0,
+   "ms": 34.27768684923649
+  },
+  {
+   "variant": "wy",
+   "layer": 13,
+   "chunk": 0,
+   "out_cos": 0.9928741455078125,
+   "out_max_abs": 9.0,
+   "out_rel_l2": 0.11923468112945557,
+   "state_cos": -0.0010483843507245183,
+   "ms": 196.30951434373856
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 13,
+   "chunk": 0,
+   "out_cos": 0.9999834299087524,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.005763172637671232,
+   "state_cos": 0.9940668940544128,
+   "ms": 16.870783641934395
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 13,
+   "chunk": 0,
+   "out_cos": 0.9992268681526184,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.03992673382163048,
+   "state_cos": 0.9940668940544128,
+   "ms": 17.574582248926163
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 13,
+   "chunk": 0,
+   "out_cos": 0.9999834299087524,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.005762835964560509,
+   "state_cos": 0.994064211845398,
+   "ms": 18.849357962608337
+  },
+  {
+   "variant": "per_token",
+   "layer": 14,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2207.397025078535
+  },
+  {
+   "variant": "own",
+   "layer": 14,
+   "chunk": 0,
+   "out_cos": 0.9999998807907104,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.68800336122513
+  },
+  {
+   "variant": "thor_native",
+   "layer": 14,
+   "chunk": 0,
+   "out_cos": 0.9999998807907104,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.73368287086487
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 14,
+   "chunk": 0,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0625,
+   "out_rel_l2": 6.579587352462113e-05,
+   "state_cos": 1.0,
+   "ms": 34.25276838243008
+  },
+  {
+   "variant": "wy",
+   "layer": 14,
+   "chunk": 0,
+   "out_cos": 0.9932574033737183,
+   "out_max_abs": 34.0,
+   "out_rel_l2": 0.11682262271642685,
+   "state_cos": 0.003968684934079647,
+   "ms": 196.4483391493559
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 14,
+   "chunk": 0,
+   "out_cos": 0.9999723434448242,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.007461072411388159,
+   "state_cos": 0.9942728281021118,
+   "ms": 16.987377777695656
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 14,
+   "chunk": 0,
+   "out_cos": 0.9990780353546143,
+   "out_max_abs": 18.0,
+   "out_rel_l2": 0.043014489114284515,
+   "state_cos": 0.9942728281021118,
+   "ms": 17.827359959483147
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 14,
+   "chunk": 0,
+   "out_cos": 0.9999721646308899,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.00747661292552948,
+   "state_cos": 0.9942721724510193,
+   "ms": 18.78838613629341
+  },
+  {
+   "variant": "per_token",
+   "layer": 16,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2229.9031130969524
+  },
+  {
+   "variant": "own",
+   "layer": 16,
+   "chunk": 0,
+   "out_cos": 0.999988853931427,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004743697587400675,
+   "state_cos": 0.9999672770500183,
+   "ms": 34.77398864924908
+  },
+  {
+   "variant": "thor_native",
+   "layer": 16,
+   "chunk": 0,
+   "out_cos": 0.999988853931427,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004743697587400675,
+   "state_cos": 0.9999672770500183,
+   "ms": 34.82295945286751
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 16,
+   "chunk": 0,
+   "out_cos": 0.999988853931427,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004743652883917093,
+   "state_cos": 0.9999672770500183,
+   "ms": 34.1848973184824
+  },
+  {
+   "variant": "wy",
+   "layer": 16,
+   "chunk": 0,
+   "out_cos": 0.9853655099868774,
+   "out_max_abs": 9.25,
+   "out_rel_l2": 0.17408370971679688,
+   "state_cos": 0.008435362949967384,
+   "ms": 196.52502425014973
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 16,
+   "chunk": 0,
+   "out_cos": 0.9999803900718689,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.006290180142968893,
+   "state_cos": 0.9954204559326172,
+   "ms": 16.699107363820076
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 16,
+   "chunk": 0,
+   "out_cos": 0.9993721842765808,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.03558437526226044,
+   "state_cos": 0.9954204559326172,
+   "ms": 17.590217292308807
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 16,
+   "chunk": 0,
+   "out_cos": 0.9999799132347107,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.006335136014968157,
+   "state_cos": 0.9954249858856201,
+   "ms": 18.82527582347393
+  },
+  {
+   "variant": "per_token",
+   "layer": 17,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2237.3462188988924
+  },
+  {
+   "variant": "own",
+   "layer": 17,
+   "chunk": 0,
+   "out_cos": 0.9999882578849792,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004851635545492172,
+   "state_cos": 0.9999223947525024,
+   "ms": 34.6669964492321
+  },
+  {
+   "variant": "thor_native",
+   "layer": 17,
+   "chunk": 0,
+   "out_cos": 0.9999882578849792,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004851635545492172,
+   "state_cos": 0.9999223947525024,
+   "ms": 34.70785729587078
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 17,
+   "chunk": 0,
+   "out_cos": 0.9999882578849792,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004852065816521645,
+   "state_cos": 0.9999223947525024,
+   "ms": 34.273192286491394
+  },
+  {
+   "variant": "wy",
+   "layer": 17,
+   "chunk": 0,
+   "out_cos": 0.9899182319641113,
+   "out_max_abs": 7.25,
+   "out_rel_l2": 0.1432100385427475,
+   "state_cos": -0.0022802315652370453,
+   "ms": 196.62292301654816
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 17,
+   "chunk": 0,
+   "out_cos": 0.9999719262123108,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.007508397102355957,
+   "state_cos": 0.9972723126411438,
+   "ms": 16.929052770137787
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 17,
+   "chunk": 0,
+   "out_cos": 0.9990071654319763,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.04455048590898514,
+   "state_cos": 0.9972723126411438,
+   "ms": 17.787208780646324
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 17,
+   "chunk": 0,
+   "out_cos": 0.999971866607666,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0075276875868439674,
+   "state_cos": 0.9972702264785767,
+   "ms": 18.79318058490753
+  },
+  {
+   "variant": "per_token",
+   "layer": 18,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2230.4235715419054
+  },
+  {
+   "variant": "own",
+   "layer": 18,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 34.636909142136574
+  },
+  {
+   "variant": "thor_native",
+   "layer": 18,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 34.680917859077454
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 18,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.015625,
+   "out_rel_l2": 7.091432780725881e-05,
+   "state_cos": 0.9999999403953552,
+   "ms": 34.21909175813198
+  },
+  {
+   "variant": "wy",
+   "layer": 18,
+   "chunk": 0,
+   "out_cos": 0.9702574014663696,
+   "out_max_abs": 43.5,
+   "out_rel_l2": 0.24872255325317383,
+   "state_cos": -0.00029183735023252666,
+   "ms": 196.57828845083714
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 18,
+   "chunk": 0,
+   "out_cos": 0.9999544620513916,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0095437653362751,
+   "state_cos": 0.9965683221817017,
+   "ms": 16.93234033882618
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 18,
+   "chunk": 0,
+   "out_cos": 0.998634397983551,
+   "out_max_abs": 15.5,
+   "out_rel_l2": 0.05235216021537781,
+   "state_cos": 0.9965683221817017,
+   "ms": 17.583567649126053
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 18,
+   "chunk": 0,
+   "out_cos": 0.9999539852142334,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.009590351954102516,
+   "state_cos": 0.9965704083442688,
+   "ms": 18.8773050904274
+  },
+  {
+   "variant": "per_token",
+   "layer": 20,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2213.440168648958
+  },
+  {
+   "variant": "own",
+   "layer": 20,
+   "chunk": 0,
+   "out_cos": 0.9999792575836182,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.006441460456699133,
+   "state_cos": 0.9999910593032837,
+   "ms": 34.78752449154854
+  },
+  {
+   "variant": "thor_native",
+   "layer": 20,
+   "chunk": 0,
+   "out_cos": 0.9999792575836182,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.006441460456699133,
+   "state_cos": 0.9999910593032837,
+   "ms": 34.6891675144434
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 20,
+   "chunk": 0,
+   "out_cos": 0.9999792575836182,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.006441480480134487,
+   "state_cos": 0.9999910593032837,
+   "ms": 34.21933948993683
+  },
+  {
+   "variant": "wy",
+   "layer": 20,
+   "chunk": 0,
+   "out_cos": 0.8878113031387329,
+   "out_max_abs": 38.0,
+   "out_rel_l2": 0.5077108144760132,
+   "state_cos": -0.00014411982556339353,
+   "ms": 196.52774557471275
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 20,
+   "chunk": 0,
+   "out_cos": 0.9998990297317505,
+   "out_max_abs": 2.5,
+   "out_rel_l2": 0.01421272661536932,
+   "state_cos": 0.9980229735374451,
+   "ms": 16.889125108718872
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 20,
+   "chunk": 0,
+   "out_cos": 0.9968395233154297,
+   "out_max_abs": 35.0,
+   "out_rel_l2": 0.08596416562795639,
+   "state_cos": 0.9980229735374451,
+   "ms": 17.820535227656364
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 20,
+   "chunk": 0,
+   "out_cos": 0.9998995065689087,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.01418248936533928,
+   "state_cos": 0.9980233907699585,
+   "ms": 18.80589686334133
+  },
+  {
+   "variant": "per_token",
+   "layer": 21,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2227.7259081602097
+  },
+  {
+   "variant": "own",
+   "layer": 21,
+   "chunk": 0,
+   "out_cos": 0.9999532699584961,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.009668956510722637,
+   "state_cos": 0.9998988509178162,
+   "ms": 34.73268821835518
+  },
+  {
+   "variant": "thor_native",
+   "layer": 21,
+   "chunk": 0,
+   "out_cos": 0.9999532699584961,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.009668956510722637,
+   "state_cos": 0.9998988509178162,
+   "ms": 34.67266261577606
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 21,
+   "chunk": 0,
+   "out_cos": 0.9999532699584961,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.009668956510722637,
+   "state_cos": 0.9998988509178162,
+   "ms": 34.23861972987652
+  },
+  {
+   "variant": "wy",
+   "layer": 21,
+   "chunk": 0,
+   "out_cos": 0.9610020518302917,
+   "out_max_abs": 151.0,
+   "out_rel_l2": 0.28075215220451355,
+   "state_cos": -0.004203632473945618,
+   "ms": 196.66272401809692
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 21,
+   "chunk": 0,
+   "out_cos": 0.9999000430107117,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.014140281826257706,
+   "state_cos": 0.9973335862159729,
+   "ms": 16.962388530373573
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 21,
+   "chunk": 0,
+   "out_cos": 0.9963687658309937,
+   "out_max_abs": 114.0,
+   "out_rel_l2": 0.08727707713842392,
+   "state_cos": 0.9973335862159729,
+   "ms": 17.81172677874565
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 21,
+   "chunk": 0,
+   "out_cos": 0.99989914894104,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.014208433218300343,
+   "state_cos": 0.9973342418670654,
+   "ms": 18.792210146784782
+  },
+  {
+   "variant": "per_token",
+   "layer": 22,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2209.6154782921076
+  },
+  {
+   "variant": "own",
+   "layer": 22,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.69104878604412
+  },
+  {
+   "variant": "thor_native",
+   "layer": 22,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.78196822106838
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 22,
+   "chunk": 0,
+   "out_cos": 0.9999998807907104,
+   "out_max_abs": 0.015625,
+   "out_rel_l2": 7.979733345564455e-05,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.20865722000599
+  },
+  {
+   "variant": "wy",
+   "layer": 22,
+   "chunk": 0,
+   "out_cos": 0.874891459941864,
+   "out_max_abs": 14.25,
+   "out_rel_l2": 0.5465916991233826,
+   "state_cos": 0.0058021629229187965,
+   "ms": 196.63355126976967
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 22,
+   "chunk": 0,
+   "out_cos": 0.9998922348022461,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.014676472172141075,
+   "state_cos": 0.9988865852355957,
+   "ms": 16.905535012483597
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 22,
+   "chunk": 0,
+   "out_cos": 0.9978551268577576,
+   "out_max_abs": 8.75,
+   "out_rel_l2": 0.06633847206830978,
+   "state_cos": 0.9988865852355957,
+   "ms": 17.756136134266853
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 22,
+   "chunk": 0,
+   "out_cos": 0.9998911619186401,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.01475122943520546,
+   "state_cos": 0.9988845586776733,
+   "ms": 18.826913088560104
+  },
+  {
+   "variant": "per_token",
+   "layer": 24,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2232.6769810169935
+  },
+  {
+   "variant": "own",
+   "layer": 24,
+   "chunk": 0,
+   "out_cos": 0.999873697757721,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.015898272395133972,
+   "state_cos": 0.9999687075614929,
+   "ms": 34.81139615178108
+  },
+  {
+   "variant": "thor_native",
+   "layer": 24,
+   "chunk": 0,
+   "out_cos": 0.999873697757721,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.015898272395133972,
+   "state_cos": 0.9999687075614929,
+   "ms": 34.73825566470623
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 24,
+   "chunk": 0,
+   "out_cos": 0.9998737573623657,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.015898166224360466,
+   "state_cos": 0.9999687075614929,
+   "ms": 34.16913561522961
+  },
+  {
+   "variant": "wy",
+   "layer": 24,
+   "chunk": 0,
+   "out_cos": 0.9483659863471985,
+   "out_max_abs": 18.0,
+   "out_rel_l2": 0.33803436160087585,
+   "state_cos": -0.009040405973792076,
+   "ms": 196.6144870966673
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 24,
+   "chunk": 0,
+   "out_cos": 0.9997676610946655,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.021572668105363846,
+   "state_cos": 0.9968429803848267,
+   "ms": 16.92422851920128
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 24,
+   "chunk": 0,
+   "out_cos": 0.9960434436798096,
+   "out_max_abs": 11.0,
+   "out_rel_l2": 0.08920431137084961,
+   "state_cos": 0.9968429803848267,
+   "ms": 17.82320812344551
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 24,
+   "chunk": 0,
+   "out_cos": 0.9997665882110596,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.021626779809594154,
+   "state_cos": 0.9968439340591431,
+   "ms": 18.82060058414936
+  },
+  {
+   "variant": "per_token",
+   "layer": 25,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2230.0058845430613
+  },
+  {
+   "variant": "own",
+   "layer": 25,
+   "chunk": 0,
+   "out_cos": 0.9998789429664612,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.015552908182144165,
+   "state_cos": 0.9999779462814331,
+   "ms": 34.716762602329254
+  },
+  {
+   "variant": "thor_native",
+   "layer": 25,
+   "chunk": 0,
+   "out_cos": 0.9998789429664612,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.015552908182144165,
+   "state_cos": 0.9999779462814331,
+   "ms": 34.65382941067219
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 25,
+   "chunk": 0,
+   "out_cos": 0.9998789429664612,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.015552924014627934,
+   "state_cos": 0.9999779462814331,
+   "ms": 34.21240672469139
+  },
+  {
+   "variant": "wy",
+   "layer": 25,
+   "chunk": 0,
+   "out_cos": 0.799688994884491,
+   "out_max_abs": 21.5,
+   "out_rel_l2": 0.8067324757575989,
+   "state_cos": -0.0063453419134020805,
+   "ms": 196.41964510083199
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 25,
+   "chunk": 0,
+   "out_cos": 0.9997629523277283,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.02177407406270504,
+   "state_cos": 0.9975634813308716,
+   "ms": 16.685355454683304
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 25,
+   "chunk": 0,
+   "out_cos": 0.9972453713417053,
+   "out_max_abs": 3.75,
+   "out_rel_l2": 0.0744640901684761,
+   "state_cos": 0.9975634813308716,
+   "ms": 17.593039199709892
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 25,
+   "chunk": 0,
+   "out_cos": 0.9997621178627014,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.021812519058585167,
+   "state_cos": 0.9975643754005432,
+   "ms": 18.9023669809103
+  },
+  {
+   "variant": "per_token",
+   "layer": 26,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2216.7463302612305
+  },
+  {
+   "variant": "own",
+   "layer": 26,
+   "chunk": 0,
+   "out_cos": 1.000000238418579,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.784773364663124
+  },
+  {
+   "variant": "thor_native",
+   "layer": 26,
+   "chunk": 0,
+   "out_cos": 1.000000238418579,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.63297709822655
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 26,
+   "chunk": 0,
+   "out_cos": 1.000000238418579,
+   "out_max_abs": 0.03125,
+   "out_rel_l2": 0.0001965169794857502,
+   "state_cos": 1.0,
+   "ms": 34.16423872113228
+  },
+  {
+   "variant": "wy",
+   "layer": 26,
+   "chunk": 0,
+   "out_cos": 0.9326308965682983,
+   "out_max_abs": 20.5,
+   "out_rel_l2": 0.37057003378868103,
+   "state_cos": -0.006866099312901497,
+   "ms": 196.62825390696526
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 26,
+   "chunk": 0,
+   "out_cos": 0.9997179508209229,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.023752333596348763,
+   "state_cos": 0.996660590171814,
+   "ms": 16.913283616304398
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 26,
+   "chunk": 0,
+   "out_cos": 0.9969716668128967,
+   "out_max_abs": 4.5,
+   "out_rel_l2": 0.07822176814079285,
+   "state_cos": 0.996660590171814,
+   "ms": 17.81301572918892
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 26,
+   "chunk": 0,
+   "out_cos": 0.9997181296348572,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.023746076971292496,
+   "state_cos": 0.9966603517532349,
+   "ms": 18.854228779673576
+  },
+  {
+   "variant": "per_token",
+   "layer": 28,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2223.543956875801
+  },
+  {
+   "variant": "own",
+   "layer": 28,
+   "chunk": 0,
+   "out_cos": 0.9998911619186401,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.01475525088608265,
+   "state_cos": 0.9999859929084778,
+   "ms": 34.68814492225647
+  },
+  {
+   "variant": "thor_native",
+   "layer": 28,
+   "chunk": 0,
+   "out_cos": 0.9998911619186401,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.01475525088608265,
+   "state_cos": 0.9999859929084778,
+   "ms": 34.78756919503212
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 28,
+   "chunk": 0,
+   "out_cos": 0.9998911023139954,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.014755373820662498,
+   "state_cos": 0.9999859929084778,
+   "ms": 34.1649167239666
+  },
+  {
+   "variant": "wy",
+   "layer": 28,
+   "chunk": 0,
+   "out_cos": 0.9185321927070618,
+   "out_max_abs": 24.5,
+   "out_rel_l2": 0.4437635540962219,
+   "state_cos": -0.0006362197455018759,
+   "ms": 196.4445859193802
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 28,
+   "chunk": 0,
+   "out_cos": 0.9996864199638367,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.025046005845069885,
+   "state_cos": 0.9979925751686096,
+   "ms": 16.94421097636223
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 28,
+   "chunk": 0,
+   "out_cos": 0.9951978921890259,
+   "out_max_abs": 6.75,
+   "out_rel_l2": 0.09789146482944489,
+   "state_cos": 0.9979925751686096,
+   "ms": 17.778487876057625
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 28,
+   "chunk": 0,
+   "out_cos": 0.9996843338012695,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.025124456733465195,
+   "state_cos": 0.9979928135871887,
+   "ms": 18.580380827188492
+  },
+  {
+   "variant": "per_token",
+   "layer": 29,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2224.1203989833593
+  },
+  {
+   "variant": "own",
+   "layer": 29,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.66174937784672
+  },
+  {
+   "variant": "thor_native",
+   "layer": 29,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.63255614042282
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 29,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.30339694023132
+  },
+  {
+   "variant": "wy",
+   "layer": 29,
+   "chunk": 0,
+   "out_cos": 0.9215044379234314,
+   "out_max_abs": 10.0,
+   "out_rel_l2": 0.4174043834209442,
+   "state_cos": -0.005293566267937422,
+   "ms": 196.48578949272633
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 29,
+   "chunk": 0,
+   "out_cos": 0.9996755719184875,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.02547438070178032,
+   "state_cos": 0.9976092576980591,
+   "ms": 16.903508454561234
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 29,
+   "chunk": 0,
+   "out_cos": 0.9953567385673523,
+   "out_max_abs": 4.5,
+   "out_rel_l2": 0.09671959280967712,
+   "state_cos": 0.9976092576980591,
+   "ms": 17.742561176419258
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 29,
+   "chunk": 0,
+   "out_cos": 0.9996738433837891,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.025541221722960472,
+   "state_cos": 0.9976102709770203,
+   "ms": 18.918564543128014
+  },
+  {
+   "variant": "per_token",
+   "layer": 30,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2225.931040942669
+  },
+  {
+   "variant": "own",
+   "layer": 30,
+   "chunk": 0,
+   "out_cos": 0.9998235702514648,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.018788311630487442,
+   "state_cos": 0.9999857544898987,
+   "ms": 34.72678363323212
+  },
+  {
+   "variant": "thor_native",
+   "layer": 30,
+   "chunk": 0,
+   "out_cos": 0.9998235702514648,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.018788311630487442,
+   "state_cos": 0.9999857544898987,
+   "ms": 34.63919647037983
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 30,
+   "chunk": 0,
+   "out_cos": 0.9998235702514648,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.018788311630487442,
+   "state_cos": 0.9999857544898987,
+   "ms": 34.2139583081007
+  },
+  {
+   "variant": "wy",
+   "layer": 30,
+   "chunk": 0,
+   "out_cos": 0.8860089778900146,
+   "out_max_abs": 14.0,
+   "out_rel_l2": 0.5072394609451294,
+   "state_cos": 0.0012206243118271232,
+   "ms": 196.23439386487007
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 30,
+   "chunk": 0,
+   "out_cos": 0.9996721744537354,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.025606263428926468,
+   "state_cos": 0.9971889853477478,
+   "ms": 16.9169120490551
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 30,
+   "chunk": 0,
+   "out_cos": 0.9947292804718018,
+   "out_max_abs": 6.0,
+   "out_rel_l2": 0.10283166915178299,
+   "state_cos": 0.9971889853477478,
+   "ms": 17.781291157007217
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 30,
+   "chunk": 0,
+   "out_cos": 0.999670147895813,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.025685541331768036,
+   "state_cos": 0.9971891641616821,
+   "ms": 18.83922703564167
+  },
+  {
+   "variant": "per_token",
+   "layer": 32,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2228.67239639163
+  },
+  {
+   "variant": "own",
+   "layer": 32,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0000001192092896,
+   "ms": 34.689003601670265
+  },
+  {
+   "variant": "thor_native",
+   "layer": 32,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0000001192092896,
+   "ms": 34.70219857990742
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 32,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0000001192092896,
+   "ms": 34.17469188570976
+  },
+  {
+   "variant": "wy",
+   "layer": 32,
+   "chunk": 0,
+   "out_cos": 0.8183571100234985,
+   "out_max_abs": 16.5,
+   "out_rel_l2": 0.715686023235321,
+   "state_cos": -0.00032487590215168893,
+   "ms": 196.47010043263435
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 32,
+   "chunk": 0,
+   "out_cos": 0.9995960593223572,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.028427604585886,
+   "state_cos": 0.9985597133636475,
+   "ms": 16.94059930741787
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 32,
+   "chunk": 0,
+   "out_cos": 0.9952511191368103,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.09735047817230225,
+   "state_cos": 0.9985597133636475,
+   "ms": 17.807643860578537
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 32,
+   "chunk": 0,
+   "out_cos": 0.9995958805084229,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.028430098667740822,
+   "state_cos": 0.9985596537590027,
+   "ms": 18.841775134205818
+  },
+  {
+   "variant": "per_token",
+   "layer": 33,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2229.5335624367
+  },
+  {
+   "variant": "own",
+   "layer": 33,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.76674109697342
+  },
+  {
+   "variant": "thor_native",
+   "layer": 33,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.643104299902916
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 33,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.03125,
+   "out_rel_l2": 0.0001675363164395094,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.21270102262497
+  },
+  {
+   "variant": "wy",
+   "layer": 33,
+   "chunk": 0,
+   "out_cos": 0.9230421781539917,
+   "out_max_abs": 11.25,
+   "out_rel_l2": 0.40912023186683655,
+   "state_cos": -0.0029314158018678427,
+   "ms": 196.53816148638725
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 33,
+   "chunk": 0,
+   "out_cos": 0.9995553493499756,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.02982115000486374,
+   "state_cos": 0.999089241027832,
+   "ms": 16.92364737391472
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 33,
+   "chunk": 0,
+   "out_cos": 0.9918482303619385,
+   "out_max_abs": 4.5,
+   "out_rel_l2": 0.1277652382850647,
+   "state_cos": 0.999089241027832,
+   "ms": 17.774969339370728
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 33,
+   "chunk": 0,
+   "out_cos": 0.9995517134666443,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.029944537207484245,
+   "state_cos": 0.9990893602371216,
+   "ms": 18.791569396853447
+  },
+  {
+   "variant": "per_token",
+   "layer": 34,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2227.9175855219364
+  },
+  {
+   "variant": "own",
+   "layer": 34,
+   "chunk": 0,
+   "out_cos": 0.9998408555984497,
+   "out_max_abs": 0.75,
+   "out_rel_l2": 0.017838172614574432,
+   "state_cos": 0.9999842643737793,
+   "ms": 34.66865047812462
+  },
+  {
+   "variant": "thor_native",
+   "layer": 34,
+   "chunk": 0,
+   "out_cos": 0.9998408555984497,
+   "out_max_abs": 0.75,
+   "out_rel_l2": 0.017838172614574432,
+   "state_cos": 0.9999842643737793,
+   "ms": 34.63225997984409
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 34,
+   "chunk": 0,
+   "out_cos": 0.9998409152030945,
+   "out_max_abs": 0.75,
+   "out_rel_l2": 0.01783830299973488,
+   "state_cos": 0.9999842643737793,
+   "ms": 34.277377650141716
+  },
+  {
+   "variant": "wy",
+   "layer": 34,
+   "chunk": 0,
+   "out_cos": 0.7897838354110718,
+   "out_max_abs": 25.25,
+   "out_rel_l2": 0.7233712077140808,
+   "state_cos": -0.000590866373386234,
+   "ms": 196.3224783539772
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 34,
+   "chunk": 0,
+   "out_cos": 0.999415397644043,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.03418990224599838,
+   "state_cos": 0.9981319308280945,
+   "ms": 16.736771911382675
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 34,
+   "chunk": 0,
+   "out_cos": 0.9936193227767944,
+   "out_max_abs": 12.75,
+   "out_rel_l2": 0.11280089616775513,
+   "state_cos": 0.9981319308280945,
+   "ms": 17.7358016371727
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 34,
+   "chunk": 0,
+   "out_cos": 0.999413013458252,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.03425629809498787,
+   "state_cos": 0.9981318116188049,
+   "ms": 18.833523616194725
+  },
+  {
+   "variant": "per_token",
+   "layer": 36,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2216.2868287414312
+  },
+  {
+   "variant": "own",
+   "layer": 36,
+   "chunk": 0,
+   "out_cos": 0.99988853931427,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.01492579746991396,
+   "state_cos": 0.9999721646308899,
+   "ms": 34.73442792892456
+  },
+  {
+   "variant": "thor_native",
+   "layer": 36,
+   "chunk": 0,
+   "out_cos": 0.99988853931427,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.01492579746991396,
+   "state_cos": 0.9999721646308899,
+   "ms": 34.745337441563606
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 36,
+   "chunk": 0,
+   "out_cos": 0.99988853931427,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.01492579746991396,
+   "state_cos": 0.9999721646308899,
+   "ms": 34.15606915950775
+  },
+  {
+   "variant": "wy",
+   "layer": 36,
+   "chunk": 0,
+   "out_cos": 0.8631528615951538,
+   "out_max_abs": 18.75,
+   "out_rel_l2": 0.5847373008728027,
+   "state_cos": -0.0019000556785613298,
+   "ms": 196.45633921027184
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 36,
+   "chunk": 0,
+   "out_cos": 0.9995383620262146,
+   "out_max_abs": 1.625,
+   "out_rel_l2": 0.03038703463971615,
+   "state_cos": 0.9983477592468262,
+   "ms": 16.66479930281639
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 36,
+   "chunk": 0,
+   "out_cos": 0.9943169951438904,
+   "out_max_abs": 18.75,
+   "out_rel_l2": 0.10820368677377701,
+   "state_cos": 0.9983477592468262,
+   "ms": 17.824595794081688
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 36,
+   "chunk": 0,
+   "out_cos": 0.9995373487472534,
+   "out_max_abs": 1.875,
+   "out_rel_l2": 0.03041657991707325,
+   "state_cos": 0.9983476400375366,
+   "ms": 18.740227445960045
+  },
+  {
+   "variant": "per_token",
+   "layer": 37,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2210.7109148055315
+  },
+  {
+   "variant": "own",
+   "layer": 37,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.664325416088104
+  },
+  {
+   "variant": "thor_native",
+   "layer": 37,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.702859818935394
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 37,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.182097762823105
+  },
+  {
+   "variant": "wy",
+   "layer": 37,
+   "chunk": 0,
+   "out_cos": 0.9095592498779297,
+   "out_max_abs": 17.5,
+   "out_rel_l2": 0.43765807151794434,
+   "state_cos": 0.0007365194032900035,
+   "ms": 196.61840796470642
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 37,
+   "chunk": 0,
+   "out_cos": 0.9996426105499268,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.026738272979855537,
+   "state_cos": 0.9986649751663208,
+   "ms": 16.93808101117611
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 37,
+   "chunk": 0,
+   "out_cos": 0.9912631511688232,
+   "out_max_abs": 14.0,
+   "out_rel_l2": 0.13393297791481018,
+   "state_cos": 0.9986649751663208,
+   "ms": 17.79293082654476
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 37,
+   "chunk": 0,
+   "out_cos": 0.9996399283409119,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.02683549001812935,
+   "state_cos": 0.9986658096313477,
+   "ms": 18.799271434545517
+  },
+  {
+   "variant": "per_token",
+   "layer": 38,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2227.6828438043594
+  },
+  {
+   "variant": "own",
+   "layer": 38,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.73704680800438
+  },
+  {
+   "variant": "thor_native",
+   "layer": 38,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.716296941041946
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 38,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.154072403907776
+  },
+  {
+   "variant": "wy",
+   "layer": 38,
+   "chunk": 0,
+   "out_cos": 0.8385698199272156,
+   "out_max_abs": 28.5,
+   "out_rel_l2": 0.6291036605834961,
+   "state_cos": -0.003448085393756628,
+   "ms": 196.46394811570644
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 38,
+   "chunk": 0,
+   "out_cos": 0.9996894001960754,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.024928946048021317,
+   "state_cos": 0.9993719458580017,
+   "ms": 16.932766884565353
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 38,
+   "chunk": 0,
+   "out_cos": 0.9951504468917847,
+   "out_max_abs": 17.75,
+   "out_rel_l2": 0.09848945587873459,
+   "state_cos": 0.9993719458580017,
+   "ms": 17.799504101276398
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 38,
+   "chunk": 0,
+   "out_cos": 0.9996886253356934,
+   "out_max_abs": 1.4375,
+   "out_rel_l2": 0.0249608363956213,
+   "state_cos": 0.9993727207183838,
+   "ms": 18.804144114255905
+  },
+  {
+   "variant": "per_token",
+   "layer": 40,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2214.452099055052
+  },
+  {
+   "variant": "own",
+   "layer": 40,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.7237978130579
+  },
+  {
+   "variant": "thor_native",
+   "layer": 40,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.658946096897125
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 40,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.17546860873699
+  },
+  {
+   "variant": "wy",
+   "layer": 40,
+   "chunk": 0,
+   "out_cos": 0.9415204524993896,
+   "out_max_abs": 21.5,
+   "out_rel_l2": 0.3552572727203369,
+   "state_cos": 0.001216938253492117,
+   "ms": 196.47179171442986
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 40,
+   "chunk": 0,
+   "out_cos": 0.9996010661125183,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.028249327093362808,
+   "state_cos": 0.9949822425842285,
+   "ms": 16.67618751525879
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 40,
+   "chunk": 0,
+   "out_cos": 0.9925963878631592,
+   "out_max_abs": 18.34375,
+   "out_rel_l2": 0.12149873375892639,
+   "state_cos": 0.9949822425842285,
+   "ms": 17.77438446879387
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 40,
+   "chunk": 0,
+   "out_cos": 0.99959796667099,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.028359821066260338,
+   "state_cos": 0.9949823021888733,
+   "ms": 18.71299557387829
+  },
+  {
+   "variant": "per_token",
+   "layer": 41,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2227.693423628807
+  },
+  {
+   "variant": "own",
+   "layer": 41,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.6525963395834
+  },
+  {
+   "variant": "thor_native",
+   "layer": 41,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.727057442069054
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 41,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.20399688184261
+  },
+  {
+   "variant": "wy",
+   "layer": 41,
+   "chunk": 0,
+   "out_cos": 0.8521014451980591,
+   "out_max_abs": 38.375,
+   "out_rel_l2": 0.6045164465904236,
+   "state_cos": 0.004268907941877842,
+   "ms": 196.49107940495014
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 41,
+   "chunk": 0,
+   "out_cos": 0.9996100664138794,
+   "out_max_abs": 2.25,
+   "out_rel_l2": 0.027924740687012672,
+   "state_cos": 0.9980193376541138,
+   "ms": 16.88453182578087
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 41,
+   "chunk": 0,
+   "out_cos": 0.9959961175918579,
+   "out_max_abs": 15.75,
+   "out_rel_l2": 0.08941581100225449,
+   "state_cos": 0.9980193376541138,
+   "ms": 17.75241270661354
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 41,
+   "chunk": 0,
+   "out_cos": 0.9996099472045898,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.027931764721870422,
+   "state_cos": 0.9980191588401794,
+   "ms": 18.53802427649498
+  },
+  {
+   "variant": "per_token",
+   "layer": 42,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2219.409903511405
+  },
+  {
+   "variant": "own",
+   "layer": 42,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.786565229296684
+  },
+  {
+   "variant": "thor_native",
+   "layer": 42,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.72229652106762
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 42,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.03125,
+   "out_rel_l2": 0.0001378619926981628,
+   "state_cos": 1.0,
+   "ms": 34.176163375377655
+  },
+  {
+   "variant": "wy",
+   "layer": 42,
+   "chunk": 0,
+   "out_cos": 0.915007472038269,
+   "out_max_abs": 96.875,
+   "out_rel_l2": 0.4132830500602722,
+   "state_cos": -0.0016104055102914572,
+   "ms": 196.49974256753922
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 42,
+   "chunk": 0,
+   "out_cos": 0.9995554685592651,
+   "out_max_abs": 4.5,
+   "out_rel_l2": 0.029820695519447327,
+   "state_cos": 0.9977729320526123,
+   "ms": 16.981717199087143
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 42,
+   "chunk": 0,
+   "out_cos": 0.9950869083404541,
+   "out_max_abs": 15.0,
+   "out_rel_l2": 0.09917547553777695,
+   "state_cos": 0.9977729320526123,
+   "ms": 17.78758130967617
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 42,
+   "chunk": 0,
+   "out_cos": 0.9995551109313965,
+   "out_max_abs": 4.5,
+   "out_rel_l2": 0.029830556362867355,
+   "state_cos": 0.997773289680481,
+   "ms": 18.57793889939785
+  },
+  {
+   "variant": "per_token",
+   "layer": 44,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2240.6688034534454
+  },
+  {
+   "variant": "own",
+   "layer": 44,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.62831676006317
+  },
+  {
+   "variant": "thor_native",
+   "layer": 44,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.68034230172634
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 44,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.16062518954277
+  },
+  {
+   "variant": "wy",
+   "layer": 44,
+   "chunk": 0,
+   "out_cos": 0.917023777961731,
+   "out_max_abs": 18.5,
+   "out_rel_l2": 0.43542367219924927,
+   "state_cos": 0.00015450055070687085,
+   "ms": 196.58578746020794
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 44,
+   "chunk": 0,
+   "out_cos": 0.9996343851089478,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.027040837332606316,
+   "state_cos": 0.9988116025924683,
+   "ms": 16.91667176783085
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 44,
+   "chunk": 0,
+   "out_cos": 0.9949405193328857,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.1004817932844162,
+   "state_cos": 0.9988116025924683,
+   "ms": 17.80838705599308
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 44,
+   "chunk": 0,
+   "out_cos": 0.9996331334114075,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.02708924561738968,
+   "state_cos": 0.9988106489181519,
+   "ms": 18.582243472337723
+  },
+  {
+   "variant": "per_token",
+   "layer": 45,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2258.714711293578
+  },
+  {
+   "variant": "own",
+   "layer": 45,
+   "chunk": 0,
+   "out_cos": 0.9998355507850647,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.018139177933335304,
+   "state_cos": 0.9999890923500061,
+   "ms": 34.69795919954777
+  },
+  {
+   "variant": "thor_native",
+   "layer": 45,
+   "chunk": 0,
+   "out_cos": 0.9998355507850647,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.018139177933335304,
+   "state_cos": 0.9999890923500061,
+   "ms": 34.65714864432812
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 45,
+   "chunk": 0,
+   "out_cos": 0.9998355507850647,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.018139177933335304,
+   "state_cos": 0.9999890923500061,
+   "ms": 34.16440449655056
+  },
+  {
+   "variant": "wy",
+   "layer": 45,
+   "chunk": 0,
+   "out_cos": 0.9416061639785767,
+   "out_max_abs": 13.75,
+   "out_rel_l2": 0.3502309322357178,
+   "state_cos": -0.004123121500015259,
+   "ms": 196.65987603366375
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 45,
+   "chunk": 0,
+   "out_cos": 0.9996616840362549,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.026013245806097984,
+   "state_cos": 0.9976288080215454,
+   "ms": 16.916876658797264
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 45,
+   "chunk": 0,
+   "out_cos": 0.9948824048042297,
+   "out_max_abs": 11.75,
+   "out_rel_l2": 0.10105310380458832,
+   "state_cos": 0.9976288080215454,
+   "ms": 17.811868339776993
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 45,
+   "chunk": 0,
+   "out_cos": 0.9996607899665833,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.026046203449368477,
+   "state_cos": 0.9976285696029663,
+   "ms": 18.8206247985363
+  },
+  {
+   "variant": "per_token",
+   "layer": 46,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2233.2863714545965
+  },
+  {
+   "variant": "own",
+   "layer": 46,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.82255898416042
+  },
+  {
+   "variant": "thor_native",
+   "layer": 46,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.636881202459335
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 46,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0625,
+   "out_rel_l2": 0.0001223407161887735,
+   "state_cos": 1.0,
+   "ms": 34.252531826496124
+  },
+  {
+   "variant": "wy",
+   "layer": 46,
+   "chunk": 0,
+   "out_cos": 0.9158726334571838,
+   "out_max_abs": 25.5,
+   "out_rel_l2": 0.4104407727718353,
+   "state_cos": 0.0017395892646163702,
+   "ms": 196.41190581023693
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 46,
+   "chunk": 0,
+   "out_cos": 0.9996592998504639,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.02610233798623085,
+   "state_cos": 0.9984833002090454,
+   "ms": 16.94708690047264
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 46,
+   "chunk": 0,
+   "out_cos": 0.9927422404289246,
+   "out_max_abs": 23.5,
+   "out_rel_l2": 0.12037406861782074,
+   "state_cos": 0.9984833002090454,
+   "ms": 17.780672758817673
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 46,
+   "chunk": 0,
+   "out_cos": 0.9996561408042908,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.02622472308576107,
+   "state_cos": 0.9984831809997559,
+   "ms": 18.760016188025475
+  },
+  {
+   "variant": "per_token",
+   "layer": 48,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2221.676994115114
+  },
+  {
+   "variant": "own",
+   "layer": 48,
+   "chunk": 0,
+   "out_cos": 0.9998817443847656,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.015381538309156895,
+   "state_cos": 0.9999822378158569,
+   "ms": 34.68719497323036
+  },
+  {
+   "variant": "thor_native",
+   "layer": 48,
+   "chunk": 0,
+   "out_cos": 0.9998817443847656,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.015381538309156895,
+   "state_cos": 0.9999822378158569,
+   "ms": 34.75097939372063
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 48,
+   "chunk": 0,
+   "out_cos": 0.9998817443847656,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.015381538309156895,
+   "state_cos": 0.9999822378158569,
+   "ms": 34.14641320705414
+  },
+  {
+   "variant": "wy",
+   "layer": 48,
+   "chunk": 0,
+   "out_cos": 0.8830641508102417,
+   "out_max_abs": 29.0,
+   "out_rel_l2": 0.5221737027168274,
+   "state_cos": 0.0013286422472447157,
+   "ms": 196.15864381194115
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 48,
+   "chunk": 0,
+   "out_cos": 0.9996106624603271,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.02790631540119648,
+   "state_cos": 0.9989030361175537,
+   "ms": 16.685735434293747
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 48,
+   "chunk": 0,
+   "out_cos": 0.996539831161499,
+   "out_max_abs": 6.5,
+   "out_rel_l2": 0.08312740921974182,
+   "state_cos": 0.9989030361175537,
+   "ms": 17.747774720191956
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 48,
+   "chunk": 0,
+   "out_cos": 0.999609112739563,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.027960391715168953,
+   "state_cos": 0.998903751373291,
+   "ms": 18.562885001301765
+  },
+  {
+   "variant": "per_token",
+   "layer": 49,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2208.873648196459
+  },
+  {
+   "variant": "own",
+   "layer": 49,
+   "chunk": 0,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.633057191967964
+  },
+  {
+   "variant": "thor_native",
+   "layer": 49,
+   "chunk": 0,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.63124297559261
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 49,
+   "chunk": 0,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.05078125,
+   "out_rel_l2": 0.0001667282049311325,
+   "state_cos": 1.0,
+   "ms": 34.17293354868889
+  },
+  {
+   "variant": "wy",
+   "layer": 49,
+   "chunk": 0,
+   "out_cos": 0.9571718573570251,
+   "out_max_abs": 12.5,
+   "out_rel_l2": 0.29866060614585876,
+   "state_cos": -0.005518168210983276,
+   "ms": 196.52235880494118
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 49,
+   "chunk": 0,
+   "out_cos": 0.9996258020401001,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.02735489420592785,
+   "state_cos": 0.9986466765403748,
+   "ms": 16.93296805024147
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 49,
+   "chunk": 0,
+   "out_cos": 0.9956090450286865,
+   "out_max_abs": 5.5,
+   "out_rel_l2": 0.0938902273774147,
+   "state_cos": 0.9986466765403748,
+   "ms": 17.79829151928425
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 49,
+   "chunk": 0,
+   "out_cos": 0.9996243715286255,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.02741122990846634,
+   "state_cos": 0.9986463189125061,
+   "ms": 18.838996067643166
+  },
+  {
+   "variant": "per_token",
+   "layer": 50,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2220.2562242746353
+  },
+  {
+   "variant": "own",
+   "layer": 50,
+   "chunk": 0,
+   "out_cos": 0.99977707862854,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.02111785300076008,
+   "state_cos": 0.9999890923500061,
+   "ms": 34.74641777575016
+  },
+  {
+   "variant": "thor_native",
+   "layer": 50,
+   "chunk": 0,
+   "out_cos": 0.99977707862854,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.02111785300076008,
+   "state_cos": 0.9999890923500061,
+   "ms": 34.73668359220028
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 50,
+   "chunk": 0,
+   "out_cos": 0.99977707862854,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.02111785300076008,
+   "state_cos": 0.9999890923500061,
+   "ms": 34.18750315904617
+  },
+  {
+   "variant": "wy",
+   "layer": 50,
+   "chunk": 0,
+   "out_cos": 0.9118971228599548,
+   "out_max_abs": 41.0,
+   "out_rel_l2": 0.42686596512794495,
+   "state_cos": 0.002921788487583399,
+   "ms": 196.08459249138832
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 50,
+   "chunk": 0,
+   "out_cos": 0.9994043111801147,
+   "out_max_abs": 5.0,
+   "out_rel_l2": 0.034516289830207825,
+   "state_cos": 0.9984588623046875,
+   "ms": 16.909487545490265
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 50,
+   "chunk": 0,
+   "out_cos": 0.9926530718803406,
+   "out_max_abs": 29.75,
+   "out_rel_l2": 0.12106218189001083,
+   "state_cos": 0.9984588623046875,
+   "ms": 17.780840396881104
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 50,
+   "chunk": 0,
+   "out_cos": 0.9993996620178223,
+   "out_max_abs": 6.0,
+   "out_rel_l2": 0.03465013578534126,
+   "state_cos": 0.9984589219093323,
+   "ms": 18.621310591697693
+  },
+  {
+   "variant": "per_token",
+   "layer": 52,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2225.540429353714
+  },
+  {
+   "variant": "own",
+   "layer": 52,
+   "chunk": 0,
+   "out_cos": 0.9998349547386169,
+   "out_max_abs": 5.0,
+   "out_rel_l2": 0.01817505992949009,
+   "state_cos": 0.9999432563781738,
+   "ms": 34.65592488646507
+  },
+  {
+   "variant": "thor_native",
+   "layer": 52,
+   "chunk": 0,
+   "out_cos": 0.9998349547386169,
+   "out_max_abs": 5.0,
+   "out_rel_l2": 0.01817505992949009,
+   "state_cos": 0.9999432563781738,
+   "ms": 34.61189195513725
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 52,
+   "chunk": 0,
+   "out_cos": 0.9998349547386169,
+   "out_max_abs": 5.0,
+   "out_rel_l2": 0.01817505992949009,
+   "state_cos": 0.9999432563781738,
+   "ms": 34.223442897200584
+  },
+  {
+   "variant": "wy",
+   "layer": 52,
+   "chunk": 0,
+   "out_cos": 0.9105708003044128,
+   "out_max_abs": 58.25,
+   "out_rel_l2": 0.4373067319393158,
+   "state_cos": -0.026274237781763077,
+   "ms": 196.7154275625944
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 52,
+   "chunk": 0,
+   "out_cos": 0.9996075630187988,
+   "out_max_abs": 3.75,
+   "out_rel_l2": 0.02801785059273243,
+   "state_cos": 0.997452974319458,
+   "ms": 16.904691234230995
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 52,
+   "chunk": 0,
+   "out_cos": 0.9951637387275696,
+   "out_max_abs": 42.0,
+   "out_rel_l2": 0.09860461205244064,
+   "state_cos": 0.997452974319458,
+   "ms": 17.827829346060753
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 52,
+   "chunk": 0,
+   "out_cos": 0.9996050596237183,
+   "out_max_abs": 3.75,
+   "out_rel_l2": 0.028106272220611572,
+   "state_cos": 0.9974493980407715,
+   "ms": 18.814219161868095
+  },
+  {
+   "variant": "per_token",
+   "layer": 53,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2213.0593303591013
+  },
+  {
+   "variant": "own",
+   "layer": 53,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.71198305487633
+  },
+  {
+   "variant": "thor_native",
+   "layer": 53,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.67881493270397
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 53,
+   "chunk": 0,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.22358259558678
+  },
+  {
+   "variant": "wy",
+   "layer": 53,
+   "chunk": 0,
+   "out_cos": 0.9611592292785645,
+   "out_max_abs": 30.5,
+   "out_rel_l2": 0.2798657715320587,
+   "state_cos": 0.0,
+   "ms": 196.52757048606873
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 53,
+   "chunk": 0,
+   "out_cos": 0.9997034072875977,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.024360500276088715,
+   "state_cos": 0.9975226521492004,
+   "ms": 16.942624002695084
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 53,
+   "chunk": 0,
+   "out_cos": 0.9946706295013428,
+   "out_max_abs": 25.0,
+   "out_rel_l2": 0.10324466973543167,
+   "state_cos": 0.9975226521492004,
+   "ms": 17.791438847780228
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 53,
+   "chunk": 0,
+   "out_cos": 0.9997010827064514,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.024452397599816322,
+   "state_cos": 0.9975231885910034,
+   "ms": 18.724605441093445
+  },
+  {
+   "variant": "per_token",
+   "layer": 54,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2224.2200262844563
+  },
+  {
+   "variant": "own",
+   "layer": 54,
+   "chunk": 0,
+   "out_cos": 0.9998892545700073,
+   "out_max_abs": 6.0,
+   "out_rel_l2": 0.014885025098919868,
+   "state_cos": 0.9999451637268066,
+   "ms": 34.74549017846584
+  },
+  {
+   "variant": "thor_native",
+   "layer": 54,
+   "chunk": 0,
+   "out_cos": 0.9998892545700073,
+   "out_max_abs": 6.0,
+   "out_rel_l2": 0.014885025098919868,
+   "state_cos": 0.9999451637268066,
+   "ms": 34.630415961146355
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 54,
+   "chunk": 0,
+   "out_cos": 0.9998892545700073,
+   "out_max_abs": 6.0,
+   "out_rel_l2": 0.014885025098919868,
+   "state_cos": 0.9999451637268066,
+   "ms": 34.2290885746479
+  },
+  {
+   "variant": "wy",
+   "layer": 54,
+   "chunk": 0,
+   "out_cos": 0.9607323408126831,
+   "out_max_abs": 100.0,
+   "out_rel_l2": 0.2846015691757202,
+   "state_cos": -0.00036198485759086907,
+   "ms": 196.48664817214012
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 54,
+   "chunk": 0,
+   "out_cos": 0.9997568726539612,
+   "out_max_abs": 8.0,
+   "out_rel_l2": 0.02205212414264679,
+   "state_cos": 0.9988536238670349,
+   "ms": 16.843678429722786
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 54,
+   "chunk": 0,
+   "out_cos": 0.9964112639427185,
+   "out_max_abs": 104.0,
+   "out_rel_l2": 0.08476551622152328,
+   "state_cos": 0.9988536238670349,
+   "ms": 17.732612788677216
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 54,
+   "chunk": 0,
+   "out_cos": 0.9997538328170776,
+   "out_max_abs": 8.0,
+   "out_rel_l2": 0.02219271846115589,
+   "state_cos": 0.9988533854484558,
+   "ms": 18.80800351500511
+  },
+  {
+   "variant": "per_token",
+   "layer": 56,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2227.5186888873577
+  },
+  {
+   "variant": "own",
+   "layer": 56,
+   "chunk": 0,
+   "out_cos": 1.000000238418579,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.73998419940472
+  },
+  {
+   "variant": "thor_native",
+   "layer": 56,
+   "chunk": 0,
+   "out_cos": 1.000000238418579,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.72055681049824
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 56,
+   "chunk": 0,
+   "out_cos": 1.000000238418579,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.20132212340832
+  },
+  {
+   "variant": "wy",
+   "layer": 56,
+   "chunk": 0,
+   "out_cos": 0.9765745401382446,
+   "out_max_abs": 78.0,
+   "out_rel_l2": 0.21574753522872925,
+   "state_cos": -0.001879981136880815,
+   "ms": 196.49842381477356
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 56,
+   "chunk": 0,
+   "out_cos": 0.9998300671577454,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.01843990758061409,
+   "state_cos": 0.9984035491943359,
+   "ms": 16.67007803916931
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 56,
+   "chunk": 0,
+   "out_cos": 0.9974568486213684,
+   "out_max_abs": 34.0,
+   "out_rel_l2": 0.07128573209047318,
+   "state_cos": 0.9984035491943359,
+   "ms": 17.758820205926895
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 56,
+   "chunk": 0,
+   "out_cos": 0.9998288154602051,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.018511680886149406,
+   "state_cos": 0.9984049797058105,
+   "ms": 18.80604214966297
+  },
+  {
+   "variant": "per_token",
+   "layer": 57,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2213.9711920171976
+  },
+  {
+   "variant": "own",
+   "layer": 57,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.63260270655155
+  },
+  {
+   "variant": "thor_native",
+   "layer": 57,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.72951985895634
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 57,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.125,
+   "out_rel_l2": 0.00024180542095564306,
+   "state_cos": 1.0,
+   "ms": 34.1949500143528
+  },
+  {
+   "variant": "wy",
+   "layer": 57,
+   "chunk": 0,
+   "out_cos": 0.96280437707901,
+   "out_max_abs": 27.78125,
+   "out_rel_l2": 0.2747737765312195,
+   "state_cos": 0.0,
+   "ms": 196.47531025111675
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 57,
+   "chunk": 0,
+   "out_cos": 0.9998592138290405,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.016782132908701897,
+   "state_cos": 0.998812735080719,
+   "ms": 16.693752259016037
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 57,
+   "chunk": 0,
+   "out_cos": 0.9971820712089539,
+   "out_max_abs": 25.40625,
+   "out_rel_l2": 0.0752515122294426,
+   "state_cos": 0.998812735080719,
+   "ms": 17.812790349125862
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 57,
+   "chunk": 0,
+   "out_cos": 0.9998583197593689,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.016832519322633743,
+   "state_cos": 0.9988196492195129,
+   "ms": 18.784452229738235
+  },
+  {
+   "variant": "per_token",
+   "layer": 58,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2213.2534459233284
+  },
+  {
+   "variant": "own",
+   "layer": 58,
+   "chunk": 0,
+   "out_cos": 0.99991375207901,
+   "out_max_abs": 5.5,
+   "out_rel_l2": 0.013134106062352657,
+   "state_cos": 0.9999416470527649,
+   "ms": 34.73788872361183
+  },
+  {
+   "variant": "thor_native",
+   "layer": 58,
+   "chunk": 0,
+   "out_cos": 0.99991375207901,
+   "out_max_abs": 5.5,
+   "out_rel_l2": 0.013134106062352657,
+   "state_cos": 0.9999416470527649,
+   "ms": 34.653639420866966
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 58,
+   "chunk": 0,
+   "out_cos": 0.9999138116836548,
+   "out_max_abs": 5.5,
+   "out_rel_l2": 0.01313423179090023,
+   "state_cos": 0.9999416470527649,
+   "ms": 34.22218933701515
+  },
+  {
+   "variant": "wy",
+   "layer": 58,
+   "chunk": 0,
+   "out_cos": 0.9845104813575745,
+   "out_max_abs": 76.0,
+   "out_rel_l2": 0.1762341558933258,
+   "state_cos": 0.0,
+   "ms": 196.70390523970127
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 58,
+   "chunk": 0,
+   "out_cos": 0.9998480677604675,
+   "out_max_abs": 8.0,
+   "out_rel_l2": 0.01743454486131668,
+   "state_cos": 0.997374415397644,
+   "ms": 16.963396221399307
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 58,
+   "chunk": 0,
+   "out_cos": 0.9956445693969727,
+   "out_max_abs": 84.0,
+   "out_rel_l2": 0.09323174506425858,
+   "state_cos": 0.997374415397644,
+   "ms": 17.742516472935677
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 58,
+   "chunk": 0,
+   "out_cos": 0.9998441934585571,
+   "out_max_abs": 20.0,
+   "out_rel_l2": 0.017651570960879326,
+   "state_cos": 0.997374415397644,
+   "ms": 18.825596198439598
+  },
+  {
+   "variant": "per_token",
+   "layer": 60,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2219.1925160586834
+  },
+  {
+   "variant": "own",
+   "layer": 60,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.6230361610651
+  },
+  {
+   "variant": "thor_native",
+   "layer": 60,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.688353538513184
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 60,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.18801352381706
+  },
+  {
+   "variant": "wy",
+   "layer": 60,
+   "chunk": 0,
+   "out_cos": 0.9724645018577576,
+   "out_max_abs": 68.0,
+   "out_rel_l2": 0.2359084039926529,
+   "state_cos": 0.0,
+   "ms": 196.41891866922379
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 60,
+   "chunk": 0,
+   "out_cos": 0.9998260736465454,
+   "out_max_abs": 6.0,
+   "out_rel_l2": 0.018651770427823067,
+   "state_cos": 0.9976412653923035,
+   "ms": 16.711141914129257
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 60,
+   "chunk": 0,
+   "out_cos": 0.992788553237915,
+   "out_max_abs": 71.0,
+   "out_rel_l2": 0.12097596377134323,
+   "state_cos": 0.9976412653923035,
+   "ms": 17.603371292352676
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 60,
+   "chunk": 0,
+   "out_cos": 0.9998258352279663,
+   "out_max_abs": 5.0,
+   "out_rel_l2": 0.01865801215171814,
+   "state_cos": 0.9976412057876587,
+   "ms": 18.824413418769836
+  },
+  {
+   "variant": "per_token",
+   "layer": 61,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2226.9655019044876
+  },
+  {
+   "variant": "own",
+   "layer": 61,
+   "chunk": 0,
+   "out_cos": 0.9999752044677734,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.007053317967802286,
+   "state_cos": 0.9999940395355225,
+   "ms": 34.66941602528095
+  },
+  {
+   "variant": "thor_native",
+   "layer": 61,
+   "chunk": 0,
+   "out_cos": 0.9999752044677734,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.007053317967802286,
+   "state_cos": 0.9999940395355225,
+   "ms": 34.73411127924919
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 61,
+   "chunk": 0,
+   "out_cos": 0.9999752044677734,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.007053317967802286,
+   "state_cos": 0.9999940395355225,
+   "ms": 34.273117780685425
+  },
+  {
+   "variant": "wy",
+   "layer": 61,
+   "chunk": 0,
+   "out_cos": 0.9742345809936523,
+   "out_max_abs": 30.0,
+   "out_rel_l2": 0.22565273940563202,
+   "state_cos": 0.0,
+   "ms": 196.66984491050243
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 61,
+   "chunk": 0,
+   "out_cos": 0.9998427629470825,
+   "out_max_abs": 4.5,
+   "out_rel_l2": 0.01773875020444393,
+   "state_cos": 0.9976060390472412,
+   "ms": 16.879569739103317
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 61,
+   "chunk": 0,
+   "out_cos": 0.9961692690849304,
+   "out_max_abs": 24.5,
+   "out_rel_l2": 0.08763796091079712,
+   "state_cos": 0.9976060390472412,
+   "ms": 17.75519736111164
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 61,
+   "chunk": 0,
+   "out_cos": 0.9998422265052795,
+   "out_max_abs": 4.5,
+   "out_rel_l2": 0.017770549282431602,
+   "state_cos": 0.9976055026054382,
+   "ms": 18.779171630740166
+  },
+  {
+   "variant": "per_token",
+   "layer": 62,
+   "chunk": 0,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2255.50408475101
+  },
+  {
+   "variant": "own",
+   "layer": 62,
+   "chunk": 0,
+   "out_cos": 0.9998939037322998,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.014568869955837727,
+   "state_cos": 0.9999872446060181,
+   "ms": 34.757861867547035
+  },
+  {
+   "variant": "thor_native",
+   "layer": 62,
+   "chunk": 0,
+   "out_cos": 0.9998939037322998,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.014568869955837727,
+   "state_cos": 0.9999872446060181,
+   "ms": 34.844864159822464
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 62,
+   "chunk": 0,
+   "out_cos": 0.9998939037322998,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.014568869955837727,
+   "state_cos": 0.9999872446060181,
+   "ms": 34.2033077031374
+  },
+  {
+   "variant": "wy",
+   "layer": 62,
+   "chunk": 0,
+   "out_cos": 0.8969029188156128,
+   "out_max_abs": 148.0,
+   "out_rel_l2": 0.47020700573921204,
+   "state_cos": -0.003092371392995119,
+   "ms": 196.3952425867319
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 62,
+   "chunk": 0,
+   "out_cos": 0.9996450543403625,
+   "out_max_abs": 5.0,
+   "out_rel_l2": 0.026645265519618988,
+   "state_cos": 0.996854305267334,
+   "ms": 16.902633011341095
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 62,
+   "chunk": 0,
+   "out_cos": 0.988315224647522,
+   "out_max_abs": 91.0,
+   "out_rel_l2": 0.1534576267004013,
+   "state_cos": 0.996854305267334,
+   "ms": 17.769910395145416
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 62,
+   "chunk": 0,
+   "out_cos": 0.9996421337127686,
+   "out_max_abs": 5.0,
+   "out_rel_l2": 0.026754463091492653,
+   "state_cos": 0.9968547821044922,
+   "ms": 18.821189180016518
+  },
+  {
+   "variant": "per_token",
+   "layer": 0,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2216.57826192677
+  },
+  {
+   "variant": "own",
+   "layer": 0,
+   "chunk": 1,
+   "out_cos": 0.9999877214431763,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.00495331734418869,
+   "state_cos": 0.9999629259109497,
+   "ms": 34.337736666202545
+  },
+  {
+   "variant": "thor_native",
+   "layer": 0,
+   "chunk": 1,
+   "out_cos": 0.9999877214431763,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.00495331734418869,
+   "state_cos": 0.9999629259109497,
+   "ms": 34.42669287323952
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 0,
+   "chunk": 1,
+   "out_cos": 0.9999877214431763,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.00495331734418869,
+   "state_cos": 0.9999629259109497,
+   "ms": 33.914973959326744
+  },
+  {
+   "variant": "wy",
+   "layer": 0,
+   "chunk": 1,
+   "out_cos": -0.4295130968093872,
+   "out_max_abs": 279.0,
+   "out_rel_l2": 2.2595856189727783,
+   "state_cos": 0.0,
+   "ms": 193.7213372439146
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 0,
+   "chunk": 1,
+   "out_cos": 0.9998717904090881,
+   "out_max_abs": 7.5,
+   "out_rel_l2": 0.01601916179060936,
+   "state_cos": 0.9958760738372803,
+   "ms": 16.89433865249157
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 0,
+   "chunk": 1,
+   "out_cos": 0.9977293610572815,
+   "out_max_abs": 19.0,
+   "out_rel_l2": 0.0967271625995636,
+   "state_cos": 0.9958760738372803,
+   "ms": 17.572319135069847
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 0,
+   "chunk": 1,
+   "out_cos": 0.9998732805252075,
+   "out_max_abs": 7.5,
+   "out_rel_l2": 0.015927469357848167,
+   "state_cos": 0.9958748817443848,
+   "ms": 18.82525533437729
+  },
+  {
+   "variant": "per_token",
+   "layer": 1,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2202.837646007538
+  },
+  {
+   "variant": "own",
+   "layer": 1,
+   "chunk": 1,
+   "out_cos": 0.9999998807907104,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0004720587457995862,
+   "state_cos": 0.999997615814209,
+   "ms": 34.35753844678402
+  },
+  {
+   "variant": "thor_native",
+   "layer": 1,
+   "chunk": 1,
+   "out_cos": 0.9999998807907104,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0004720587457995862,
+   "state_cos": 0.999997615814209,
+   "ms": 34.4022773206234
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 1,
+   "chunk": 1,
+   "out_cos": 0.9999998807907104,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.00047344292397610843,
+   "state_cos": 0.999997615814209,
+   "ms": 33.94109569489956
+  },
+  {
+   "variant": "wy",
+   "layer": 1,
+   "chunk": 1,
+   "out_cos": -0.7351810932159424,
+   "out_max_abs": 389.0,
+   "out_rel_l2": 1.7588615417480469,
+   "state_cos": 0.0,
+   "ms": 193.85943934321404
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 1,
+   "chunk": 1,
+   "out_cos": 0.9999528527259827,
+   "out_max_abs": 10.0,
+   "out_rel_l2": 0.009747193194925785,
+   "state_cos": 0.99806809425354,
+   "ms": 16.407009214162827
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 1,
+   "chunk": 1,
+   "out_cos": -0.4828651547431946,
+   "out_max_abs": 326.0,
+   "out_rel_l2": 1.3434633016586304,
+   "state_cos": 0.99806809425354,
+   "ms": 17.728986218571663
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 1,
+   "chunk": 1,
+   "out_cos": 0.9999494552612305,
+   "out_max_abs": 6.0,
+   "out_rel_l2": 0.010101692751049995,
+   "state_cos": 0.9980679750442505,
+   "ms": 18.73662695288658
+  },
+  {
+   "variant": "per_token",
+   "layer": 2,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2219.4001469761133
+  },
+  {
+   "variant": "own",
+   "layer": 2,
+   "chunk": 1,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.37284752726555
+  },
+  {
+   "variant": "thor_native",
+   "layer": 2,
+   "chunk": 1,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.443264827132225
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 2,
+   "chunk": 1,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0078125,
+   "out_rel_l2": 1.2943685760546941e-05,
+   "state_cos": 1.0,
+   "ms": 33.95409695804119
+  },
+  {
+   "variant": "wy",
+   "layer": 2,
+   "chunk": 1,
+   "out_cos": 0.995193362236023,
+   "out_max_abs": 37.5,
+   "out_rel_l2": 0.1116553470492363,
+   "state_cos": 0.12311432510614395,
+   "ms": 193.96190717816353
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 2,
+   "chunk": 1,
+   "out_cos": 0.9999867677688599,
+   "out_max_abs": 3.0,
+   "out_rel_l2": 0.005468436051160097,
+   "state_cos": 0.9985949397087097,
+   "ms": 16.84919185936451
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 2,
+   "chunk": 1,
+   "out_cos": 0.9990234971046448,
+   "out_max_abs": 31.0,
+   "out_rel_l2": 0.05813863128423691,
+   "state_cos": 0.9985949397087097,
+   "ms": 17.694491893053055
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 2,
+   "chunk": 1,
+   "out_cos": 0.9999866485595703,
+   "out_max_abs": 3.0,
+   "out_rel_l2": 0.005502879619598389,
+   "state_cos": 0.9985944628715515,
+   "ms": 18.68719980120659
+  },
+  {
+   "variant": "per_token",
+   "layer": 4,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2185.8023833483458
+  },
+  {
+   "variant": "own",
+   "layer": 4,
+   "chunk": 1,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0000001192092896,
+   "ms": 34.41485017538071
+  },
+  {
+   "variant": "thor_native",
+   "layer": 4,
+   "chunk": 1,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0000001192092896,
+   "ms": 34.35429558157921
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 4,
+   "chunk": 1,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0078125,
+   "out_rel_l2": 1.312284712184919e-05,
+   "state_cos": 1.0000001192092896,
+   "ms": 33.633315935730934
+  },
+  {
+   "variant": "wy",
+   "layer": 4,
+   "chunk": 1,
+   "out_cos": 0.9993450045585632,
+   "out_max_abs": 5.5,
+   "out_rel_l2": 0.03688016161322594,
+   "state_cos": 0.06362718343734741,
+   "ms": 194.41272877156734
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 4,
+   "chunk": 1,
+   "out_cos": 0.9999961853027344,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0027790332678705454,
+   "state_cos": 0.9977142214775085,
+   "ms": 16.854826360940933
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 4,
+   "chunk": 1,
+   "out_cos": 0.9999551773071289,
+   "out_max_abs": 5.25,
+   "out_rel_l2": 0.009502238593995571,
+   "state_cos": 0.9977142214775085,
+   "ms": 17.525585368275642
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 4,
+   "chunk": 1,
+   "out_cos": 0.9999962449073792,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0027868952602148056,
+   "state_cos": 0.9977140426635742,
+   "ms": 18.511556088924408
+  },
+  {
+   "variant": "per_token",
+   "layer": 5,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2204.77594435215
+  },
+  {
+   "variant": "own",
+   "layer": 5,
+   "chunk": 1,
+   "out_cos": 0.9999992847442627,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.001262344652786851,
+   "state_cos": 0.9999938011169434,
+   "ms": 34.3803558498621
+  },
+  {
+   "variant": "thor_native",
+   "layer": 5,
+   "chunk": 1,
+   "out_cos": 0.9999992847442627,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.001262344652786851,
+   "state_cos": 0.9999938011169434,
+   "ms": 34.39844958484173
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 5,
+   "chunk": 1,
+   "out_cos": 0.9999992847442627,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0012623853981494904,
+   "state_cos": 0.9999938011169434,
+   "ms": 33.930983394384384
+  },
+  {
+   "variant": "wy",
+   "layer": 5,
+   "chunk": 1,
+   "out_cos": 0.9994791746139526,
+   "out_max_abs": 8.5,
+   "out_rel_l2": 0.033610060811042786,
+   "state_cos": 0.007237831596285105,
+   "ms": 193.95848363637924
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 5,
+   "chunk": 1,
+   "out_cos": 0.9999943375587463,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0034704329445958138,
+   "state_cos": 0.9962630867958069,
+   "ms": 16.905978322029114
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 5,
+   "chunk": 1,
+   "out_cos": 0.99989914894104,
+   "out_max_abs": 4.5,
+   "out_rel_l2": 0.01443870272487402,
+   "state_cos": 0.9962630867958069,
+   "ms": 17.780369147658348
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 5,
+   "chunk": 1,
+   "out_cos": 0.999994158744812,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.003481903811916709,
+   "state_cos": 0.9962630271911621,
+   "ms": 18.46880652010441
+  },
+  {
+   "variant": "per_token",
+   "layer": 6,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2203.830501064658
+  },
+  {
+   "variant": "own",
+   "layer": 6,
+   "chunk": 1,
+   "out_cos": 0.999999463558197,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0011191016528755426,
+   "state_cos": 0.9999966025352478,
+   "ms": 34.35997851192951
+  },
+  {
+   "variant": "thor_native",
+   "layer": 6,
+   "chunk": 1,
+   "out_cos": 0.999999463558197,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0011191016528755426,
+   "state_cos": 0.9999966025352478,
+   "ms": 34.436922520399094
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 6,
+   "chunk": 1,
+   "out_cos": 0.999999463558197,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0011191016528755426,
+   "state_cos": 0.9999966025352478,
+   "ms": 33.922379836440086
+  },
+  {
+   "variant": "wy",
+   "layer": 6,
+   "chunk": 1,
+   "out_cos": 0.9977469444274902,
+   "out_max_abs": 9.0,
+   "out_rel_l2": 0.07066578418016434,
+   "state_cos": 0.007519718259572983,
+   "ms": 193.95839236676693
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 6,
+   "chunk": 1,
+   "out_cos": 0.9999915957450867,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.0041355411522090435,
+   "state_cos": 0.9984872341156006,
+   "ms": 16.87057875096798
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 6,
+   "chunk": 1,
+   "out_cos": 0.9998096823692322,
+   "out_max_abs": 6.5,
+   "out_rel_l2": 0.021927546709775925,
+   "state_cos": 0.9984872341156006,
+   "ms": 17.80064031481743
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 6,
+   "chunk": 1,
+   "out_cos": 0.9999915361404419,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.004133786540478468,
+   "state_cos": 0.99848473072052,
+   "ms": 18.748272210359573
+  },
+  {
+   "variant": "per_token",
+   "layer": 8,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2187.4442268162966
+  },
+  {
+   "variant": "own",
+   "layer": 8,
+   "chunk": 1,
+   "out_cos": 0.9999977350234985,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0020780989434570074,
+   "state_cos": 0.9999865293502808,
+   "ms": 34.39463675022125
+  },
+  {
+   "variant": "thor_native",
+   "layer": 8,
+   "chunk": 1,
+   "out_cos": 0.9999977350234985,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0020780989434570074,
+   "state_cos": 0.9999865293502808,
+   "ms": 34.41748768091202
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 8,
+   "chunk": 1,
+   "out_cos": 0.9999977350234985,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0020780989434570074,
+   "state_cos": 0.9999865293502808,
+   "ms": 33.939095214009285
+  },
+  {
+   "variant": "wy",
+   "layer": 8,
+   "chunk": 1,
+   "out_cos": 0.9985712170600891,
+   "out_max_abs": 13.5,
+   "out_rel_l2": 0.0553872175514698,
+   "state_cos": 0.01572721265256405,
+   "ms": 193.81282851099968
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 8,
+   "chunk": 1,
+   "out_cos": 0.999991774559021,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.004132586065679789,
+   "state_cos": 0.9974840879440308,
+   "ms": 16.920942813158035
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 8,
+   "chunk": 1,
+   "out_cos": 0.999858021736145,
+   "out_max_abs": 9.5,
+   "out_rel_l2": 0.017960745841264725,
+   "state_cos": 0.9974840879440308,
+   "ms": 17.540697008371353
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 8,
+   "chunk": 1,
+   "out_cos": 0.9999915957450867,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.004157980438321829,
+   "state_cos": 0.9974839091300964,
+   "ms": 18.711762502789497
+  },
+  {
+   "variant": "per_token",
+   "layer": 9,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2199.4950212538242
+  },
+  {
+   "variant": "own",
+   "layer": 9,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.369513392448425
+  },
+  {
+   "variant": "thor_native",
+   "layer": 9,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.48675572872162
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 9,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.015625,
+   "out_rel_l2": 5.364044409361668e-05,
+   "state_cos": 1.0,
+   "ms": 33.93751569092274
+  },
+  {
+   "variant": "wy",
+   "layer": 9,
+   "chunk": 1,
+   "out_cos": 0.9951227903366089,
+   "out_max_abs": 6.0,
+   "out_rel_l2": 0.10017254203557968,
+   "state_cos": 0.008507928811013699,
+   "ms": 193.62386129796505
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 9,
+   "chunk": 1,
+   "out_cos": 0.9999918937683105,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004046473652124405,
+   "state_cos": 0.9991145133972168,
+   "ms": 16.915321350097656
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 9,
+   "chunk": 1,
+   "out_cos": 0.9999009370803833,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.014066994190216064,
+   "state_cos": 0.9991145133972168,
+   "ms": 17.40952767431736
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 9,
+   "chunk": 1,
+   "out_cos": 0.9999918937683105,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004050580319017172,
+   "state_cos": 0.9991145133972168,
+   "ms": 18.763771280646324
+  },
+  {
+   "variant": "per_token",
+   "layer": 10,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2233.9096311479807
+  },
+  {
+   "variant": "own",
+   "layer": 10,
+   "chunk": 1,
+   "out_cos": 0.9999979734420776,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0019405025523155928,
+   "state_cos": 0.9999988675117493,
+   "ms": 34.32248346507549
+  },
+  {
+   "variant": "thor_native",
+   "layer": 10,
+   "chunk": 1,
+   "out_cos": 0.9999979734420776,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0019405025523155928,
+   "state_cos": 0.9999988675117493,
+   "ms": 34.46671739220619
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 10,
+   "chunk": 1,
+   "out_cos": 0.9999979734420776,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0019405025523155928,
+   "state_cos": 0.9999988675117493,
+   "ms": 33.937735483050346
+  },
+  {
+   "variant": "wy",
+   "layer": 10,
+   "chunk": 1,
+   "out_cos": 0.9973248243331909,
+   "out_max_abs": 6.75,
+   "out_rel_l2": 0.07311653345823288,
+   "state_cos": 0.16455380618572235,
+   "ms": 193.84709373116493
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 10,
+   "chunk": 1,
+   "out_cos": 0.9999902248382568,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.00442596385255456,
+   "state_cos": 0.9984795451164246,
+   "ms": 16.909532248973846
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 10,
+   "chunk": 1,
+   "out_cos": 0.9998296499252319,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.018478363752365112,
+   "state_cos": 0.9984795451164246,
+   "ms": 17.70664192736149
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 10,
+   "chunk": 1,
+   "out_cos": 0.9999901652336121,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004437236115336418,
+   "state_cos": 0.998479425907135,
+   "ms": 18.813680857419968
+  },
+  {
+   "variant": "per_token",
+   "layer": 12,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2200.963130220771
+  },
+  {
+   "variant": "own",
+   "layer": 12,
+   "chunk": 1,
+   "out_cos": 0.9999988675117493,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0015059143770486116,
+   "state_cos": 0.9999964237213135,
+   "ms": 34.37631018459797
+  },
+  {
+   "variant": "thor_native",
+   "layer": 12,
+   "chunk": 1,
+   "out_cos": 0.9999988675117493,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0015059143770486116,
+   "state_cos": 0.9999964237213135,
+   "ms": 34.397050738334656
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 12,
+   "chunk": 1,
+   "out_cos": 0.9999988675117493,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0015061087906360626,
+   "state_cos": 0.9999964237213135,
+   "ms": 33.63553248345852
+  },
+  {
+   "variant": "wy",
+   "layer": 12,
+   "chunk": 1,
+   "out_cos": 0.9957247376441956,
+   "out_max_abs": 8.0,
+   "out_rel_l2": 0.09324157238006592,
+   "state_cos": 0.006922964937984943,
+   "ms": 193.8191633671522
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 12,
+   "chunk": 1,
+   "out_cos": 0.9999908804893494,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0042775277979671955,
+   "state_cos": 0.9977286458015442,
+   "ms": 16.626382246613503
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 12,
+   "chunk": 1,
+   "out_cos": 0.9996462464332581,
+   "out_max_abs": 6.5,
+   "out_rel_l2": 0.0267412681132555,
+   "state_cos": 0.9977286458015442,
+   "ms": 17.738690599799156
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 12,
+   "chunk": 1,
+   "out_cos": 0.9999908804893494,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004284735769033432,
+   "state_cos": 0.9977283477783203,
+   "ms": 18.52545514702797
+  },
+  {
+   "variant": "per_token",
+   "layer": 13,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2203.1528167426586
+  },
+  {
+   "variant": "own",
+   "layer": 13,
+   "chunk": 1,
+   "out_cos": 0.9999991655349731,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.0013030159752815962,
+   "state_cos": 0.9999993443489075,
+   "ms": 34.410376101732254
+  },
+  {
+   "variant": "thor_native",
+   "layer": 13,
+   "chunk": 1,
+   "out_cos": 0.9999991655349731,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.0013030159752815962,
+   "state_cos": 0.9999993443489075,
+   "ms": 34.36982072889805
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 13,
+   "chunk": 1,
+   "out_cos": 0.9999991655349731,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.0013030159752815962,
+   "state_cos": 0.9999993443489075,
+   "ms": 33.6629431694746
+  },
+  {
+   "variant": "wy",
+   "layer": 13,
+   "chunk": 1,
+   "out_cos": 0.9979236125946045,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.06446521729230881,
+   "state_cos": 0.002758883871138096,
+   "ms": 193.8062720000744
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 13,
+   "chunk": 1,
+   "out_cos": 0.999990701675415,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.00433764886111021,
+   "state_cos": 0.9979313611984253,
+   "ms": 16.908079385757446
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 13,
+   "chunk": 1,
+   "out_cos": 0.9997463226318359,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.02257184125483036,
+   "state_cos": 0.9979313611984253,
+   "ms": 17.504896968603134
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 13,
+   "chunk": 1,
+   "out_cos": 0.9999905228614807,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004365609027445316,
+   "state_cos": 0.9979314208030701,
+   "ms": 18.757568672299385
+  },
+  {
+   "variant": "per_token",
+   "layer": 14,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2184.748148545623
+  },
+  {
+   "variant": "own",
+   "layer": 14,
+   "chunk": 1,
+   "out_cos": 0.999997615814209,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.00221362360753119,
+   "state_cos": 0.9999910593032837,
+   "ms": 34.31674465537071
+  },
+  {
+   "variant": "thor_native",
+   "layer": 14,
+   "chunk": 1,
+   "out_cos": 0.999997615814209,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.00221362360753119,
+   "state_cos": 0.9999910593032837,
+   "ms": 34.35094840824604
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 14,
+   "chunk": 1,
+   "out_cos": 0.999997615814209,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.00221362360753119,
+   "state_cos": 0.9999910593032837,
+   "ms": 33.953314647078514
+  },
+  {
+   "variant": "wy",
+   "layer": 14,
+   "chunk": 1,
+   "out_cos": 0.9976537823677063,
+   "out_max_abs": 9.5,
+   "out_rel_l2": 0.0692705363035202,
+   "state_cos": 0.08493364602327347,
+   "ms": 193.69169883430004
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 14,
+   "chunk": 1,
+   "out_cos": 0.9999873638153076,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.005076914094388485,
+   "state_cos": 0.998454749584198,
+   "ms": 16.850624233484268
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 14,
+   "chunk": 1,
+   "out_cos": 0.999691903591156,
+   "out_max_abs": 9.0,
+   "out_rel_l2": 0.026960641145706177,
+   "state_cos": 0.998454749584198,
+   "ms": 17.63276197016239
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 14,
+   "chunk": 1,
+   "out_cos": 0.9999874234199524,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.00508139980956912,
+   "state_cos": 0.9984546303749084,
+   "ms": 18.603214994072914
+  },
+  {
+   "variant": "per_token",
+   "layer": 16,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2205.4567709565163
+  },
+  {
+   "variant": "own",
+   "layer": 16,
+   "chunk": 1,
+   "out_cos": 0.9999970197677612,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.002507617697119713,
+   "state_cos": 0.9999978542327881,
+   "ms": 34.37334671616554
+  },
+  {
+   "variant": "thor_native",
+   "layer": 16,
+   "chunk": 1,
+   "out_cos": 0.9999970197677612,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.002507617697119713,
+   "state_cos": 0.9999978542327881,
+   "ms": 34.438006579875946
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 16,
+   "chunk": 1,
+   "out_cos": 0.9999969005584717,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0025079231709241867,
+   "state_cos": 0.9999978542327881,
+   "ms": 33.94562937319279
+  },
+  {
+   "variant": "wy",
+   "layer": 16,
+   "chunk": 1,
+   "out_cos": 0.9945052862167358,
+   "out_max_abs": 8.5,
+   "out_rel_l2": 0.10846574604511261,
+   "state_cos": 0.007667556405067444,
+   "ms": 193.948769941926
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 16,
+   "chunk": 1,
+   "out_cos": 0.999988317489624,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004834129940718412,
+   "state_cos": 0.9981859922409058,
+   "ms": 16.925374045968056
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 16,
+   "chunk": 1,
+   "out_cos": 0.9996994137763977,
+   "out_max_abs": 3.75,
+   "out_rel_l2": 0.024543773382902145,
+   "state_cos": 0.9981859922409058,
+   "ms": 17.772216349840164
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 16,
+   "chunk": 1,
+   "out_cos": 0.9999884963035583,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.004819010384380817,
+   "state_cos": 0.9981861114501953,
+   "ms": 18.849458545446396
+  },
+  {
+   "variant": "per_token",
+   "layer": 17,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2223.8120399415493
+  },
+  {
+   "variant": "own",
+   "layer": 17,
+   "chunk": 1,
+   "out_cos": 0.9999968409538269,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0024899120908230543,
+   "state_cos": 0.9999987483024597,
+   "ms": 34.38850864768028
+  },
+  {
+   "variant": "thor_native",
+   "layer": 17,
+   "chunk": 1,
+   "out_cos": 0.9999968409538269,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0024899120908230543,
+   "state_cos": 0.9999987483024597,
+   "ms": 34.3998558819294
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 17,
+   "chunk": 1,
+   "out_cos": 0.9999968409538269,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.0024900822900235653,
+   "state_cos": 0.9999987483024597,
+   "ms": 34.00026075541973
+  },
+  {
+   "variant": "wy",
+   "layer": 17,
+   "chunk": 1,
+   "out_cos": 0.9967204928398132,
+   "out_max_abs": 7.25,
+   "out_rel_l2": 0.08263006806373596,
+   "state_cos": 0.007863479666411877,
+   "ms": 194.05986182391644
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 17,
+   "chunk": 1,
+   "out_cos": 0.9999839663505554,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.0057540759444236755,
+   "state_cos": 0.9990392923355103,
+   "ms": 16.910670325160027
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 17,
+   "chunk": 1,
+   "out_cos": 0.9995975494384766,
+   "out_max_abs": 2.75,
+   "out_rel_l2": 0.028738731518387794,
+   "state_cos": 0.9990392923355103,
+   "ms": 17.74882711470127
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 17,
+   "chunk": 1,
+   "out_cos": 0.9999839663505554,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.005779656581580639,
+   "state_cos": 0.9990389943122864,
+   "ms": 18.569881096482277
+  },
+  {
+   "variant": "per_token",
+   "layer": 18,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2207.1814090013504
+  },
+  {
+   "variant": "own",
+   "layer": 18,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.37322564423084
+  },
+  {
+   "variant": "thor_native",
+   "layer": 18,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.36553478240967
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 18,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.015625,
+   "out_rel_l2": 3.302585537312552e-05,
+   "state_cos": 1.0,
+   "ms": 33.95492769777775
+  },
+  {
+   "variant": "wy",
+   "layer": 18,
+   "chunk": 1,
+   "out_cos": 0.9830223321914673,
+   "out_max_abs": 14.0,
+   "out_rel_l2": 0.1920003443956375,
+   "state_cos": -0.007364868652075529,
+   "ms": 193.93006712198257
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 18,
+   "chunk": 1,
+   "out_cos": 0.9999722242355347,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.007446668576449156,
+   "state_cos": 0.9989051818847656,
+   "ms": 16.699880361557007
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 18,
+   "chunk": 1,
+   "out_cos": 0.9990070462226868,
+   "out_max_abs": 13.0,
+   "out_rel_l2": 0.04896216839551926,
+   "state_cos": 0.9989051818847656,
+   "ms": 17.742374911904335
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 18,
+   "chunk": 1,
+   "out_cos": 0.9999721646308899,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.007479099091142416,
+   "state_cos": 0.9989053010940552,
+   "ms": 18.758615478873253
+  },
+  {
+   "variant": "per_token",
+   "layer": 20,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2192.0439433306456
+  },
+  {
+   "variant": "own",
+   "layer": 20,
+   "chunk": 1,
+   "out_cos": 0.9999746084213257,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.007127248682081699,
+   "state_cos": 0.9999918937683105,
+   "ms": 34.321753308176994
+  },
+  {
+   "variant": "thor_native",
+   "layer": 20,
+   "chunk": 1,
+   "out_cos": 0.9999746084213257,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.007127248682081699,
+   "state_cos": 0.9999918937683105,
+   "ms": 34.397635608911514
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 20,
+   "chunk": 1,
+   "out_cos": 0.9999746084213257,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.007127248682081699,
+   "state_cos": 0.9999918937683105,
+   "ms": 33.90831686556339
+  },
+  {
+   "variant": "wy",
+   "layer": 20,
+   "chunk": 1,
+   "out_cos": 0.9607043266296387,
+   "out_max_abs": 35.5,
+   "out_rel_l2": 0.3103253245353699,
+   "state_cos": 0.07203641533851624,
+   "ms": 193.86089220643044
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 20,
+   "chunk": 1,
+   "out_cos": 0.9999217987060547,
+   "out_max_abs": 2.5,
+   "out_rel_l2": 0.012509416788816452,
+   "state_cos": 0.9984450340270996,
+   "ms": 16.906697303056717
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 20,
+   "chunk": 1,
+   "out_cos": 0.9965181946754456,
+   "out_max_abs": 32.5,
+   "out_rel_l2": 0.1105029284954071,
+   "state_cos": 0.9984450340270996,
+   "ms": 17.771095037460327
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 20,
+   "chunk": 1,
+   "out_cos": 0.9999208450317383,
+   "out_max_abs": 2.5,
+   "out_rel_l2": 0.012588697485625744,
+   "state_cos": 0.9984450340270996,
+   "ms": 18.77821795642376
+  },
+  {
+   "variant": "per_token",
+   "layer": 21,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2206.1067167669535
+  },
+  {
+   "variant": "own",
+   "layer": 21,
+   "chunk": 1,
+   "out_cos": 0.9999685287475586,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.007928585633635521,
+   "state_cos": 0.9999688863754272,
+   "ms": 34.40039046108723
+  },
+  {
+   "variant": "thor_native",
+   "layer": 21,
+   "chunk": 1,
+   "out_cos": 0.9999685287475586,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.007928585633635521,
+   "state_cos": 0.9999688863754272,
+   "ms": 34.416355192661285
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 21,
+   "chunk": 1,
+   "out_cos": 0.9999685287475586,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.007928585633635521,
+   "state_cos": 0.9999688863754272,
+   "ms": 34.002890810370445
+  },
+  {
+   "variant": "wy",
+   "layer": 21,
+   "chunk": 1,
+   "out_cos": 0.981134295463562,
+   "out_max_abs": 20.0,
+   "out_rel_l2": 0.19653445482254028,
+   "state_cos": 0.023961398750543594,
+   "ms": 193.85469891130924
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 21,
+   "chunk": 1,
+   "out_cos": 0.9999176263809204,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.012836298905313015,
+   "state_cos": 0.998000979423523,
+   "ms": 16.93202368915081
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 21,
+   "chunk": 1,
+   "out_cos": 0.9974071979522705,
+   "out_max_abs": 18.0,
+   "out_rel_l2": 0.07201322913169861,
+   "state_cos": 0.998000979423523,
+   "ms": 17.510076984763145
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 21,
+   "chunk": 1,
+   "out_cos": 0.999916672706604,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.012906555086374283,
+   "state_cos": 0.9980021715164185,
+   "ms": 18.714075908064842
+  },
+  {
+   "variant": "per_token",
+   "layer": 22,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2186.0254425555468
+  },
+  {
+   "variant": "own",
+   "layer": 22,
+   "chunk": 1,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.33174453675747
+  },
+  {
+   "variant": "thor_native",
+   "layer": 22,
+   "chunk": 1,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.36962515115738
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 22,
+   "chunk": 1,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.025390625,
+   "out_rel_l2": 0.00013173521438147873,
+   "state_cos": 1.0,
+   "ms": 33.899156376719475
+  },
+  {
+   "variant": "wy",
+   "layer": 22,
+   "chunk": 1,
+   "out_cos": 0.8826358318328857,
+   "out_max_abs": 11.75,
+   "out_rel_l2": 0.5355969071388245,
+   "state_cos": -0.007813386619091034,
+   "ms": 193.44361871480942
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 22,
+   "chunk": 1,
+   "out_cos": 0.9998956918716431,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.01445348747074604,
+   "state_cos": 0.9987504482269287,
+   "ms": 16.930079087615013
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 22,
+   "chunk": 1,
+   "out_cos": 0.9984024167060852,
+   "out_max_abs": 7.75,
+   "out_rel_l2": 0.05650310963392258,
+   "state_cos": 0.9987504482269287,
+   "ms": 17.75979995727539
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 22,
+   "chunk": 1,
+   "out_cos": 0.9998950958251953,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.014488041400909424,
+   "state_cos": 0.9987462162971497,
+   "ms": 18.87495629489422
+  },
+  {
+   "variant": "per_token",
+   "layer": 24,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2202.857619151473
+  },
+  {
+   "variant": "own",
+   "layer": 24,
+   "chunk": 1,
+   "out_cos": 0.9999227523803711,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.01243598386645317,
+   "state_cos": 0.9999940395355225,
+   "ms": 34.36930663883686
+  },
+  {
+   "variant": "thor_native",
+   "layer": 24,
+   "chunk": 1,
+   "out_cos": 0.9999227523803711,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.01243598386645317,
+   "state_cos": 0.9999940395355225,
+   "ms": 34.3881081789732
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 24,
+   "chunk": 1,
+   "out_cos": 0.9999227523803711,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.01243598386645317,
+   "state_cos": 0.9999940395355225,
+   "ms": 33.90234149992466
+  },
+  {
+   "variant": "wy",
+   "layer": 24,
+   "chunk": 1,
+   "out_cos": 0.9545634984970093,
+   "out_max_abs": 12.0,
+   "out_rel_l2": 0.3123709261417389,
+   "state_cos": 0.0007257314864546061,
+   "ms": 193.78278031945229
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 24,
+   "chunk": 1,
+   "out_cos": 0.9997638463973999,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.021728841587901115,
+   "state_cos": 0.9974845051765442,
+   "ms": 16.884151846170425
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 24,
+   "chunk": 1,
+   "out_cos": 0.9966931939125061,
+   "out_max_abs": 10.75,
+   "out_rel_l2": 0.08127592504024506,
+   "state_cos": 0.9974845051765442,
+   "ms": 17.74483732879162
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 24,
+   "chunk": 1,
+   "out_cos": 0.9997627139091492,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.02178167924284935,
+   "state_cos": 0.9974846839904785,
+   "ms": 18.77705007791519
+  },
+  {
+   "variant": "per_token",
+   "layer": 25,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2206.4169999212027
+  },
+  {
+   "variant": "own",
+   "layer": 25,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.34407897293568
+  },
+  {
+   "variant": "thor_native",
+   "layer": 25,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.37362611293793
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 25,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.044921875,
+   "out_rel_l2": 0.0003393113729543984,
+   "state_cos": 1.0,
+   "ms": 33.87976065278053
+  },
+  {
+   "variant": "wy",
+   "layer": 25,
+   "chunk": 1,
+   "out_cos": 0.7614326477050781,
+   "out_max_abs": 25.25,
+   "out_rel_l2": 0.9395707249641418,
+   "state_cos": -0.0037552067078649998,
+   "ms": 193.76829452812672
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 25,
+   "chunk": 1,
+   "out_cos": 0.9997368454933167,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.02294006384909153,
+   "state_cos": 0.9985984563827515,
+   "ms": 16.7266596108675
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 25,
+   "chunk": 1,
+   "out_cos": 0.9979438185691833,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.06413289904594421,
+   "state_cos": 0.9985984563827515,
+   "ms": 17.462370917201042
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 25,
+   "chunk": 1,
+   "out_cos": 0.999735951423645,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.022982288151979446,
+   "state_cos": 0.9985983371734619,
+   "ms": 18.67593638598919
+  },
+  {
+   "variant": "per_token",
+   "layer": 26,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2199.3354000151157
+  },
+  {
+   "variant": "own",
+   "layer": 26,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 34.41889211535454
+  },
+  {
+   "variant": "thor_native",
+   "layer": 26,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 34.510236233472824
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 26,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 33.93617644906044
+  },
+  {
+   "variant": "wy",
+   "layer": 26,
+   "chunk": 1,
+   "out_cos": 0.950764536857605,
+   "out_max_abs": 14.5,
+   "out_rel_l2": 0.3183978497982025,
+   "state_cos": 0.0958431214094162,
+   "ms": 193.54202039539814
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 26,
+   "chunk": 1,
+   "out_cos": 0.9997045993804932,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.024301819503307343,
+   "state_cos": 0.9978510141372681,
+   "ms": 16.84173196554184
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 26,
+   "chunk": 1,
+   "out_cos": 0.9969881772994995,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.07778817415237427,
+   "state_cos": 0.9978510141372681,
+   "ms": 17.727764323353767
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 26,
+   "chunk": 1,
+   "out_cos": 0.9997040629386902,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.024327127262949944,
+   "state_cos": 0.9978511333465576,
+   "ms": 18.750252202153206
+  },
+  {
+   "variant": "per_token",
+   "layer": 28,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2200.2739179879427
+  },
+  {
+   "variant": "own",
+   "layer": 28,
+   "chunk": 1,
+   "out_cos": 0.9999710917472839,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.007627710234373808,
+   "state_cos": 0.999998927116394,
+   "ms": 34.383755177259445
+  },
+  {
+   "variant": "thor_native",
+   "layer": 28,
+   "chunk": 1,
+   "out_cos": 0.9999710917472839,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.007627710234373808,
+   "state_cos": 0.999998927116394,
+   "ms": 34.32195633649826
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 28,
+   "chunk": 1,
+   "out_cos": 0.9999710917472839,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.0076302336528897285,
+   "state_cos": 0.999998927116394,
+   "ms": 33.985406160354614
+  },
+  {
+   "variant": "wy",
+   "layer": 28,
+   "chunk": 1,
+   "out_cos": 0.9435057044029236,
+   "out_max_abs": 14.0,
+   "out_rel_l2": 0.3615480661392212,
+   "state_cos": 0.002848513424396515,
+   "ms": 193.75943206250668
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 28,
+   "chunk": 1,
+   "out_cos": 0.9996479749679565,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.02653655782341957,
+   "state_cos": 0.9985772371292114,
+   "ms": 16.81036688387394
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 28,
+   "chunk": 1,
+   "out_cos": 0.9957544803619385,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.09210284054279327,
+   "state_cos": 0.9985772371292114,
+   "ms": 17.515750601887703
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 28,
+   "chunk": 1,
+   "out_cos": 0.9996458888053894,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.02661098912358284,
+   "state_cos": 0.9985772371292114,
+   "ms": 18.729208037257195
+  },
+  {
+   "variant": "per_token",
+   "layer": 29,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2201.1637929826975
+  },
+  {
+   "variant": "own",
+   "layer": 29,
+   "chunk": 1,
+   "out_cos": 0.999996542930603,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.002663087798282504,
+   "state_cos": 0.9999971389770508,
+   "ms": 34.281253814697266
+  },
+  {
+   "variant": "thor_native",
+   "layer": 29,
+   "chunk": 1,
+   "out_cos": 0.999996542930603,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.002663087798282504,
+   "state_cos": 0.9999971389770508,
+   "ms": 34.37120094895363
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 29,
+   "chunk": 1,
+   "out_cos": 0.999996542930603,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.002663087798282504,
+   "state_cos": 0.9999971389770508,
+   "ms": 33.99952128529549
+  },
+  {
+   "variant": "wy",
+   "layer": 29,
+   "chunk": 1,
+   "out_cos": 0.8966805338859558,
+   "out_max_abs": 11.0,
+   "out_rel_l2": 0.5001590847969055,
+   "state_cos": -0.013541762717068195,
+   "ms": 193.8144639134407
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 29,
+   "chunk": 1,
+   "out_cos": 0.9996381402015686,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.026902224868535995,
+   "state_cos": 0.9984581470489502,
+   "ms": 16.630714759230614
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 29,
+   "chunk": 1,
+   "out_cos": 0.9966102242469788,
+   "out_max_abs": 3.75,
+   "out_rel_l2": 0.08237271010875702,
+   "state_cos": 0.9984581470489502,
+   "ms": 17.735900357365608
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 29,
+   "chunk": 1,
+   "out_cos": 0.999637246131897,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.026938704773783684,
+   "state_cos": 0.998458743095398,
+   "ms": 18.763363361358643
+  },
+  {
+   "variant": "per_token",
+   "layer": 30,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2202.8973177075386
+  },
+  {
+   "variant": "own",
+   "layer": 30,
+   "chunk": 1,
+   "out_cos": 0.9998857378959656,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.015110925771296024,
+   "state_cos": 0.9999958872795105,
+   "ms": 34.383757039904594
+  },
+  {
+   "variant": "thor_native",
+   "layer": 30,
+   "chunk": 1,
+   "out_cos": 0.9998857378959656,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.015110925771296024,
+   "state_cos": 0.9999958872795105,
+   "ms": 34.33505818247795
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 30,
+   "chunk": 1,
+   "out_cos": 0.9998857378959656,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.015110925771296024,
+   "state_cos": 0.9999958872795105,
+   "ms": 33.92585180699825
+  },
+  {
+   "variant": "wy",
+   "layer": 30,
+   "chunk": 1,
+   "out_cos": 0.8993383646011353,
+   "out_max_abs": 20.5,
+   "out_rel_l2": 0.48678314685821533,
+   "state_cos": 0.007406719960272312,
+   "ms": 193.91453452408314
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 30,
+   "chunk": 1,
+   "out_cos": 0.9996297955513,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.027210934087634087,
+   "state_cos": 0.9982242584228516,
+   "ms": 16.89336448907852
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 30,
+   "chunk": 1,
+   "out_cos": 0.9954994916915894,
+   "out_max_abs": 7.0,
+   "out_rel_l2": 0.09483477473258972,
+   "state_cos": 0.9982242584228516,
+   "ms": 17.73867942392826
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 30,
+   "chunk": 1,
+   "out_cos": 0.9996286034584045,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.02725236676633358,
+   "state_cos": 0.9982243180274963,
+   "ms": 18.815679475665092
+  },
+  {
+   "variant": "per_token",
+   "layer": 32,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2191.0609491169453
+  },
+  {
+   "variant": "own",
+   "layer": 32,
+   "chunk": 1,
+   "out_cos": 0.9998878240585327,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.014980629086494446,
+   "state_cos": 0.9999775886535645,
+   "ms": 34.411875531077385
+  },
+  {
+   "variant": "thor_native",
+   "layer": 32,
+   "chunk": 1,
+   "out_cos": 0.9998878240585327,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.014980629086494446,
+   "state_cos": 0.9999775886535645,
+   "ms": 34.40989553928375
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 32,
+   "chunk": 1,
+   "out_cos": 0.9998878240585327,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.014980629086494446,
+   "state_cos": 0.9999775886535645,
+   "ms": 33.89139659702778
+  },
+  {
+   "variant": "wy",
+   "layer": 32,
+   "chunk": 1,
+   "out_cos": 0.8358060717582703,
+   "out_max_abs": 13.25,
+   "out_rel_l2": 0.6655126214027405,
+   "state_cos": 4.5777200284646824e-05,
+   "ms": 193.87000985443592
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 32,
+   "chunk": 1,
+   "out_cos": 0.9995406866073608,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.030312322080135345,
+   "state_cos": 0.9988661408424377,
+   "ms": 16.85023307800293
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 32,
+   "chunk": 1,
+   "out_cos": 0.9963700771331787,
+   "out_max_abs": 5.0,
+   "out_rel_l2": 0.08522256463766098,
+   "state_cos": 0.9988661408424377,
+   "ms": 17.542919144034386
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 32,
+   "chunk": 1,
+   "out_cos": 0.9995397329330444,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.030339550226926804,
+   "state_cos": 0.998866081237793,
+   "ms": 18.79867911338806
+  },
+  {
+   "variant": "per_token",
+   "layer": 33,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2205.2010893821716
+  },
+  {
+   "variant": "own",
+   "layer": 33,
+   "chunk": 1,
+   "out_cos": 0.99995356798172,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.00964231975376606,
+   "state_cos": 0.9999974966049194,
+   "ms": 34.32811610400677
+  },
+  {
+   "variant": "thor_native",
+   "layer": 33,
+   "chunk": 1,
+   "out_cos": 0.99995356798172,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.00964231975376606,
+   "state_cos": 0.9999974966049194,
+   "ms": 34.310514107346535
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 33,
+   "chunk": 1,
+   "out_cos": 0.9999535083770752,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.009644805453717709,
+   "state_cos": 0.9999974966049194,
+   "ms": 33.6262471973896
+  },
+  {
+   "variant": "wy",
+   "layer": 33,
+   "chunk": 1,
+   "out_cos": 0.9349284768104553,
+   "out_max_abs": 10.75,
+   "out_rel_l2": 0.37882372736930847,
+   "state_cos": -0.003095500636845827,
+   "ms": 193.98952648043633
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 33,
+   "chunk": 1,
+   "out_cos": 0.9995278120040894,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.030734218657016754,
+   "state_cos": 0.9993067383766174,
+   "ms": 16.656789928674698
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 33,
+   "chunk": 1,
+   "out_cos": 0.9938434362411499,
+   "out_max_abs": 5.25,
+   "out_rel_l2": 0.11154051870107651,
+   "state_cos": 0.9993067383766174,
+   "ms": 17.746901139616966
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 33,
+   "chunk": 1,
+   "out_cos": 0.9995254278182983,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.030809858813881874,
+   "state_cos": 0.9993067383766174,
+   "ms": 18.790986388921738
+  },
+  {
+   "variant": "per_token",
+   "layer": 34,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2206.431781873107
+  },
+  {
+   "variant": "own",
+   "layer": 34,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.37162563204765
+  },
+  {
+   "variant": "thor_native",
+   "layer": 34,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.413743764162064
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 34,
+   "chunk": 1,
+   "out_cos": 0.9999998807907104,
+   "out_max_abs": 0.06640625,
+   "out_rel_l2": 0.00039851354085840285,
+   "state_cos": 0.9999998807907104,
+   "ms": 33.89474004507065
+  },
+  {
+   "variant": "wy",
+   "layer": 34,
+   "chunk": 1,
+   "out_cos": 0.7740060091018677,
+   "out_max_abs": 21.75,
+   "out_rel_l2": 0.7752730250358582,
+   "state_cos": 0.018109038472175598,
+   "ms": 193.8769295811653
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 34,
+   "chunk": 1,
+   "out_cos": 0.999252200126648,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.03867514058947563,
+   "state_cos": 0.9987309575080872,
+   "ms": 16.833344474434853
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 34,
+   "chunk": 1,
+   "out_cos": 0.9938063621520996,
+   "out_max_abs": 11.25,
+   "out_rel_l2": 0.11174087226390839,
+   "state_cos": 0.9987309575080872,
+   "ms": 17.715658992528915
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 34,
+   "chunk": 1,
+   "out_cos": 0.9992517232894897,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.03868744894862175,
+   "state_cos": 0.9987308382987976,
+   "ms": 18.81941966712475
+  },
+  {
+   "variant": "per_token",
+   "layer": 36,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2191.9337306171656
+  },
+  {
+   "variant": "own",
+   "layer": 36,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.53779220581055
+  },
+  {
+   "variant": "thor_native",
+   "layer": 36,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.501856192946434
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 36,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 33.91333296895027
+  },
+  {
+   "variant": "wy",
+   "layer": 36,
+   "chunk": 1,
+   "out_cos": 0.8608257174491882,
+   "out_max_abs": 20.25,
+   "out_rel_l2": 0.5999967455863953,
+   "state_cos": -0.010625110007822514,
+   "ms": 193.8565205782652
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 36,
+   "chunk": 1,
+   "out_cos": 0.9994350671768188,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.03361248970031738,
+   "state_cos": 0.9987065196037292,
+   "ms": 20.26754431426525
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 36,
+   "chunk": 1,
+   "out_cos": 0.995105504989624,
+   "out_max_abs": 19.25,
+   "out_rel_l2": 0.10373318940401077,
+   "state_cos": 0.9987065196037292,
+   "ms": 17.77081750333309
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 36,
+   "chunk": 1,
+   "out_cos": 0.9994330406188965,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.03367190435528755,
+   "state_cos": 0.9987068176269531,
+   "ms": 18.662258982658386
+  },
+  {
+   "variant": "per_token",
+   "layer": 37,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2188.8947673141956
+  },
+  {
+   "variant": "own",
+   "layer": 37,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0000001192092896,
+   "ms": 34.497806802392006
+  },
+  {
+   "variant": "thor_native",
+   "layer": 37,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0000001192092896,
+   "ms": 34.29680876433849
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 37,
+   "chunk": 1,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.03125,
+   "out_rel_l2": 0.00016524805687367916,
+   "state_cos": 1.0000001192092896,
+   "ms": 33.917831256985664
+  },
+  {
+   "variant": "wy",
+   "layer": 37,
+   "chunk": 1,
+   "out_cos": 0.947338879108429,
+   "out_max_abs": 18.5,
+   "out_rel_l2": 0.3247959017753601,
+   "state_cos": 0.011510580778121948,
+   "ms": 193.87382827699184
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 37,
+   "chunk": 1,
+   "out_cos": 0.9995928406715393,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.028535110875964165,
+   "state_cos": 0.9986677169799805,
+   "ms": 16.32530428469181
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 37,
+   "chunk": 1,
+   "out_cos": 0.9891735911369324,
+   "out_max_abs": 16.0,
+   "out_rel_l2": 0.14815764129161835,
+   "state_cos": 0.9986677169799805,
+   "ms": 17.80003122985363
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 37,
+   "chunk": 1,
+   "out_cos": 0.9995904564857483,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.02862071618437767,
+   "state_cos": 0.9986649751663208,
+   "ms": 18.76416988670826
+  },
+  {
+   "variant": "per_token",
+   "layer": 38,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2204.9527522176504
+  },
+  {
+   "variant": "own",
+   "layer": 38,
+   "chunk": 1,
+   "out_cos": 0.9998255372047424,
+   "out_max_abs": 0.75,
+   "out_rel_l2": 0.018684307113289833,
+   "state_cos": 0.9999923706054688,
+   "ms": 34.33928079903126
+  },
+  {
+   "variant": "thor_native",
+   "layer": 38,
+   "chunk": 1,
+   "out_cos": 0.9998255372047424,
+   "out_max_abs": 0.75,
+   "out_rel_l2": 0.018684307113289833,
+   "state_cos": 0.9999923706054688,
+   "ms": 34.39394012093544
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 38,
+   "chunk": 1,
+   "out_cos": 0.9998255372047424,
+   "out_max_abs": 0.75,
+   "out_rel_l2": 0.018684307113289833,
+   "state_cos": 0.9999923706054688,
+   "ms": 33.887092024087906
+  },
+  {
+   "variant": "wy",
+   "layer": 38,
+   "chunk": 1,
+   "out_cos": 0.7653790712356567,
+   "out_max_abs": 32.375,
+   "out_rel_l2": 0.8449367880821228,
+   "state_cos": -0.029368644580245018,
+   "ms": 193.67536343634129
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 38,
+   "chunk": 1,
+   "out_cos": 0.999626636505127,
+   "out_max_abs": 1.625,
+   "out_rel_l2": 0.02732888050377369,
+   "state_cos": 0.9988858103752136,
+   "ms": 16.962559893727303
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 38,
+   "chunk": 1,
+   "out_cos": 0.9956791400909424,
+   "out_max_abs": 19.75,
+   "out_rel_l2": 0.09286197274923325,
+   "state_cos": 0.9988858103752136,
+   "ms": 17.742983996868134
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 38,
+   "chunk": 1,
+   "out_cos": 0.9996228218078613,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.027463749051094055,
+   "state_cos": 0.9988856911659241,
+   "ms": 18.756482750177383
+  },
+  {
+   "variant": "per_token",
+   "layer": 40,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2189.816001802683
+  },
+  {
+   "variant": "own",
+   "layer": 40,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.327272325754166
+  },
+  {
+   "variant": "thor_native",
+   "layer": 40,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.29070487618446
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 40,
+   "chunk": 1,
+   "out_cos": 1.0000001192092896,
+   "out_max_abs": 0.25,
+   "out_rel_l2": 0.00022400522721000016,
+   "state_cos": 1.0,
+   "ms": 33.644700422883034
+  },
+  {
+   "variant": "wy",
+   "layer": 40,
+   "chunk": 1,
+   "out_cos": 0.9497743248939514,
+   "out_max_abs": 17.0,
+   "out_rel_l2": 0.3281700611114502,
+   "state_cos": 0.00244737695902586,
+   "ms": 193.8644964247942
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 40,
+   "chunk": 1,
+   "out_cos": 0.999558687210083,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.029710138216614723,
+   "state_cos": 0.9976504445075989,
+   "ms": 16.69243723154068
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 40,
+   "chunk": 1,
+   "out_cos": 0.9942282438278198,
+   "out_max_abs": 15.25,
+   "out_rel_l2": 0.10728629678487778,
+   "state_cos": 0.9976504445075989,
+   "ms": 17.77505874633789
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 40,
+   "chunk": 1,
+   "out_cos": 0.9995555877685547,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.029815541580319405,
+   "state_cos": 0.9976503849029541,
+   "ms": 18.458759412169456
+  },
+  {
+   "variant": "per_token",
+   "layer": 41,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2206.394076347351
+  },
+  {
+   "variant": "own",
+   "layer": 41,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 34.31714326143265
+  },
+  {
+   "variant": "thor_native",
+   "layer": 41,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 34.42506119608879
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 41,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 33.942313864827156
+  },
+  {
+   "variant": "wy",
+   "layer": 41,
+   "chunk": 1,
+   "out_cos": 0.7967466115951538,
+   "out_max_abs": 16.125,
+   "out_rel_l2": 0.7552803158760071,
+   "state_cos": 0.04588465765118599,
+   "ms": 193.96961480379105
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 41,
+   "chunk": 1,
+   "out_cos": 0.9995512366294861,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.02995925582945347,
+   "state_cos": 0.9983298182487488,
+   "ms": 16.9232077896595
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 41,
+   "chunk": 1,
+   "out_cos": 0.9977682828903198,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.06677355617284775,
+   "state_cos": 0.9983298182487488,
+   "ms": 17.77038350701332
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 41,
+   "chunk": 1,
+   "out_cos": 0.9995498061180115,
+   "out_max_abs": 1.75,
+   "out_rel_l2": 0.030004331842064857,
+   "state_cos": 0.9983298182487488,
+   "ms": 18.7957976013422
+  },
+  {
+   "variant": "per_token",
+   "layer": 42,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2199.0291997790337
+  },
+  {
+   "variant": "own",
+   "layer": 42,
+   "chunk": 1,
+   "out_cos": 0.9999975562095642,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.002200126415118575,
+   "state_cos": 0.9999989867210388,
+   "ms": 34.38110463321209
+  },
+  {
+   "variant": "thor_native",
+   "layer": 42,
+   "chunk": 1,
+   "out_cos": 0.9999975562095642,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.002200126415118575,
+   "state_cos": 0.9999989867210388,
+   "ms": 34.50101427733898
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 42,
+   "chunk": 1,
+   "out_cos": 0.9999975562095642,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.002200126415118575,
+   "state_cos": 0.9999989867210388,
+   "ms": 33.93622115254402
+  },
+  {
+   "variant": "wy",
+   "layer": 42,
+   "chunk": 1,
+   "out_cos": 0.9383180141448975,
+   "out_max_abs": 55.25,
+   "out_rel_l2": 0.358309268951416,
+   "state_cos": 0.01264480222016573,
+   "ms": 193.87773983180523
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 42,
+   "chunk": 1,
+   "out_cos": 0.9994499087333679,
+   "out_max_abs": 4.5,
+   "out_rel_l2": 0.0331670306622982,
+   "state_cos": 0.9969080090522766,
+   "ms": 16.97562448680401
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 42,
+   "chunk": 1,
+   "out_cos": 0.9959756731987,
+   "out_max_abs": 6.5,
+   "out_rel_l2": 0.08968149125576019,
+   "state_cos": 0.9969080090522766,
+   "ms": 17.770107835531235
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 42,
+   "chunk": 1,
+   "out_cos": 0.9994500875473022,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.03315865620970726,
+   "state_cos": 0.9969080090522766,
+   "ms": 18.756968900561333
+  },
+  {
+   "variant": "per_token",
+   "layer": 44,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2217.2874063253403
+  },
+  {
+   "variant": "own",
+   "layer": 44,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.39009562134743
+  },
+  {
+   "variant": "thor_native",
+   "layer": 44,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.41500477492809
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 44,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.5,
+   "out_rel_l2": 0.00022683928546030074,
+   "state_cos": 1.0,
+   "ms": 33.57516974210739
+  },
+  {
+   "variant": "wy",
+   "layer": 44,
+   "chunk": 1,
+   "out_cos": 0.9134502410888672,
+   "out_max_abs": 18.5,
+   "out_rel_l2": 0.4448488652706146,
+   "state_cos": 0.05255779251456261,
+   "ms": 193.97160410881042
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 44,
+   "chunk": 1,
+   "out_cos": 0.9994980692863464,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.031679973006248474,
+   "state_cos": 0.9988698363304138,
+   "ms": 16.883734613656998
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 44,
+   "chunk": 1,
+   "out_cos": 0.996087908744812,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.08849140256643295,
+   "state_cos": 0.9988698363304138,
+   "ms": 17.301607877016068
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 44,
+   "chunk": 1,
+   "out_cos": 0.9994988441467285,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.03165091946721077,
+   "state_cos": 0.9988696575164795,
+   "ms": 18.43111217021942
+  },
+  {
+   "variant": "per_token",
+   "layer": 45,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2236.1970245838165
+  },
+  {
+   "variant": "own",
+   "layer": 45,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.464698284864426
+  },
+  {
+   "variant": "thor_native",
+   "layer": 45,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.41769815981388
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 45,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.05078125,
+   "out_rel_l2": 0.0002768569684121758,
+   "state_cos": 0.9999998807907104,
+   "ms": 33.95846486091614
+  },
+  {
+   "variant": "wy",
+   "layer": 45,
+   "chunk": 1,
+   "out_cos": 0.9139875173568726,
+   "out_max_abs": 16.5,
+   "out_rel_l2": 0.44350048899650574,
+   "state_cos": 0.05616613104939461,
+   "ms": 193.38388182222843
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 45,
+   "chunk": 1,
+   "out_cos": 0.9995405673980713,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.030310316011309624,
+   "state_cos": 0.9990150928497314,
+   "ms": 16.909539699554443
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 45,
+   "chunk": 1,
+   "out_cos": 0.996566653251648,
+   "out_max_abs": 6.0,
+   "out_rel_l2": 0.08291040360927582,
+   "state_cos": 0.9990150928497314,
+   "ms": 17.783086746931076
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 45,
+   "chunk": 1,
+   "out_cos": 0.9995389580726624,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.030366171151399612,
+   "state_cos": 0.9990150928497314,
+   "ms": 18.804244697093964
+  },
+  {
+   "variant": "per_token",
+   "layer": 46,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2209.2879116535187
+  },
+  {
+   "variant": "own",
+   "layer": 46,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0000001192092896,
+   "ms": 34.348390996456146
+  },
+  {
+   "variant": "thor_native",
+   "layer": 46,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0000001192092896,
+   "ms": 34.35726277530193
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 46,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0000001192092896,
+   "ms": 33.9245181530714
+  },
+  {
+   "variant": "wy",
+   "layer": 46,
+   "chunk": 1,
+   "out_cos": 0.9577442407608032,
+   "out_max_abs": 24.0,
+   "out_rel_l2": 0.29021498560905457,
+   "state_cos": 0.05854656547307968,
+   "ms": 194.0053552389145
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 46,
+   "chunk": 1,
+   "out_cos": 0.9995343685150146,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.030514581128954887,
+   "state_cos": 0.9986640214920044,
+   "ms": 16.328265890479088
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 46,
+   "chunk": 1,
+   "out_cos": 0.9948543906211853,
+   "out_max_abs": 20.0,
+   "out_rel_l2": 0.10136310756206512,
+   "state_cos": 0.9986640214920044,
+   "ms": 17.748160287737846
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 46,
+   "chunk": 1,
+   "out_cos": 0.9995319247245789,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.03059474565088749,
+   "state_cos": 0.9986642599105835,
+   "ms": 18.592534586787224
+  },
+  {
+   "variant": "per_token",
+   "layer": 48,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2200.167767703533
+  },
+  {
+   "variant": "own",
+   "layer": 48,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 34.33157689869404
+  },
+  {
+   "variant": "thor_native",
+   "layer": 48,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 34.30623561143875
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 48,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999999403953552,
+   "ms": 33.946240320801735
+  },
+  {
+   "variant": "wy",
+   "layer": 48,
+   "chunk": 1,
+   "out_cos": 0.8738020658493042,
+   "out_max_abs": 26.5,
+   "out_rel_l2": 0.5533970594406128,
+   "state_cos": -0.0012960742460563779,
+   "ms": 193.89981217682362
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 48,
+   "chunk": 1,
+   "out_cos": 0.9993537664413452,
+   "out_max_abs": 2.75,
+   "out_rel_l2": 0.03594901040196419,
+   "state_cos": 0.9988940954208374,
+   "ms": 16.816075891256332
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 48,
+   "chunk": 1,
+   "out_cos": 0.9975165128707886,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.07044019550085068,
+   "state_cos": 0.9988940954208374,
+   "ms": 17.71092787384987
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 48,
+   "chunk": 1,
+   "out_cos": 0.9993528723716736,
+   "out_max_abs": 2.5,
+   "out_rel_l2": 0.035972710698843,
+   "state_cos": 0.998894214630127,
+   "ms": 18.778176978230476
+  },
+  {
+   "variant": "per_token",
+   "layer": 49,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2189.7585690021515
+  },
+  {
+   "variant": "own",
+   "layer": 49,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.31307710707188
+  },
+  {
+   "variant": "thor_native",
+   "layer": 49,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.32425111532211
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 49,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0625,
+   "out_rel_l2": 0.00021702559024561197,
+   "state_cos": 1.0,
+   "ms": 33.638132736086845
+  },
+  {
+   "variant": "wy",
+   "layer": 49,
+   "chunk": 1,
+   "out_cos": 0.95167076587677,
+   "out_max_abs": 8.5,
+   "out_rel_l2": 0.32044512033462524,
+   "state_cos": 0.06881460547447205,
+   "ms": 193.55121441185474
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 49,
+   "chunk": 1,
+   "out_cos": 0.999424934387207,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.033910032361745834,
+   "state_cos": 0.9987993240356445,
+   "ms": 16.807613894343376
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 49,
+   "chunk": 1,
+   "out_cos": 0.9961954951286316,
+   "out_max_abs": 8.0,
+   "out_rel_l2": 0.08823829889297485,
+   "state_cos": 0.9987993240356445,
+   "ms": 17.673611640930176
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 49,
+   "chunk": 1,
+   "out_cos": 0.9994243383407593,
+   "out_max_abs": 1.75,
+   "out_rel_l2": 0.03393031656742096,
+   "state_cos": 0.9987993836402893,
+   "ms": 18.71374249458313
+  },
+  {
+   "variant": "per_token",
+   "layer": 50,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2200.008764863014
+  },
+  {
+   "variant": "own",
+   "layer": 50,
+   "chunk": 1,
+   "out_cos": 0.9996978044509888,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.024586986750364304,
+   "state_cos": 0.9999943971633911,
+   "ms": 34.30581837892532
+  },
+  {
+   "variant": "thor_native",
+   "layer": 50,
+   "chunk": 1,
+   "out_cos": 0.9996978044509888,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.024586986750364304,
+   "state_cos": 0.9999943971633911,
+   "ms": 34.39266048371792
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 50,
+   "chunk": 1,
+   "out_cos": 0.9996978044509888,
+   "out_max_abs": 1.25,
+   "out_rel_l2": 0.024586986750364304,
+   "state_cos": 0.9999943971633911,
+   "ms": 33.960314467549324
+  },
+  {
+   "variant": "wy",
+   "layer": 50,
+   "chunk": 1,
+   "out_cos": 0.8586154580116272,
+   "out_max_abs": 30.75,
+   "out_rel_l2": 0.5719824433326721,
+   "state_cos": 0.08492603152990341,
+   "ms": 193.7388963997364
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 50,
+   "chunk": 1,
+   "out_cos": 0.9990581274032593,
+   "out_max_abs": 2.5,
+   "out_rel_l2": 0.04339882358908653,
+   "state_cos": 0.9983669519424438,
+   "ms": 16.91105216741562
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 50,
+   "chunk": 1,
+   "out_cos": 0.9926282167434692,
+   "out_max_abs": 19.0,
+   "out_rel_l2": 0.12130387127399445,
+   "state_cos": 0.9983669519424438,
+   "ms": 17.681963741779327
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 50,
+   "chunk": 1,
+   "out_cos": 0.9990559816360474,
+   "out_max_abs": 2.5,
+   "out_rel_l2": 0.04344749078154564,
+   "state_cos": 0.9983667731285095,
+   "ms": 18.82697455585003
+  },
+  {
+   "variant": "per_token",
+   "layer": 52,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2203.5118844360113
+  },
+  {
+   "variant": "own",
+   "layer": 52,
+   "chunk": 1,
+   "out_cos": 0.9999088644981384,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.013506215997040272,
+   "state_cos": 0.9999827146530151,
+   "ms": 34.36516039073467
+  },
+  {
+   "variant": "thor_native",
+   "layer": 52,
+   "chunk": 1,
+   "out_cos": 0.9999088644981384,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.013506215997040272,
+   "state_cos": 0.9999827146530151,
+   "ms": 34.421976655721664
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 52,
+   "chunk": 1,
+   "out_cos": 0.9999088644981384,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.013506215997040272,
+   "state_cos": 0.9999827146530151,
+   "ms": 33.90004485845566
+  },
+  {
+   "variant": "wy",
+   "layer": 52,
+   "chunk": 1,
+   "out_cos": 0.9047150015830994,
+   "out_max_abs": 44.5,
+   "out_rel_l2": 0.455615371465683,
+   "state_cos": -0.012118948623538017,
+   "ms": 193.99192370474339
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 52,
+   "chunk": 1,
+   "out_cos": 0.9993788003921509,
+   "out_max_abs": 2.75,
+   "out_rel_l2": 0.035246822983026505,
+   "state_cos": 0.9972675442695618,
+   "ms": 16.944246366620064
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 52,
+   "chunk": 1,
+   "out_cos": 0.9921016097068787,
+   "out_max_abs": 36.5,
+   "out_rel_l2": 0.12796762585639954,
+   "state_cos": 0.9972675442695618,
+   "ms": 17.440397292375565
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 52,
+   "chunk": 1,
+   "out_cos": 0.9993748068809509,
+   "out_max_abs": 2.875,
+   "out_rel_l2": 0.03535962104797363,
+   "state_cos": 0.9972684979438782,
+   "ms": 18.760131672024727
+  },
+  {
+   "variant": "per_token",
+   "layer": 53,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2191.156167536974
+  },
+  {
+   "variant": "own",
+   "layer": 53,
+   "chunk": 1,
+   "out_cos": 0.9998196363449097,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.018996134400367737,
+   "state_cos": 0.9999788999557495,
+   "ms": 34.449098631739616
+  },
+  {
+   "variant": "thor_native",
+   "layer": 53,
+   "chunk": 1,
+   "out_cos": 0.9998196363449097,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.018996134400367737,
+   "state_cos": 0.9999788999557495,
+   "ms": 34.372299909591675
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 53,
+   "chunk": 1,
+   "out_cos": 0.9998195767402649,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.01899563893675804,
+   "state_cos": 0.9999788999557495,
+   "ms": 33.97594392299652
+  },
+  {
+   "variant": "wy",
+   "layer": 53,
+   "chunk": 1,
+   "out_cos": 0.976560115814209,
+   "out_max_abs": 27.609375,
+   "out_rel_l2": 0.21650275588035583,
+   "state_cos": 0.0,
+   "ms": 193.93607415258884
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 53,
+   "chunk": 1,
+   "out_cos": 0.9995587468147278,
+   "out_max_abs": 1.75,
+   "out_rel_l2": 0.02970871701836586,
+   "state_cos": 0.9978981614112854,
+   "ms": 16.819855198264122
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 53,
+   "chunk": 1,
+   "out_cos": 0.9931342005729675,
+   "out_max_abs": 26.375,
+   "out_rel_l2": 0.11715482920408249,
+   "state_cos": 0.9978981614112854,
+   "ms": 17.675019800662994
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 53,
+   "chunk": 1,
+   "out_cos": 0.9995577335357666,
+   "out_max_abs": 1.75,
+   "out_rel_l2": 0.02974090352654457,
+   "state_cos": 0.9978982210159302,
+   "ms": 18.50353740155697
+  },
+  {
+   "variant": "per_token",
+   "layer": 54,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2202.096363529563
+  },
+  {
+   "variant": "own",
+   "layer": 54,
+   "chunk": 1,
+   "out_cos": 0.9998319149017334,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.018334658816456795,
+   "state_cos": 0.9999765753746033,
+   "ms": 34.383974969387054
+  },
+  {
+   "variant": "thor_native",
+   "layer": 54,
+   "chunk": 1,
+   "out_cos": 0.9998319149017334,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.018334658816456795,
+   "state_cos": 0.9999765753746033,
+   "ms": 34.32307578623295
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 54,
+   "chunk": 1,
+   "out_cos": 0.9998318552970886,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.01833619922399521,
+   "state_cos": 0.9999765753746033,
+   "ms": 33.975766971707344
+  },
+  {
+   "variant": "wy",
+   "layer": 54,
+   "chunk": 1,
+   "out_cos": 0.9425482153892517,
+   "out_max_abs": 32.125,
+   "out_rel_l2": 0.346951961517334,
+   "state_cos": 0.023540638387203217,
+   "ms": 193.78775730729103
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 54,
+   "chunk": 1,
+   "out_cos": 0.9996253252029419,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.02737170271575451,
+   "state_cos": 0.9989563226699829,
+   "ms": 16.896598041057587
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 54,
+   "chunk": 1,
+   "out_cos": 0.9960881471633911,
+   "out_max_abs": 36.0,
+   "out_rel_l2": 0.0883675143122673,
+   "state_cos": 0.9989563226699829,
+   "ms": 17.749741673469543
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 54,
+   "chunk": 1,
+   "out_cos": 0.9996252059936523,
+   "out_max_abs": 4.0,
+   "out_rel_l2": 0.027379440143704414,
+   "state_cos": 0.9989563226699829,
+   "ms": 18.771929666399956
+  },
+  {
+   "variant": "per_token",
+   "layer": 56,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2204.53492552042
+  },
+  {
+   "variant": "own",
+   "layer": 56,
+   "chunk": 1,
+   "out_cos": 0.9999786615371704,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.006546034011989832,
+   "state_cos": 0.999991774559021,
+   "ms": 34.345364198088646
+  },
+  {
+   "variant": "thor_native",
+   "layer": 56,
+   "chunk": 1,
+   "out_cos": 0.9999786615371704,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.006546034011989832,
+   "state_cos": 0.999991774559021,
+   "ms": 34.35957618057728
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 56,
+   "chunk": 1,
+   "out_cos": 0.9999785423278809,
+   "out_max_abs": 1.0,
+   "out_rel_l2": 0.006546991411596537,
+   "state_cos": 0.999991774559021,
+   "ms": 33.936507999897
+  },
+  {
+   "variant": "wy",
+   "layer": 56,
+   "chunk": 1,
+   "out_cos": 0.9784500002861023,
+   "out_max_abs": 22.0,
+   "out_rel_l2": 0.2075192928314209,
+   "state_cos": 0.08826635777950287,
+   "ms": 193.61747056245804
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 56,
+   "chunk": 1,
+   "out_cos": 0.9997624158859253,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.021796146407723427,
+   "state_cos": 0.9976222515106201,
+   "ms": 16.842640936374664
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 56,
+   "chunk": 1,
+   "out_cos": 0.9968461990356445,
+   "out_max_abs": 22.0,
+   "out_rel_l2": 0.07956003397703171,
+   "state_cos": 0.9976222515106201,
+   "ms": 17.705047503113747
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 56,
+   "chunk": 1,
+   "out_cos": 0.9997621774673462,
+   "out_max_abs": 2.0,
+   "out_rel_l2": 0.021806560456752777,
+   "state_cos": 0.9976213574409485,
+   "ms": 18.48199963569641
+  },
+  {
+   "variant": "per_token",
+   "layer": 57,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2192.8078662604094
+  },
+  {
+   "variant": "own",
+   "layer": 57,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.41421687602997
+  },
+  {
+   "variant": "thor_native",
+   "layer": 57,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 34.32254679501057
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 57,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 0.9999998807907104,
+   "ms": 33.63834694027901
+  },
+  {
+   "variant": "wy",
+   "layer": 57,
+   "chunk": 1,
+   "out_cos": 0.9745014905929565,
+   "out_max_abs": 28.75,
+   "out_rel_l2": 0.2266823798418045,
+   "state_cos": 0.0,
+   "ms": 194.04900260269642
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 57,
+   "chunk": 1,
+   "out_cos": 0.9997935891151428,
+   "out_max_abs": 1.5,
+   "out_rel_l2": 0.02031697891652584,
+   "state_cos": 0.998090386390686,
+   "ms": 16.872938722372055
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 57,
+   "chunk": 1,
+   "out_cos": 0.9964094161987305,
+   "out_max_abs": 26.75,
+   "out_rel_l2": 0.08470674604177475,
+   "state_cos": 0.998090386390686,
+   "ms": 17.738549038767815
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 57,
+   "chunk": 1,
+   "out_cos": 0.9997915029525757,
+   "out_max_abs": 1.625,
+   "out_rel_l2": 0.02042468823492527,
+   "state_cos": 0.9980911016464233,
+   "ms": 18.48536916077137
+  },
+  {
+   "variant": "per_token",
+   "layer": 58,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2193.2697650045156
+  },
+  {
+   "variant": "own",
+   "layer": 58,
+   "chunk": 1,
+   "out_cos": 0.9999502897262573,
+   "out_max_abs": 4.5,
+   "out_rel_l2": 0.009973935782909393,
+   "state_cos": 0.9999881386756897,
+   "ms": 34.30783376097679
+  },
+  {
+   "variant": "thor_native",
+   "layer": 58,
+   "chunk": 1,
+   "out_cos": 0.9999502897262573,
+   "out_max_abs": 4.5,
+   "out_rel_l2": 0.009973935782909393,
+   "state_cos": 0.9999881386756897,
+   "ms": 34.384531900286674
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 58,
+   "chunk": 1,
+   "out_cos": 0.9999502897262573,
+   "out_max_abs": 4.5,
+   "out_rel_l2": 0.009973935782909393,
+   "state_cos": 0.9999881386756897,
+   "ms": 33.9653380215168
+  },
+  {
+   "variant": "wy",
+   "layer": 58,
+   "chunk": 1,
+   "out_cos": 0.9793002009391785,
+   "out_max_abs": 32.125,
+   "out_rel_l2": 0.20374491810798645,
+   "state_cos": 0.0,
+   "ms": 193.95067729055882
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 58,
+   "chunk": 1,
+   "out_cos": 0.99977707862854,
+   "out_max_abs": 5.5,
+   "out_rel_l2": 0.02112119272351265,
+   "state_cos": 0.997373104095459,
+   "ms": 16.925670206546783
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 58,
+   "chunk": 1,
+   "out_cos": 0.9931413531303406,
+   "out_max_abs": 26.5,
+   "out_rel_l2": 0.11692211031913757,
+   "state_cos": 0.997373104095459,
+   "ms": 17.761845141649246
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 58,
+   "chunk": 1,
+   "out_cos": 0.999776303768158,
+   "out_max_abs": 5.0,
+   "out_rel_l2": 0.02115362510085106,
+   "state_cos": 0.9973729252815247,
+   "ms": 18.7712162733078
+  },
+  {
+   "variant": "per_token",
+   "layer": 60,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2197.5096687674522
+  },
+  {
+   "variant": "own",
+   "layer": 60,
+   "chunk": 1,
+   "out_cos": 0.9999195337295532,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.012682709842920303,
+   "state_cos": 0.9999813437461853,
+   "ms": 34.31357815861702
+  },
+  {
+   "variant": "thor_native",
+   "layer": 60,
+   "chunk": 1,
+   "out_cos": 0.9999195337295532,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.012682709842920303,
+   "state_cos": 0.9999813437461853,
+   "ms": 34.37797538936138
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 60,
+   "chunk": 1,
+   "out_cos": 0.9999195337295532,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.012682709842920303,
+   "state_cos": 0.9999813437461853,
+   "ms": 33.909739926457405
+  },
+  {
+   "variant": "wy",
+   "layer": 60,
+   "chunk": 1,
+   "out_cos": 0.9787279367446899,
+   "out_max_abs": 56.0,
+   "out_rel_l2": 0.20969180762767792,
+   "state_cos": 0.039215441793203354,
+   "ms": 193.78630258142948
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 60,
+   "chunk": 1,
+   "out_cos": 0.9997707605361938,
+   "out_max_abs": 5.25,
+   "out_rel_l2": 0.021411491557955742,
+   "state_cos": 0.9965648651123047,
+   "ms": 16.94360561668873
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 60,
+   "chunk": 1,
+   "out_cos": 0.9927104115486145,
+   "out_max_abs": 62.0,
+   "out_rel_l2": 0.12351512163877487,
+   "state_cos": 0.9965648651123047,
+   "ms": 17.665788531303406
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 60,
+   "chunk": 1,
+   "out_cos": 0.9997705221176147,
+   "out_max_abs": 6.5,
+   "out_rel_l2": 0.021422700956463814,
+   "state_cos": 0.9965647459030151,
+   "ms": 18.70414800941944
+  },
+  {
+   "variant": "per_token",
+   "layer": 61,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2203.1464613974094
+  },
+  {
+   "variant": "own",
+   "layer": 61,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.33987312018871
+  },
+  {
+   "variant": "thor_native",
+   "layer": 61,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 34.422602504491806
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 61,
+   "chunk": 1,
+   "out_cos": 0.9999999403953552,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 33.92898663878441
+  },
+  {
+   "variant": "wy",
+   "layer": 61,
+   "chunk": 1,
+   "out_cos": 0.9881625771522522,
+   "out_max_abs": 19.75,
+   "out_rel_l2": 0.1534104347229004,
+   "state_cos": 0.0,
+   "ms": 193.60847398638725
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 61,
+   "chunk": 1,
+   "out_cos": 0.9998200535774231,
+   "out_max_abs": 5.0,
+   "out_rel_l2": 0.018971046432852745,
+   "state_cos": 0.9973759651184082,
+   "ms": 16.6496392339468
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 61,
+   "chunk": 1,
+   "out_cos": 0.9965179562568665,
+   "out_max_abs": 12.0,
+   "out_rel_l2": 0.08343547582626343,
+   "state_cos": 0.9973759651184082,
+   "ms": 17.775030806660652
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 61,
+   "chunk": 1,
+   "out_cos": 0.9998182654380798,
+   "out_max_abs": 5.0,
+   "out_rel_l2": 0.01906494051218033,
+   "state_cos": 0.9973759651184082,
+   "ms": 18.711604177951813
+  },
+  {
+   "variant": "per_token",
+   "layer": 62,
+   "chunk": 1,
+   "out_cos": 1.0,
+   "out_max_abs": 0.0,
+   "out_rel_l2": 0.0,
+   "state_cos": 1.0,
+   "ms": 2234.2831380665302
+  },
+  {
+   "variant": "own",
+   "layer": 62,
+   "chunk": 1,
+   "out_cos": 0.9999017715454102,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.014018573798239231,
+   "state_cos": 0.9999955296516418,
+   "ms": 34.36136431992054
+  },
+  {
+   "variant": "thor_native",
+   "layer": 62,
+   "chunk": 1,
+   "out_cos": 0.9999017715454102,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.014018573798239231,
+   "state_cos": 0.9999955296516418,
+   "ms": 34.460654482245445
+  },
+  {
+   "variant": "rtx_native",
+   "layer": 62,
+   "chunk": 1,
+   "out_cos": 0.9999017715454102,
+   "out_max_abs": 3.5,
+   "out_rel_l2": 0.014018573798239231,
+   "state_cos": 0.9999955296516418,
+   "ms": 33.97892788052559
+  },
+  {
+   "variant": "wy",
+   "layer": 62,
+   "chunk": 1,
+   "out_cos": 0.9343357086181641,
+   "out_max_abs": 122.0,
+   "out_rel_l2": 0.3798154890537262,
+   "state_cos": 0.0,
+   "ms": 193.9073670655489
+  },
+  {
+   "variant": "wy_lt",
+   "layer": 62,
+   "chunk": 1,
+   "out_cos": 0.9995433688163757,
+   "out_max_abs": 5.0,
+   "out_rel_l2": 0.030217895284295082,
+   "state_cos": 0.9967979788780212,
+   "ms": 16.8356504291296
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "layer": 62,
+   "chunk": 1,
+   "out_cos": 0.9869231581687927,
+   "out_max_abs": 89.0,
+   "out_rel_l2": 0.16393457353115082,
+   "state_cos": 0.9967979788780212,
+   "ms": 17.649132758378983
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "layer": 62,
+   "chunk": 1,
+   "out_cos": 0.9995409846305847,
+   "out_max_abs": 5.5,
+   "out_rel_l2": 0.030297692865133286,
+   "state_cos": 0.9967979788780212,
+   "ms": 18.71718466281891
+  }
+ ],
+ "prompt": [
+  {
+   "variant": "per_token",
+   "prefill_ms": 213221.49298153818,
+   "logits_cos": 1.0,
+   "top1": 4754,
+   "top1_equal": true
+  },
+  {
+   "variant": "own",
+   "prefill_ms": 3994.246831163764,
+   "logits_cos": 0.5730770826339722,
+   "top1": 4754,
+   "top1_equal": true
+  },
+  {
+   "variant": "thor_native",
+   "prefill_ms": 3993.0615443736315,
+   "logits_cos": 0.5730770826339722,
+   "top1": 4754,
+   "top1_equal": true
+  },
+  {
+   "variant": "rtx_native",
+   "prefill_ms": 3947.0264073461294,
+   "logits_cos": 0.664049506187439,
+   "top1": 4754,
+   "top1_equal": true
+  },
+  {
+   "variant": "wy",
+   "prefill_ms": 19409.641860052943,
+   "logits_cos": 0.0833469107747078,
+   "top1": 101549,
+   "top1_equal": false
+  },
+  {
+   "variant": "wy_lt",
+   "prefill_ms": 2294.10314001143,
+   "logits_cos": 0.6292846202850342,
+   "top1": 4754,
+   "top1_equal": true
+  },
+  {
+   "variant": "wy_lt_f32gemm",
+   "prefill_ms": 2379.443980753422,
+   "logits_cos": 0.39274901151657104,
+   "top1": 248046,
+   "top1_equal": false
+  },
+  {
+   "variant": "wy_lt_f32state",
+   "prefill_ms": 2474.9981686472893,
+   "logits_cos": 0.13196121156215668,
+   "top1": 220,
+   "top1_equal": false
+  }
+ ]
+}
