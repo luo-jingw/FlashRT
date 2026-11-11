@@ -3446,6 +3446,9 @@ Rationale, evidence and the expected effect of every item: `research/topics/long
   prefill chunk. Round `1111_h12h11h9`: the 5090's `wy_lt` chunk path is as accurate per layer on SM110 as on the
   5090 and takes the prefill from 3 994 to 2 294 ms (H9); the fast path keeps 27 / 27 decisions on closed-loop calls
   including 3 `next` (H11); Thor replies are not reproducible run to run, decisions are (H12, issues.md ISSUE-114).
+  Round `1111_h14h13`: with the prefill linear attention on `wy_lt` the fast path takes 1.77 s on 47 calls (2.61 s on
+  `native`), and 3 of the 47 reference decisions differ from the `native` runs (H13); with every repetition preceded
+  by the previous call, Thor replies repeat in 79 / 80 (H14).
   The 27B planner has not been measured co-located with the executor on the Thor.
 - Goal: on the Thor, decision available below the monitor interval with the smallest robot wait, executor calls
   within their deadline under co-location, and intervention decisions equal to the original path.
@@ -3481,8 +3484,9 @@ the Thor; this plan delivers the planner process it drives.
 H10 runs the existing `decode_cycle_drift.py` on the Thor. The three probes run on the 5090 first (denominator), then
 in one Thor round (H9, H11, H12). H9 defines the prefill change: the Thor frontend's prefill linear-attention layers
 on the parent chunk branch with `wy_lt`, selected by `FLASHRT_QWEN36_THOR_LIN_PREFILL=parent`; Thor row H13 measures
-it on the H8 and H11 call sets, H14 tests the leftover-state hypothesis of ISSUE-114. The planner process is handed
-to the co-location measurement.
+it on the H8 and H11 call sets, H14 tests the leftover-state hypothesis of ISSUE-114, H15 separates the order from
+another process on the GPU. The Thor default route follows the decision criterion. The planner process is handed to
+the co-location measurement.
 
 ## Code Mapping
 
@@ -3497,6 +3501,9 @@ to the co-location measurement.
 - Prefill route: `flash_rt/frontends/torch/qwen36_thor.py` (`FLASHRT_QWEN36_THOR_LIN_PREFILL`, read in `__init__`
   into `_thor_lin_prefill`; `_layer_forward_lin_K_nvfp4` dispatch); no kernel change.
 - H14: `monitor_call/reply_repeat.py` order argument (`back_to_back` | `after_previous`), `run_repeat_rtx.sh`.
+- H15: `THOR_CHECKLIST.md` row only (`reply_repeat.py thor back_to_back`, unchanged script).
+- Thor default route: `flash_rt/frontends/torch/qwen36_thor.py` (default of `FLASHRT_QWEN36_THOR_LIN_PREFILL` and of
+  `FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND`, class docstring).
 - Records: `THOR_STATUS_SUMMARY.md`, issues.md ISSUE-112 / ISSUE-114, `opportunities.md` OPT-040 candidate 5, the
   experiment READMEs, `thor_rationale.md`.
 
@@ -3562,7 +3569,7 @@ Phase Status: completed
 
 ### Phase 7 — Thor prefill linear attention on the parent chunk branch
 
-Phase Status: active
+Phase Status: completed
 
 - Modified files: `flash_rt/frontends/torch/qwen36_thor.py` (`FLASHRT_QWEN36_THOR_LIN_PREFILL=thor|parent`, default
   `thor`; with `parent`, linear-attention layers at K > `_K_save_max` and K <= `MAX_Q_SEQ` go to the parent K-row
@@ -3571,3 +3578,27 @@ Phase Status: active
 - Observation: Thor row H13 (prefill and call ms, MTP accepts per attempt, decisions against the `native` runs on the
   47 calls of H8 and H11); Thor row H14 (repetitions identical per call against H12). The default changes only after
   H13, in a separate change.
+- Result (`THOR_STATUS_SUMMARY.md` `1111_h14h13`): H13 aligned capsule + stop at action 1 768 ms median against
+  2 613 ms on `native` (same 47 calls), prefill 1 181 against 2 026 ms, MTP accepts per attempt 1.77 against 1.83;
+  inside the run 47 / 47 decisions equal the run's `generate`; 3 of 47 reference decisions differ from the `native`
+  runs (Thor `native` and the 5090 also differ in 3). H14 79 / 80 repetitions identical (H12 44 / 80).
+
+### Phase 8 — H15: the H12 order on an idle GPU
+
+Phase Status: active
+
+- Modified files: `THOR_CHECKLIST.md` row H15.
+- Observation: per call, repetitions 2-5 against the first and against one another, compared with H12 (same order,
+  another process on the GPU) and H14 (fixed predecessor, idle). Result goes to issues.md ISSUE-114.
+
+### Phase 9 — Thor default prefill route
+
+Phase Status: pending
+
+- Modified files: `flash_rt/frontends/torch/qwen36_thor.py` (default `FLASHRT_QWEN36_THOR_LIN_PREFILL=parent` with
+  `wy_lt`, class docstring), `THOR_CHECKLIST.md` (a Thor check of the default).
+- Precondition: the planner's decision criterion. The plan goal says "intervention decisions equal to the original
+  path"; H13 changes 3 of 47 reference decisions against Thor `native`, and Thor `native` differs from the 5090
+  (`wy_lt`) in 3 of 47. The criterion names which path is the reference (Thor `native`, the 5090, or the recorded
+  decisions) or an allowed number of changed decisions.
+- Observation: the Thor `none` / `aligned` cells on the default without environment variables equal H13.

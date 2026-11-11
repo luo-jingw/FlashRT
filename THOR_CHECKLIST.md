@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` / `1030` 轮做完，已从本清单删除。`1104_h` 轮做完 H1、H2，`1104_h3` 轮做完 H3a、H3，`1104_h3b` 轮做完 H3b，`1104_h3c` 轮做完 H3c，`1105_h6h4` 轮做完 H6、H4，`1110_h7h4bh8` 轮做完 H7、H4b、H8，`1111_h10` 轮做完 H10，`1111_h12h11h9` 轮做完 H12、H11、H9，已从本清单删除。待测的是 H14（每次重复之前先生成上一个调用，回复是否变得可重复），之后 H13（prefill 线性注意力走分块路径之后的 monitor 网格）。另外剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` / `1030` 轮做完，已从本清单删除。`1104_h` 轮做完 H1、H2，`1104_h3` 轮做完 H3a、H3，`1104_h3b` 轮做完 H3b，`1104_h3c` 轮做完 H3c，`1105_h6h4` 轮做完 H6、H4，`1110_h7h4bh8` 轮做完 H7、H4b、H8，`1111_h10` 轮做完 H10，`1111_h12h11h9` 轮做完 H12、H11、H9，`1111_h14h13` 轮做完 H14、H13，已从本清单删除。待测的是 H15（GPU 空闲时按 H12 的顺序重复，把顺序与 GPU 上另一个进程的作用分开）。另外剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -54,12 +54,12 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ### 本轮共同前置
 
-开始前 GPU 上没有其他计算进程（有就等，不要停别人的进程）；若等不到，照常跑，并在报告里写明哪个进程在、从何时到何时。H14 约 30 分钟，H13 约 1 小时。
+H15 的自变量就是"GPU 上没有其他进程"：开始前 GPU 上没有其他计算进程（有就等，不要停别人的进程）。运行中若出现其他进程，照常跑完，并在报告里写明哪个进程、从何时到何时（`nvidia-smi` 在开始与结束各记一次）。约 30 分钟。
 
 ```
 cd $FLASHRT_ROOT
 git pull
-export OUT=$HOME/thor_val/$(date +%m%d)_h14h13; mkdir -p $OUT
+export OUT=$HOME/thor_val/$(date +%m%d)_h15; mkdir -p $OUT
 export CK=$HOME/thor_val/ckpt
 export PYTHONPATH=$HOME/thor_val/pydeps_tf5:$PYTHONPATH
 export PLANNER_CKPT=$CK/qwen38-27b-nvfp4-official PLANNER_MTP_DIR=$CK/qwen38-27b-fp8-official
@@ -68,49 +68,32 @@ C=research/topics/wam-inference-acceleration/experiments/harness_replay_5090/cal
 python -c "from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state as r; r()" | tee $OUT/P0_clock.log
 git rev-parse HEAD | tee $OUT/P0_commit.log
 nvidia-smi | tee $OUT/P0_gpu.log
+env | grep FLASHRT_QWEN36 | tee $OUT/P0_env.log
 ```
 
-### H14：每次重复之前先生成上一个调用，回复是否变得可重复
+`P0_env.log` 应为空（默认路径，不设 `FLASHRT_QWEN36_THOR_LIN_PREFILL` 等变量）。
 
-问题：`1111_h12h11h9` 的 H12 里同一调用连续 5 次 `generate`，第 2–5 次与第 1 次只有 44 / 80 相同；7 次调用里第 2–5 次在同一位置偏离第 1 次，而第 1 次紧跟在上一个调用之后、第 2–5 次紧跟在同一提示词之后（issues.md ISSUE-114）。同一脚本换成 `after_previous` 顺序：每次重复之前先生成一次上一个调用（输出丢弃），让 5 次重复都有相同的前一次调用。默认路径，不设任何新环境变量。
+### H15：GPU 空闲时按 H12 的顺序重复，回复是否可重复
+
+问题：`1111_h12h11h9` 的 H12（`back_to_back` 顺序，GPU 上另有进程与 MPS）第 2–5 次与第 1 次 44 / 80 相同；`1111_h14h13` 的 H14（`after_previous` 顺序，GPU 空闲）79 / 80。两轮之间顺序与 GPU 上是否另有进程同时变了（issues.md ISSUE-114）。本行只把 GPU 状态换成空闲、顺序保持 H12 的。
 
 ```
-python $D/monitor_call/reply_repeat.py thor after_previous $OUT/reply_repeat_thor_official_after_previous.json $C/ep0_wrist224.jsonl $C/ep43_wrist224.jsonl 2>&1 | tee $OUT/H14_repeat.log
+python $D/monitor_call/reply_repeat.py thor back_to_back $OUT/reply_repeat_thor_official_idle.json $C/ep0_wrist224.jsonl $C/ep43_wrist224.jsonl 2>&1 | tee $OUT/H15_repeat.log
+nvidia-smi | tee $OUT/H15_gpu_end.log
 ```
 
-带回：`H14_repeat.log` 全部；`reply_repeat_thor_official_after_previous.json`（复制到 `$D/monitor_call/` 并推送，附 `sha256sum`）。
+带回：`H15_repeat.log` 全部；`H15_gpu_end.log`；`reply_repeat_thor_official_idle.json`（复制到 `$D/monitor_call/` 并推送，附 `sha256sum`）。任何一步失败：完整 traceback 与失败前最后 20 行。
 
 判据：
-- 每次调用 5 次里与第 1 次相同的次数（log 的 `N/5 identical`），与 H12（`$D/monitor_call/reply_repeat_thor_official.json`：5 / 5 的调用 7 / 20，第 2–5 次与第 1 次相同 44 / 80）比较。
-- 若前一次调用留下的状态决定回复，预期大多数调用 5 / 5；若是调度相关的非确定性，预期与 H12 同样分散。第一个调用（ep0 第 80 步）没有前一个调用，与 H12 同样连续重复。
+- 每次调用 5 次里与第 1 次相同的次数（log 的 `N/5 identical`），与 H12（44 / 80，5 / 5 的调用 7 / 20）、H14（79 / 80，19 / 20）比较。
+- 每次调用第 2–5 次彼此是否相同。只有前一次调用的状态起作用时，预期第 2–5 次在每次调用里彼此相同、第 1 次在部分调用里不同；若第 2–5 次中间也出现单次不同（如 H12 的 ep0 第 320 步），说明空闲 GPU 上也有别的来源。
+- 与 H12 逐调用比：空闲时的单次不同明显少于 H12，说明 H12 里另一个进程（MPS）改变了规划器的回复，这就是共置条件。
 
-结论去向：issues.md ISSUE-114；`THOR_STATUS_SUMMARY.md` 本轮小节。
-
-### H13：prefill 线性注意力走分块路径（`wy_lt`）之后的 monitor 网格
-
-问题：`1111_h12h11h9` 的 H9 里，5090 的 WY 分块后端 `wy_lt` 在 Thor 上逐层与 5090 相同、不漂移，整段 prefill 2 294 ms，Thor 前端现在的逐步递归路径 3 994 ms（`$D/gdn_wy_thor/README.md`）。新开关 `FLASHRT_QWEN36_THOR_LIN_PREFILL=parent` 让 Thor 前端的 prefill 线性注意力层走父类分块分支，后端由 `FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND` 决定。用 H8 + H11 两组调用（47 次，含 3 次 `next`）跑同一网格，看耗时、MTP 接受率与决策。
-
-```
-export FLASHRT_QWEN36_THOR_LIN_PREFILL=parent FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND=wy_lt
-env | grep FLASHRT_QWEN36 | tee $OUT/H13_env.log
-python $D/monitor_call/monitor_call_bench.py thor own $OUT/monitor_call_thor_official_wylt.json $C/ep0_wrist224.jsonl $C/ep43_wrist224.jsonl $D/sim_closed_loop/calls/t*.jsonl 2>&1 | tee $OUT/H13_monitor_call.log
-python $D/monitor_call/tables.py $OUT/monitor_call_thor_official_wylt.json | tee $OUT/H13_tables.md
-unset FLASHRT_QWEN36_THOR_LIN_PREFILL FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND
-```
-
-带回：`H13_env.log`、`H13_monitor_call.log`、`H13_tables.md` 全部；`monitor_call_thor_official_wylt.json`（复制到 `$D/monitor_call/` 并推送，附 `sha256sum`）。任何一步失败：完整 traceback 与失败前最后 20 行。
-
-判据：
-- `H13_env.log` 里两个变量都在；无复用一格的 prefill 中位约 2.3 s 说明开关生效，约 4.0 s 说明没有生效（`native` 的 prefill 在 `1110_h7h4bh8` H4b / H8 与 `1111_h12h11h9` H11 三次为 3 981–3 994 ms）。
-- 对齐复用 + 闭合即停一格：到决策可用中位与最大值，与 H8 的 2 608 ms、H11 的 2 684 ms 比较。
-- 决策：各格 action 与同一运行的参考相同的次数；参考回复的决策与 `native` 运行（`$D/monitor_call/monitor_call_thor_official.json`、`$D/monitor_call/monitor_call_sim_thor_official.json`）逐调用比较，尤其 t0e1 第 240 步、t6e0 第 160 步、t6e1 第 160 步的 `next`。
-- MTP：JSON 里每格的 `spec_attempts` / `spec_accepts`，与 `native` 运行比较（每次尝试接受的 token 数下降说明分块路径影响了草稿质量）。
-
-结论去向：`opportunities.md` OPT-040 candidate 5；`$D/monitor_call/README.md` 的 Thor 一节；`THOR_STATUS_SUMMARY.md` 本轮小节。
+结论去向：issues.md ISSUE-114；`THOR_STATUS_SUMMARY.md` 本轮小节；`$D/monitor_call/README.md` 运行间差异一节。
 
 ## 已完成的轮次（不再重跑）
 
-逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`、`1029`、`1029b`、`1030`、`1104_h`、`1104_h3`、`1104_h3b`、`1104_h3c`、`1105_h6h4`、`1110_h7h4bh8`、`1111_h10`、`1111_h12h11h9`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
+逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`、`1029`、`1029b`、`1030`、`1104_h`、`1104_h3`、`1104_h3b`、`1104_h3c`、`1105_h6h4`、`1110_h7h4bh8`、`1111_h10`、`1111_h12h11h9`、`1111_h14h13`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
 
 ---
 
