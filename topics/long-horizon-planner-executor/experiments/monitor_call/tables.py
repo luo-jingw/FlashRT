@@ -18,8 +18,11 @@ PREFIXES = (("none", "无复用"), ("aligned", "对齐复用"), ("exact", "完�
 BUDGETS = (("eos", "解码整段回复"), ("stop", "action 闭合即停"), ("decision", "预知长度解码到 action"))
 
 
+SIM_WRIST = "wrist224"   # ../sim_closed_loop/build_monitor_calls.py: episodes t<task>e<episode>, WRIST = 224
+
+
 def wrist_of(episode: str) -> str:
-    return episode.rsplit("_", 1)[1]
+    return episode.rsplit("_", 1)[1] if "_wrist" in episode else SIM_WRIST
 
 
 def med(xs: list[float]) -> float:
