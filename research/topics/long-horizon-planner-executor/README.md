@@ -31,6 +31,7 @@ long-horizon manipulation, hierarchical VLA, planner–executor, dual-system, as
 | `notes/` | 精读笔记：[2026-vla-xpu-characterization.md](notes/2026-vla-xpu-characterization.md) |
 | `experiments/` | [monitor_call](experiments/monitor_call/README.md)：monitor 调用的固定前缀（61–65 % 的输入）与决策位置（第 9–11 个 token），复用前缀 + action 闭合即停后到决策可用的时间（RTX 5090），以及不对齐的前缀边界翻转干预决策；[sim_closed_loop](experiments/sim_closed_loop/README.md)：规划器 + ImageWAM 在 LIBERO 仿真里的闭环（21 个回合 × 5 种模式，带标注视频）：执行器几乎不读指令，规划器的失败来自看错，同步协议下机器人约 20 % 的时间在等规划器 |
 | [summary_1111.html](summary_1111.html) | 11/05–11/11 进展汇报：按场景动机、Thor 上的 challenge、解决方向三个问题组织（论文证据卡片、challenge 排序、Thor 实测、闭环视频） |
+| [findings_1112.html](findings_1112.html) | 六个发现，每条一张由 Thor 原始日志画出的图：Thor 与 RTX 5090 的规划器延迟、瓶颈阶段随 harness 变化、共置时静态划分顾不了两头、干扰随规划器阶段变化、SM 分区共享芯片级吞吐上限、执行器的 GPU 时间占比 |
 | `reports/` | 汇报材料（尚无） |
 
 ## 相关记录
