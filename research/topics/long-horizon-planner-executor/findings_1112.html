@@ -147,7 +147,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;font-size:12.5px;color:
 <section class="fd" id="f5">
   <div class="claim"><span class="k">FINDING #5</span><h2>Thor 上按 SM 分区不等于独占算力：两个分区共享一个芯片级的吞吐上限</h2></div>
   <div class="tags"><span class="tag thor">Thor 特有</span><span class="who j">J</span></div>
-  <p class="body">在两个 green context 分区上各跑一个纯计算负载（操作数在 L2 里，不读内存），比较单独与一起运行时的吞吐。Thor 上 12 个 SM 单独就能到约 100 TFLOP/s，与 20 个 SM 相同；两个分区一起跑时，吞吐之和仍是约 100，按 SM 数分掉，4 个 SM 的分区只剩单独时的 46 %。同一测试在 RTX 5090 上，两个分区一起跑都保留 92 % 以上。</p>
+  <p class="body">在两个 green context 分区上各跑一个纯计算负载（操作数在 L2 里，不读内存），比较单独与一起运行时的吞吐。Thor 上 12 个 SM 单独就能到约 100 TFLOP/s，与 20 个 SM 相同；两个分区一起跑时，吞吐之和仍是约 100，按 SM 数分掉，4 个 SM 的分区只剩单独时的 46 %。同一测试在 RTX 5090 上，两个分区一起跑都保留 92 % 以上。这说明按 SM 划分不等于独占算力；它用合成负载测得，在真实规划器共置中的影响没有单独测，#3、#4 的结论不依赖它。</p>
   <div class="fig">
     <div class="legend"><span><i style="background:var(--dev-thor)"></i>Jetson Thor</span><span><i style="background:var(--dev-rtx)"></i>RTX 5090</span></div>
     <div class="sc"><svg id="c5" role="img" aria-label="一起运行时保留单独吞吐的比例"></svg></div>

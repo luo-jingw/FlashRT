@@ -1137,6 +1137,12 @@ tokens): the stall also appears at about 4k tokens, shorter. green25 and mps100 
 (543–571 ms), all inside a planner prefill; prio (max 428.6 ms) and mps50 (max 294.9 ms) have none. At the harness's
 chunk deadline the stall decides which sharing modes are usable on the Thor.
 
+With the real 27B FlashRT planner (Chenwei B25 T4 and B26 T3, nine co-located runs: no split, MPS 20 % + 16-SM
+green, and the disjoint MPS 60 / 40; native and wy_lt prefill; 4.1k-5.7k-token monitors), no executor call took
+longer than 430 ms, and none longer than 87 ms under an SM split. The stall has been seen only with the 2B stand-in
+planner (HF transformers) at 4k-16k tokens. It is therefore not part of the 27B co-location result; whether it needs
+the HF path or a longer context is not known. B27 Task 3 checks every configuration for it.
+
 # ISSUE-099
 
 Status: open, non-blocking
