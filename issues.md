@@ -1807,3 +1807,41 @@ replies of the same prompt in one process are not always token-identical.
 On the Thor, "same reply as the reference" from a single reference run cannot separate a path's own numerical change
 from run-to-run variation. Thor comparisons of reply text need a run-to-run baseline cell (here `generate` against
 `generate`); decision equality is the comparison that this round supports.
+
+# ISSUE-115
+
+Status: open, non-blocking
+
+Area: the 27B planner weights used on the Thor in rounds `1104_h3` – `1111_h15h16` (H3–H16):
+`$HOME/thor_val/ckpt/qwen38-27b-nvfp4-official/model.safetensors`.
+
+## Observation
+
+`hash_tensors.py` (per-tensor sha256 of the raw tensor bytes) over that file gives a JSON whose sha256 is
+`6efb6f80…` with 1696 tensors. The same script over the RTX 5090 host copy and over Chenwei's Thor copy (B25 T0.7)
+gives byte-identical JSONs (`7c018844…`): those two copies are equal tensor for tensor.
+
+## Evidence
+
+`research/topics/long-horizon-planner-executor/experiments/planner_weights/README.md`. All three copies come from the
+same converter (`fp8_to_nvfp4_ct.py`, last content change 2026-11-03, before every conversion). The RTX 5090 host
+copy and Chenwei's copy come from different downloads of the FP8 source (2026-11-03; revision `c3a462cc`, 11-07);
+the Thor H3 conversion recorded revision `017b9c7a` and ran in the Thor environment (torch 2.9.1+cu130).
+
+## Hypotheses
+
+- Some tensors differ in value: the Thor H3 conversion ran with a different torch version, whose rounding in an op of
+  the converter differs.
+- The tensors are equal and only the JSON differs: `hash_tensors.py` writes `str(t.dtype)`, and a dtype name or a
+  tensor's dtype as loaded differs between torch versions.
+- The FP8 source revision `017b9c7a` differs from the others in tensor values.
+
+## Next Experiment
+
+On the Thor, `compare_tensor_hashes.py` between the H8 copy's JSON and `tensors_sha256_rtx5090.json`: the counts by
+field (dtype / shape / sha256) and the name patterns of the differing tensors separate the hypotheses.
+
+## Impact
+
+If tensor values differ, the cross-machine decision comparisons of H8–H16 (52–55 / 59 against the RTX 5090) and the
+J / C comparisons of B25 against H16 mix a weight difference with the kernel and machine difference.
