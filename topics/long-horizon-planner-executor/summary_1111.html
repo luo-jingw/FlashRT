@@ -387,31 +387,34 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
     <div class="ans">规划器每隔一个检查间隔 Δ 看一次进度，执行器高频输出动作。规划器的延迟 L 进入机器人的关键路径：<span class="term" tabindex="0" data-tip="tip-sync">同步协议</span>下机器人停着等，代价是时间；<span class="term" tabindex="0" data-tip="tip-async">异步协议</span>下机器人按旧指令执行，代价是质量。规划器延迟超过检查间隔时会怎样，文献里没有测量。</div>
     <div class="panel">
       <h4>同一段 14.7 s，两种协议（Δ = 5.33 s，L = 2 s，示意）</h4>
+      <div class="legend"><span>▼ 检查：拍下当前画面、发起规划器调用</span><span>◆ 决策到达</span><span><i style="background:var(--accent-soft)"></i>执行</span><span><i style="background:var(--crit-soft)"></i>停</span><span><i style="background:repeating-linear-gradient(135deg,var(--accent-soft) 0 4px,var(--crit-soft) 4px 8px)"></i>按旧指令执行</span></div>
       <div class="tl">
-        <div class="row"><b>同步</b><span class="note">检查到期时机器人停下，规划器回复完再继续</span></div>
-        <div class="row"><span>规划器</span><div class="lane"><span class="s-idle" style="flex:5.33"></span><span class="s-plan" style="flex:2">L</span><span class="s-idle" style="flex:5.33"></span><span class="s-plan" style="flex:2">L</span></div></div>
-        <div class="row"><span>机器人</span><div class="lane"><span class="s-run" style="flex:5.33">执行 Δ</span><span class="s-stop" style="flex:2">停</span><span class="s-run" style="flex:5.33">执行 Δ</span><span class="s-stop" style="flex:2">停</span></div></div>
-        <div class="row" style="margin-top:8px"><b>异步</b><span class="note">机器人一直动，决策晚 L 才到</span></div>
-        <div class="row"><span>规划器</span><div class="lane"><span class="s-idle" style="flex:5.33"></span><span class="s-plan" style="flex:2">L</span><span class="s-idle" style="flex:3.33"></span><span class="s-plan" style="flex:2">L</span><span class="s-idle" style="flex:2"></span></div></div>
-        <div class="row"><span>机器人</span><div class="lane"><span class="s-run" style="flex:5.33">执行</span><span class="s-old" style="flex:2">旧指令</span><span class="s-run" style="flex:3.33">执行</span><span class="s-old" style="flex:2">旧指令</span><span class="s-run" style="flex:2">执行</span></div></div>
-        <div class="row"><span></span><div class="lane" style="height:16px;font-family:var(--f-mono);font-size:10.5px;color:var(--muted)"><span style="flex:5.33;justify-content:flex-start">0</span><span style="flex:2;justify-content:flex-start">5.3</span><span style="flex:3.33;justify-content:flex-start">7.3</span><span style="flex:2;justify-content:flex-start">10.7</span><span style="flex:2;justify-content:space-between"><span>12.7</span><span>14.7 s</span></span></div></div>
+        <div class="row"><b>同步</b><span class="note">检查时机器人停下，决策到达后继续；下一次检查在<b>再执行一个 Δ</b> 之后</span></div>
+        <div class="row"><span>规划器</span><div class="lane"><span class="s-idle" style="flex:5.33"></span><span class="s-plan" style="flex:2">▼ 调用 L ◆</span><span class="s-idle" style="flex:5.33"></span><span class="s-plan" style="flex:2">▼ 调用 L ◆</span></div></div>
+        <div class="row"><span>机器人</span><div class="lane"><span class="s-run" style="flex:5.33">执行 Δ</span><span class="s-stop" style="flex:2">停</span><span class="s-run" style="flex:5.33">执行 Δ（新指令）</span><span class="s-stop" style="flex:2">停</span></div></div>
+        <div class="row"><span></span><div class="lane" style="height:16px;font-family:var(--f-mono);font-size:10.5px;color:var(--muted)"><span style="flex:5.33;justify-content:flex-start">0</span><span style="flex:2;justify-content:flex-start">▼5.3</span><span style="flex:5.33;justify-content:flex-start">◆7.3</span><span style="flex:2;justify-content:space-between"><span>▼12.7</span><span>◆14.7</span></span></div></div>
+        <div class="row" style="margin-top:10px"><b>异步</b><span class="note">检查按固定时钟每 Δ 一次；机器人不停，决策<b>晚 L 才到</b></span></div>
+        <div class="row"><span>规划器</span><div class="lane"><span class="s-idle" style="flex:5.33"></span><span class="s-plan" style="flex:2">▼ 调用 L ◆</span><span class="s-idle" style="flex:3.33"></span><span class="s-plan" style="flex:2">▼ 调用 L ◆</span><span class="s-idle" style="flex:2"></span></div></div>
+        <div class="row"><span>机器人</span><div class="lane"><span class="s-run" style="flex:5.33">执行</span><span class="s-old" style="flex:2">旧指令</span><span class="s-run" style="flex:3.33">执行（新指令）</span><span class="s-old" style="flex:2">旧指令</span><span class="s-run" style="flex:2">执行</span></div></div>
+        <div class="row"><span></span><div class="lane" style="height:16px;font-family:var(--f-mono);font-size:10.5px;color:var(--muted)"><span style="flex:5.33;justify-content:flex-start">0</span><span style="flex:2;justify-content:flex-start">▼5.3</span><span style="flex:3.33;justify-content:flex-start">◆7.3</span><span style="flex:2;justify-content:flex-start">▼10.7</span><span style="flex:2;justify-content:space-between"><span>◆12.7</span><span>14.7 s</span></span></div></div>
       </div>
       <div class="grid2">
-        <p><b>同步</b>：14.7 s 里机器人只动了 10.7 s。停着的时间占比 = L / (L + Δ)，称<b>等待占比</b>；文献常用的执行占比（motion duty cycle）就是 1 − 等待占比。代价是时间。</p>
-        <p><b>异步</b>：机器人一直在动，但每次检查后的 L 秒里按旧指令或旧观测动作（斜纹）；L 超过 Δ 时调用堆积。代价是质量。</p>
+        <p><b>同步</b>：第一次检查前两者相同；之后同步要停 L，所以第二次检查推到 12.7 s。14.7 s 里机器人只动了 10.7 s。停着的时间占比 = L / (L + Δ)，称<b>等待占比</b>（文献的执行占比 = 1 − 等待占比）。L 再大也不会排队，只是停得更久：L &gt; Δ 时等待占比超过 50 %。代价是时间。</p>
+        <p><b>异步</b>：机器人一直在动，但每次检查后的 L 秒里还在按旧指令动（斜纹），决策依据的是 L 秒前的画面。L &gt; Δ 时下一次检查到期而上一次还没回来，调用排队，越排越晚。也可以提前 L 发起调用、让决策在检查时刻到达，但它依据的画面同样是 L 秒前的。代价是质量。</p>
       </div>
     </div>
     <div class="panel">
-      <h4>同步协议下，一个 VoLoAgent 回合在 Thor 上要多久（按实测 L 换算）</h4>
+      <h4>同步协议下，一个 VoLoAgent 回合在 Thor 上要多久（推算：用 Thor 实测的每次 L）</h4>
+      <p class="note">三条路径协议相同、执行时间相同，区别只在每次 monitor 的 L：原始路径（整段 prefill、解码到回复结束）；复用前缀 + <code>action</code> 闭合即停（<span class="term" tabindex="0" data-tip="tip-twoopt">两项优化</span>，见 Q3b）；再把 prefill 换成 <code>wy_lt</code>。</p>
       <div class="legend"><span><i style="background:var(--accent-soft);border:1px solid var(--fast2)"></i>机器人执行（10 段 × 5.33 s）</span><span><i style="background:var(--crit)"></i>机器人停着等 monitor</span></div>
       <div class="ep" id="ep"></div>
       <p class="note">10 次 monitor，每次停 L（<span class="ref" data-ref="H16">H16</span> 腕部 224 中位）；不含开局的 decompose。执行时间相同，差别全在等待。</p>
     </div>
     <div class="vids">
       <figure class="vid"><video controls muted playsinline preload="metadata" src="experiments/sim_closed_loop/videos/t6e0_planner_eos_next.mp4"></video>
-        <figcaption><span class="who j">J</span><b>同步协议，原始路径</b>（RTX 5090，LIBERO-10 任务 6）：每次 monitor 期间画面停帧并加橙色边框，机器人不动；每次停约 0.9 s。第 160 步 <code>next</code> 切到第二个子目标，第 213 步成功。</figcaption></figure>
+        <figcaption><span class="who j">J</span><b>同步协议，原始路径</b>（RTX 5090，LIBERO-10 任务 6；每次 monitor 整段 prefill、解码到回复结束）：monitor 期间画面停帧并加橙色边框，机器人不动；每次停约 0.9 s。第 160 步 <code>next</code> 切到第二个子目标，第 213 步成功。</figcaption></figure>
       <figure class="vid"><video controls muted playsinline preload="metadata" src="experiments/sim_closed_loop/videos/t6e0_planner_fast_next.mp4"></video>
-        <figcaption><span class="who j">J</span><b>同步协议，两项优化</b>：同一回合，每次只停约 0.3 s，轨迹与决策相同。两段都是同步协议，区别只是每次停多久；5090 上本来就停得短（0.9 s 对 0.3 s），肉眼差别不大。换到 Thor 上，每次停 6.92 s 对 1.78 s，见上方的回合时间轴。<span class="ref" data-ref="SIM">闭环</span></figcaption></figure>
+        <figcaption><span class="who j">J</span><b>同步协议，复用前缀 + <code>action</code> 闭合即停</b>（<span class="term" tabindex="0" data-tip="tip-twoopt">两项优化</span>）：协议不变，每次 monitor 只算不重复的那部分输入、决策一出来就停，所以每次只停约 0.3 s；轨迹与决策相同。两段都是同步协议，区别只是每次停多久；5090 上本来就停得短（0.9 s 对 0.3 s），肉眼差别不大。换到 Thor 上，每次停 6.92 s 对 1.78 s，见上方的回合时间轴。<span class="ref" data-ref="SIM">闭环</span></figcaption></figure>
     </div>
     <div class="cards">
       <details class="ev"><summary><span class="nm">同步：机器人停下等</span><span class="hl">执行占比 28.7 → 65.6 %</span><span class="one">Fast Plans 把规划从 1 094 ms 缩到 125 ms；SmolVLA 改成异步后完成时间短约 30 %</span></summary>
@@ -500,7 +503,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
     <h3><span class="qn">Q2b</span>用什么量衡量 challenge 的影响</h3>
     <div class="ans">每个 challenge 都用同样三个量说明它的影响。M1 就是 Q1c 的 L 与等待占比；M2、M3 是另外两个对象：执行器与任务决策。Q3a 给这三个量定目标。</div>
     <div class="grid3">
-      <div class="mcard"><span class="mn">M1 · 机器人</span><b>L 与等待占比</b><p>L = 从调用开始到决策可用（<span class="term" tabindex="0" data-tip="tip-L">定义</span>）；等待占比 = L / (L + Δ)。L 超过 Δ 时调用开始排队。</p></div>
+      <div class="mcard"><span class="mn">M1 · 机器人</span><b>L 与等待占比</b><p>L = 从调用开始到决策可用（<span class="term" tabindex="0" data-tip="tip-L">定义</span>）。同步协议下等待占比 = L / (L + Δ)；异步协议下 L &gt; Δ 时调用排队。</p></div>
       <div class="mcard"><span class="mn">M2 · 执行器</span><b>截止期错过率</b><p>执行器没能在旧动作块用完前给出新动作块的比例；看 p99 与错过率（严格 200 ms，宽松 600 ms）。</p></div>
       <div class="mcard"><span class="mn">M3 · 任务决策</span><b>决策一致数</b><p>同一次调用，加速或换条件后，<code>continue</code> / <code>next</code> / <code>replan</code> 与<span class="term" tabindex="0" data-tip="tip-orig">原始路径</span>相同的次数。</p></div>
     </div>
@@ -523,11 +526,11 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
       <button class="chip" type="button" data-f="M3" aria-pressed="false">M3 决策</button>
     </div>
     <div class="chl" id="chl">
-      <details class="ch" id="ch-B1" data-g="B" data-a="M1"><summary><span class="rk">1</span><span class="tt">规划器延迟卡在关键路径上<small>B1</small></span><span class="im" aria-label="影响 5 / 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><span class="kn"><span class="m">M1</span>原始路径 L 6.92 s &gt; Δ，等待占比 56 %（5090：1.44 s、21 %），每次 monitor 都发生。<span class="who j">J</span></span></summary>
+      <details class="ch" id="ch-B1" data-g="B" data-a="M1"><summary><span class="rk">1</span><span class="tt">规划器延迟卡在关键路径上<small>B1</small></span><span class="im" aria-label="影响 5 / 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><span class="kn"><span class="m">M1</span>原始路径 L 6.92 s &gt; Δ（5090：1.44 s），每次 monitor 都发生：同步协议下等待占比 56 %（5090 21 %），异步节奏下调用排队。<span class="who j">J</span></span></summary>
         <div class="bd">
           <div class="lchart" id="chart-orig"></div>
           <dl>
-          <dt>现象</dt><dd>腕部 720 时 L 8.76 s；L 超过 Δ，开始时间逐次推迟（224 最多 29.7 s，720 最多 38.4 s），规划器看的是越来越旧的画面。</dd>
+          <dt>现象</dt><dd>腕部 720 时 L 8.76 s。两种协议下的后果不同：同步时机器人每次停 L，等待占比 56 %（由 L 推算）；按固定时钟检查（异步节奏，H16 的回放方式）时调用排队，开始时间逐次推迟，实测 224 最多 29.7 s、720 最多 38.4 s，规划器看的是越来越旧的画面。</dd>
           <dt>证据</dt><dd><span class="ref" data-ref="H8">H8</span> <span class="ref" data-ref="H16">H16</span></dd>
           <dt>数据中心为什么没有</dt><dd>请求之间互相独立，服务按大量请求的<span class="term" tabindex="0" data-tip="tip-slo">统计延迟</span>考核；没有一个物理系统按固定周期等每一次回复。</dd></dl></div></details>
       <details class="ch" id="ch-A4" data-g="A" data-a="M1"><summary><span class="rk">2</span><span class="tt">软件：Thor 前端选了逐 token 的 prefill 路径<small>A4</small></span><span class="im" aria-label="影响 5 / 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><span class="kn"><span class="m">M1</span>B1 最大的单一原因：prefill 的 55 % 在一个逐 token 的 kernel 上，比 5090 的分块路径慢 32 倍。换掉它，L 2.63 → 1.78 s。<span class="who j">J</span></span></summary>
@@ -631,7 +634,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
     <div class="ans">主目标是 <span class="m">M1</span>：L &lt; Δ，越小越好；<span class="m">M2</span>、<span class="m">M3</span> 是约束，保证 L 的降低不是拿执行器或任务质量换来的。</div>
     <div class="tw"><table>
       <tr><th style="width:22%">量与目标</th><th style="width:30%">本周达到</th><th>不满足的后果</th></tr>
-      <tr><td><span class="m">M1</span><b>L &lt; Δ，越小越好</b></td><td>Thor 上 6.92 → 1.78 s（腕部 224），等待占比 56 % → 25 % <span class="who j">J</span></td><td>同步协议下机器人停机时间变长（等待占比 56 % 时，任务墙钟时间约为纯执行时间的 2.3 倍）。L &gt; Δ 时调用排队，规划器看的是几十秒前的画面：子目标早已完成或失败，决策才出来。</td></tr>
+      <tr><td><span class="m">M1</span><b>L &lt; Δ，越小越好</b></td><td>Thor 上 6.92 → 1.78 s（腕部 224），等待占比 56 % → 25 % <span class="who j">J</span></td><td>同步协议：机器人停机时间变长（等待占比 56 % 时，任务墙钟时间约为纯执行时间的 2.3 倍）。异步协议：L 期间按旧指令动；L &gt; Δ 时调用排队，规划器看的是几十秒前的画面，子目标早已完成或失败，决策才出来。</td></tr>
       <tr><td><span class="m">M2</span><b>执行器不错过截止期</b></td><td>27B 共置未测；2B / 7B 共置下分 SM 时 0 错过 <span class="who c">C</span></td><td>机器人没有新动作可执行，只能停顿或继续执行过时的动作；一次超时会让下一次释放也被丢弃（<span class="ref c" data-ref="C-#12">C-#12</span>：27.8 % 错过，成对出现）。</td></tr>
       <tr><td><span class="m">M3</span><b>决策与<span class="term" tabindex="0" data-tip="tip-orig">原始路径</span>一致</b></td><td>同一配置 59 / 59；换 kernel 或机器 52–55 / 59 <span class="who j">J</span></td><td>加速改变了任务行为：该 <code>next</code> 时给 <code>continue</code>，机器人在已完成的子目标上空转；该 <code>replan</code> 时没给，失败得不到处理；不该 <code>replan</code> 时给了，白白重新规划。5090 上前缀截在非对齐位置时，12 次干预决策改了 6 次（<span class="ref" data-ref="MC5090">monitor 调用</span>）。</td></tr>
     </table></div>
@@ -676,20 +679,21 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
 
   <div class="sq" id="q3x">
     <h3><span class="qn">Q3d</span>本周实验：每个实验回答什么</h3>
-    <div class="ans">每个实验都对应一个具体问题：要么测量某个 challenge 有多大、来自哪里，要么验证某一步解决方法有没有用、有没有副作用。点 challenge 编号可跳到对应卡片。</div>
-    <div class="tw"><table>
-      <tr><th style="width:15%">实验</th><th style="width:22%">要回答的问题</th><th>为什么这样设计</th><th style="width:25%">结果</th><th style="width:9%">对应</th></tr>
-      <tr><td><span class="ref" data-ref="MC5090">monitor 调用</span><br><span class="note">RTX 5090</span></td><td>monitor 调用里哪些计算是多余的？</td><td>先在快的机器上把调用拆开：输入里多少逐 token 不变，回复里决策在第几个 token；再试去掉它们，看决策是否改变。</td><td>61–65 % 的输入不变，决策在第 9–16 个 token；1 057 → 338 ms，决策不变；非对齐截断改了 6 / 12 次干预决策。</td><td><a href="#ch-B1" data-open="ch-B1">B1</a> M1 M3</td></tr>
-      <tr><td><span class="ref" data-ref="SIM">LIBERO 闭环</span><br><span class="note">RTX 5090</span></td><td>放进真实闭环后，规划器的延迟变成多少等待？</td><td>规划器 + 执行器在仿真里跑完整的分解、执行、检查，同步协议，比较原始路径与两项优化。</td><td>等待占比 19.8 % → 12.0 %，21 个回合的成败与决策不变。</td><td>M1</td></tr>
-      <tr><td><span class="ref" data-ref="H8">H8</span></td><td>两项优化在 Thor 上能否把 L 压到 Δ 以下？</td><td>同一组调用、同一脚本，在 Thor 上跑与 5090 相同的网格（复用前缀 × 解码方式）。</td><td>6.40 → 2.61 s，20 / 20 决策不变；剩下的以 prefill 为主。</td><td><a href="#ch-B1" data-open="ch-B1">B1</a> M1</td></tr>
-      <tr><td><span class="ref" data-ref="H4b">H4b</span></td><td>Thor 上的 prefill 慢在哪里？</td><td>torch.profiler 在 Thor 上记不到 kernel，于是逐个 binding 加同步计时。</td><td>一个逐 token 的线性注意力 kernel 占 55 %，比 5090 慢 32 倍；GEMM 慢 3.8 倍。</td><td><a href="#ch-A4" data-open="ch-A4">A4</a> <a href="#ch-A3" data-open="ch-A3">A3</a></td></tr>
-      <tr><td><span class="ref" data-ref="H9">H9</span></td><td>Thor 前端不用分块路径，是不是因为它在 Thor 上算不准？</td><td>同一份层输入上跑 7 个变体，逐层与逐 token 参考比较；先确认数值正确，再谈换路径。</td><td><code>wy_lt</code> 与 5090 同样准确；只有手写 <code>wy</code> 出错。prefill 3 994 → 2 294 ms。</td><td><a href="#ch-A4" data-open="ch-A4">A4</a></td></tr>
-      <tr><td><span class="ref" data-ref="H11">H11</span></td><td>快路径会不会改变干预决策？</td><td>H8 的决策全是 <code>continue</code>，检验不了；从闭环里挑出含 <code>next</code> 或失败的回合重建调用。</td><td>27 / 27 决策不变，含 3 / 3 次 <code>next</code>。</td><td>M3</td></tr>
-      <tr><td><span class="ref" data-ref="H13">H13</span></td><td>换 <code>wy_lt</code> 后 L、MTP、决策如何？</td><td>同一网格、同 47 次调用，只换 prefill 路径。</td><td>L 2.61 → 1.77 s；MTP 接受率低 3 %；3 / 47 次决策与 <code>native</code> 不同。</td><td><a href="#ch-A4" data-open="ch-A4">A4</a> M1 M3</td></tr>
-      <tr><td><span class="ref" data-ref="H6H7H10">H6 / H7 / H10</span></td><td>热态在多长空闲后出现、有多大？</td><td>背靠背运行 → 空闲不同时长 → 再运行，看第一、二次 decode 的周期时间。</td><td>阈值在 120–300 s 之间，平台 1.63 倍、持续 35–60 s。</td><td><a href="#ch-A2" data-open="ch-A2">A2</a></td></tr>
-      <tr><td><span class="ref" data-ref="H12">H12</span> → <span class="ref" data-ref="H14">H14</span> → <span class="ref" data-ref="H15">H15 / H15w</span></td><td>Thor 上同一提示词为什么回复不同？不知道这一点，就判断不了优化是否改变了决策。</td><td>依次只改一个条件：重复顺序（前一次调用固定与否）、GPU 上有无其他进程、prefill 路径。</td><td>5090 80 / 80；Thor 44 / 79 / 69 / 55。不是单一来源，不在 Thor 前端的 prefill 路径里。</td><td><a href="#ch-A5" data-open="ch-A5">A5</a> M3</td></tr>
-      <tr><td><span class="ref" data-ref="H16">H16</span></td><td>按真实节奏运行时，三种配置的 L 各是多少？给共置测量一个单独运行的基准。</td><td>规划器进程按 VoLoAgent 的节奏回放 66 次调用（含腕部 720 与 decompose），三组配置各跑一遍。</td><td>L 6.92 / 2.63 / 1.78 s；连续 5–9 min 无漂移；decompose 也在关键路径上。</td><td><a href="#ch-B1" data-open="ch-B1">B1</a> <a href="#ch-B4" data-open="ch-B4">B4</a> M1</td></tr>
+    <div class="ans">每个实验都对应一个具体问题：要么测量某个 challenge 有多大、来自哪里，要么验证某一步解决方法有没有用、有没有副作用。"协议"一列说明实验在什么调用方式下做：多数实验逐次测一次调用的 L，与协议无关；同步、异步只决定 L 变成什么代价（见 Q1c）。点 challenge 编号可跳到对应卡片。</div>
+    <div class="tw"><table style="min-width:760px">
+      <tr><th style="width:13%">实验</th><th style="width:19%">要回答的问题</th><th>为什么这样设计</th><th style="width:11%">协议</th><th style="width:22%">结果</th><th style="width:8%">对应</th></tr>
+      <tr><td><span class="ref" data-ref="MC5090">monitor 调用</span><br><span class="note">RTX 5090</span></td><td>monitor 调用里哪些计算是多余的？</td><td>先在快的机器上把调用拆开：输入里多少逐 token 不变，回复里决策在第几个 token；再试去掉它们，看决策是否改变。</td><td>逐次测单次调用，与协议无关</td><td>61–65 % 的输入不变，决策在第 9–16 个 token；1 057 → 338 ms，决策不变；非对齐截断改了 6 / 12 次干预决策。</td><td><a href="#ch-B1" data-open="ch-B1">B1</a> M1 M3</td></tr>
+      <tr><td><span class="ref" data-ref="SIM">LIBERO 闭环</span><br><span class="note">RTX 5090</span></td><td>放进真实闭环后，规划器的延迟变成多少等待？</td><td>规划器 + 执行器在仿真里跑完整的分解、执行、检查，比较原始路径与两项优化。</td><td><b>同步</b>：规划器调用期间仿真暂停</td><td>等待占比 19.8 % → 12.0 %，21 个回合的成败与决策不变。</td><td>M1</td></tr>
+      <tr><td><span class="ref" data-ref="H8">H8</span></td><td>两项优化在 Thor 上能否把 L 压到 Δ 以下？</td><td>同一组调用、同一脚本，在 Thor 上跑与 5090 相同的网格（复用前缀 × 解码方式）。</td><td>逐次测单次调用</td><td>6.40 → 2.61 s，20 / 20 决策不变；剩下的以 prefill 为主。</td><td><a href="#ch-B1" data-open="ch-B1">B1</a> M1</td></tr>
+      <tr><td><span class="ref" data-ref="H4b">H4b</span></td><td>Thor 上的 prefill 慢在哪里？</td><td>torch.profiler 在 Thor 上记不到 kernel，于是逐个 binding 加同步计时。</td><td>单次 prefill</td><td>一个逐 token 的线性注意力 kernel 占 55 %，比 5090 慢 32 倍；GEMM 慢 3.8 倍。</td><td><a href="#ch-A4" data-open="ch-A4">A4</a> <a href="#ch-A3" data-open="ch-A3">A3</a></td></tr>
+      <tr><td><span class="ref" data-ref="H9">H9</span></td><td>Thor 前端不用分块路径，是不是因为它在 Thor 上算不准？</td><td>同一份层输入上跑 7 个变体，逐层与逐 token 参考比较；先确认数值正确，再谈换路径。</td><td>单次 prefill</td><td><code>wy_lt</code> 与 5090 同样准确；只有手写 <code>wy</code> 出错。prefill 3 994 → 2 294 ms。</td><td><a href="#ch-A4" data-open="ch-A4">A4</a></td></tr>
+      <tr><td><span class="ref" data-ref="H11">H11</span></td><td>快路径会不会改变干预决策？</td><td>H8 的决策全是 <code>continue</code>，检验不了；从闭环里挑出含 <code>next</code> 或失败的回合重建调用。</td><td>逐次测单次调用</td><td>27 / 27 决策不变，含 3 / 3 次 <code>next</code>。</td><td>M3</td></tr>
+      <tr><td><span class="ref" data-ref="H13">H13</span></td><td>换 <code>wy_lt</code> 后 L、MTP、决策如何？</td><td>同一网格、同 47 次调用，只换 prefill 路径。</td><td>逐次测单次调用</td><td>L 2.61 → 1.77 s；MTP 接受率低 3 %；3 / 47 次决策与 <code>native</code> 不同。</td><td><a href="#ch-A4" data-open="ch-A4">A4</a> M1 M3</td></tr>
+      <tr><td><span class="ref" data-ref="H6H7H10">H6 / H7 / H10</span></td><td>热态在多长空闲后出现、有多大？</td><td>背靠背运行 → 空闲不同时长 → 再运行，看第一、二次 decode 的周期时间。</td><td>—</td><td>阈值在 120–300 s 之间，平台 1.63 倍、持续 35–60 s。</td><td><a href="#ch-A2" data-open="ch-A2">A2</a></td></tr>
+      <tr><td><span class="ref" data-ref="H12">H12</span> → <span class="ref" data-ref="H14">H14</span> → <span class="ref" data-ref="H15">H15 / H15w</span></td><td>Thor 上同一提示词为什么回复不同？不知道这一点，就判断不了优化是否改变了决策。</td><td>依次只改一个条件：重复顺序（前一次调用固定与否）、GPU 上有无其他进程、prefill 路径。</td><td>逐次重复单次调用</td><td>5090 80 / 80；Thor 44 / 79 / 69 / 55。不是单一来源，不在 Thor 前端的 prefill 路径里。</td><td><a href="#ch-A5" data-open="ch-A5">A5</a> M3</td></tr>
+      <tr><td><span class="ref" data-ref="H16">H16</span></td><td>按真实节奏运行时，三种配置的 L 各是多少？给共置测量一个单独运行的基准。</td><td>规划器进程回放 66 次调用（含腕部 720 与 decompose），三组配置各跑一遍。</td><td><b>固定时钟</b>（异步节奏）：第 s 步的调用在 s / 80 × 5.33 s 到期，与规划器快慢无关</td><td>L 6.92 / 2.63 / 1.78 s；原始路径调用排队，最多推迟 38 s；快路径不排队；连续 5–9 min 无漂移。</td><td><a href="#ch-B1" data-open="ch-B1">B1</a> <a href="#ch-B4" data-open="ch-B4">B4</a> M1</td></tr>
     </table></div>
+    <p class="note">页面里的等待占比（56 % → 25 %）是用 H16 实测的每次 L 按同步协议推算的；"排队最多 38 s"是 H16 在固定时钟节奏下实测的。两者描述同一个 L 在两种协议下的代价。</p>
   </div>
 
   <div class="sq" id="q3d">
@@ -715,7 +719,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
     <li>两层运行频率不同：规划器约 1 Hz 或更低，执行器每秒十几到几十次。</li>
     <li>两层可单独替换，复用预训练 VLM 的推理能力，不必在窄的控制数据上重新训练。</li>
     <li>现有的 agent 系统（VoLoAgent、Gemini Robotics、Hi Robot、RoboCerebra 的评测循环）多是这种结构。</li></ol></div>
-  <div id="tip-volo"><h4>VoLoAgent（W-VOLO）</h4><p>智能体式的规划–执行系统（arXiv 2606.07723），开源 harness：开局 decompose，每 80 个控制步 monitor，事件触发 replan；执行器 π0.5。</p><p><b>为什么用它的调用</b>：</p><ol>
+  <div id="tip-volo"><h4>VoLoAgent（W-VOLO）</h4><p>智能体式的规划–执行系统（arXiv 2606.07723），开源 harness：开局 decompose，每 80 个控制步 monitor，事件触发 replan；执行器 π0.5。论文描述的部署是异步的；开源 harness 代码是同步的（monitor 期间不推进环境）。</p><p><b>为什么用它的调用</b>：</p><ol>
     <li>有对照证据：同一 π0.5 加上它的编排，成功率 12.57 → 41.80 %。</li>
     <li>开源代码把循环定义完整（调用时刻、提示词、输出格式、<code>max_tokens</code>），可以录制成可重放的调用；多数论文不报告这些参数。</li>
     <li>monitor 是多图长上下文（4.1–5.7k token），正是 Thor 上 prefill 成为瓶颈的情形；与 RoboCerebra 的短上下文互补。</li>
@@ -762,7 +766,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
     "H13":{t:"H13 · wy_lt 路径跑同一网格（Jingwu，1111_h14h13）",d:"47 次调用：L 2.61 → 1.77 s；MTP 每次尝试接受 1.83 → 1.77；3 / 47 次决策与 native 不同。",u:GH+D+"monitor_call/README.md",l:"monitor_call/README.md"},
     "H14":{t:"H14 · 重复前先生成上一个调用（Jingwu，1111_h14h13）",d:"前一次调用固定、GPU 空闲：79 / 80 相同。",u:GH+"issues.md",l:"issues.md ISSUE-114"},
     "H15":{t:"H15 / H15w · GPU 空闲时按 H12 的顺序重复（Jingwu，1111_h15h16）",d:"native 路径 69 / 80，wy_lt 路径 55 / 80：GPU 空闲时也不可复现，换路径也不消除。",u:GH+D+"monitor_call/",l:"monitor_call/ 数据文件"},
-    "H16":{t:"H16 · 规划器进程按 harness 节奏单独运行（Jingwu，1111_h15h16）",d:"66 次调用 × 3 组配置：monitor L 中位 6.92 / 2.63 / 1.78 s（224），8.76 / 4.38 / 2.86 s（720）；连续 5–9 min 无漂移。",u:GH+D+"colocation_thor/",l:"colocation_thor/ 数据文件"},
+    "H16":{t:"H16 · 规划器进程按 harness 节奏单独运行（Jingwu，1111_h15h16）",d:"固定时钟节奏（第 s 步的调用在 s / 80 × 5.33 s 到期），66 次调用 × 3 组配置：monitor L 中位 6.92 / 2.63 / 1.78 s（224），8.76 / 4.38 / 2.86 s（720）；原始路径调用排队最多 38 s，快路径不排队；连续 5–9 min 无漂移。",u:GH+D+"colocation_thor/",l:"colocation_thor/ 数据文件"},
     "MC5090":{t:"monitor 调用的结构与优化（Jingwu，RTX 5090）",d:"61–65 % 的输入在回合内逐 token 不变；决策在第 9–16 个 token；两项优化 1 057 → 338 ms，决策不变；非对齐截断改了 6 / 12 次干预决策。",u:GH+D+"monitor_call/README.md",l:"monitor_call/README.md"},
     "SIM":{t:"LIBERO 闭环（Jingwu，RTX 5090）",d:"21 个回合 × 5 种模式：同步协议下等待占比 19.8 % → 12.0 %（两项优化），成败与决策不变；规划器的两次致命错误都是看错。",u:GH+D+"sim_closed_loop/README.md",l:"sim_closed_loop/README.md"},
     "C-#8":{t:"C-#8（Chenwei）",d:"短上下文（约 470 token）下 7B 规划器一次切换调用 L ≈ 2.5 s，decode 占 92 %。",l:"Chenwei · Findings_1110_v2 #8"},
@@ -792,7 +796,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
 
   // episode timeline: 10 x (5.33 s execution + L stop)
   (function(){
-    var rows=[{lb:"原始路径",L:6.92},{lb:"两项优化",L:2.63},{lb:"两项优化 + wy_lt",L:1.78}];
+    var rows=[{lb:"原始路径",L:6.92},{lb:"复用前缀 + 闭合即停",L:2.63},{lb:"再换 wy_lt",L:1.78}];
     var max=10*(5.33+6.92), h="";
     rows.forEach(function(r){
       var tot=10*(5.33+r.L); h+='<div class="row"><span>'+r.lb+'<br><small class="note">每次停 '+r.L.toFixed(2)+' s</small></span><div class="lane" style="width:'+(tot/max*100)+'%">';
