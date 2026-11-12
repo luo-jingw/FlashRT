@@ -1838,8 +1838,16 @@ the Thor H3 conversion recorded revision `017b9c7a` and ran in the Thor environm
 
 ## Next Experiment
 
-On the Thor, `compare_tensor_hashes.py` between the H8 copy's JSON and `tensors_sha256_rtx5090.json`: the counts by
-field (dtype / shape / sha256) and the name patterns of the differing tensors separate the hypotheses.
+- Done: `compare_tensor_hashes.py` on the Thor. 63 of 1696 tensors differ, all NVFP4 `weight_packed`
+  (down 20, gate 12, up 12, o 7, k 5, q 4, v 3); no dtype or shape differs, and every scale and bf16 tensor is equal.
+  The FP8 source is therefore the same; the codes differ.
+- Done: `encode_variants_check.py` re-encodes every NVFP4 tensor on the CPU with five division variants. Computing the
+  two divisions by a Python scalar as a multiply by the float32 reciprocal differs from the RTX 5090 copy in exactly
+  63 tensors with the same per-kind counts; every other variant differs in 75-163. This supports the first hypothesis
+  in the form: torch 2.9.1 on CUDA divides by a scalar through its float32 reciprocal, and values on an E2M1 midpoint
+  move to the neighbouring code.
+- Next: match by tensor name (bring back the H8 copy's hash JSON, or hash the reciprocal-variant codes here and
+  compare on the Thor); then choose one copy for all further Thor runs and record it in PROJECT.md.
 
 ## Impact
 
