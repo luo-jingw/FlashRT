@@ -282,7 +282,7 @@ this fork covers Jetson AGX Thor (sm_110).
   SM120 NVFP4 GEMMs (`fp4_w4a16_gemm_sm120_bf16out{,_widen,_pingpong}`),
   quantizers and fused norm -> NVFP4 kernels.
 - `tmp/` and `benchmark_results/` are untracked local directories: the
-  cross-hardware harness scripts (`tmp/bench_pi05_synthetic_rtx5090.py`
+  cross-hardware harness scripts (`tmp/bench_5090/bench_pi05_synthetic_rtx5090.py`
   and siblings) and their JSON results.
 - The Pi0.5 synthetic checkpoint (`scripts/gen_synthetic_pi05_checkpoint.py`,
   3 views / chunk 30) is not kept on disk; regenerating it takes about
