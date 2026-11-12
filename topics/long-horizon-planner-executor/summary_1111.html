@@ -550,12 +550,24 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
       <tr><td>规划器调用</td><td>decompose（开局）、monitor（每 80 步）、replan（事件触发）</td><td>decomposition（开局，编号列表）、monitor（周期）、switch（子目标边界）</td></tr>
       <tr><td>monitor 的输入</td><td>6 张图（回合开始与当前 × 前置、外部、腕部相机）+ 子目标列表 + 上一工具结果；4.1–5.7k token</td><td>当前观测 + 子目标；约 470 token</td></tr>
       <tr><td>输出</td><td>JSON：<code>status</code> / <code>action</code> / <code>reason</code>，决策在第 9–16 个 token</td><td>下一子目标或修正指令、完成判断；decomposition 为编号列表</td></tr>
+      <tr><td>上下文长度（实测）</td><td>monitor 输入：腕部 224 为 4 076–4 098 token，腕部 720 为 5 708–5 730 token；输出：快路径中位 14 token，原始路径中位 72–74。decompose 输入 2 130 / 2 946 token，输出 25–82 <span class="ref" data-ref="H16">H16</span></td><td>切换调用输入约 470 token，输出约 38 <span class="ref c" data-ref="C-#8">C-#8</span></td></tr>
+      <tr><td>复用的固定前缀</td><td>每个回合建一次，复用 2 048 token。固定部分（系统提示 + 3 张回合开始的图）占输入的 61–65 %，腕部 224 为 2 641 token；只复用到 2 048 是因为分块 prefill 的块长是 2 048，截在别处回复会变（<span class="ref" data-ref="H13">H13</span>）。实际复用比例：腕部 224 约 50 %，腕部 720 约 36 %</td><td>不适用：848 次调用里只有 3 次与上一次共享图像</td></tr>
+      <tr class="hl"><td>规划器的思考模式</td><td><b>关闭</b>：调用时传 <code>enable_thinking=False</code>，对话模板填入空的 <code>&lt;think&gt;&lt;/think&gt;</code>，模型不输出推理，第 9–16 个 token 给出决策。模型自带的模板默认开启思考</td><td>27B 运行用同一个规划器进程，同样关闭</td></tr>
       <tr><td>子任务与时长</td><td>1–2 个子目标，53 s</td><td>平均 9.1 个子步，约 2.5 min</td></tr>
       <tr><td>节奏</td><td>Δ = 5.33 s；执行器每 533 ms 一个 8 步动作块（15 Hz）</td><td>代码每 150 步（20 Hz 下 7.5 s）切换子目标；回放中执行器每 600 ms 释放一次</td></tr>
       <tr><td>开源代码的协议</td><td>同步（论文的真机系统是异步）</td><td>同步</td></tr>
       <tr><td>规划器（本周实测）</td><td>官方 Qwen3.8-27B（FlashRT NVFP4）</td><td>2B / 7B（HF）；B25、B26 用 W-VOLO 回放跑 27B</td></tr>
     </table></div>
     <p class="note">为什么用 VoLoAgent 的调用：悬停表头里的 <span class="term" tabindex="0" data-tip="tip-volo">VoLoAgent</span>。</p>
+    <div class="panel" id="nothink">
+      <h4>前提：规划器不开思考</h4>
+      <p>本页所有延迟与共置的结论，都建立在规划器关闭思考模式、每次只输出十几个 token 的前提上。</p>
+      <ul>
+        <li><b>开思考时延迟差一个量级</b>：Thor 上 27B 每输出一个 token 约 30 ms（<span class="ref" data-ref="H13">H13</span>）。若每次先输出约 1 000 个 token 的推理，仅 decode 就约 30 s，远超 Δ = 5.33 s（推算）。那时规划器延迟以 decode 为主，"冲突落在 prefill 上"的分析不再适用。</li>
+        <li><b>关掉思考对决策质量的影响没有测</b>：Hi-VLA 的编排研究里，最佳组合包含开启思考（Q1b）。</li>
+        <li><b>为什么关</b>：VoLoAgent 原本调用云端的大模型；换成本地 27B 后，决策要在一个检查间隔内出来，所以关掉思考。这是延迟与决策质量的取舍，目前只测了延迟这一边。</li>
+      </ul>
+    </div>
     <div class="panel" id="protocols">
       <h4>本线测了哪种协议</h4>
       <p><b>同步</b>：检查时机器人停下，执行器不出动作，GPU 全给规划器；代价只有等待时间，取决于 L。<b>异步</b>：规划器在后台运行，执行器照常每个周期出动作；两个模型同时在 GPU 上，才会互相干扰。所以规划器延迟（L）对两种协议都要测，共置的资源冲突只在异步下存在。</p>
@@ -624,7 +636,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
 
   <div class="sq" id="q2b">
     <h3><span class="qn">Q2d</span>真正的问题：Thor 上共置时，长上下文下没有一种静态划分能同时照顾两个模型</h3>
-    <div class="ans"><b>回答</b>：在 Thor 上，规划器输入约 5.7k token（腕部 720）时，测过的静态配置没有一种能同时满足执行器的 200 ms 截止期与规划器的 5.33 s 检查间隔；约 4.1k token（腕部 224）时，不重叠划分加 <code>wy_lt</code> 能同时满足。原因是 Thor 只有 20 个 SM、两个模型共用一份内存：规划器的 prefill 需要算力，分走 SM 就变慢约 2 倍，不分又占住执行器要用的 SM；按 SM 划分之后，剩下的干扰来自共用的内存带宽。这一节只用 27B 规划器的实测数据。</div>
+    <div class="ans"><b>回答</b>：在 Thor 上，规划器输入约 5.7k token（腕部 720）时，测过的静态配置没有一种能同时满足执行器的 200 ms 截止期与规划器的 5.33 s 检查间隔；约 4.1k token（腕部 224）时，不重叠划分加 <code>wy_lt</code> 能同时满足。原因是 Thor 只有 20 个 SM、两个模型共用一份内存：规划器的 prefill 需要算力，分走 SM 就变慢约 2 倍，不分又占住执行器要用的 SM；按 SM 划分之后，剩下的干扰来自共用的内存带宽。这一节只用 27B 规划器（关闭思考，见 <a href="#nothink">Q2a</a>）的实测数据。</div>
     <div class="tw"><table style="min-width:700px">
       <tr><th style="width:28%">27B 共置（快路径，执行器每 533 ms）</th><th>执行器：与 prefill 重叠 p50 / 全部 p99</th><th>规划器 monitor L，腕部 224 / 720</th></tr>
       <tr><td>单独运行</td><td>37.5 ms</td><td>2.68 / 4.45 s（<code>native</code>）；1.86 / 2.94 s（<code>wy_lt</code>）</td></tr>
@@ -889,12 +901,14 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
 
   <div class="sq" id="q3d">
     <h3><span class="qn">Q3e</span>还缺什么</h3>
-    <div class="ans">只列会改变上面回答的两项；其余未解决的现象记在仓库的 <code>issues.md</code>，不影响本页结论。</div>
+    <div class="ans">只列会改变上面回答的三项；其余未解决的现象记在仓库的 <code>issues.md</code>，不影响本页结论。</div>
     <div class="tree">
       <details class="tg" open><summary>会改变回答的</summary>
         <ul>
           <li><details class="ti" open><summary>长上下文（腕部 720）下能顾两头的配置<span class="tag w">Chenwei B27 进行中</span></summary>
             <div class="tb"><p>决定 Q3c 的回答：某个基线就能做到，还是需要按时间编排，还是都不行。</p></div></details></li>
+          <li><details class="ti" open><summary>开启思考时的延迟与决策质量<span class="tag u">未测</span></summary>
+            <div class="tb"><p>本页结论以关闭思考为前提（<a href="#nothink">Q2a</a>）。开启思考会让延迟以 decode 为主、可能超过 Δ 很多，也可能提高决策质量；两者都会改变 Q2d、Q3c 的回答。</p></div></details></li>
           <li><details class="ti" open><summary>异步协议下的任务代价<span class="tag u">未测</span></summary>
             <div class="tb"><p>机器人按旧指令多做了多少、决策是否因此出错、任务成败是否改变。需要仿真在规划器思考时继续推进，以及会跟随子目标指令的执行器；本线的 ImageWAM 在 LIBERO 上几乎不读指令，所以还测不了。它决定 M1 的目标在异步下该定多严。</p></div></details></li>
         </ul></details>
