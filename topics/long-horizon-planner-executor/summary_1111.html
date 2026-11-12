@@ -77,6 +77,18 @@ th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-ali
 th{background:var(--sunk);font-weight:500;font-size:13px;color:var(--ink2)}
 td.n{font-family:var(--f-mono);font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
 tr.hl td{background:var(--accent-soft)}
+tr.grp td{background:var(--sunk)}
+svg.hw{display:block;width:100%;min-width:560px;max-width:760px;height:auto;font-family:var(--f-body)}
+.hw-chip{fill:var(--surface);stroke:var(--line);stroke-width:1.5}
+.hw-box{fill:var(--sunk);stroke:var(--line)}
+.hw-ex{fill:var(--accent-soft);stroke:var(--accent)}
+.hw-pl{fill:var(--j-soft);stroke:var(--j)}
+.hw-mem{fill:var(--crit-soft);stroke:var(--crit)}
+.hw-cut{stroke:var(--ink2);stroke-width:1.5;stroke-dasharray:4 3}
+.hw-ar{stroke:var(--muted);stroke-width:1.5}
+.hw-t{font-size:13px;font-weight:700;fill:var(--ink)}
+.hw-l{font-size:13px;font-weight:500;fill:var(--ink)}
+.hw-s{font-size:11.5px;fill:var(--ink2)}
 .tag{display:inline-block;font-size:11.5px;border-radius:999px;padding:0 8px;margin:1px 4px 1px 0;white-space:nowrap;border:1px solid var(--line);color:var(--ink2)}
 .tag.u{border-style:dashed;color:var(--muted)}
 .tag.w{border-color:var(--crit);color:var(--crit)}
@@ -273,7 +285,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
     <div class="q"><a href="#q2">Q2 我们的 setting 有什么独特 challenge</a><ul>
       <li><a href="#q2a">Q2a 我们的 setting 是什么</a></li>
       <li><a href="#q2m">Q2b 用什么量衡量</a></li>
-      <li><a href="#q2b">Q2c 真正的问题：共置时的资源冲突</a></li></ul></div>
+      <li><a href="#q2b">Q2c 真正的问题：SM 分区在 Thor 上不够</a></li></ul></div>
     <div class="q"><a href="#q3">Q3 challenge 可以怎么解决</a><ul>
       <li><a href="#q3a">Q3a 三个量的目标</a></li>
       <li><a href="#q3b">Q3b 常规方法已解决的部分</a></li>
@@ -281,7 +293,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
       <li><a href="#q3x">Q3d 本周实验</a></li>
       <li><a href="#q3d">Q3e 还缺什么</a></li></ul></div>
     <div class="q"><a href="#q4">Q4 本周的发现</a><ul>
-      <li>共置时的资源冲突</li>
+      <li>SM 分区在 Thor 上不够</li>
       <li>规划器延迟</li>
       <li>评估方法</li></ul></div>
   </div>
@@ -549,36 +561,52 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
   </div>
 
   <div class="sq" id="q2b">
-    <h3><span class="qn">Q2c</span>真正的问题：两个模型共用统一内存时的资源冲突</h3>
-    <div class="ans">规划器与执行器在同一块 Thor 上同时运行时，规划器的 decode 几乎占满内存带宽，执行器因此错过截止期。按 SM 分区能保护执行器，却隔不开带宽，还让规划器的 prefill 变慢、更难被打断。数据中心靠独立显存与硬件分区避开了这个问题；现有的通用手段只能在"保执行器"与"保规划器"之间二选一。</div>
+    <h3><span class="qn">Q2c</span>真正的问题：Thor 上按 SM 隔开两个模型，既护不全执行器，又拖慢规划器</h3>
+    <div class="ans">规划器和执行器只能共用 Thor 这一块 GPU。不隔离时执行器违约；通用的隔离手段是按 SM 分区（green context、MPS）。在 Thor 上它两头都不够：分区之外还有三条共享通道，执行器仍受规划器影响；Thor 只有 20 个 SM，分走一部分后规划器的 prefill 明显变慢，而常规优化之后 prefill 正好占规划器延迟的大部分。这些都来自 Thor 的硬件结构，RTX 5090 上同样的测试没有出现。</div>
     <div class="panel">
-      <h4>为什么这是 Thor 上的问题</h4>
-      <ol>
-        <li><b>一份内存，而且带宽小。</b>CPU 与 GPU 共用同一份 LPDDR5X，两个模型都在这块 GPU 上，带宽 273 GB/s（规格，实测拷贝约 256 GB/s），是 RTX 5090 显存的约 1 / 7。27B 规划器的 decode 一个就要约 200 GB/s，剩给执行器的很少。<span class="ref" data-ref="1104_h3c">1104_h3c</span></li>
-        <li><b>只有一块小 GPU。</b>Thor 的 GPU 只有 20 个 SM，两个模型只能在同一块 GPU 上分。SM 分区后规划器只剩 4 个 SM，一次 prefill 拉长到几百毫秒，可打断的粒度随之变粗（最长 567 ms）。<span class="ref c" data-ref="C-#9">C-#9</span> <span class="ref c" data-ref="C-#16">C-#16</span></li>
-        <li><b>测过的隔离手段只分算力、不分带宽。</b>SM 分区之后，两个模型的计算不再互相占用，但仍从同一份内存读数据，规划器 decode 照样能拖慢执行器；数据中心 GPU 上每块卡独立的显存、可划分的内存控制器，在这里没有对应的手段。<span class="ref c" data-ref="C-#12">C-#12</span></li>
-      </ol>
-      <p class="note">机器人本体上只有这一块芯片，执行器的截止期由控制周期决定，不能放宽；规划器放在本体上也就只能和执行器共用它。</p>
+      <h4>Thor 的硬件结构与三条通道</h4>
+      <div class="tw"><svg class="hw" viewBox="0 0 640 236" role="img" aria-label="Thor 芯片示意：CPU 与 GPU 共用 LPDDR5X；GPU 20 个 SM 分成执行器 16 个、规划器 4 个">
+        <rect x="6" y="6" width="628" height="224" rx="10" class="hw-chip"/>
+        <text x="20" y="26" class="hw-t">Jetson Thor：机器人本体上唯一的一块芯片</text>
+        <rect x="20" y="44" width="110" height="96" rx="6" class="hw-box"/><text x="75" y="97" text-anchor="middle" class="hw-l">CPU</text>
+        <rect x="146" y="44" width="474" height="96" rx="6" class="hw-box"/>
+        <text x="158" y="62" class="hw-s">GPU · 20 个 SM　② 两个分区共享一个约 100 TFLOP/s 的上限</text>
+        <rect x="158" y="72" width="324" height="56" rx="5" class="hw-ex"/><text x="320" y="105" text-anchor="middle" class="hw-l">执行器 16 SM</text>
+        <rect x="496" y="72" width="112" height="56" rx="5" class="hw-pl"/><text x="552" y="98" text-anchor="middle" class="hw-l">规划器 4 SM</text>
+        <text x="552" y="116" text-anchor="middle" class="hw-s">prefill 慢 2.2×</text>
+        <line x1="489" y1="68" x2="489" y2="132" class="hw-cut"/>
+        <text x="336" y="158" class="hw-s">③ 长 prefill 末尾的停顿穿过分区</text>
+        <line x1="75" y1="140" x2="75" y2="180" class="hw-ar"/><line x1="320" y1="128" x2="320" y2="180" class="hw-ar"/><line x1="552" y1="128" x2="552" y2="180" class="hw-ar"/>
+        <rect x="20" y="180" width="600" height="38" rx="6" class="hw-mem"/>
+        <text x="320" y="204" text-anchor="middle" class="hw-l">① LPDDR5X 273 GB/s，CPU 与 GPU 共用，SM 分区不分它</text>
+      </svg></div>
+      <p class="note">按 SM 分区时 green context 的粒度是 8 个 SM，只能分成 8 / 12 或 16 / 4（<span class="ref" data-ref="1028">1028</span>）。图中为 16 / 4。</p>
     </div>
-    <div class="tree">
-      <details class="tg" open><summary>证据</summary>
-        <ul>
-          <li><details class="ti"><summary>执行器的违约全部发生在与规划器 decode 重叠的时段<span class="m">M2</span><span class="who c">C</span><span class="who j">J</span></summary>
-            <div class="tb"><p>7B 规划器 + 执行器，严格 200 ms 截止期、不分 SM：27.8 % 的释放错过，超时全部与规划器 decode 重叠，且成对出现。替身规划器共置时，执行器变慢也集中在与 decode 重叠的调用上（1.3–1.7 倍），与 prefill 重叠几乎不慢。<span class="ref c" data-ref="C-#12">C-#12</span></p></div></details></li>
-          <li><details class="ti"><summary>规划器的 decode 一个就占掉大部分带宽<span class="who j">J</span></summary>
-            <div class="tb"><p>27B 规划器 decode 稳态约 200 GB/s，Thor 拷贝带宽约 256 GB/s，占 85 %。<span class="ref" data-ref="1104_h3c">1104_h3c</span></p></div></details></li>
-          <li><details class="ti"><summary>SM 分区隔开了算力，隔不开带宽<span class="m">M1</span><span class="m">M2</span><span class="who c">C</span></summary>
-            <div class="tb"><p>分 SM（规划器 4 个、执行器 16 个）后执行器 0 错过，最长 129.8 ms；代价是规划器 prefill 慢 2.2 倍、视觉编码慢 3.1 倍，而 decode 只慢 1.06 倍，仍有 210 GB/s。<span class="ref c" data-ref="C-#9">C-#9</span> <span class="ref c" data-ref="C-#12">C-#12</span></p></div></details></li>
-          <li><details class="ti"><summary>SM 分区让规划器更难被打断<span class="m">M1</span><span class="who c">C</span></summary>
-            <div class="tb"><p>两个模型之间最小的可中断单位是一次 forward：不分 SM 时最长约 160 ms（一次 decode 步），分 SM 后可能是一次 prefill，最长 567 ms。子目标切换时要打断正在跑的 monitor，这段时间机器人在等。<span class="ref c" data-ref="C-#16">C-#16</span></p></div></details></li>
-          <li><details class="ti"><summary>还不知道：27B 规划器下冲突有多大<span class="tag u">未测</span></summary>
-            <div class="tb"><p>以上来自 2B / 7B 规划器。27B 的 decode 读的权重更多、调用更长，共置时执行器的 p99、错过率与规划器自己的 L 都还没有测。</p></div></details></li>
-        </ul></details>
+    <div class="tw"><table style="min-width:720px">
+      <tr><th style="width:20%">Thor 的硬件特性</th><th>测到的现象</th><th style="width:17%">RTX 5090 同一测试</th></tr>
+      <tr class="grp"><td colspan="3"><b>一、分区之外的三条通道：执行器护不全</b><span class="m">M2</span></td></tr>
+      <tr><td>① CPU 与 GPU 共用一份 LPDDR5X，273 GB/s（5090 显存 1 792 GB/s）</td><td>SM 分区之后，与规划器 decode 重叠的执行器调用仍慢 1.3–1.7 倍，与短 prefill 重叠的基本不慢（2B 规划器）<span class="ref" data-ref="1030V2">1030 V2</span>。27B 规划器 decode 稳态约 200 GB/s，占实测拷贝带宽的 85 % <span class="ref" data-ref="1104_h3c">1104_h3c</span>。<span class="who j">J</span></td><td>带宽是 Thor 的 6.6 倍；未做同一测试</td></tr>
+      <tr><td>② 芯片级吞吐上限：12 个 SM 单独就到约 100 TFLOP/s，与 20 个 SM 相同</td><td>两个分区一起跑时按 SM 数分这一个上限：16 / 4 分区单独 102 / 50 TFLOP/s，一起 79 / 23。分区不等于独占算力；上限来自功耗 / 时钟还是 L2，没有区分 <span class="ref" data-ref="1030V1">1030 V1</span>。<span class="who j">J</span></td><td>一起与单独几乎相同（46 → 43，101 → 99）</td></tr>
+      <tr><td>③ 一种跨分区的停顿，机制未明</td><td>规划器长 prefill 的末尾，执行器停顿：16k token 时 2.4 s，4k token 时 543–571 ms，超过 533 ms 的动作块。两个模型在不相交的 green 分区上也出现；已排除长 kernel、解释器锁、内存分配；测过的方式里只有 MPS 50 % 没有 <span class="ref" data-ref="1028">1028</span> <span class="ref" data-ref="1104_h">1104_h</span> <span class="ref" data-ref="ISSUE-098">ISSUE-098</span>。<span class="who j">J</span></td><td>同一格 p99 34 ms，没有停顿</td></tr>
+      <tr class="grp"><td colspan="3"><b>二、分区的代价：规划器变慢</b><span class="m">M1</span></td></tr>
+      <tr><td>只有 20 个 SM（5090 170 个）</td><td>规划器限在 4 个 SM：prefill 慢 2.2 倍、视觉编码慢 3.1 倍，decode 只慢 1.06 倍、仍有 210 GB/s，decode 受带宽限制，4 个 SM 已够 <span class="ref c" data-ref="C-#9">C-#9</span>。分区后最小可中断单位可能是一次 prefill，最长 567 ms <span class="ref c" data-ref="C-#16">C-#16</span>。<span class="who c">C</span></td><td>—</td></tr>
+      <tr><td>常规优化之后 prefill 占规划器延迟的大部分</td><td>27B 快路径 + <code>wy_lt</code>：prefill 占 monitor L 的 66 %（腕部 224）/ 76 %（720）<span class="ref" data-ref="H16">H16</span>。按 prefill 慢 2.2 倍推算，规划器 4 个 SM 时 L ≈ 3.2 s / 5.5 s，腕部 720 超过 Δ = 5.33 s（推算，27B 未测）。<span class="who j">J</span></td><td>—</td></tr>
+    </table></div>
+    <p>不隔离也不行：7B 规划器、严格 200 ms 截止期、不分 SM 时，执行器 27.8 % 的释放错过，超时全部与规划器 decode 重叠、成对出现；分 SM（16 / 4）后 12 格全部 0 错过 <span class="ref c" data-ref="C-#12">C-#12</span>。</p>
+    <div class="panel">
+      <h4>两个阶段对 Thor 资源的需求不同</h4>
+      <div class="tw"><table style="min-width:520px">
+        <tr><th></th><th>prefill</th><th>decode</th></tr>
+        <tr><td>受什么限制</td><td>算力（20 个 SM）</td><td>带宽（273 GB/s）</td></tr>
+        <tr><td>规划器限到 4 个 SM</td><td>慢 2.2 倍</td><td>慢 1.06 倍</td></tr>
+        <tr><td>与执行器重叠时</td><td>短 prefill 基本不影响；长 prefill 末尾有停顿（③）</td><td>减速与错过集中在这里（①、C-#12）</td></tr>
+      </table></div>
+      <p class="note">静态分区对两个阶段用同一种分配：代价落在 prefill 上，执行器受影响的主要是 decode 时段。</p>
     </div>
-    <p class="note">数据中心为什么没有：CPU 用独立 DDR、GPU 用 HBM，带宽是统一内存设备的 13–20 倍；MIG 可以划分 L2 与内存控制器；不同服务各占 GPU 或 MIG 实例，不需要互相抢占。其余候选问题的判断：<span class="term" tabindex="0" data-tip="tip-others">常规方法已解决，或影响很小</span>。</p>
+    <p class="note">以上来自 2B / 7B 规划器；27B 共置待测（Thor 清单 H17）。数据中心的对应情况：每块 GPU 有独立 HBM，MIG 可以划分 L2 与内存控制器；Thor 是否报告 MIG 模式，H17 前置里只读查询。其余候选问题的判断：<span class="term" tabindex="0" data-tip="tip-others">常规方法已解决，或影响很小</span>。</p>
   </div>
 
-  <div class="bridge"><b>→ Q3</b>　真正的问题是共置时的资源冲突。规划器自身的延迟先用常规方法压下来，这是两个模型能共置的前提。</div>
+  <div class="bridge"><b>→ Q3</b>　规划器自身的延迟先用常规方法压下来，这是两个模型能共置的前提；之后剩下的是 SM 分区在 Thor 上漏掉的三条通道与它的代价。</div>
 </section>
 
 <!-- ================= Q3 ================= -->
@@ -640,14 +668,17 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
 
   <div class="sq" id="q3c">
     <h3><span class="qn">Q3c</span>真正的问题怎么解决</h3>
-    <div class="ans">目前测过的手段各只顾一头：不加限制时执行器违约，SM 分区时规划器变慢、难打断。规划器的 prefill 争算力、decode 争带宽，执行器的违约来自与 decode 的重叠，所以可能的方向是按规划器所处的阶段、配合执行器的截止期来安排它。这需要 27B 共置的数据。</div>
-    <div class="tw"><table style="min-width:680px">
-      <tr><th style="width:24%">手段</th><th><span class="m">M2</span>执行器</th><th><span class="m">M1</span>规划器</th><th style="width:16%">状态</th></tr>
-      <tr><td>不加限制，同时运行</td><td>严格 200 ms 下错过 27.8 %</td><td>不受影响</td><td><span class="tag ok">已测（7B）</span><span class="who c">C</span></td></tr>
-      <tr><td>SM 分区（16 / 4）</td><td>0 错过</td><td>prefill 慢 2.2 倍；打断最长 567 ms</td><td><span class="tag ok">已测（7B）</span><span class="who c">C</span></td></tr>
-      <tr><td>缩短规划器 decode（Q3b 的快路径）</td><td>每次 monitor 与执行器争带宽的时间从约 2 s 缩到约 0.4 s，对违约的作用待测</td><td>L 1.78 s</td><td><span class="tag w">规划器侧已测，共置待测</span><span class="who j">J</span></td></tr>
-      <tr><td>按规划器所处阶段安排（prefill 与 decode 分开，配合执行器截止期）</td><td>待做</td><td>待做</td><td><span class="tag u">未做</span></td></tr>
+    <div class="ans">测过的手段只管住 SM 争用；SM 以外的三条通道（带宽、芯片级吞吐上限、跨分区停顿）和分区的代价都还没有对应的手段。按阶段分配与 Q2c 的需求结构对得上：decode 只需要 4 个 SM，prefill 需要全部。下一步先测 27B 共置（Thor 清单 H17）。</div>
+    <div class="tw"><table style="min-width:760px">
+      <tr><th style="width:22%">手段</th><th style="width:18%">管住哪条</th><th><span class="m">M2</span>执行器</th><th><span class="m">M1</span>规划器</th><th style="width:15%">状态</th></tr>
+      <tr><td>不隔离（分时、优先级流）</td><td>—</td><td>7B、严格 200 ms：错过 27.8 %</td><td>不受影响</td><td><span class="tag ok">已测（7B）</span><span class="who c">C</span></td></tr>
+      <tr><td>静态 SM 分区（green 16 / 4）</td><td>SM 争用</td><td>7B：0 错过；①③ 在 2B 下仍在，② 在合成负载下</td><td>prefill 慢 2.2 倍；推算腕部 720 L ≈ 5.5 s &gt; Δ</td><td><span class="tag ok">已测（2B / 7B）</span><span class="who c">C</span><span class="who j">J</span></td></tr>
+      <tr><td>MPS 50 %</td><td>SM 争用；2B 下 ③ 没有出现</td><td>2B、4k token：最长 295 ms，未超过 533 ms</td><td>2B 调用 6.6 s，27B 未测</td><td><span class="tag ok">已测（2B）</span><span class="who j">J</span></td></tr>
+      <tr><td>缩短规划器 decode（Q3b 的快路径）</td><td>① 的重叠时间：每次 monitor 的 decode 约 0.4 s</td><td>待测</td><td>L 1.78 s</td><td><span class="tag w">规划器侧已测</span><span class="who j">J</span></td></tr>
+      <tr><td>按阶段分配 SM：prefill 时规划器多拿，decode 时限到 4 个</td><td>分区的代价（规划器 prefill 不再受限）</td><td>未做</td><td>未做</td><td><span class="tag u">未做</span></td></tr>
+      <tr><td>decode 限速，或与执行器的释放错开</td><td>①</td><td>未做</td><td>未做</td><td><span class="tag u">未做</span></td></tr>
     </table></div>
+    <p class="note">按阶段分配需要在同一个规划器进程里切换两个 green context（或两档 MPS 上限），FlashRT 的 CUDA graph 是否能在两个 context 之间复用，还没有检查。③ 的机制未明，任何手段都要单独验证它。</p>
   </div>
 
   <div class="sq" id="q3x">
@@ -671,10 +702,12 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
           <li><details class="ti"><summary>按真实节奏运行时，三种配置的 L 各是多少？<span class="ref" data-ref="H16">H16</span></summary>
             <div class="tb"><dl class="ed"><dt>设计</dt><dd>规划器进程回放 VoLoAgent 的 66 次调用（含腕部 720 与 decompose），三组配置各跑一遍。</dd><dt>协议</dt><dd>固定时钟（异步节奏）：调用按时到期，不等规划器</dd><dt>结果</dt><dd>L 6.92 / 2.63 / 1.78 s；原始路径排队最多 38 s，快路径不排队；连续 5–9 min 无漂移。</dd></dl></div></details></li>
         </ol></details>
-      <details class="tg" open><summary>真正的问题：为共置测量准备（Q2c、Q3c）</summary>
+      <details class="tg" open><summary>真正的问题：SM 分区在 Thor 上够不够（Q2c、Q3c）</summary>
         <ol class="exp">
           <li><details class="ti"><summary>共置测量用的规划器侧基准是什么？<span class="ref" data-ref="H16">H16</span></summary>
             <div class="tb"><dl class="ed"><dt>设计</dt><dd>同上一组第 7 项：规划器进程单独在 Thor 上按真实节奏运行，每次调用记录开始、决策可用、结束；共置测量用同一个进程、加上执行器再跑一遍即可对比。Thor 上已接入共用的 GPU 独占锁。</dd><dt>协议</dt><dd>固定时钟</dd><dt>结果</dt><dd>单独运行的基准已有；27B 共置待测。</dd></dl></div></details></li>
+          <li><details class="ti"><summary>27B 共置时，执行器在规划器哪个阶段受影响、规划器慢多少？<span class="tag u">H17 待测</span></summary>
+            <div class="tb"><dl class="ed"><dt>设计</dt><dd>执行器与规划器（快路径 + <code>wy_lt</code>）各一个进程；四种共享方式：不开 MPS、MPS 不限、MPS 对半、规划器约 4 个 SM。每个执行器 tick 按墙钟归到它重叠最长的规划器阶段，分组看延迟与错过；规划器与 H16 单独运行比较。前后各测一次执行器单独运行，作漂移参照。</dd><dt>协议</dt><dd>固定时钟：执行器每 533 ms 释放，规划器按 harness 节奏</dd><dt>回答</dt><dd>① 在 27B、SM 受限时是否仍在；③ 在短 prefill 下是否消失；规划器 4 个 SM 时腕部 720 的 L 是否超过 Δ。</dd></dl></div></details></li>
         </ol></details>
       <details class="tg"><summary>评估方法</summary>
         <ol class="exp">
@@ -694,10 +727,14 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
     <div class="tree">
       <details class="tg" open><summary>真正的问题</summary>
         <ul>
-          <li><details class="ti"><summary>27B 规划器与执行器在 Thor 上的真实共置<span class="tag u">未测</span></summary>
-            <div class="tb"><p>冲突的程度目前只有 2B / 7B 的数。共置框架驱动规划器进程（原始 / 快路径），记录执行器 p99、错过率与规划器 L；先回答"缩短 decode 能减少多少违约"。</p></div></details></li>
-          <li><details class="ti"><summary>按规划器所处阶段安排两个模型<span class="tag u">未做</span></summary>
-            <div class="tb"><p>prefill 与 decode 分开安排，配合执行器的截止期；依赖上一条的数据。</p></div></details></li>
+          <li><details class="ti"><summary>27B 规划器与执行器在 Thor 上的共置<span class="tag u">H17 待测</span></summary>
+            <div class="tb"><p>①②③ 与分区代价目前只有 2B / 7B 的数。H17 已写入 Thor 清单（见 Q3d），约 50 分钟。</p></div></details></li>
+          <li><details class="ti"><summary>跨分区停顿（③）的机制<span class="tag u">未明</span></summary>
+            <div class="tb"><p>已排除分区轮流运行、长 kernel、解释器锁、内存分配。下一步：分开计时执行器 tick 的主机侧准备、GPU 拷贝与 graph 重放，看哪一段在等（<span class="ref" data-ref="ISSUE-098">ISSUE-098</span>）。</p></div></details></li>
+          <li><details class="ti"><summary>芯片级吞吐上限（②）来自功耗 / 时钟还是 L2<span class="tag u">未区分</span></summary>
+            <div class="tb"><p>两个分区一起跑时记录 GPU 时钟与功耗；换成工作集超过 L2 的负载再比较。</p></div></details></li>
+          <li><details class="ti"><summary>按阶段分配 SM<span class="tag u">未做</span></summary>
+            <div class="tb"><p>prefill 时规划器多拿 SM，decode 时限到 4 个；先查同一进程里切换两个 green context 时 CUDA graph 能否复用，再依 H17 的数据定切换点。</p></div></details></li>
         </ul></details>
       <details class="tg" open><summary>常规部分的收尾</summary>
         <ul>
@@ -717,14 +754,18 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
   <h2><span class="qn">Q4</span>本周的发现</h2>
   <div class="ans">按 Q2、Q3 的分类组织。标 <span class="tag lit">文献未测</span> 的条目，在本线调研范围内（快照 2026-11-09，非穷尽检索）没有找到对应的测量。点开每条看数据与证据。</div>
   <div class="tree">
-    <details class="tg" open><summary>关于真正的问题：共置时的资源冲突</summary>
+    <details class="tg" open><summary>关于真正的问题：SM 分区在 Thor 上不够</summary>
       <ul>
-        <li><details class="ti"><summary>执行器的违约来自与规划器 decode 的重叠，SM 分区隔不开带宽<span class="tag lit">文献未测</span><span class="who c">C</span><span class="who j">J</span></summary>
-          <div class="tb"><p>7B 规划器 + 执行器，严格 200 ms：不分 SM 时 27.8 % 的释放错过，全部与规划器 decode 重叠；分 SM 后 0 错过，但规划器 prefill 慢 2.2 倍、decode 只慢 1.06 倍。<span class="ref c" data-ref="C-#12">C-#12</span> <span class="ref c" data-ref="C-#9">C-#9</span></p><p class="note">文献：OxyGen 只报动作频率；DualVLN on Thor 只有摘要，且仿真在模型计算期间冻结场景。</p></div></details></li>
-        <li><details class="ti"><summary>27B 规划器的 decode 占掉 Thor 约 85 % 的内存带宽<span class="tag lit">文献未测</span><span class="who j">J</span></summary>
-          <div class="tb"><p>decode 稳态约 200 GB/s，拷贝带宽约 256 GB/s；prefill 约 55 TFLOP/s。<span class="ref" data-ref="1104_h3c">1104_h3c</span> <span class="ref" data-ref="H4b">H4b</span></p><p class="note">文献：Hydra 刻画了 Thor 上 LLM 的分阶段特性，没有带宽数据。</p></div></details></li>
-        <li><details class="ti"><summary>SM 分区让规划器更难被打断：最长 567 ms<span class="who c">C</span></summary>
-          <div class="tb"><p>最小可中断单位是一次 forward；分 SM 后可能是一次 prefill。<span class="ref c" data-ref="C-#16">C-#16</span></p></div></details></li>
+        <li><details class="ti"><summary>SM 分区之后，执行器仍被规划器 decode 拖慢 1.3–1.7 倍<span class="tag lit">文献未测</span><span class="who j">J</span></summary>
+          <div class="tb"><p>2B 替身，green 8 / 12 与 MPS 50 %：与 decode 重叠的执行器调用变慢，与短 prefill 重叠的基本不慢。27B decode 约 200 GB/s，占 Thor 拷贝带宽 85 %。<span class="ref" data-ref="1030V2">1030 V2</span> <span class="ref" data-ref="1104_h3c">1104_h3c</span></p><p class="note">文献：Hydra 刻画了 Thor 上 LLM 的分阶段特性，没有带宽数据；OxyGen 只报动作频率。</p></div></details></li>
+        <li><details class="ti"><summary>Thor 有一个芯片级吞吐上限，12 个 SM 就达到，两个分区共享它<span class="tag lit">文献未测</span><span class="who j">J</span></summary>
+          <div class="tb"><p>约 100 TFLOP/s；16 / 4 分区单独 102 / 50，一起 79 / 23。RTX 5090 一起与单独几乎相同。<span class="ref" data-ref="1030V1">1030 V1</span></p></div></details></li>
+        <li><details class="ti"><summary>规划器长 prefill 末尾有一种穿过分区的停顿，只在 Thor 上出现<span class="tag lit">文献未测</span><span class="who j">J</span></summary>
+          <div class="tb"><p>16k token 2.4 s，4k token 543–571 ms，超过 533 ms 的动作块；RTX 5090 同一格 p99 34 ms。机制未明。<span class="ref" data-ref="1028">1028</span> <span class="ref" data-ref="1104_h">1104_h</span> <span class="ref" data-ref="ISSUE-098">ISSUE-098</span></p></div></details></li>
+        <li><details class="ti"><summary>不分 SM 时执行器的错过全部与 decode 重叠；分 SM 后 0 错过，代价落在 prefill<span class="who c">C</span></summary>
+          <div class="tb"><p>7B、严格 200 ms：27.8 % 错过；分 16 / 4 后 0 错过，规划器 prefill 慢 2.2 倍、decode 只慢 1.06 倍；最小可中断单位最长 567 ms。<span class="ref c" data-ref="C-#12">C-#12</span> <span class="ref c" data-ref="C-#9">C-#9</span> <span class="ref c" data-ref="C-#16">C-#16</span></p><p class="note">文献：DualVLN on Thor 只有摘要，且仿真在模型计算期间冻结场景。</p></div></details></li>
+        <li><details class="ti"><summary>常规优化之后，Thor 上规划器延迟的 2 / 3 以上是 prefill<span class="who j">J</span></summary>
+          <div class="tb"><p>27B 快路径 + <code>wy_lt</code>：prefill 占 monitor L 的 66 %（224）/ 76 %（720），正是 SM 分区拖慢的阶段。<span class="ref" data-ref="H16">H16</span></p></div></details></li>
       </ul></details>
     <details class="tg" open><summary>关于规划器延迟（常规方法已解决）</summary>
       <ul>
@@ -807,6 +848,11 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
   var GH="https://github.com/luo-jingw/FlashRT/blob/main/";
   var D="research/topics/long-horizon-planner-executor/experiments/";
   var REF={
+    "1028":{t:"Thor 轮次 1028（Jingwu）",d:"green context 在 Thor 上的粒度是 8 个 SM，只能分成 8 / 12 或 16 / 4。规划器 16k token 上下文时，即使在不相交的 green 分区上，执行器也有长达 2.4 s 的停顿（p99 2 380 ms）；RTX 5090 同一格 p99 34.2 ms。",u:GH+"THOR_STATUS_SUMMARY.md",l:"THOR_STATUS_SUMMARY.md（1028 轮）"},
+    "1030V1":{t:"1030 轮 V1 · green 分区是否同时运行（Jingwu）",d:"两个分区同时运行（一个分区上 241–273 ms 的长 kernel 期间，另一分区的小 matmul 最多等 11.7 ms）。整卡有约 100 TFLOP/s 的共同上限：12 个 SM 单独 103.2，16 个 SM 102.3；一起跑时按 SM 数分，16 / 4 为 79.2 / 22.7。RTX 5090 一起与单独几乎相同。",u:GH+"THOR_STATUS_SUMMARY.md",l:"THOR_STATUS_SUMMARY.md（1030 轮）"},
+    "1030V2":{t:"1030 轮 V2 · 执行器调用按重叠的规划器阶段分组（Jingwu）",d:"2B 规划器替身，SM 分区（green 8 / 12、MPS 50 %）：与 decode 重叠的执行器调用是同 SM 数单独运行的 1.3–1.7 倍，与短上下文 prefill 重叠的基本不慢。",u:GH+"THOR_STATUS_SUMMARY.md",l:"THOR_STATUS_SUMMARY.md（1030 轮）"},
+    "1104_h":{t:"Thor 轮次 1104_h · 按 harness 节奏共置（Jingwu）",d:"2B 替身每 5.33 s 一次、4 061 token；执行器每 533 ms 一个动作块。green 25 % 与 MPS 不限各有 3 次超过 533 ms（543–571 ms），全部在规划器 prefill 内；优先级流与 MPS 50 % 没有。",u:GH+"THOR_STATUS_SUMMARY.md",l:"THOR_STATUS_SUMMARY.md（1104_h 轮）"},
+    "ISSUE-098":{t:"ISSUE-098 · 长 prefill 末尾的跨分区停顿（Jingwu）",d:"每次规划器调用恰有一次，落在 prefill 后段、随 prefill 结束而结束；长度与规划器的 SM 数近似成反比。已排除：分区轮流运行、长 kernel、解释器锁、内存分配；剩下的候选是 SM 以外的共享部件（拷贝引擎、统一内存的页映射）。",u:GH+"issues.md",l:"issues.md ISSUE-098"},
     "1104_h3c":{t:"Thor 轮次 1104_h3c（Jingwu）",d:"Thor 与 RTX 5090 同一 monitor 调用的阶段对比：prefill 慢 13.8 倍，decode 慢 3.6 倍；规划器 decode 稳态约 200 GB/s。",u:GH+"THOR_STATUS_SUMMARY.md",l:"THOR_STATUS_SUMMARY.md"},
     "H4b":{t:"H4b · prefill 逐 kernel 计时（Jingwu，1110_h7h4bh8）",d:"Thor prefill 3 982 ms：线性注意力 57 %（其中一个 native kernel 2 235 ms，55 %，是 5090 分块路径的 32 倍），GEMM 18.5 %，注意力 8.3 %；kernel 以外 0.9 %。",u:GH+"THOR_STATUS_SUMMARY.md",l:"THOR_STATUS_SUMMARY.md"},
     "H6H7H10":{t:"H6 / H7 / H10 · 空闲后 decode 变慢（Jingwu）",d:"空闲 5–120 s 后不出现；180 s 后 1 / 2 次、300 s 后 2 / 2 次出现 142 ms / 周期的平台（稳态 87 ms，1.63 倍），持续 35–60 s。",u:GH+"issues.md",l:"issues.md ISSUE-112"},
@@ -953,5 +999,6 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
   document.addEventListener("keydown",function(e){if(e.key==="Escape") hide();});
 })();
 </script>
+
 </body>
 </html>
