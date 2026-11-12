@@ -1,6 +1,6 @@
 # Thor 测试清单
 
-`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` / `1030` 轮做完，已从本清单删除。`1104_h` 轮做完 H1、H2，`1104_h3` 轮做完 H3a、H3，`1104_h3b` 轮做完 H3b，`1104_h3c` 轮做完 H3c，`1105_h6h4` 轮做完 H6、H4，`1110_h7h4bh8` 轮做完 H7、H4b、H8，`1111_h10` 轮做完 H10，`1111_h12h11h9` 轮做完 H12、H11、H9，`1111_h14h13` 轮做完 H14、H13，已从本清单删除。待测的是 H15、H15w（GPU 空闲时按 H12 的顺序重复，`native` 与 `wy_lt` 两条路径，把顺序、GPU 上的另一个进程与 Thor 前端自己的 prefill 路径分开）与 H16（规划器进程在 Thor 上单独运行，共置测量的基准）。另外剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
+`0921x`/`0922`/`0922b`/`0922d`/`0922e`/`0922f`/`0922g`/`0922h`/`0922i` 把 X0/X6/X1/X4/X2/X3/X5/X7b/X8/X9/X10/X11/X12/X13 做完并落库（`THOR_STATUS_SUMMARY.md` 同名小节）。OPT-032 candidate 1（单流+双流）、candidate 3 第一、二轮接线、Phase 3（candidate 8）都在 Thor 上完全确认，`plan.md` Phase 1、Phase 2、Phase 3、Phase 4（第一、二轮）都已关闭。X13 确认了这轮大量改动 `pipeline_thor.py`/`checkpoint_loader.py`/`imagewam_thor.py` 之后默认路径**没有回归**（`0922i`，数字跟历史表基本重合）。`1021` 轮做完 X14、X15、X16（`THOR_STATUS_SUMMARY.md` 同名小节），已从本清单删除。`1028` 轮做完 Y0–Y4（Y5 未得到结果，见 issues.md ISSUE-099），已从本清单删除。`1029` / `1029b` / `1030` 轮做完，已从本清单删除。`1104_h` 轮做完 H1、H2，`1104_h3` 轮做完 H3a、H3，`1104_h3b` 轮做完 H3b，`1104_h3c` 轮做完 H3c，`1105_h6h4` 轮做完 H6、H4，`1110_h7h4bh8` 轮做完 H7、H4b、H8，`1111_h10` 轮做完 H10，`1111_h12h11h9` 轮做完 H12、H11、H9，`1111_h14h13` 轮做完 H14、H13，`1111_h15h16` 轮做完 H15、H15w、H16，已从本清单删除。待测的是 H17（27B 规划器与执行器在 Thor 上共置，四种共享方式）。另外剩下：candidate 3 Round 4（关闭双流/ActionDiT-double 边界，需要动 kernel 或改消费端设计）——等用户决定怎么走。RoboTwin 那张等它的 workload 声明，不在本清单。
 
 ## 用法
 
@@ -54,95 +54,82 @@ git rev-parse HEAD | tee $OUT/P0_commit.log
 
 ### 本轮共同前置
 
-三行依次做，合计约 2.5 小时；某一行失败不影响后面的行，带回失败信息后继续下一行。
+一行，六格依次做，合计约 50 分钟。某一格失败不影响后面的格，带回失败信息后继续下一格。
 
-GPU 锁：每个 GPU 命令都经 `$L`（`colocation_thor/with_gpu_lock.sh`）运行。它以只读方式打开 `/tmp/lingbot_va_gpu_exclusive.lock`，用 `flock(LOCK_EX)` 持有到命令结束，并打印等待、拿到、释放的时间。锁被共置测量的任务持有时会一直等，不要绕过，也不要停别人的进程。锁文件不存在时，命令照常运行，log 第一行会注明。
+GPU 锁：每个 GPU 命令都经 `$L`（`colocation_thor/with_gpu_lock.sh`）运行。它以只读方式打开 `/tmp/lingbot_va_gpu_exclusive.lock`，用 `flock(LOCK_EX)` 持有到命令结束，并打印等待、拿到、释放的时间。锁被共置测量的任务持有时会一直等，不要绕过，也不要停别人的进程。锁文件不存在时，命令照常运行，log 第一行会注明。每格开始前看一次 `nvidia-smi`：拿到锁之后若仍有别人的计算进程，照常跑，并在报告里写明是哪个进程、从何时到何时。
 
-H15、H15w 的自变量是"GPU 上没有其他进程"。每行开始前看一次 `nvidia-smi`：拿到锁之后若仍有别人的计算进程（锁管不到的用户），照常跑，并在报告里写明是哪个进程、从何时到何时。
+执行器的环境变量（`CKPT_PATH`、`FLUX2_SRC`、`FLUX2_AE_MODEL_PATH`、`QWEN3_MODEL_SPEC`）与 `1104_h` 轮相同，取值见 `scripts/imagewam_thor_validation.sh` 文件头。
 
 ```
 cd $FLASHRT_ROOT
 git pull
-export OUT=$HOME/thor_val/$(date +%m%d)_h15h16; mkdir -p $OUT
+export OUT=$HOME/thor_val/$(date +%m%d)_h17; mkdir -p $OUT
 export CK=$HOME/thor_val/ckpt
 export PYTHONPATH=$HOME/thor_val/pydeps_tf5:$PYTHONPATH
 export PLANNER_CKPT=$CK/qwen38-27b-nvfp4-official PLANNER_MTP_DIR=$CK/qwen38-27b-fp8-official
+export FLASHRT_ROOT=$PWD DATASET_STATS_PATH=$(dirname $CKPT_PATH)/dataset_stats.json
 D=research/topics/long-horizon-planner-executor/experiments
 C=research/topics/wam-inference-acceleration/experiments/harness_replay_5090/calls
+W=research/topics/wam-inference-acceleration/experiments/colocation_5090
 L=$D/colocation_thor/with_gpu_lock.sh
 python -c "from flash_rt.hardware.jetson_clock_state import report_jetson_clock_state as r; r()" | tee $OUT/P0_clock.log
 git rev-parse HEAD | tee $OUT/P0_commit.log
 nvidia-smi | tee $OUT/P0_gpu.log
+nvidia-smi -q 2>&1 | grep -i -B1 -A3 mig | tee $OUT/P0_mig.log
+free -g | tee $OUT/P0_mem.log
 env | grep FLASHRT_QWEN36 | tee $OUT/P0_env.log
-{ cat /etc/nv_tegra_release; nvidia-smi --query-gpu=driver_version --format=csv,noheader; ls /usr/local/cuda/lib64/libcublas.so.*; python -c "import torch, transformers; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'transformers', transformers.__version__)"; } 2>&1 | tee $OUT/P0_versions.log
 ```
 
-`P0_env.log` 应为空（默认路径）。
+`P0_env.log` 应为空；`P0_mig.log` 只读查询，记下 Thor 是否报告 MIG 模式（不要尝试开启）。
 
-### H15：GPU 空闲时按 H12 的顺序重复（`native` 路径）
+### H17：27B 规划器与执行器在 Thor 上共置，四种共享方式
 
-问题：`1111_h12h11h9` 的 H12（`back_to_back` 顺序，GPU 上另有进程与 MPS）第 2–5 次与第 1 次 44 / 80 相同；`1111_h14h13` 的 H14（`after_previous` 顺序，GPU 空闲）79 / 80。两轮之间顺序与 GPU 上是否另有进程同时变了（issues.md ISSUE-114）。本行只把 GPU 状态换成空闲，顺序保持 H12 的。约 30 分钟。
+问题：Thor 上把两个模型按 SM 隔开，执行器是否仍受规划器影响、规划器又慢多少。此前的数来自 2B / 7B 规划器（`1028`–`1030`、`1104_h` 轮，Chenwei C-#9 / C-#12），27B 没有测过。三个要读的量：
+- 与规划器 decode 重叠的执行器 tick 是否仍变慢（`1030` 轮 V2：2B 替身在 SM 分区下 1.3–1.7 倍，推测来自共享的内存带宽）；
+- 快路径的 prefill 只剩几百个 token，长 prefill 末尾的秒级停顿（ISSUE-098）是否还出现；
+- 规划器限在约 4 个 SM 时，L_decision 比单独运行（H16 `fast_wylt`）慢多少，腕部 720 是否超过 Δ = 5.33 s。
 
-```
-nvidia-smi | tee $OUT/H15_gpu_start.log
-bash $L python $D/monitor_call/reply_repeat.py thor back_to_back $OUT/reply_repeat_thor_official_idle.json $C/ep0_wrist224.jsonl $C/ep43_wrist224.jsonl 2>&1 | tee $OUT/H15_repeat.log
-```
+设计：执行器（ImageWAM fp8、10 步，`colocation_bench.py isolated`，每 533 ms 释放一次 tick）与规划器进程（`planner_process.py`，`fast` + `wy_lt`，回放 ep0 腕部 224 / 720 两段录制：2 次 decompose、约 20 次 monitor）各是一个进程，`colocation_thor/run_colocation.sh` 在一格里先启动执行器、到它的计时窗口开始时再启动规划器，规划器结束后让执行器停止，最后用 `colocation_align.py` 在墙钟上把每个 tick 归到它重叠最长的规划器阶段（vit / prefill / decode / capsule / 无）。只统计规划器计时那一遍之内的 tick。
 
-带回：`H15_repeat.log` 全部，`H15_gpu_start.log`；`reply_repeat_thor_official_idle.json`（复制到 `$D/monitor_call/` 并推送，附 `sha256sum`）。
-
-判据：
-- 每次调用 5 次里与第 1 次相同的次数（log 的 `N/5 identical`），与 H12（44 / 80，5 / 5 的调用 7 / 20）、H14（79 / 80，19 / 20）比较。
-- 每次调用的第 2–5 次彼此是否相同。若只有前一次调用留下的状态起作用，预期每次调用的第 2–5 次彼此相同，第 1 次在部分调用里不同；若第 2–5 次中间也出现单次不同（如 H12 的 ep0 第 320 步），说明 GPU 空闲时也有别的来源。
-- 与 H12 逐调用比：GPU 空闲时单次不同明显少于 H12，说明 H12 里的另一个进程（MPS）改变了规划器的回复，这正是共置时的条件。
-
-### H15w：同一行，prefill 线性注意力走 `wy_lt`
-
-问题：留存状态若来自 Thor 前端自己的 prefill 线性注意力路径（`_thor_lin_K_forward` 的 scratch 或状态槽），换到父类分块路径后应消失；5090 用父类路径，两种顺序都是 80 / 80。约 25 分钟。
+| 格 | 共享方式 | 规划器 / 执行器 MPS 线程上限 |
+|---|---|---|
+| H17a | 执行器单独，60 s | — |
+| H17b | 两个进程，不开 MPS（驱动分时） | — |
+| H17c | MPS，不限 | 100 % / 100 % |
+| H17d | MPS，对半 | 50 % / 50 % |
+| H17e | MPS，规划器约 4 个 SM | 20 % / 80 % |
+| H17f | 执行器单独，60 s（漂移） | — |
 
 ```
 export FLASHRT_QWEN36_THOR_LIN_PREFILL=parent FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND=wy_lt
-env | grep FLASHRT_QWEN36 | tee $OUT/H15w_env.log
-nvidia-smi | tee $OUT/H15w_gpu_start.log
-bash $L python $D/monitor_call/reply_repeat.py thor back_to_back $OUT/reply_repeat_thor_official_idle_wylt.json $C/ep0_wrist224.jsonl $C/ep43_wrist224.jsonl 2>&1 | tee $OUT/H15w_repeat.log
+env | grep FLASHRT_QWEN36 | tee $OUT/H17_env.log
+EPS="$C/ep0_wrist224.jsonl $C/ep0_wrist720.jsonl"
+export PERIOD_MS=533 ALONE=$PWD/$D/colocation_thor/planner_process_thor_fast_wylt.jsonl
+R=$D/colocation_thor/run_colocation.sh
+mkdir -p $OUT/H17a $OUT/H17f
+bash $L bash -c "cd $W && DROP_TEXT_ENCODER=1 NO_SMI=1 python colocation_bench.py isolated 0 60 $OUT/H17a/exec.json" 2>&1 | tee $OUT/H17a.log
+bash $L bash $R H17b process fast $EPS 2>&1 | tee $OUT/H17b.log
+bash $L bash $R H17c mps:100:100 fast $EPS 2>&1 | tee $OUT/H17c.log
+bash $L bash $R H17d mps:50:50 fast $EPS 2>&1 | tee $OUT/H17d.log
+bash $L bash $R H17e mps:20:80 fast $EPS 2>&1 | tee $OUT/H17e.log
+bash $L bash -c "cd $W && DROP_TEXT_ENCODER=1 NO_SMI=1 python colocation_bench.py isolated 0 60 $OUT/H17f/exec.json" 2>&1 | tee $OUT/H17f.log
 unset FLASHRT_QWEN36_THOR_LIN_PREFILL FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND
+nvidia-smi | tee $OUT/H17_gpu_end.log
 ```
 
-带回：`H15w_env.log`、`H15w_gpu_start.log`、`H15w_repeat.log` 全部；`reply_repeat_thor_official_idle_wylt.json`（复制到 `$D/monitor_call/` 并推送，附 `sha256sum`）。
+带回：`H17_env.log`、`H17a.log` … `H17f.log`、`H17_gpu_end.log` 全部；每格目录下的 `align.json`、`exec.json`、`planner.jsonl`、`exec.log`、`planner.log`（复制到 `$D/colocation_thor/h17/<格>/` 并推送，附 `sha256sum`；`tegrastats.log` 只带回整段平均的 `VDD_GPU` 与 `RAM`）。
 
 判据：
-- 与 H15 同样的两个计数。H15 有第 1 次不同、H15w 为 80 / 80，说明留存状态在 Thor 前端的 prefill 线性注意力路径里；两行一样分散，说明来源在两条路径共用的部分（全注意力、GEMM、解码）。
-- H15w 的回复与 H13 同一调用的参考回复（`$D/monitor_call/monitor_call_thor_official_wylt.json`）是否相同，只作参考。
+- 完整性：每个共置格的 `planner.log` 有 `warm-up pass done`、`planner rc=0 executor rc=0`；`exec.json` 的 `stopped_by_file` 为 `true`；`colocation_align.py` 打印 `executor window covers it: True`。MPS 格的 log 开头有 `CUDA_MPS_PIPE_DIRECTORY`。两个模型同时加载时若内存不足，带回报错与 `free -g`。
+- 漂移：H17a 与 H17f 的 p50 / p99。共置格之间小于这个漂移的差别不读。
+- 执行器（`colocation_align.py` 的阶段表）：每格 `decode`、`prefill`、`capsule`、`none` 各组的 p50 / p99 / max 与 `>200` / `>533` 计数。`decode` 组 p50 与 H17a p50 之比在 H17d、H17e（SM 受限）里是否仍明显大于 1；`prefill` 与 `capsule` 组有没有秒级的 max。
+- 规划器（阶段表下面的调用表）：monitor 的 L_decision 中位 / 最大按腕部与括号里的单独运行比较；H17e 里腕部 720 的 L_decision 是否超过 5.33 s，`start-due` 是否随调用增长（排队）。
 
-结论去向（H15、H15w）：issues.md ISSUE-114；`THOR_STATUS_SUMMARY.md` 本轮小节；`$D/monitor_call/README.md` 运行间差异一节。
-
-### H16：规划器进程在 Thor 上单独运行（6 段录制、66 次调用，三组）
-
-问题：共置测量用 `colocation_thor/planner_process.py` 驱动 27B 规划器；它在 Thor 上还没跑过，720 腕部图的录制（5.7k token）也还没在 Thor 上跑过。本行在 Thor 上单独运行它（不开执行器），作为共置测量的"单独运行"基准：按 harness 节奏回放 6 段录制（ep0 / ep43 / ep188 × 腕部 224 / 720：6 次 decompose、59 次 monitor、1 次 replan），每次调用记开始、决策可用、结束。三组：`original`、`fast`、`fast` + `wy_lt` 路径。每组先不计时地热身一遍、再按节奏计时一遍，约 20–30 分钟，三组合计约 1.3 小时。
-
-```
-EPS="$C/ep0_wrist224.jsonl $C/ep0_wrist720.jsonl $C/ep43_wrist224.jsonl $C/ep43_wrist720.jsonl $C/ep188_wrist224.jsonl $C/ep188_wrist720.jsonl"
-bash $L python $D/colocation_thor/planner_process.py thor original $OUT/planner_process_thor_original.jsonl $EPS 2>&1 | tee $OUT/H16_original.log
-bash $L python $D/colocation_thor/planner_process.py thor fast $OUT/planner_process_thor_fast.jsonl $EPS 2>&1 | tee $OUT/H16_fast.log
-export FLASHRT_QWEN36_THOR_LIN_PREFILL=parent FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND=wy_lt
-env | grep FLASHRT_QWEN36 | tee $OUT/H16_env.log
-bash $L python $D/colocation_thor/planner_process.py thor fast $OUT/planner_process_thor_fast_wylt.jsonl $EPS 2>&1 | tee $OUT/H16_fast_wylt.log
-unset FLASHRT_QWEN36_THOR_LIN_PREFILL FLASHRT_QWEN36_TQ_PREFILL_GDN_BACKEND
-nvidia-smi | tee $OUT/H16_gpu_end.log
-```
-
-带回：`H16_original.log`、`H16_fast.log`、`H16_fast_wylt.log`、`H16_env.log`、`H16_gpu_end.log` 全部；三个 jsonl（复制到 `$D/colocation_thor/` 并推送，附 `sha256sum`）。
-
-判据：
-- 完整性：每个 jsonl 66 行调用（`fast` 两组另有 6 行 `capsule`）；log 里有 `warm-up pass done`。
-- 每组按调用类型（decompose / monitor / replan）与腕部图（224 / 720）：L_decision = `decision_s − start_s`、L_reply = `end_s − start_s` 的中位与最大值；monitor 开始时间相对到期时间的延迟（`start_s − due_s`）中位与最大值。`original` 的 monitor 若超过 5.33 s，后面的调用会顺延，延迟逐次累积。
-- 决策：三组各自 59 次 monitor 的决策，与 5090 同一脚本（`$D/colocation_thor/planner_process_rtx_{original,fast}.jsonl`）逐调用比较；`fast_wylt` 与 `fast` 逐调用比较。
-- `fast_wylt` 与 `fast`：腕部 224 的 monitor L_decision 应与 H13（1.77 s 与 2.61 s）同一量级；腕部 720 是新的数。
-
-结论去向：`$D/colocation_thor/README.md` 的 Thor 一节；`THOR_STATUS_SUMMARY.md` 本轮小节；`research/topics/long-horizon-planner-executor/thor_rationale.md` W4。
+结论去向：`$D/colocation_thor/README.md` 新增 Thor 共置一节；`THOR_STATUS_SUMMARY.md` 本轮小节；issues.md ISSUE-098（短 prefill 下停顿是否仍在）；`research/topics/long-horizon-planner-executor/summary_1111.html` Q2c。
 
 ## 已完成的轮次（不再重跑）
 
-逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`、`1029`、`1029b`、`1030`、`1104_h`、`1104_h3`、`1104_h3b`、`1104_h3c`、`1105_h6h4`、`1110_h7h4bh8`、`1111_h10`、`1111_h12h11h9`、`1111_h14h13`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
+逐轮结论已按"用法"第 2、3 条落库，不在本清单重复：每轮做了什么、数字是多少、口径是什么，看 `THOR_STATUS_SUMMARY.md` 的同名轮次小节（`eccf14f`、`a84916a`／`0919e`、`0920`、`0920s4`、`0920t`、`0920c`、`0921`、`0921x`、`0922`、`0922b`、`0922d`、`0922e`、`0922f`、`0922g`、`0922h`、`0922i`、`1021`、`1028`、`1029`、`1029b`、`1030`、`1104_h`、`1104_h3`、`1104_h3b`、`1104_h3c`、`1105_h6h4`、`1110_h7h4bh8`、`1111_h10`、`1111_h12h11h9`、`1111_h14h13`、`1111_h15h16`），各项结论看 `opportunities.md` 对应 OPT 条目。逐字的原始记录看 `git log`；本清单只保留"还没做"的东西。
 
 ---
 
