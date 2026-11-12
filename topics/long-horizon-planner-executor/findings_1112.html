@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Thor 双模型 Findings</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+/* Layout: a findings sheet in the style of a measurement paper. One column; every finding is a boxed claim,
+   one figure drawn from the raw logs, and a source line. Colors: phase hues are shared by every chart. */
+:root{
+  --bg:#f5f6f3; --surface:#ffffff; --sunk:#eceee9; --ink:#1b1f1d; --ink2:#46504a; --muted:#6a736d; --line:#d5dad3;
+  --accent:#1c6a58; --accent-soft:#dcebe5; --crit:#c2412f; --crit-soft:#f6e3df;
+  --j:#2b5fa8; --j-soft:#e1e9f6; --c:#9a5b12; --c-soft:#f6ead9;
+  --ph-vit:#7a4fb5; --ph-pre:#c8641c; --ph-dec:#2f63b5; --ph-cap:#1c8a74; --ph-none:#a3aca6;
+  --m-alone:#46504a; --m-m1:#c2412f; --m-m2:#2f63b5; --dev-thor:#1c6a58; --dev-rtx:#a3aca6;
+  --f-body:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace; --r:8px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#111513; --surface:#181d1a; --sunk:#1f2521; --ink:#e5ebe7; --ink2:#bac4be; --muted:#8f9a93; --line:#2d3531;
+  --accent:#6cc3a8; --accent-soft:#1a3029; --crit:#e2725f; --crit-soft:#3a201b;
+  --j:#86aee8; --j-soft:#1b2638; --c:#e0a965; --c-soft:#33261a;
+  --ph-vit:#b195e3; --ph-pre:#e89a5c; --ph-dec:#7fa6ea; --ph-cap:#5cc2a8; --ph-none:#5f6a63;
+  --m-alone:#bac4be; --m-m1:#e2725f; --m-m2:#7fa6ea; --dev-thor:#6cc3a8; --dev-rtx:#6f7a73; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111513; --surface:#181d1a; --sunk:#1f2521; --ink:#e5ebe7; --ink2:#bac4be; --muted:#8f9a93; --line:#2d3531;
+  --accent:#6cc3a8; --accent-soft:#1a3029; --crit:#e2725f; --crit-soft:#3a201b;
+  --j:#86aee8; --j-soft:#1b2638; --c:#e0a965; --c-soft:#33261a;
+  --ph-vit:#b195e3; --ph-pre:#e89a5c; --ph-dec:#7fa6ea; --ph-cap:#5cc2a8; --ph-none:#5f6a63;
+  --m-alone:#bac4be; --m-m1:#e2725f; --m-m2:#7fa6ea; --dev-thor:#6cc3a8; --dev-rtx:#6f7a73; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.65}
+.page{max-width:980px;margin:0 auto;padding-block:36px 64px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:28px}
+h1{font-size:27px;line-height:1.3;margin:0;text-wrap:balance}
+h2{font-size:17px;margin:0;line-height:1.45;text-wrap:balance}
+.lede{color:var(--ink2);max-width:72ch;margin:0}
+.setting{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--ink2)}
+.setting b{font-family:var(--f-mono);font-weight:500;color:var(--ink)}
+.toc{display:grid;gap:4px;margin:0;padding:0;list-style:none;font-size:14px}
+.toc a{color:var(--ink);text-decoration:none;border-bottom:1px dashed var(--line)}
+.toc a:hover,.toc a:focus-visible{border-bottom-color:var(--accent);color:var(--accent)}
+.toc .n{font-family:var(--f-mono);color:var(--accent);margin-right:8px}
+section.fd{display:grid;gap:12px;scroll-margin-top:16px}
+.claim{background:var(--surface);border:1.5px solid var(--ink);border-radius:4px;padding:10px 14px}
+.claim .k{font-family:var(--f-mono);font-size:12.5px;color:var(--accent);letter-spacing:.04em}
+.tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tag{font-size:11.5px;border:1px solid var(--line);border-radius:999px;padding:0 8px;color:var(--ink2);white-space:nowrap}
+.tag.thor{border-color:var(--crit);color:var(--crit)}
+.who{font-size:11px;font-weight:700;border-radius:4px;padding:0 6px;white-space:nowrap}
+.who.j{background:var(--j-soft);color:var(--j)}.who.c{background:var(--c-soft);color:var(--c)}
+.body{margin:0;max-width:78ch;color:var(--ink)}
+.fig{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 14px 8px;display:grid;gap:8px;min-width:0}
+.fig .sc{overflow-x:auto;min-width:0}
+.fig svg{display:block;width:100%;min-width:560px;height:auto;font-family:var(--f-body)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12.5px;color:var(--ink2)}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.legend i.o{background:transparent!important;border:2px solid var(--ink2);border-radius:50%}
+.legend i.f{border-radius:50%}
+.legend i.dash{width:16px;height:0;border-top:2px dashed var(--crit);border-radius:0;vertical-align:3px}
+.cap{font-size:13px;color:var(--muted);margin:0;max-width:85ch}
+.src{font-size:12.5px;color:var(--muted);margin:0}
+.src code{font-family:var(--f-mono);font-size:12px}
+.ax text{fill:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+.ax line,.ax path{stroke:var(--line)}
+.grid line{stroke:var(--line);stroke-dasharray:2 3}
+.lab{fill:var(--ink2);font-size:12.5px}
+.lab.b{fill:var(--ink);font-weight:500}
+.val{fill:var(--ink);font-size:11.5px;font-family:var(--f-mono)}
+.dl{stroke:var(--crit);stroke-width:1.5;stroke-dasharray:5 4}
+.dlt{fill:var(--crit);font-size:11.5px}
+.zone{fill:var(--accent-soft)}
+[data-tip]{cursor:default}
+#tip{position:fixed;z-index:20;pointer-events:none;background:var(--ink);color:var(--bg);font-size:12.5px;line-height:1.45;padding:6px 9px;border-radius:5px;max-width:280px;white-space:pre-line}
+footer{border-top:1px solid var(--line);padding-top:12px;font-size:12.5px;color:var(--muted)}
+@media (max-width:560px){h1{font-size:22px}}
+</style>
+
+</head>
+<body>
+<div class="page">
+<header style="display:grid;gap:12px">
+  <h1>规划器 + 执行器共置在 Jetson Thor 上：六个发现</h1>
+  <p class="lede">一个秒级的大规划器负责分解任务、周期性检查进度，一个高频执行器负责出动作，两者放在机器人本体唯一的一块芯片上。下面每条发现配一张由原始日志直接画出的图，图上悬停可看具体数值。</p>
+  <div class="setting"><span>规划器 <b>Qwen3.8-27B NVFP4 + MTP</b></span><span>执行器 <b>ImageWAM nvfp4</b></span><span>硬件 <b>Jetson AGX Thor，20 SM，LPDDR5X 273 GB/s</b></span><span>检查间隔 <b>Δ = 5.33 s</b></span><span>执行器动作块 <b>每 533 ms</b></span></div>
+  <ol class="toc">
+    <li><a href="#f1"><span class="n">#1</span>同一个 27B 规划器，Thor 上的检查调用超过检查间隔，RTX 5090 上不会</a></li>
+    <li><a href="#f2"><span class="n">#2</span>规划器的瓶颈阶段由 harness 决定</a></li>
+    <li><a href="#f3"><span class="n">#3</span>共置时没有一种静态划分能同时照顾两个模型</a></li>
+    <li><a href="#f4"><span class="n">#4</span>执行器受到的干扰取决于规划器所处的阶段，分区后剩下的来自 decode</a></li>
+    <li><a href="#f5"><span class="n">#5</span>Thor 上按 SM 分区不等于独占算力</a></li>
+    <li><a href="#f6"><span class="n">#6</span>执行器只占 GPU 时间的约 7 %：冲突在于同时，不在于总量</a></li>
+  </ol>
+</header>
+
+<section class="fd" id="f1">
+  <div class="claim"><span class="k">FINDING #1</span><h2>同一个 27B 规划器，Thor 上的检查调用超过检查间隔，RTX 5090 上不会</h2></div>
+  <div class="tags"><span class="tag thor">Thor 特有</span><span class="tag">常规方法可解</span><span class="who j">J</span></div>
+  <p class="body">按 VoLoAgent 的节奏回放 59 次 monitor 调用：Thor 上原始路径（整段 prefill、解码到回复结束）每一次都超过 5.33 s，中位 8.05 s，调用逐次排队；同一组调用在 RTX 5090 上中位 1.50 s。复用固定前缀、<code>action</code> 闭合即停、prefill 换分块路径三步之后，Thor 上中位 2.03 s，59 次都在检查间隔之内。</p>
+  <div class="fig">
+    <div class="legend"><span><i class="f" style="background:var(--ink2)"></i>腕部图 224（约 4.1k token）</span><span><i class="o"></i>腕部图 720（约 5.7k token）</span><span><i class="dash"></i>Δ = 5.33 s</span></div>
+    <div class="sc"><svg id="c1" role="img" aria-label="三组配置下每次 monitor 调用的延迟"></svg></div>
+    <p class="cap">每个点是一次 monitor 调用，从开始到回复结束。</p>
+  </div>
+  <p class="src">H16（Thor 轮次 <code>1111_h15h16</code>，GPU 空闲）；RTX 5090 那次运行时 GPU 上另有一个进程。</p>
+</section>
+
+<section class="fd" id="f2">
+  <div class="claim"><span class="k">FINDING #2</span><h2>规划器的瓶颈阶段由 harness 决定：多图长上下文时是 prefill，短上下文时是 decode</h2></div>
+  <div class="tags"><span class="tag">与负载有关</span><span class="who j">J</span><span class="who c">C</span></div>
+  <p class="body">VoLoAgent 的 monitor 每次带 6 张图、约 4.1k token，原始路径里 prefill 占 58 %；三步优化把 decode 截到决策出现为止，prefill 的占比升到 67 %。RoboCerebra 的切换调用约 470 token，decode 占 92 %。同一个"降低规划器延迟"的目标，在两种 harness 下要优化的是不同的阶段。</p>
+  <div class="fig">
+    <div class="legend"><span><i style="background:var(--ph-vit)"></i>视觉编码</span><span><i style="background:var(--ph-pre)"></i>prefill</span><span><i style="background:var(--ph-dec)"></i>decode</span></div>
+    <div class="sc"><svg id="c2" role="img" aria-label="三种调用的阶段耗时堆叠"></svg></div>
+    <p class="cap">中位耗时（ms），条内标注占比。上两行是 27B 的 VoLoAgent monitor（腕部 224），第三行是 7B 的 RoboCerebra 切换调用。</p>
+  </div>
+  <p class="src">H16（J）；Chenwei C-#8（B22，RoboCerebra 回放，7B，不分 SM）。</p>
+</section>
+
+<section class="fd" id="f3">
+  <div class="claim"><span class="k">FINDING #3</span><h2>共置时没有一种静态划分能同时照顾两个模型</h2></div>
+  <div class="tags"><span class="tag thor">Thor 特有</span><span class="tag">核心问题</span><span class="who c">C</span><span class="who j">J</span></div>
+  <p class="body">27B 规划器与执行器同时运行。不隔离时，执行器 p99 从单独的 47 ms 升到 321 ms，守不住 200 ms 的严格截止期；把规划器限在 MPS 20 % 后执行器回到 69 ms，规划器的 monitor 却从 2.68 s 变成 5.00 s（腕部 720 从 4.45 s 变成 8.50 s，30 次里 29 次超过 Δ）。图中绿色区域是两个约束同时满足的地方，腕部 720 的三种配置都不在里面。</p>
+  <div class="fig">
+    <div class="legend"><span><i class="f" style="background:var(--m-alone)"></i>各自单独运行</span><span><i class="f" style="background:var(--m-m1)"></i>不隔离</span><span><i class="f" style="background:var(--m-m2)"></i>规划器 MPS 20 %</span><span>实心：腕部 224　空心：腕部 720</span></div>
+    <div class="sc"><svg id="c3" role="img" aria-label="执行器 p99 对规划器 monitor 延迟的取舍"></svg></div>
+    <p class="cap">横轴：规划器 monitor 延迟中位；纵轴：执行器全部调用的 p99。执行器每 533 ms 一个动作块；规划器走快路径（<code>native</code> prefill）。同一配置的两个点只差腕部图大小，执行器 p99 取同一次运行。</p>
+  </div>
+  <p class="src">Chenwei B25 T4（C-#18），使用 Jingwu 的规划器进程与权重转换脚本。MPS 20 % 实为 8 个 SM，执行器在 16 个 SM 的 green context 里，两者可能重叠约 4 个 SM。</p>
+</section>
+
+<section class="fd" id="f4">
+  <div class="claim"><span class="k">FINDING #4</span><h2>执行器受到的干扰取决于规划器所处的阶段；限制规划器 SM 后，剩下的干扰来自 decode</h2></div>
+  <div class="tags"><span class="tag thor">在 Thor 上测得</span><span class="who c">C</span><span class="who j">J</span></div>
+  <p class="body">把每次执行器调用归到它重叠最长的规划器阶段。不隔离时，与 prefill 重叠的调用中位 212 ms，是单独运行（38 ms）的 5.6 倍，p99 也由它决定；与 decode 重叠的中位 82 ms。限制规划器 SM 之后顺序反过来：与 decode 重叠的调用最慢（中位 67 ms），与 prefill 重叠的 54 ms。prefill 争的是 SM，分区能挡住；decode 争的是共用的内存带宽，分区挡不住。</p>
+  <div class="fig">
+    <div class="legend"><span><i style="background:var(--ph-none)"></i>不与规划器重叠</span><span><i style="background:var(--ph-vit)"></i>视觉编码</span><span><i style="background:var(--ph-pre)"></i>prefill</span><span><i style="background:var(--ph-cap)"></i>建前缀缓存</span><span><i style="background:var(--ph-dec)"></i>decode</span><span><i class="dash"></i>200 ms 严格截止期</span></div>
+    <div class="sc"><svg id="c4" role="img" aria-label="执行器调用延迟按重叠的规划器阶段分组"></svg></div>
+    <p class="cap">每个点是一次执行器调用（释放到完成），竖线为中位。限制规划器 SM 时执行器自己在 16 个 SM 上，单独约 41 ms。</p>
+  </div>
+  <p class="src">Chenwei B25 T4 原始日志（<code>co_fast_M1_P533</code>、<code>co_fast_M2_P533</code>），按阶段重新归类；与 B25 自己的表一致（prefill 组中位 208.6 / 211.6 ms，差别来自视觉编码单独成组）。2B 替身规划器在 SM 分区下也观察到 decode 重叠时慢 1.3–1.7 倍（Jingwu <code>1030</code> V2）。</p>
+</section>
+
+<section class="fd" id="f5">
+  <div class="claim"><span class="k">FINDING #5</span><h2>Thor 上按 SM 分区不等于独占算力：两个分区共享一个芯片级的吞吐上限</h2></div>
+  <div class="tags"><span class="tag thor">Thor 特有</span><span class="who j">J</span></div>
+  <p class="body">在两个 green context 分区上各跑一个纯计算负载（操作数在 L2 里，不读内存），比较单独与一起运行时的吞吐。Thor 上 12 个 SM 单独就能到约 100 TFLOP/s，与 20 个 SM 相同；两个分区一起跑时，吞吐之和仍是约 100，按 SM 数分掉，4 个 SM 的分区只剩单独时的 46 %。同一测试在 RTX 5090 上，两个分区一起跑都保留 92 % 以上。</p>
+  <div class="fig">
+    <div class="legend"><span><i style="background:var(--dev-thor)"></i>Jetson Thor</span><span><i style="background:var(--dev-rtx)"></i>RTX 5090</span></div>
+    <div class="sc"><svg id="c5" role="img" aria-label="一起运行时保留单独吞吐的比例"></svg></div>
+    <p class="cap">一起运行时的吞吐 ÷ 同一分区单独运行时的吞吐。悬停看 TFLOP/s。这个上限来自功耗 / 时钟还是 L2，还没有区分。</p>
+  </div>
+  <p class="src">Jingwu Thor 轮次 <code>1030</code> V1（2048³ BF16 matmul 连续计算）；RTX 5090 那次 GPU 上另有一个进程。green context 在 Thor 上的粒度是 8 个 SM，只能分成 8 / 12 或 16 / 4（<code>1028</code>）。</p>
+</section>
+
+<section class="fd" id="f6">
+  <div class="claim"><span class="k">FINDING #6</span><h2>执行器只占 GPU 时间的约 7 %：冲突在于两者同时运行，不在于 GPU 不够用</h2></div>
+  <div class="tags"><span class="tag">通用</span><span class="who c">C</span><span class="who j">J</span></div>
+  <p class="body">执行器单独一次 38 ms，每 533 ms 一次，只占 GPU 时间的约 7 %（200 ms 周期约 19 %）。下图是一次真实的 monitor 调用前后约 5 s：执行器 tick 落进规划器 prefill 时变长到 183–238 ms，落进 decode 时 84 ms，其余时间仍是约 38 ms。一个 tick 周期里，规划器有 490 ms 以上可以独占 GPU。</p>
+  <div class="fig">
+    <div class="legend"><span><i style="background:var(--ph-vit)"></i>视觉编码</span><span><i style="background:var(--ph-pre)"></i>prefill</span><span><i style="background:var(--ph-dec)"></i>decode</span><span><i style="background:var(--ph-none)"></i>执行器 tick（颜色为它重叠的规划器阶段）</span></div>
+    <div class="sc"><svg id="c6" role="img" aria-label="一次 monitor 调用前后的规划器阶段与执行器 tick 时间线"></svg></div>
+    <p class="cap">上行：规划器的阶段；下行：执行器每个 tick 从释放到完成，竖短线是释放时刻。</p>
+  </div>
+  <p class="src">Chenwei B25 T4 原始日志 <code>co_fast_M1_P533</code>，ep0 腕部 224 第 320 步的 monitor 调用（不隔离，快路径）。</p>
+</section>
+
+<footer>数据：Jingwu 的 Jetson Thor 轮次 1028–1111 与 RTX 5090 对照；Chenwei 的 B22、B25（RoboCerebra 与 VoLoAgent 回放）。J / C 标出测量来自谁。格式参照 arXiv 2604.24447 的 "Finding #k"。</footer>
+</div>
+<div id="tip" hidden></div>
+<script type="application/json" id="data">{"f1": {"thor_original": [[7.61, "wrist224"], [7.276, "wrist224"], [6.949, "wrist224"], [6.808, "wrist224"], [7.667, "wrist224"], [7.928, "wrist224"], [6.743, "wrist224"], [6.503, "wrist224"], [19.836, "wrist224"], [6.984, "wrist224"], [12.37, "wrist720"], [10.204, "wrist720"], [9.523, "wrist720"], [8.236, "wrist720"], [8.44, "wrist720"], [8.805, "wrist720"], [8.17, "wrist720"], [8.546, "wrist720"], [10.052, "wrist720"], [6.809, "wrist224"], [7.25, "wrist224"], [6.628, "wrist224"], [6.304, "wrist224"], [6.903, "wrist224"], [6.982, "wrist224"], [6.927, "wrist224"], [6.211, "wrist224"], [6.167, "wrist224"], [6.399, "wrist224"], [9.182, "wrist720"], [9.022, "wrist720"], [8.307, "wrist720"], [9.254, "wrist720"], [8.848, "wrist720"], [8.541, "wrist720"], [8.197, "wrist720"], [8.049, "wrist720"], [8.524, "wrist720"], [8.659, "wrist720"], [7.011, "wrist224"], [8.936, "wrist224"], [6.852, "wrist224"], [6.827, "wrist224"], [7.703, "wrist224"], [7.061, "wrist224"], [6.837, "wrist224"], [6.736, "wrist224"], [7.646, "wrist224"], [6.407, "wrist224"], [9.732, "wrist720"], [8.675, "wrist720"], [9.403, "wrist720"], [9.623, "wrist720"], [10.203, "wrist720"], [8.441, "wrist720"], [8.394, "wrist720"], [8.936, "wrist720"], [7.836, "wrist720"], [8.761, "wrist720"]], "thor_fast_wylt": [[1.781, "wrist224"], [1.78, "wrist224"], [1.781, "wrist224"], [1.778, "wrist224"], [1.786, "wrist224"], [1.781, "wrist224"], [1.783, "wrist224"], [1.779, "wrist224"], [1.782, "wrist224"], [1.782, "wrist224"], [2.852, "wrist720"], [2.858, "wrist720"], [2.852, "wrist720"], [2.855, "wrist720"], [2.944, "wrist720"], [2.858, "wrist720"], [2.864, "wrist720"], [2.945, "wrist720"], [2.854, "wrist720"], [1.784, "wrist224"], [1.786, "wrist224"], [1.873, "wrist224"], [1.784, "wrist224"], [1.784, "wrist224"], [1.697, "wrist224"], [1.869, "wrist224"], [1.785, "wrist224"], [1.875, "wrist224"], [1.782, "wrist224"], [2.844, "wrist720"], [2.856, "wrist720"], [2.858, "wrist720"], [2.855, "wrist720"], [2.949, "wrist720"], [2.862, "wrist720"], [2.859, "wrist720"], [2.945, "wrist720"], [2.946, "wrist720"], [2.942, "wrist720"], [1.851, "wrist224"], [1.852, "wrist224"], [1.855, "wrist224"], [1.943, "wrist224"], [1.854, "wrist224"], [1.945, "wrist224"], [1.942, "wrist224"], [1.766, "wrist224"], [1.942, "wrist224"], [2.026, "wrist224"], [2.95, "wrist720"], [2.853, "wrist720"], [2.946, "wrist720"], [2.853, "wrist720"], [2.864, "wrist720"], [4.194, "wrist720"], [2.94, "wrist720"], [2.781, "wrist720"], [2.955, "wrist720"], [2.884, "wrist720"]], "rtx_original": [[2.072, "wrist224"], [1.502, "wrist224"], [1.257, "wrist224"], [1.183, "wrist224"], [1.658, "wrist224"], [1.261, "wrist224"], [1.216, "wrist224"], [1.499, "wrist224"], [1.658, "wrist224"], [1.618, "wrist224"], [1.794, "wrist720"], [1.796, "wrist720"], [1.763, "wrist720"], [1.499, "wrist720"], [1.587, "wrist720"], [1.491, "wrist720"], [1.761, "wrist720"], [1.638, "wrist720"], [1.349, "wrist720"], [1.603, "wrist224"], [1.297, "wrist224"], [1.451, "wrist224"], [1.264, "wrist224"], [1.508, "wrist224"], [1.471, "wrist224"], [1.505, "wrist224"], [1.078, "wrist224"], [1.22, "wrist224"], [1.435, "wrist224"], [1.568, "wrist720"], [1.864, "wrist720"], [1.417, "wrist720"], [1.617, "wrist720"], [1.65, "wrist720"], [1.655, "wrist720"], [1.773, "wrist720"], [1.345, "wrist720"], [2.318, "wrist720"], [1.501, "wrist720"], [1.877, "wrist224"], [1.604, "wrist224"], [1.392, "wrist224"], [1.459, "wrist224"], [1.654, "wrist224"], [1.384, "wrist224"], [1.184, "wrist224"], [1.159, "wrist224"], [1.186, "wrist224"], [1.416, "wrist224"], [1.862, "wrist720"], [1.645, "wrist720"], [1.657, "wrist720"], [2.089, "wrist720"], [1.752, "wrist720"], [1.423, "wrist720"], [1.393, "wrist720"], [1.502, "wrist720"], [1.541, "wrist720"], [1.393, "wrist720"]]}, "f2": {"volo_original": {"vit_ms": 267, "restore_ms": 0, "prefill_ms": 3991, "decode_ms": 2630, "L_reply_ms": 6915, "tokens": 4083}, "volo_fast_wylt": {"vit_ms": 135, "restore_ms": 3, "prefill_ms": 1181, "decode_ms": 438, "L_reply_ms": 1784, "tokens": 4083}, "rc_7b": {"vit_ms": 63, "restore_ms": 0, "prefill_ms": 111, "decode_ms": 2355, "L_reply_ms": 2529, "tokens": 470}}, "f6": {"t1": 5.246, "planner": [["vit", 1.0, 1.158], ["restore", 1.158, 1.162], ["prefill", 1.162, 3.248], ["decode", 3.248, 3.746]], "exec": [[0.076, 0.115, 38.1], [0.609, 0.647, 37.9], [1.142, 1.204, 61.4], [1.675, 1.863, 187.9], [2.208, 2.392, 183.0], [2.741, 2.979, 237.5], [3.274, 3.358, 83.5], [3.807, 3.846, 38.5], [4.34, 4.379, 38.2], [4.873, 4.912, 38.1]], "call": {"episode": "ep0_wrist224", "step": 320}}, "f4": {"co_fast_M1_P533": {"prefill": [61.4, 243.6, 143.8, 204.3, 86.3, 184.2, 213.4, 281.2, 150.8, 59.7, 243.1, 164.4, 236.1, 93.6, 259.7, 253.2, 240.0, 61.4, 187.9, 183.0, 237.5, 64.3, 236.1, 258.5, 247.7, 67.5, 187.0, 258.1, 222.6, 74.4, 233.1, 126.6, 200.6, 73.1, 185.1, 261.6, 219.6, 77.5, 230.8, 186.5, 250.4, 212.1, 132.6, 174.5, 253.2, 226.5, 166.5, 142.8, 139.9, 153.3, 182.2, 262.0, 277.3, 174.0, 124.8, 231.2, 155.5, 244.7, 351.1, 199.7, 238.2, 117.1, 223.3, 180.0, 236.0, 189.4, 175.5, 286.7, 194.8, 172.8, 187.0, 203.8, 217.3, 204.5, 134.3, 168.9, 211.6, 179.0, 231.6, 317.7, 230.6, 238.3, 170.1, 265.2, 224.4, 211.6, 228.1, 335.1, 181.9, 184.8, 199.1, 225.1, 272.8, 132.9, 176.6, 211.2, 248.8, 309.2, 272.4, 193.6, 242.8, 249.4, 158.1, 184.6, 189.2, 174.2, 135.0, 304.8, 243.0, 223.4, 186.6, 266.3, 229.3, 134.4, 150.7, 216.7, 199.2, 163.3, 137.8, 211.1, 297.7, 166.7, 227.6, 76.1, 248.6, 244.5, 155.7, 206.5, 260.2, 226.1, 209.7, 244.5, 234.8, 165.9, 238.7, 152.4, 165.5, 256.9, 223.1, 165.0, 229.5, 165.1, 156.6, 236.7, 135.4, 227.1, 264.7, 257.1, 133.9, 233.0, 233.0, 177.0, 190.2, 276.1, 166.4, 178.1, 181.1, 191.0, 146.2, 175.5, 173.3, 224.2, 178.0, 294.7, 169.1, 249.3, 304.8, 310.0, 122.9, 172.8, 234.1, 191.5, 144.6, 166.5, 130.6, 213.0, 216.6, 148.3, 208.6, 297.7, 216.2, 207.5, 162.5, 159.0, 218.9, 241.8, 398.4, 160.6, 217.9, 264.5, 199.1, 210.0, 225.8, 226.2, 308.9, 214.3, 207.8, 143.8, 201.8, 247.1, 324.2, 326.3, 225.6, 254.3, 241.7, 231.1, 265.6, 169.0, 328.1, 306.8, 221.3, 193.7, 171.7, 313.9, 167.5, 223.2, 187.1, 181.3, 192.3, 286.7, 231.0, 296.4, 238.0, 267.0, 236.3, 313.1, 186.6, 287.7, 189.9, 250.1, 162.0, 238.7, 203.7, 214.5, 163.4, 246.1, 150.6, 192.6, 118.6, 186.5, 217.3, 201.1, 220.7, 179.0, 245.7, 201.9, 256.2, 195.7, 219.7, 206.4, 189.7, 228.4, 163.1, 176.8, 320.3, 228.5, 185.8, 228.8, 208.8, 234.3, 229.1, 204.1, 279.8, 266.2, 226.9, 213.5, 203.4, 319.3, 211.6, 225.0, 188.0, 321.2, 232.4, 204.9, 202.3, 192.6, 232.2, 222.1, 208.4, 280.6, 150.3, 177.3, 154.1, 133.1, 191.7, 225.7, 231.1, 208.8, 225.0, 193.5, 146.0, 234.8, 214.6, 211.4, 318.0, 231.5, 225.5, 240.8, 135.5, 220.3, 269.6, 298.9, 146.8, 231.5, 166.6, 163.3, 246.6, 163.4, 224.8, 119.2, 152.8, 199.2, 193.2, 162.3, 232.2, 149.6, 210.1, 241.5, 140.0, 191.5, 302.2, 219.5, 196.4, 221.8, 228.6, 228.4, 174.5, 233.3, 236.5, 153.3, 123.2, 127.0, 150.4, 167.2, 176.1, 152.5, 235.0, 221.1, 273.5, 199.6, 220.2, 163.7, 137.5, 227.2, 277.3, 296.9, 229.0, 259.0, 263.5, 229.8, 262.1, 243.1, 202.9, 267.4], "decode": [93.2, 67.0, 58.5, 80.1, 87.9, 83.5, 96.5, 95.0, 94.2, 93.6, 104.2, 95.0, 70.9, 92.9, 66.3, 152.8, 54.1, 71.5, 85.0, 72.4, 85.0, 84.0, 82.2, 84.7, 84.0, 80.1, 72.1, 92.8, 68.4, 66.7, 81.1, 70.1, 94.4, 72.3, 52.0, 70.7, 44.0, 75.0, 77.4, 57.2, 88.7, 86.0, 61.1, 83.9, 72.3, 81.9, 58.6, 150.6, 86.5, 93.4, 66.0, 100.5, 74.8, 70.8, 77.0, 80.3, 81.7, 61.2, 66.7, 67.5, 87.3, 67.2, 74.6, 67.5, 67.7, 71.0, 70.9, 96.5, 86.8, 102.8, 71.9, 100.0, 85.4, 87.7, 79.4, 73.1, 72.3, 78.7, 90.4, 103.3, 92.7, 81.9, 72.6, 72.3, 111.6, 71.0, 59.6, 70.9, 84.2, 87.5, 60.2, 102.9, 88.0, 77.0, 67.0, 80.6, 93.9, 111.9, 121.9, 175.6, 79.7, 91.0, 73.7, 86.4, 86.7, 83.8, 85.7, 85.5, 81.9, 86.3, 123.3, 100.8, 67.8, 74.0, 94.8, 62.9, 66.8, 111.3, 103.6, 71.7, 70.4, 101.5, 115.5, 73.8, 84.4, 170.1, 66.3, 80.3, 99.4, 116.0, 71.8, 111.6, 70.6, 84.9, 75.4, 71.1, 73.8, 91.2, 103.9], "capsule": [293.2, 313.7, 252.8, 158.0, 144.1, 141.0, 180.6, 255.7, 213.5, 195.6, 207.2, 156.7, 224.6, 183.8, 181.7, 145.8, 176.3, 108.8, 158.6, 183.8, 242.8, 185.3, 96.5, 153.6, 175.1, 162.4, 192.9], "vit": [134.2, 81.2, 175.9, 101.1, 100.5, 39.8, 177.3, 39.0, 160.6, 42.5, 132.8, 46.4, 50.5, 43.0, 42.8, 42.6, 38.4, 37.8, 38.1, 37.8, 182.1, 203.9, 43.6, 172.0], "none": [38.3, 38.2, 38.1, 38.7, 38.0, 38.0, 38.0, 38.1, 38.7, 38.3, 38.1, 38.1, 37.9, 38.5, 38.2, 38.1, 38.1, 37.9, 38.4, 37.9, 38.3, 38.0, 37.9, 38.6, 38.1, 37.8, 37.8, 38.0, 38.3, 37.7, 38.4, 38.1, 37.9, 38.4, 38.1, 37.8, 37.9, 38.0, 38.3, 38.1, 38.0, 37.8, 37.8, 37.8, 38.3, 37.8, 38.8, 37.9, 38.1, 37.8, 38.1, 37.9, 38.3, 37.7, 38.2, 37.9, 38.1, 37.8, 37.9, 37.7, 38.2, 38.0, 37.8, 37.6, 38.1, 37.9, 38.0, 37.9, 38.5, 37.8, 37.7, 37.7, 38.2, 38.0, 38.0, 38.0, 37.8, 38.7, 38.1, 38.1, 37.8, 38.1, 37.9, 38.0, 37.8, 37.9, 37.9, 37.9, 38.1, 37.8, 38.1, 37.9, 37.9, 37.8, 38.2, 38.1, 38.0, 38.3, 38.2, 38.2, 38.2, 38.1, 38.3, 37.9, 37.7, 37.9, 38.3, 38.0, 37.8, 37.8, 38.1, 37.7, 38.0, 37.8, 38.2, 37.8, 37.8, 37.6, 37.8, 38.2, 38.1, 37.8, 38.2]}, "co_fast_M2_P533": {"vit": [56.0, 47.5, 55.8, 44.6, 55.6, 46.5, 45.6, 55.3, 56.9, 55.9, 46.9, 43.8, 55.2, 56.8, 55.9, 55.8, 56.6, 57.0, 53.6, 54.7, 55.3, 53.4, 56.2, 46.1, 57.0, 57.4, 57.6, 56.0, 55.6, 54.0, 48.4, 56.4, 56.9, 57.3, 55.7, 56.9, 55.8, 56.0, 54.0, 57.1, 56.7, 56.6, 53.2, 47.5, 60.5, 57.5, 56.4, 56.7], "prefill": [56.6, 54.2, 53.4, 54.3, 52.3, 55.3, 54.0, 56.8, 54.3, 54.0, 54.8, 53.4, 49.6, 54.0, 53.7, 54.6, 53.8, 52.2, 55.8, 52.1, 53.5, 54.5, 53.4, 57.7, 54.4, 49.0, 54.4, 53.6, 53.6, 54.8, 51.5, 53.5, 53.5, 54.3, 53.8, 52.5, 53.8, 53.6, 55.4, 54.3, 51.4, 54.0, 55.2, 54.1, 58.2, 57.5, 55.8, 49.2, 54.9, 53.5, 50.4, 54.8, 53.7, 51.5, 54.1, 54.5, 51.9, 54.5, 54.7, 53.3, 53.8, 57.6, 54.2, 49.5, 55.2, 53.7, 50.6, 54.5, 54.1, 54.3, 54.3, 52.8, 54.1, 55.2, 53.7, 58.2, 55.1, 57.9, 54.4, 50.2, 53.8, 54.4, 52.8, 53.5, 55.3, 56.5, 53.8, 54.1, 54.5, 53.2, 55.7, 54.8, 51.8, 51.1, 51.8, 52.3, 56.4, 53.8, 52.5, 53.5, 54.8, 53.5, 54.5, 54.8, 51.6, 51.0, 49.3, 53.3, 52.9, 54.8, 55.0, 53.4, 48.8, 54.1, 54.4, 53.4, 49.2, 51.4, 54.3, 54.4, 51.5, 50.2, 52.2, 53.9, 52.1, 53.0, 54.3, 54.3, 52.8, 53.3, 54.6, 54.4, 51.7, 51.5, 49.1, 52.9, 52.7, 49.8, 53.2, 52.8, 52.6, 49.2, 53.4, 53.4, 52.6, 49.1, 53.6, 51.6, 51.2, 49.8, 55.1, 54.1, 51.5, 56.3, 53.8, 49.6, 53.7, 54.3, 54.0, 54.2, 53.1, 53.1, 51.0, 51.2, 54.4, 51.8, 55.8, 52.9, 48.8, 54.1, 53.8, 54.1, 53.0, 54.6, 53.4, 52.5, 50.6, 56.2, 53.0, 58.8, 56.3, 53.7, 49.5, 54.0, 54.5, 54.6, 49.9, 54.0, 53.0, 53.0, 54.9, 55.7, 53.1, 55.2, 52.4, 49.1, 53.2, 53.0, 52.6, 49.0, 55.1, 51.9, 53.3, 53.3, 50.4, 49.2, 53.7, 50.8, 54.1, 54.7, 53.5, 53.1, 53.6, 54.4, 54.5, 55.1, 52.9, 50.5, 49.3, 53.5, 53.8, 53.9, 51.5, 54.0, 51.1, 53.9, 54.5, 53.6, 54.1, 54.9, 52.0, 54.5, 50.1, 54.7, 53.5, 55.1, 53.3, 54.2, 54.9, 54.8, 52.0, 53.5, 54.5, 50.1, 54.2, 54.6, 53.7, 50.0, 54.2, 54.7, 53.5, 55.2, 54.3, 53.1, 53.4, 55.3, 54.0, 52.9, 53.8, 58.4, 55.9, 52.8, 54.0, 55.0, 54.4, 52.2, 54.6, 52.5, 53.3, 54.5, 54.3, 52.4, 53.5, 54.7, 55.6, 55.5, 52.3, 56.9, 54.5, 50.1, 54.0, 52.9, 56.6, 53.2, 48.9, 54.6, 54.6, 53.6, 49.2, 53.6, 55.2, 54.6, 54.0, 58.1, 55.6, 51.9, 70.8, 55.0, 55.6, 55.3, 51.9, 57.3, 55.5, 53.0, 54.1, 55.3, 58.6, 52.9, 51.5, 56.2, 54.0, 49.9, 70.0, 54.8, 54.1, 54.0, 55.0, 61.9, 51.9, 54.6, 49.7, 51.3, 50.8, 51.8, 51.9, 49.5, 53.8, 54.0, 53.5, 49.1, 53.6, 54.0, 54.5, 52.8, 53.6, 52.5, 53.7, 52.2, 53.4, 54.8, 52.9, 49.2, 53.4, 54.9, 54.0, 53.6, 53.2, 49.1, 54.1, 53.6, 54.1, 52.9, 53.7, 53.7, 53.0, 52.2, 52.8, 53.5, 53.4, 52.0, 52.0, 52.1, 50.9, 50.4, 50.5, 49.3, 53.5, 54.0, 54.8, 53.8, 53.5, 58.6, 55.7, 52.2, 53.5, 53.4, 54.6, 52.2, 52.9, 52.5, 50.8, 52.5, 49.4, 54.2, 54.7, 54.2, 51.3, 56.5, 53.5, 50.8, 53.2, 49.9, 56.5, 54.2, 55.2, 55.1, 55.3, 54.6, 50.0, 53.7, 55.2, 54.4, 50.3, 52.6, 50.6, 56.7, 55.3, 56.3, 53.1, 54.9, 55.2, 53.6, 57.1, 54.6, 52.4, 53.4, 52.6, 52.8, 51.7, 52.1, 52.2, 52.9, 52.3, 53.5, 53.0, 53.9, 54.7, 54.4, 52.0, 53.6, 55.0, 54.2, 54.2, 52.6, 53.3, 52.7, 53.8, 56.4, 58.3, 55.1, 54.6, 49.1, 54.4, 54.9, 53.8, 54.3, 55.0, 52.5, 54.1, 53.3, 52.9, 52.3, 52.5, 52.4, 56.1, 53.4, 52.4, 53.6, 53.0, 53.3, 52.6, 48.9, 54.9, 53.1, 53.7, 51.4, 54.4, 52.6, 54.7, 49.6, 55.6, 55.9, 53.3, 53.7, 54.9, 54.3, 56.3, 54.4, 56.9, 53.7, 50.0, 52.1, 54.7, 55.9, 54.6, 49.4, 55.5, 54.7, 53.4, 53.6, 50.3, 54.1, 54.8, 53.2, 57.8, 54.7, 53.5, 49.1, 53.9, 53.7, 52.7, 53.6, 54.5, 53.9, 50.8, 55.3, 55.2, 52.7, 54.3, 55.6, 54.6, 54.4, 54.5, 58.3, 55.3, 52.0, 53.5, 54.5, 54.0, 54.9, 54.1, 49.2, 53.4, 54.7, 54.1, 49.3, 55.4, 55.0, 52.0, 53.9, 54.6, 53.4, 49.4, 54.8, 54.9, 55.7, 54.3, 52.5, 55.8, 53.0, 53.6, 54.3, 55.2, 53.6, 57.8, 55.0, 50.1, 54.6, 54.1, 52.2, 54.5, 58.4, 53.4, 54.4, 53.3, 55.0, 53.4, 52.2, 51.2, 51.1, 53.3, 53.0, 56.8, 54.1, 52.0, 53.3, 53.9, 52.6, 48.9, 53.9, 52.6, 51.7, 51.9, 50.8, 53.0, 52.8, 51.6, 53.3, 53.5, 53.6, 51.5, 56.7, 52.0, 51.9, 50.7, 51.9, 48.8, 55.1, 54.1, 54.0, 52.5, 52.6, 53.4, 54.8, 53.4, 51.7, 52.8, 50.4, 55.4, 52.5, 52.5, 51.4, 56.3, 58.3, 56.0, 52.4, 53.6, 54.8, 54.3, 53.2, 53.5, 53.3, 51.7, 49.1, 54.4, 52.9, 53.4, 54.3, 54.0, 52.8, 53.7, 54.4, 53.1, 52.3, 53.3, 51.6, 54.4, 54.3, 52.1, 53.0, 51.8, 53.4, 49.0, 55.6, 54.0, 53.7, 49.5, 54.7, 53.8, 53.3, 53.9, 51.7, 52.7, 50.3, 55.8, 53.1, 54.5, 51.8, 48.8, 53.3, 52.6, 51.9, 49.3, 53.1, 53.0, 52.5, 51.9, 50.9, 59.9, 51.1, 53.6, 52.6, 53.7, 53.8, 52.9, 52.2, 53.7, 53.8, 52.4, 55.0, 51.9, 51.4, 54.2, 54.8, 51.9, 49.2, 53.6, 53.0, 51.5, 53.6, 54.1, 53.3, 51.4, 51.5, 48.8, 55.0, 51.9, 52.0, 49.5, 53.6, 54.2, 53.7, 49.9, 53.6, 54.3, 54.6, 50.9, 53.4, 53.7, 54.8, 52.8, 51.6], "decode": [66.3, 66.4, 65.0, 67.3, 67.9, 68.8, 68.0, 64.1, 67.2, 65.8, 67.4, 65.4, 68.4, 65.6, 66.3, 65.6, 66.3, 66.5, 68.1, 67.9, 68.6, 67.5, 68.0, 68.7, 67.4, 63.5, 64.5, 68.0, 65.4, 67.4, 67.6, 68.0, 67.0, 68.4, 53.5, 69.8, 48.5, 67.0, 66.2, 65.5, 64.8, 69.4, 68.5, 68.3, 67.2, 65.7, 63.3, 67.8, 68.7, 66.6, 67.1, 67.0, 69.5, 66.5, 66.4, 65.8, 67.8, 65.8, 55.7, 68.2, 70.2, 67.6, 70.1, 68.6, 68.1, 66.1, 64.7, 65.8, 67.5, 48.8, 66.8, 66.1, 67.0, 66.0, 62.4, 65.9, 66.7, 64.4, 66.0, 64.1, 66.1, 65.7, 65.1, 66.2, 67.7, 63.6, 54.8, 47.5, 62.8, 64.9, 71.3, 68.2, 69.5, 68.1], "capsule": [53.8, 53.9, 52.1, 54.7, 49.7, 54.8, 56.6, 53.6, 53.5, 54.9, 52.7, 54.9, 53.9, 51.4, 53.2, 49.6, 53.3, 65.9, 53.3, 55.0, 53.7, 53.8, 54.2, 53.9, 52.5, 54.7, 55.1, 56.4, 54.2, 54.2, 52.4, 54.6, 49.4, 54.3, 56.0, 48.0, 49.9, 55.3, 53.1, 54.8, 49.5, 54.7, 53.2, 54.4, 53.7, 56.0, 56.0, 54.1, 52.1, 54.0, 52.6, 53.1, 49.1, 52.5]}}, "exec_alone_p50": 37.9}</script>
+<script>
+(function(){
+const D = JSON.parse(document.getElementById('data').textContent);
+const NS = 'http://www.w3.org/2000/svg';
+const DELTA = 80/15;
+function el(tag, attrs, parent, text){ const e=document.createElementNS(NS,tag); for(const k in attrs) e.setAttribute(k, attrs[k]); if(text!==undefined) e.textContent=text; if(parent) parent.appendChild(e); return e; }
+function lin(d0,d1,r0,r1){ return v => r0 + (v-d0)/(d1-d0)*(r1-r0); }
+function size(svg,w,h){ svg.setAttribute('viewBox','0 0 '+w+' '+h); }
+function xaxis(svg,x,y,ticks,fmt,x0,x1,gridTop){
+  const g=el('g',{class:'ax'},svg); el('line',{x1:x0,x2:x1,y1:y,y2:y},g);
+  ticks.forEach(t=>{ el('line',{x1:x(t),x2:x(t),y1:y,y2:y+4},g); el('text',{x:x(t),y:y+16,'text-anchor':'middle'},g,fmt(t));
+    if(gridTop!==undefined){ const gg=el('g',{class:'grid'},svg); el('line',{x1:x(t),x2:x(t),y1:gridTop,y2:y},gg); } });
+}
+function yaxis(svg,y,x,ticks,fmt,y0,y1,gridRight){
+  const g=el('g',{class:'ax'},svg); el('line',{x1:x,x2:x,y1:y0,y2:y1},g);
+  ticks.forEach(t=>{ el('line',{x1:x-4,x2:x,y1:y(t),y2:y(t)},g); el('text',{x:x-7,y:y(t)+4,'text-anchor':'end'},g,fmt(t));
+    if(gridRight!==undefined){ const gg=el('g',{class:'grid'},svg); el('line',{x1:x,x2:gridRight,y1:y(t),y2:y(t)},gg); } });
+}
+function rng(seed){ let s=seed; return ()=>{ s=(s*16807)%2147483647; return (s-1)/2147483646; }; }
+const PH = {vit:'var(--ph-vit)', restore:'var(--ph-pre)', prefill:'var(--ph-pre)', decode:'var(--ph-dec)', capsule:'var(--ph-cap)', none:'var(--ph-none)'};
+const PHN = {vit:'视觉编码', restore:'prefill', prefill:'prefill', decode:'decode', capsule:'建前缀缓存', none:'不与规划器重叠'};
+
+// ---- #1 strip plot
+(function(){
+  const svg=document.getElementById('c1'); const W=900,H=250,L=250,R=880,T=20; size(svg,W,H);
+  const rows=[['thor_original','Thor · 原始路径'],['thor_fast_wylt','Thor · 三步优化后'],['rtx_original','RTX 5090 · 原始路径']];
+  const x=lin(0,20,L,R); const rowH=62; const yb=T+rows.length*rowH;
+  xaxis(svg,x,yb,[0,2,4,6,8,10,12,14,16,18,20],t=>t+' s',L,R,T);
+  el('line',{x1:x(DELTA),x2:x(DELTA),y1:T-6,y2:yb,class:'dl'},svg); el('text',{x:x(DELTA)+5,y:T+4,class:'dlt'},svg,'Δ = 5.33 s');
+  const rnd=rng(7);
+  rows.forEach(([k,lab],i)=>{
+    const cy=T+i*rowH+rowH/2; const v=D.f1[k]; const vals=v.map(p=>p[0]).sort((a,b)=>a-b); const med=vals[Math.floor(vals.length/2)];
+    el('text',{x:L-12,y:cy-2,'text-anchor':'end',class:'lab b'},svg,lab);
+    el('text',{x:L-12,y:cy+15,'text-anchor':'end',class:'val'},svg,'中位 '+med.toFixed(2)+' s · 超过 Δ '+vals.filter(a=>a>DELTA).length+' / '+vals.length);
+    v.forEach(([l,w])=>{ const cyj=cy+(rnd()-0.5)*30; const filled=w==='wrist224';
+      el('circle',{cx:x(Math.min(l,20)),cy:cyj,r:4.2,fill:filled?'var(--ink2)':'var(--surface)',stroke:'var(--ink2)','stroke-width':1.5,'fill-opacity':filled?0.75:1,'data-tip':lab+'\n'+(filled?'腕部 224':'腕部 720')+'：'+l.toFixed(2)+' s'},svg); });
+  });
+})();
+
+// ---- #2 stacked bars
+(function(){
+  const svg=document.getElementById('c2'); const W=900,H=210,L=250,R=880,T=14; size(svg,W,H);
+  const rows=[['volo_original','VoLoAgent monitor · 27B · 原始','约 4.1k token'],['volo_fast_wylt','VoLoAgent monitor · 27B · 三步优化','约 4.1k token'],['rc_7b','RoboCerebra 切换 · 7B','约 470 token']];
+  const x=lin(0,7000,L,R); const rowH=52; const yb=T+rows.length*rowH;
+  xaxis(svg,x,yb,[0,1000,2000,3000,4000,5000,6000,7000],t=>t===0?'0':(t/1000)+' s',L,R,T);
+  rows.forEach(([k,lab,sub],i)=>{
+    const d=D.f2[k]; const y0=T+i*rowH+10, h=30; const segs=[['vit',d.vit_ms+d.restore_ms],['prefill',d.prefill_ms],['decode',d.decode_ms]];
+    const tot=segs.reduce((a,s)=>a+s[1],0); let acc=0;
+    el('text',{x:L-12,y:y0+13,'text-anchor':'end',class:'lab b'},svg,lab); el('text',{x:L-12,y:y0+29,'text-anchor':'end',class:'val'},svg,sub+' · '+(tot/1000).toFixed(2)+' s');
+    segs.forEach(([p,v])=>{ const xa=x(acc), xb=x(acc+v); acc+=v; const pct=Math.round(v/tot*100);
+      el('rect',{x:xa,y:y0,width:Math.max(xb-xa-2,1),height:h,rx:3,fill:PH[p],'data-tip':lab+'\n'+PHN[p]+'：'+v+' ms（'+pct+' %）'},svg);
+      if(xb-xa>44) el('text',{x:(xa+xb)/2,y:y0+19,'text-anchor':'middle',style:'fill:#fff;font-size:12px;font-family:var(--f-mono)'},svg,pct+'%'); });
+  });
+})();
+
+// ---- #3 trade-off scatter
+(function(){
+  const svg=document.getElementById('c3'); const W=900,H=380,L=80,R=870,T=20,B=330; size(svg,W,H);
+  const x=lin(0,10,L,R), y=lin(0,360,B,T);
+  el('rect',{x:x(0),y:y(200),width:x(DELTA)-x(0),height:y(0)-y(200),class:'zone'},svg);
+  el('text',{x:x(0)+8,y:y(200)+18,style:'fill:var(--accent);font-size:12px;font-weight:500'},svg,'两个约束都满足');
+  xaxis(svg,x,B,[0,2,4,6,8,10],t=>t+' s',L,R,T); yaxis(svg,y,L,[0,50,100,150,200,250,300,350],t=>t,T,B,R);
+  el('text',{x:(L+R)/2,y:B+36,'text-anchor':'middle',class:'lab'},svg,'规划器 monitor 延迟中位（s）');
+  el('text',{x:16,y:(T+B)/2,'text-anchor':'middle',class:'lab',transform:'rotate(-90 16 '+(T+B)/2+')'},svg,'执行器 p99（ms）');
+  el('line',{x1:x(DELTA),x2:x(DELTA),y1:T,y2:B,class:'dl'},svg); el('text',{x:x(DELTA)+5,y:T+12,class:'dlt'},svg,'Δ = 5.33 s');
+  el('line',{x1:L,x2:R,y1:y(200),y2:y(200),class:'dl'},svg); el('text',{x:R-4,y:y(200)-6,'text-anchor':'end',class:'dlt'},svg,'200 ms 严格截止期');
+  const pts=[['各自单独运行','var(--m-alone)',2.68,4.45,47.1,'执行器单独 p99 47.1 ms；规划器单独'],['不隔离','var(--m-m1)',2.80,4.65,320.6,'执行器与 prefill 重叠时慢 5.5 倍'],['规划器 MPS 20 %','var(--m-m2)',5.00,8.50,68.8,'规划器 prefill 2.1 → 4.2 s']];
+  pts.forEach(([lab,col,a,b,p,note])=>{
+    el('line',{x1:x(a),x2:x(b),y1:y(p),y2:y(p),stroke:col,'stroke-width':1.5,'stroke-opacity':.6},svg);
+    el('circle',{cx:x(a),cy:y(p),r:7,fill:col,stroke:'var(--surface)','stroke-width':2,'data-tip':lab+' · 腕部 224\n规划器 '+a.toFixed(2)+' s，执行器 p99 '+p+' ms\n'+note},svg);
+    el('circle',{cx:x(b),cy:y(p),r:6,fill:'var(--surface)',stroke:col,'stroke-width':2.5,'data-tip':lab+' · 腕部 720\n规划器 '+b.toFixed(2)+' s，执行器 p99 '+p+' ms'},svg);
+    el('text',{x:x(b)+12,y:y(p)+4,class:'lab b',style:'fill:'+col},svg,lab);
+  });
+})();
+
+// ---- #4 executor latency by overlapped phase
+(function(){
+  const svg=document.getElementById('c4'); const W=900,H=470,L=150,R=880,T=34; size(svg,W,H);
+  const x=lin(0,420,L,R); const order=['none','vit','prefill','capsule','decode'];
+  const panels=[['co_fast_M1_P533','不隔离'],['co_fast_M2_P533','规划器 MPS 20 %']]; const rowH=34; const gap=44;
+  let ycur=T; const rnd=rng(11); const bottom=T+panels.length*(order.length*rowH)+gap;
+  el('line',{x1:x(200),x2:x(200),y1:T-14,y2:bottom-gap+4,class:'dl'},svg);
+  panels.forEach(([k,title],pi)=>{
+    el('text',{x:L-140,y:ycur-14,class:'lab b'},svg,title);
+    order.forEach(p=>{
+      const v=D.f4[k][p]; const cy=ycur+rowH/2;
+      el('text',{x:L-12,y:cy+4,'text-anchor':'end',class:'lab'},svg,PHN[p]+(v?'（'+v.length+'）':''));
+      if(v){ const s=[...v].sort((a,b)=>a-b); const med=s[Math.floor(s.length/2)];
+        v.forEach(l=>el('circle',{cx:x(Math.min(l,420)),cy:cy+(rnd()-0.5)*18,r:2.4,fill:PH[p],'fill-opacity':.55},svg));
+        el('line',{x1:x(med),x2:x(med),y1:cy-13,y2:cy+13,stroke:'var(--ink)','stroke-width':2.5},svg);
+        el('rect',{x:L,y:cy-rowH/2,width:R-L,height:rowH,fill:'transparent','data-tip':title+' · '+PHN[p]+'\n'+v.length+' 次，中位 '+med.toFixed(1)+' ms，p99 '+s[Math.floor(s.length*0.99)].toFixed(1)+' ms，最大 '+s[s.length-1].toFixed(1)+' ms'},svg);
+        el('text',{x:Math.min(x(med)+6,R-60),y:cy-8,class:'val'},svg,med.toFixed(0)+' ms');
+      } else el('text',{x:L+6,y:cy+4,class:'val',style:'fill:var(--muted)'},svg,'—');
+      ycur+=rowH; });
+    ycur+=gap;
+  });
+  el('text',{x:x(200)+5,y:T-18,class:'dlt'},svg,'200 ms');
+  xaxis(svg,x,bottom-gap+6,[0,50,100,150,200,250,300,350,400],t=>t+' ms',L,R);
+})();
+
+// ---- #5 retained throughput
+(function(){
+  const svg=document.getElementById('c5'); const W=900,H=300,L=360,R=860,T=14; size(svg,W,H);
+  const rows=[['Thor · 8 / 12 分区','8 个 SM 的分区',64.6,36.9,'thor'],['','12 个 SM 的分区',103.2,63.1,'thor'],['Thor · 16 / 4 分区','16 个 SM 的分区',102.3,79.2,'thor'],['','4 个 SM 的分区',49.7,22.7,'thor'],['RTX 5090 · 48 / 122 分区','48 个 SM 的分区',46.1,42.5,'rtx'],['','122 个 SM 的分区',100.9,99.0,'rtx']];
+  const x=lin(0,100,L,R); const rowH=40; const yb=T+rows.length*rowH;
+  xaxis(svg,x,yb,[0,20,40,60,80,100],t=>t+' %',L,R,T);
+  rows.forEach(([grp,lab,a,t,dev],i)=>{ const y0=T+i*rowH+8; const f=t/a*100;
+    if(grp) el('text',{x:16,y:y0+14,class:'lab b'},svg,grp);
+    el('text',{x:L-12,y:y0+16,'text-anchor':'end',class:'lab'},svg,lab);
+    el('rect',{x:L,y:y0,width:x(f)-L,height:22,rx:3,fill:dev==='thor'?'var(--dev-thor)':'var(--dev-rtx)','data-tip':grp.replace(/ · .*/,'')+lab+'\n单独 '+a+' TFLOP/s → 一起 '+t+' TFLOP/s'},svg);
+    el('text',{x:x(f)+6,y:y0+16,class:'val'},svg,f.toFixed(0)+' %');
+  });
+})();
+
+// ---- #6 timeline
+(function(){
+  const svg=document.getElementById('c6'); const d=D.f6; const W=900,H=190,L=100,R=880,T=20; size(svg,W,H);
+  const x=lin(0,d.t1,L,R); const yP=T+12, yE=T+82;
+  el('text',{x:L-12,y:yP+18,'text-anchor':'end',class:'lab b'},svg,'规划器');
+  el('text',{x:L-12,y:yE+18,'text-anchor':'end',class:'lab b'},svg,'执行器');
+  d.planner.forEach(([p,a,b])=>{ const xa=x(Math.max(a,0)), xb=x(Math.min(b,d.t1)); if(xb<=xa) return;
+    el('rect',{x:xa,y:yP,width:Math.max(xb-xa,1.5),height:28,rx:2,fill:PH[p],'data-tip':PHN[p]+'：'+((b-a)*1000).toFixed(0)+' ms'},svg); });
+  d.exec.forEach(([r,f,l])=>{ let best='none',bo=0; d.planner.forEach(([p,a,b])=>{ const o=Math.min(f,b)-Math.max(r,a); if(o>bo){bo=o;best=p;} });
+    el('line',{x1:x(r),x2:x(r),y1:yE-8,y2:yE+36,stroke:'var(--muted)','stroke-width':1},svg);
+    el('rect',{x:x(r),y:yE,width:Math.max(x(f)-x(r),2),height:28,rx:2,fill:PH[best],'data-tip':'执行器 tick：'+l.toFixed(1)+' ms\n重叠：'+PHN[best]},svg);
+    if(l>100) el('text',{x:x(r)+2,y:yE+46,class:'val'},svg,l.toFixed(0)+' ms'); });
+  xaxis(svg,x,yE+58,[0,1,2,3,4,5],t=>t+' s',L,R);
+})();
+
+// tooltips
+const tip=document.getElementById('tip');
+function show(e){ const t=e.target.closest('[data-tip]'); if(!t){ tip.hidden=true; return; } tip.textContent=t.getAttribute('data-tip'); tip.hidden=false;
+  const pad=12; let px=e.clientX+pad, py=e.clientY+pad; const r=tip.getBoundingClientRect(); if(px+r.width>innerWidth-8) px=e.clientX-r.width-pad; if(py+r.height>innerHeight-8) py=e.clientY-r.height-pad; tip.style.left=px+'px'; tip.style.top=py+'px'; }
+document.addEventListener('pointermove',show); document.addEventListener('pointerdown',show); document.addEventListener('scroll',()=>{tip.hidden=true;},{passive:true});
+})();
+</script>
+
+</body>
+</html>
