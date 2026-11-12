@@ -241,6 +241,13 @@ details.ti[open]>summary::before{content:"−"}
 details.ti>summary .tag,details.ti>summary .who{margin-left:6px}
 details.ti .tb{padding:2px 0 8px 1.1em;display:grid;gap:4px;font-size:14px;color:var(--ink2)}
 .tag.lit{border-color:var(--j);color:var(--j)}
+ol.exp{margin:0 14px 12px 22px;padding:0 0 0 2.2em;border-left:2px solid var(--line);display:grid;gap:4px;max-width:none}
+ol.exp>li::marker{font-family:var(--f-mono);color:var(--accent)}
+details.ti>summary .ref{margin-left:8px}
+details.ti>summary .note{margin-left:6px}
+dl.ed{display:grid;grid-template-columns:4.5em minmax(0,1fr);gap:4px 10px;margin:0}
+dl.ed dt{color:var(--muted);font-size:13px}
+dl.ed dd{margin:0;min-width:0}
 /* video */
 .vids{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px}
 figure.vid{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:10px;display:grid;gap:6px;min-width:0}
@@ -544,6 +551,15 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
   <div class="sq" id="q2b">
     <h3><span class="qn">Q2c</span>真正的问题：两个模型共用统一内存时的资源冲突</h3>
     <div class="ans">规划器与执行器在同一块 Thor 上同时运行时，规划器的 decode 几乎占满内存带宽，执行器因此错过截止期。按 SM 分区能保护执行器，却隔不开带宽，还让规划器的 prefill 变慢、更难被打断。数据中心靠独立显存与硬件分区避开了这个问题；现有的通用手段只能在"保执行器"与"保规划器"之间二选一。</div>
+    <div class="panel">
+      <h4>为什么这是 Thor 上的问题</h4>
+      <ol>
+        <li><b>一份内存，而且带宽小。</b>CPU 与 GPU 共用同一份 LPDDR5X，两个模型都在这块 GPU 上，带宽 273 GB/s（规格，实测拷贝约 256 GB/s），是 RTX 5090 显存的约 1 / 7。27B 规划器的 decode 一个就要约 200 GB/s，剩给执行器的很少。<span class="ref" data-ref="1104_h3c">1104_h3c</span></li>
+        <li><b>只有一块小 GPU。</b>Thor 的 GPU 只有 20 个 SM，两个模型只能在同一块 GPU 上分。SM 分区后规划器只剩 4 个 SM，一次 prefill 拉长到几百毫秒，可打断的粒度随之变粗（最长 567 ms）。<span class="ref c" data-ref="C-#9">C-#9</span> <span class="ref c" data-ref="C-#16">C-#16</span></li>
+        <li><b>测过的隔离手段只分算力、不分带宽。</b>SM 分区之后，两个模型的计算不再互相占用，但仍从同一份内存读数据，规划器 decode 照样能拖慢执行器；数据中心 GPU 上每块卡独立的显存、可划分的内存控制器，在这里没有对应的手段。<span class="ref c" data-ref="C-#12">C-#12</span></li>
+      </ol>
+      <p class="note">机器人本体上只有这一块芯片，执行器的截止期由控制周期决定，不能放宽；规划器放在本体上也就只能和执行器共用它。</p>
+    </div>
     <div class="tree">
       <details class="tg" open><summary>证据</summary>
         <ul>
@@ -636,19 +652,41 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
 
   <div class="sq" id="q3x">
     <h3><span class="qn">Q3d</span>本周实验：每个实验回答什么</h3>
-    <div class="ans">每个实验对应一个具体问题："协议"一列说明实验在什么调用方式下做（多数逐次测一次调用，与协议无关）；"归属"一列说明它服务于哪一部分。</div>
-    <div class="tw"><table style="min-width:780px">
-      <tr><th style="width:13%">实验</th><th style="width:19%">要回答的问题</th><th>为什么这样设计</th><th style="width:11%">协议</th><th style="width:21%">结果</th><th style="width:10%">归属</th></tr>
-      <tr><td><span class="ref" data-ref="MC5090">monitor 调用</span><br><span class="note">RTX 5090</span></td><td>monitor 调用里哪些计算是多余的？</td><td>先在快的机器上把调用拆开：输入里多少逐 token 不变，回复里决策在第几个 token；再试去掉它们，看决策是否改变。</td><td>逐次测单次调用</td><td>61–65 % 的输入不变，决策在第 9–16 个 token；1 057 → 338 ms，决策不变；非对齐截断改了 6 / 12 次干预决策。</td><td><a href="#q3b">常规方法</a></td></tr>
-      <tr><td><span class="ref" data-ref="SIM">LIBERO 闭环</span><br><span class="note">RTX 5090</span></td><td>放进真实闭环后，规划器的延迟变成多少等待？</td><td>规划器 + 执行器在仿真里跑完整的分解、执行、检查，比较原始路径与两项优化。</td><td><b>同步</b></td><td>等待占比 19.8 % → 12.0 %，成败与决策不变。</td><td><a href="#q3b">常规方法</a></td></tr>
-      <tr><td><span class="ref" data-ref="H8">H8</span></td><td>两项优化在 Thor 上能否把 L 压到 Δ 以下？</td><td>同一组调用、同一脚本，在 Thor 上跑与 5090 相同的网格。</td><td>逐次测单次调用</td><td>6.40 → 2.61 s，20 / 20 决策不变；剩下的以 prefill 为主。</td><td><a href="#q3b">常规方法</a></td></tr>
-      <tr><td><span class="ref" data-ref="H4b">H4b</span></td><td>Thor 上的 prefill 慢在哪里？</td><td>torch.profiler 在 Thor 上记不到 kernel，于是逐个 binding 加同步计时。</td><td>单次 prefill</td><td>一个逐 token 的线性注意力 kernel 占 55 %，比 5090 慢 32 倍。</td><td><a href="#q3b">常规方法</a></td></tr>
-      <tr><td><span class="ref" data-ref="H9">H9</span></td><td>Thor 前端不用分块路径，是不是因为它在 Thor 上算不准？</td><td>同一份层输入上跑 7 个变体，逐层与逐 token 参考比较；先确认数值正确，再换路径。</td><td>单次 prefill</td><td><code>wy_lt</code> 与 5090 同样准确；prefill 3 994 → 2 294 ms。</td><td><a href="#q3b">常规方法</a></td></tr>
-      <tr><td><span class="ref" data-ref="H11">H11</span> <span class="ref" data-ref="H13">H13</span></td><td>快路径、换 kernel 会不会改变干预决策？</td><td>从闭环里挑出含 <code>next</code> 或失败的回合重建调用；换 kernel 时其余不变。</td><td>逐次测单次调用</td><td>快路径 27 / 27 不变；换 <code>wy_lt</code> 后 L 2.61 → 1.77 s，3 / 47 次决策不同。</td><td><a href="#q3b">常规方法</a>，M3</td></tr>
-      <tr><td><span class="ref" data-ref="H16">H16</span></td><td>按真实节奏运行时，三种配置的 L 各是多少？给共置测量一个单独运行的基准。</td><td>规划器进程回放 66 次调用（含腕部 720 与 decompose），三组配置各跑一遍。</td><td><b>固定时钟</b>（异步节奏）</td><td>L 6.92 / 2.63 / 1.78 s；原始路径排队最多 38 s；连续 5–9 min 无漂移。</td><td><a href="#q3b">常规方法</a>；<a href="#q3c">共置的基准</a></td></tr>
-      <tr><td><span class="ref" data-ref="H6H7H10">H6 / H7 / H10</span></td><td>空闲后 decode 变慢有多严重？</td><td>背靠背运行 → 空闲不同时长 → 再运行，看前两次 decode 的周期时间。</td><td>—</td><td>只在空闲 3–5 min 后出现、持续约 1 min；共置时大部分消失，不列为问题。</td><td>排除</td></tr>
-      <tr><td><span class="ref" data-ref="H12">H12</span> → <span class="ref" data-ref="H14">H14</span> → <span class="ref" data-ref="H15">H15 / H15w</span></td><td>Thor 上同一提示词为什么回复不同？不知道这一点，就判断不了优化是否改变了决策。</td><td>依次只改一个条件：重复顺序、GPU 上有无其他进程、prefill 路径。</td><td>逐次重复单次调用</td><td>5090 80 / 80；Thor 44–79 / 80。比较决策时以运行间翻转为参照。</td><td>评估方法</td></tr>
-    </table></div>
+    <div class="ans">按服务的问题分组，组内按回答问题的先后排列。每行是实验要回答的问题；点开看设计、协议与结果。多数实验逐次测一次调用，与协议无关（<a href="#protocols">本线测了哪种协议</a>）。</div>
+    <div class="tree">
+      <details class="tg" open><summary>规划器延迟：用常规方法降下来（Q3b）</summary>
+        <ol class="exp">
+          <li><details class="ti"><summary>monitor 调用里哪些计算是多余的？<span class="ref" data-ref="MC5090">monitor 调用</span><span class="note">RTX 5090</span></summary>
+            <div class="tb"><dl class="ed"><dt>设计</dt><dd>先在快的机器上把调用拆开：输入里多少逐 token 不变，回复里决策在第几个 token；再试去掉它们，看决策是否改变。</dd><dt>协议</dt><dd>逐次测单次调用</dd><dt>结果</dt><dd>61–65 % 的输入不变，决策在第 9–16 个 token；两项优化 1 057 → 338 ms，决策不变；前缀非对齐截断改了 6 / 12 次干预决策。</dd></dl></div></details></li>
+          <li><details class="ti"><summary>放进闭环后，规划器的延迟变成多少等待？<span class="ref" data-ref="SIM">LIBERO 闭环</span><span class="note">RTX 5090</span></summary>
+            <div class="tb"><dl class="ed"><dt>设计</dt><dd>规划器 + 执行器在仿真里跑完整的分解、执行、检查，比较原始路径与两项优化。</dd><dt>协议</dt><dd>同步：规划器思考时仿真暂停</dd><dt>结果</dt><dd>等待占比 19.8 % → 12.0 %，21 个回合的成败与决策不变。</dd></dl></div></details></li>
+          <li><details class="ti"><summary>两项优化在 Thor 上能否把 L 压到 Δ 以下？<span class="ref" data-ref="H8">H8</span></summary>
+            <div class="tb"><dl class="ed"><dt>设计</dt><dd>同一组调用、同一脚本，在 Thor 上跑与 5090 相同的网格（复用前缀 × 解码方式）。</dd><dt>协议</dt><dd>逐次测单次调用</dd><dt>结果</dt><dd>6.40 → 2.61 s，20 / 20 决策不变；剩下的以 prefill 为主。</dd></dl></div></details></li>
+          <li><details class="ti"><summary>剩下的 prefill 慢在哪里？<span class="ref" data-ref="H4b">H4b</span></summary>
+            <div class="tb"><dl class="ed"><dt>设计</dt><dd>torch.profiler 在 Thor 上记不到 kernel，于是逐个 binding 加同步计时。</dd><dt>协议</dt><dd>单次 prefill</dd><dt>结果</dt><dd>一个逐 token 的线性注意力 kernel 占 55 %，比 5090 的分块路径慢 32 倍。</dd></dl></div></details></li>
+          <li><details class="ti"><summary>分块路径在 Thor 上算得准吗？<span class="ref" data-ref="H9">H9</span></summary>
+            <div class="tb"><dl class="ed"><dt>设计</dt><dd>同一份层输入上跑 7 个变体，逐层与逐 token 参考比较；先确认数值正确，再换路径。</dd><dt>协议</dt><dd>单次 prefill</dd><dt>结果</dt><dd><code>wy_lt</code> 与 5090 同样准确，只有手写 <code>wy</code> 出错；prefill 3 994 → 2 294 ms。</dd></dl></div></details></li>
+          <li><details class="ti"><summary>快路径、换 kernel 会不会改变干预决策？<span class="ref" data-ref="H11">H11</span><span class="ref" data-ref="H13">H13</span></summary>
+            <div class="tb"><dl class="ed"><dt>设计</dt><dd>前面的调用决策几乎全是 <code>continue</code>，检验不了；从闭环里挑出含 <code>next</code> 或失败的回合重建调用。换 kernel 时其余条件不变。</dd><dt>协议</dt><dd>逐次测单次调用</dd><dt>结果</dt><dd>快路径 27 / 27 不变，含 3 / 3 次 <code>next</code>；换 <code>wy_lt</code> 后 L 2.61 → 1.77 s，3 / 47 次接近平局的决策不同。</dd></dl></div></details></li>
+          <li><details class="ti"><summary>按真实节奏运行时，三种配置的 L 各是多少？<span class="ref" data-ref="H16">H16</span></summary>
+            <div class="tb"><dl class="ed"><dt>设计</dt><dd>规划器进程回放 VoLoAgent 的 66 次调用（含腕部 720 与 decompose），三组配置各跑一遍。</dd><dt>协议</dt><dd>固定时钟（异步节奏）：调用按时到期，不等规划器</dd><dt>结果</dt><dd>L 6.92 / 2.63 / 1.78 s；原始路径排队最多 38 s，快路径不排队；连续 5–9 min 无漂移。</dd></dl></div></details></li>
+        </ol></details>
+      <details class="tg" open><summary>真正的问题：为共置测量准备（Q2c、Q3c）</summary>
+        <ol class="exp">
+          <li><details class="ti"><summary>共置测量用的规划器侧基准是什么？<span class="ref" data-ref="H16">H16</span></summary>
+            <div class="tb"><dl class="ed"><dt>设计</dt><dd>同上一组第 7 项：规划器进程单独在 Thor 上按真实节奏运行，每次调用记录开始、决策可用、结束；共置测量用同一个进程、加上执行器再跑一遍即可对比。Thor 上已接入共用的 GPU 独占锁。</dd><dt>协议</dt><dd>固定时钟</dd><dt>结果</dt><dd>单独运行的基准已有；27B 共置待测。</dd></dl></div></details></li>
+        </ol></details>
+      <details class="tg"><summary>评估方法</summary>
+        <ol class="exp">
+          <li><details class="ti"><summary>Thor 上同一提示词为什么回复不同？<span class="ref" data-ref="H12">H12</span><span class="ref" data-ref="H14">H14</span><span class="ref" data-ref="H15">H15 / H15w</span></summary>
+            <div class="tb"><dl class="ed"><dt>为什么做</dt><dd>不知道运行间差异有多大，就判断不了一种优化是否改变了决策。</dd><dt>设计</dt><dd>依次只改一个条件：重复顺序（前一次调用固定与否）、GPU 上有无其他进程、prefill 路径。</dd><dt>协议</dt><dd>逐次重复单次调用</dd><dt>结果</dt><dd>RTX 5090 80 / 80 相同；Thor 44–79 / 80，不是单一来源，不在 Thor 前端的 prefill 路径里。比较决策时以运行间翻转为参照。</dd></dl></div></details></li>
+        </ol></details>
+      <details class="tg"><summary>排除候选问题</summary>
+        <ol class="exp">
+          <li><details class="ti"><summary>空闲后 decode 变慢有多严重？<span class="ref" data-ref="H6H7H10">H6 / H7 / H10</span></summary>
+            <div class="tb"><dl class="ed"><dt>设计</dt><dd>背靠背运行 → 空闲不同时长 → 再运行，看前两次 decode 的周期时间。</dd><dt>结果</dt><dd>只在空闲 3–5 min 后出现、持续约 1 min；共置时大部分消失，不列为问题。</dd></dl></div></details></li>
+        </ol></details>
+    </div>
   </div>
 
   <div class="sq" id="q3d">
