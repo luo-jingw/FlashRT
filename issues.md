@@ -1736,6 +1736,9 @@ replies of the same prompt in one process are not always token-identical.
   19 of 20 calls. All 100 decisions are `continue`. RTX 5090, same order: 80 / 80.
 - H13 of the same round (GPU idle, prefill linear attention on `wy_lt`, 47 calls): the timed `generate` equals the
   untimed reference `generate` of the same call in 44 / 47.
+- Round `1111_h15h16` (GPU idle, the H12 order `back_to_back`): H15 (`native`) repetitions 2-5 equal the first in
+  69 / 80, all five identical in 12 / 20; H15w (`wy_lt`) 55 / 80 and 9 / 20. H15 still has single differing
+  repetitions between identical ones (ep0 steps 240 / 320 / 480 / 720, ep43 steps 240 / 480 / 800).
 
 ## Evidence
 
@@ -1791,8 +1794,13 @@ replies of the same prompt in one process are not always token-identical.
 - H15w: H15 with the prefill linear attention on the parent `wy_lt` route. If H15 shows leftover state and H15w
   repeats 80 / 80, the state is in the Thor frontend's own prefill path (`_thor_lin_K_forward`); if both scatter
   alike, it is in a part both routes share.
-- Then, if leftover state is confirmed, fill the Thor frontend's scratch and state buffers with a constant before each
-  call and find which buffer removes the dependence.
+- H15 / H15w result: on an idle GPU repetitions 2-5 also differ singly, so a source other than the predecessor exists
+  without another process; H15w is not 80 / 80, so the source is not only in the Thor frontend's own prefill path.
+  Both hypotheses above stay open; the predecessor effect (H14 79 / 80) and a scheduling-dependent kernel can both
+  be present.
+- Next: fill the Thor frontend's scratch and state buffers with a constant before each call (tests the first
+  hypothesis on its own), and repeat one call's prefill only, comparing last-position logits bitwise across
+  repetitions (localizes the scheduling-dependent part to prefill or decode).
 
 ## Impact
 

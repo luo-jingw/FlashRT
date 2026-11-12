@@ -1031,6 +1031,35 @@ isolated p50：周期 50 ms 一段 start / end 44.93 / 37.97，周期 100 ms 一
 
 结论去向：本节；`opportunities.md` OPT-040 candidate 5（H13）；issues.md ISSUE-114（H14）；`research/topics/long-horizon-planner-executor/experiments/monitor_call/README.md`；`research/topics/long-horizon-planner-executor/thor_rationale.md`；`plan.md` Phase 7 / 8。`THOR_CHECKLIST.md` 的 H14、H13 已删除，新增 H15。
 
+### `1111_h15h16` 轮：H15 / H15w GPU 空闲时按 H12 的顺序重复，H16 规划器进程在 Thor 上单独运行（commit `7ed16ef9`）
+
+共同条件：HEAD `7ed16ef9`，MAXN，GPC / NVD 锁定，`emc_locked=null`；GPU 空闲（只有 Xorg / gnome）；`P0_env.log` 为空；torch 2.9.1+cu130、transformers 5.17.0、driver 580.00；未改时钟、未 sudo。每行经 `with_gpu_lock.sh` 运行，等待 0 s。`$OUT` = `$HOME/thor_val/1111_h15h16`。产物已带回入库（`32b11560`）：`monitor_call/reply_repeat_thor_official_idle{,_wylt}.json`、`colocation_thor/planner_process_thor_{original,fast,fast_wylt}.jsonl`。
+
+**H15 / H15w**（`monitor_call/reply_repeat.py thor back_to_back`，H12 的 20 次调用，各重复 5 次）：
+
+| | H15（`native`） | H15w（`wy_lt`） | H12（GPU 上另有进程） | H14（`after_previous`） |
+|---|---|---|---|---|
+| 第 2–5 次与第 1 次相同 | 69 / 80 | 55 / 80 | 44 / 80 | 79 / 80 |
+| 5 次全部相同的调用 | 12 / 20 | 9 / 20 | 7 / 20 | 19 / 20 |
+
+- H15 第 2–5 次中仍有夹在相同次之间的单次不同（ep0 第 240 / 320 / 480 / 720 步、ep43 第 240 / 480 / 800 步）。
+- 按 H15 的判据：GPU 空闲时也有不来自前一次调用的单次差异；H15w 不是 80 / 80，来源不只在 Thor 前端自己的 prefill 线性注意力路径里。
+
+**H16**（`colocation_thor/planner_process.py thor`，6 段录制、66 次调用：6 decompose、59 monitor、1 replan；每组先热身一遍再按节奏计时；三个 jsonl 各 66 行调用，`fast` 两组另有 6 行 `capsule`，log 均有 `warm-up pass done`）。monitor，单位 s：
+
+| 组 | L_decision 中位 / 最大，腕部 224 | 腕部 720 | 开始 − 到期，224 中位 / 最大 | L_decision > 5.33 s | monitor prefill 中位 224 / 720 |
+|---|---|---|---|---|---|
+| `original` | 4.79 / 5.58 | 6.60 / 8.47 | 9.47 / 29.65 | 30 / 59 | — |
+| `fast` | 2.63 / 2.79 | 4.38 / 4.64 | 0.00 / 1.03 | 0 / 59 | 2.03 / 3.69 |
+| `fast` + `wy_lt` | 1.78 / 2.03 | 2.86 / 4.19 | 0.00 / 0.00 | 0 / 59 | 1.18 / 2.17 |
+
+- `fast` + `wy_lt` 腕部 720 在 ep188 前几步仍有开始延迟（最大 6.05 s）。
+- 决策：各组与 5090 同一脚本逐调用相同 59 / 66（7 处不同）；`fast` 与 `fast` + `wy_lt` 61 / 66。
+- 快路径之后 prefill 占 monitor L_decision 的 66 %（224）/ 76 %（720）（`fast` + `wy_lt`，中位之比）。
+- 每组锁内耗时：`original` 19 min，`fast` 11 min，`fast` + `wy_lt` 10 min，含加载与热身。
+
+结论去向：本节；issues.md ISSUE-114（H15 / H15w）；`research/topics/long-horizon-planner-executor/experiments/colocation_thor/README.md` 的 Thor 一节（H16）；`research/topics/long-horizon-planner-executor/summary_1111.html`。`THOR_CHECKLIST.md` 的 H15、H15w、H16 已删除。
+
 ### 各精度（未叠加其他选项，同一次运行，fp16 参考 275.2 ms）
 
 | 精度 | `infer()` P50 | vs official（median，LIBERO gate） | MAE vs GT |
