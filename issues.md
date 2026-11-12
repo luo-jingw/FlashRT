@@ -1801,6 +1801,13 @@ replies of the same prompt in one process are not always token-identical.
 - Next: fill the Thor frontend's scratch and state buffers with a constant before each call (tests the first
   hypothesis on its own), and repeat one call's prefill only, comparing last-position logits bitwise across
   repetitions (localizes the scheduling-dependent part to prefill or decode).
+- Chenwei B26 T2 (C-#26): the same 27B decomposition prompt repeated three times gives identical replies in 12 / 12
+  groups with the planner alone on the full GPU, 11 / 12 next to the executor without a partition, and 0 / 12 on an
+  8-SM MPS partition (first sub-goal equal in 7 / 12). The SM count the planner runs on changes its output. Candidate
+  mechanisms (not checked): cuBLASLt heuristics that pick algorithms from the SM count the context reports (as
+  suspected for the executor in ISSUE-107), and persistent or stream-K GEMM schedules whose split of the K reduction
+  depends on the number of SMs. Next: log the cuBLASLt algorithm and the kernel names of one planner prefill on 20 and
+  on 8 SMs; if they differ, pin the algorithms chosen on the full GPU and repeat the 8-SM run.
 
 ## Impact
 
