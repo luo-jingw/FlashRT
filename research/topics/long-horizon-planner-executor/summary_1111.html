@@ -270,6 +270,12 @@ ol.exp{margin:0 14px 12px 22px;padding:0 0 0 2.6em;border-left:2px solid var(--l
 ol.exp>li::marker{font-family:var(--f-mono);color:var(--accent)}
 details.ti>summary .ref{margin-left:8px}
 details.ti>summary .note{margin-left:6px}
+.eq{font-family:"Cambria Math","STIX Two Math","Latin Modern Math","Times New Roman",serif;font-size:16px;line-height:1.9;background:var(--sunk);border-radius:6px;padding:8px 12px;overflow-x:auto;white-space:nowrap;color:var(--ink)}
+.eq i{font-style:italic}
+.eq .w{color:var(--muted);font-family:var(--f-body);font-size:13px;margin-left:14px;white-space:normal}
+.mathsteps{display:grid;gap:12px}
+.mathsteps h5{margin:0;font-size:14px}
+.mathsteps p{margin:0}
 dl.ed{display:grid;grid-template-columns:4.5em minmax(0,1fr);gap:4px 10px;margin:0}
 dl.ed dt{color:var(--muted);font-size:13px}
 dl.ed dd{margin:0;min-width:0}
@@ -728,6 +734,36 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
               <div class="row"><span>分块，每块 16</span><div class="tok wy" id="tok-w"></div><span class="ctr" id="ctr-w">第 0 步</span></div>
               <p class="note">每一格是一个 token。逐 token 每步只能算 1 个（后一个依赖前一个的结果），要 64 步；分块每步把一整块写成矩阵乘法一次算完，4 步。实际提示词 4 093 个 token、块大小 64：逐 token 4 093 步，分块 64 步。</p>
             </div>
+          </div></details>
+        <details class="ev" style="margin-top:8px"><summary><span class="nm">分块的数学形式</span><span class="hl">4 093 次递推 → 64 次</span><span class="one">为什么可以合并，合并之后算的是什么</span></summary>
+          <div class="body mathsteps">
+            <div><h5>1. 逐 token（<code>native</code>）</h5>
+              <p>每层每个头有一个状态矩阵 <i>S</i>（128 × 128），第 <i>t</i> 个 token 更新一次并输出：</p>
+              <div class="eq"><i>S</i><sub><i>t</i></sub> = <i>α</i><sub><i>t</i></sub> <i>S</i><sub><i>t</i>−1</sub> (I − <i>β</i><sub><i>t</i></sub> <i>k</i><sub><i>t</i></sub><i>k</i><sub><i>t</i></sub><sup>⊤</sup>) + <i>β</i><sub><i>t</i></sub> <i>v</i><sub><i>t</i></sub><i>k</i><sub><i>t</i></sub><sup>⊤</sup>,　　<i>o</i><sub><i>t</i></sub> = <i>S</i><sub><i>t</i></sub> <i>q</i><sub><i>t</i></sub><span class="w">α 门控，β 写入强度；k、v、q 由当前 token 算出</span></div>
+              <p>第 <i>t</i> 步要用第 <i>t</i>−1 步的 <i>S</i>，4 093 个 token 就是 4 093 次依次进行的矩阵乘向量。</p></div>
+            <div><h5>2. 为什么能合并：对 <i>S</i> 是线性的</h5>
+              <p>记 <i>A</i><sub><i>t</i></sub> = <i>α</i><sub><i>t</i></sub>(I − <i>β</i><sub><i>t</i></sub><i>k</i><sub><i>t</i></sub><i>k</i><sub><i>t</i></sub><sup>⊤</sup>)，<i>B</i><sub><i>t</i></sub> = <i>β</i><sub><i>t</i></sub><i>v</i><sub><i>t</i></sub><i>k</i><sub><i>t</i></sub><sup>⊤</sup>，一步就是 <i>S</i><sub><i>t</i></sub> = <i>S</i><sub><i>t</i>−1</sub><i>A</i><sub><i>t</i></sub> + <i>B</i><sub><i>t</i></sub>。<i>S</i> 外面没有 softmax 或激活函数，连续 <i>C</i> 步可以直接展开：</p>
+              <div class="eq"><i>S</i><sub><i>C</i></sub> = <i>S</i><sub>0</sub> <i>A</i><sub>1</sub><i>A</i><sub>2</sub>⋯<i>A</i><sub><i>C</i></sub> + Σ<sub><i>t</i>=1…<i>C</i></sub> <i>B</i><sub><i>t</i></sub> <i>A</i><sub><i>t</i>+1</sub>⋯<i>A</i><sub><i>C</i></sub><span class="w"><i>S</i><sub>0</sub> 是块开始时的状态</span></div>
+              <p>这是矩阵乘法的结合律：先把一块的 <i>A</i> 乘起来再作用到 <i>S</i><sub>0</sub> 上，和一步步乘过去结果相同。</p></div>
+            <div><h5>3. 连乘的紧凑形式（WY 表示）</h5>
+              <p>以不带门控（<i>α</i> = 1）为例。每个 I − <i>β kk</i><sup>⊤</sup> 是单位阵减一个秩 1 矩阵，它们的连乘和累加项可以写成：</p>
+              <div class="eq">(I − <i>β</i><sub>1</sub><i>k</i><sub>1</sub><i>k</i><sub>1</sub><sup>⊤</sup>)⋯(I − <i>β</i><sub><i>n</i></sub><i>k</i><sub><i>n</i></sub><i>k</i><sub><i>n</i></sub><sup>⊤</sup>) = I − Σ<sub><i>i</i>≤<i>n</i></sub> <i>w</i><sub><i>i</i></sub><i>k</i><sub><i>i</i></sub><sup>⊤</sup>,　　累加项 = Σ<sub><i>i</i>≤<i>n</i></sub> <i>u</i><sub><i>i</i></sub><i>k</i><sub><i>i</i></sub><sup>⊤</sup></div>
+              <div class="eq"><i>w</i><sub><i>n</i></sub> = <i>β</i><sub><i>n</i></sub>(<i>k</i><sub><i>n</i></sub> − Σ<sub><i>i</i>&lt;<i>n</i></sub> (<i>k</i><sub><i>i</i></sub><sup>⊤</sup><i>k</i><sub><i>n</i></sub>) <i>w</i><sub><i>i</i></sub>),　　<i>u</i><sub><i>n</i></sub> = <i>β</i><sub><i>n</i></sub>(<i>v</i><sub><i>n</i></sub> − Σ<sub><i>i</i>&lt;<i>n</i></sub> (<i>k</i><sub><i>i</i></sub><sup>⊤</sup><i>k</i><sub><i>n</i></sub>) <i>u</i><sub><i>i</i></sub>)</div>
+              <p>把一块的 <i>k</i>、<i>v</i>、<i>w</i>、<i>u</i> 按行排成矩阵 <i>K</i>、<i>V</i>、<i>W</i>、<i>U</i>（<i>C</i> 行），上面的递推就是一个下三角方程组，一次解完：</p>
+              <div class="eq"><i>W</i> = <i>T</i> diag(<i>β</i>) <i>K</i>,　　<i>U</i> = <i>T</i> diag(<i>β</i>) <i>V</i>,　　<i>T</i> = (I + tril(diag(<i>β</i>) <i>KK</i><sup>⊤</sup>, −1))<sup>−1</sup><span class="w"><i>T</i> 是 <i>C</i> × <i>C</i> 下三角矩阵，<i>C</i> = 64</span></div></div>
+            <div><h5>4. 块内输出与块末状态：全是矩阵乘法</h5>
+              <div class="eq"><i>Ũ</i> = <i>U</i> − <i>W S</i><sub>0</sub><sup>⊤</sup>,　　<i>O</i> = <i>Q S</i><sub>0</sub><sup>⊤</sup> + (<i>QK</i><sup>⊤</sup> ⊙ <i>M</i>) <i>Ũ</i>,　　<i>S</i><sub><i>C</i></sub> = <i>S</i><sub>0</sub> + <i>Ũ</i><sup>⊤</sup><i>K</i><span class="w"><i>O</i> 的第 <i>t</i> 行就是 <i>o</i><sub><i>t</i></sub>；<i>M</i> 是含对角线的下三角掩码</span></div>
+              <p>块内 64 个 token 的输出一次算出，块与块之间只传 <i>S</i><sub>0</sub> → <i>S</i><sub><i>C</i></sub>。带门控时，每一项再乘上两个位置之间 <i>α</i> 的连乘（衰减系数），矩阵形式不变。上面的公式在随机数据上与逐 token 递推的差在 10<sup>−14</sup> 量级。</p></div>
+            <div><h5>5. 计算形态的变化</h5>
+              <div class="tw"><table style="min-width:520px">
+                <tr><th></th><th>逐 token（<code>native</code>）</th><th>分块（<code>wy</code> / <code>wy_lt</code>）</th></tr>
+                <tr><td>必须依次完成的步数</td><td class="n">4 093</td><td class="n">64</td></tr>
+                <tr><td>每步的计算</td><td>128 × 128 矩阵乘一个向量</td><td>一个 64 × 64 下三角求解 + 几个 64 × 128 × 128 规模的矩阵乘</td></tr>
+                <tr><td>能否用上 tensor core</td><td>不能，GPU 大部分算力闲着</td><td>能（<code>wy_lt</code> 交给 cuBLASLt）</td></tr>
+                <tr><td>Thor 上的 prefill</td><td class="n">3 994 ms</td><td class="n">2 294 ms</td></tr>
+              </table></div>
+              <p>数学上两者相同；数值上舍入的先后顺序变了，每层输出与逐 token 相差约 cos 0.9998，所以换 kernel 后 59 次 monitor 有 5 次决策不同。分块只在块边界上得到精确的 <i>S</i><sub><i>C</i></sub>，所以复用前缀必须截在块边界（2 048 的整数倍）上。</p>
+              <p class="src"><span class="who l">文献</span>Yang 等，Parallelizing Linear Transformers with the Delta Rule over Sequence Length（<a href="https://arxiv.org/abs/2406.06484" target="_blank" rel="noopener">arXiv 2406.06484</a>）；Gated Delta Networks（<a href="https://arxiv.org/abs/2412.06464" target="_blank" rel="noopener">arXiv 2412.06464</a>）。</p></div>
           </div></details>
       </div></div>
     </div>
