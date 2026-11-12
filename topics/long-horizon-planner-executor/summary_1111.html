@@ -497,6 +497,18 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
       <tr><td>规划器（本周实测）</td><td>官方 Qwen3.8-27B（FlashRT NVFP4）</td><td>2B / 7B（HF）</td></tr>
     </table></div>
     <p class="note">为什么用 VoLoAgent 的调用：悬停表头里的 <span class="term" tabindex="0" data-tip="tip-volo">VoLoAgent</span>。</p>
+    <div class="panel" id="protocols">
+      <h4>本线测了哪种协议</h4>
+      <p>两种协议里 L 是同一个量，区别只在 L 变成什么代价：同步下是停机时间，异步下是按旧指令做事的时间与过时的决策（Q1c 的时间轴）。本线主要测 L 本身，所以结论对两种协议都成立；代价只在同步协议下完整测过。</p>
+      <div class="tw"><table style="min-width:600px">
+        <tr><th>实验</th><th>协议</th><th>测到什么</th></tr>
+        <tr><td><span class="ref" data-ref="H8">H8</span> <span class="ref" data-ref="H9">H9</span> <span class="ref" data-ref="H11">H11</span> <span class="ref" data-ref="H13">H13</span> <span class="ref" data-ref="H4b">H4b</span> <span class="ref" data-ref="H12">H12–H15</span></td><td>不涉及：逐次测一次调用</td><td>L 本身，以及决策是否改变</td></tr>
+        <tr><td><span class="ref" data-ref="SIM">LIBERO 闭环</span>（RTX 5090）</td><td><b>同步</b>：规划器思考时仿真暂停</td><td>同步下的代价：等待占比 19.8 % → 12.0 %</td></tr>
+        <tr><td><span class="ref" data-ref="H16">H16</span>（Thor）</td><td><b>半个异步</b>：调用按固定时钟到期、不等规划器，但没有机器人在动</td><td>L，以及 L &gt; Δ 时调用排队（最多 38 s）；没有测机器人一侧的代价</td></tr>
+        <tr><td>—</td><td><b>完整的异步闭环</b>：机器人一边动、规划器一边想</td><td>未测："按旧指令做了多少"、决策是否因此出错</td></tr>
+      </table></div>
+      <p class="note">为什么这样：VoLoAgent 与 RoboCerebra 的开源代码都是同步的；先把 L 压下来对两种协议都有用；异步闭环需要仿真在规划器思考时继续推进，并且需要真正跟随子目标指令的执行器才能看出"旧指令"的损失，本线的 ImageWAM 几乎不读指令。两个模型同时运行时本身是异步的：执行器按自己的时钟释放动作块，不等规划器，这是 H16 按固定时钟回放的原因。页面里的"等待占比 56 % → 25 %"是同步协议下的代价（由 L 推算）。</p>
+    </div>
   </div>
 
   <div class="sq" id="q2m">
@@ -705,6 +717,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
       <tr><td>子目标多的长任务上 decompose 的耗时</td><td>W-VOLO 只有 1–2 个子目标；长任务（RoboCerebra 平均 9.1 个）的 decompose 会更长，且在关键路径上（B4）。</td><td>构造子目标数不同的分解提示，在 Thor 上测 decompose 的 L 与第一条子目标出来的时间。</td><td><span class="tag u">未测</span></td></tr>
       <tr><td>decompose 的规则</td><td>"闭合即停"管不到 decompose（B4）。</td><td>第一条子目标可用即开始执行、长度上限；测开局等待与决策是否变化。</td><td><span class="tag">待做</span></td></tr>
       <tr><td>回复不可复现的来源</td><td>决定 M3 的参照有多宽（A5）。</td><td>在两条路径共用的部分（全注意力、GEMM、decode）逐个换确定性实现。</td><td><span class="tag">待做</span></td></tr>
+      <tr><td>异步协议下的代价</td><td>真实部署中机器人多半不停下来等；L 在异步下的代价（按旧指令做了多少、决策是否出错）未测（<a href="#protocols">本线测了哪种协议</a>）。</td><td>仿真在规划器思考时继续推进，执行器换成跟随子目标指令的策略；比较不同 L 下的成功率与完成时间。</td><td><span class="tag u">未测</span></td></tr>
       <tr><td>功耗约束</td><td>A6 未知。</td><td>运行中记录板级功耗与频率（只读），与 L、执行器延迟对齐。</td><td><span class="tag u">未测</span></td></tr>
     </table></div>
   </div>
