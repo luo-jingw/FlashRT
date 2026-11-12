@@ -17,6 +17,9 @@ Planner modes (planner = planner_qwen3vl.py, one image + short prompt -> 32 toke
 DRAM / SM activity: nvidia-smi utilization.{gpu,memory} sampled every 100 ms during the timed window.
 
 EXEC_PRECISION overrides the executor precision (default fp8); EXEC_STEPS the denoise steps (default 10). NO_SMI=1 skips the nvidia-smi sampler (devices whose nvidia-smi lacks these fields). DROP_TEXT_ENCODER=1 frees the text encoder after set_prompt; START_AT=<epoch s> delays the timed window to that wall-clock time (used by run_r3.sh to align several executors).
+STOP_FILE=<path> ends the timed window at the first release after that file exists (a co-located process of
+unknown length, e.g. ../../../long-horizon-planner-executor/experiments/colocation_thor/run_colocation.sh); DURATION_S is then
+the upper bound. The output records t0_wall (time.time() at the window start) for alignment with other processes' wall-clock logs.
 
 usage: python colocation_bench.py MODE HZ DURATION_S OUT_JSON
 """
@@ -145,7 +148,8 @@ alloc0 = torch.cuda.memory_stats()
 
 ticks, release, next_plan = [], t0, t0
 period = PERIOD_MS / 1e3
-while release < t_end:
+STOP_FILE = os.environ.get("STOP_FILE")
+while release < t_end and not (STOP_FILE and os.path.exists(STOP_FILE)):
     now = time.time()
     if now < release:
         time.sleep(release - now)
@@ -177,7 +181,7 @@ smi = np.array(smi_rows)
 pc = planner_recs
 ALLOC_KEYS = ["num_alloc_retries", "num_device_alloc", "num_device_free", "segment.all.allocated", "segment.all.freed"]
 res = {"mode": MODE, "planner_hz": HZ, "period_ms": PERIOD_MS, "precision": PRECISION, "steps": WORKLOAD.num_steps,
-       "duration_s": DURATION,
+       "duration_s": DURATION, "t0_wall": t0, "stopped_by_file": bool(STOP_FILE and os.path.exists(STOP_FILE)),
        "gpu": torch.cuda.get_device_name(), "ticks": len(ticks),
        "torch_reserved_GB": round(torch.cuda.memory_reserved() / 1e9, 2),
        "green_sm": None if green is None else {"device": green.device_sm_count, "planner": green.part.sm_count, "executor": green.rest.sm_count},
