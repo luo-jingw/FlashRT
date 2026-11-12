@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Thor 规划器周报 1111</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+/* Layout: a field report organised by three questions. Sticky rail of question anchors; every sub-question opens with
+   its answer in a ruled block, then the evidence (cards with diagrams, tables, figures, videos). Grey = baseline,
+   green = accelerated path or the paper's contribution, red dashed = the 5.33 s check interval. Owner badges:
+   J = Jingwu, C = Chenwei, 文献 = literature. */
+:root{
+  --bg:#f5f6f3; --surface:#ffffff; --sunk:#eceee9; --ink:#1b1f1d; --ink2:#46504a; --muted:#6a736d;
+  --line:#d5dad3; --accent:#1c6a58; --accent-soft:#dcebe5; --accent-ink:#ffffff;
+  --base:#9ba49d; --fast:#1c6a58; --fast2:#56a58c; --crit:#c2412f; --crit-soft:#f6e3df;
+  --j:#2b5fa8; --j-soft:#e1e9f6; --c:#9a5b12; --c-soft:#f6ead9;
+  --shadow:rgba(20,30,25,.14);
+  --f-body:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --r:8px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#111513; --surface:#181d1a; --sunk:#1f2521; --ink:#e5ebe7; --ink2:#bac4be; --muted:#8f9a93;
+  --line:#2d3531; --accent:#6cc3a8; --accent-soft:#1a3029; --accent-ink:#0b1712;
+  --base:#606b64; --fast:#5fb79c; --fast2:#2f7a64; --crit:#e2725f; --crit-soft:#3a201b;
+  --j:#86aee8; --j-soft:#1b2638; --c:#e0a965; --c-soft:#33261a; --shadow:rgba(0,0,0,.5); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111513; --surface:#181d1a; --sunk:#1f2521; --ink:#e5ebe7; --ink2:#bac4be; --muted:#8f9a93;
+  --line:#2d3531; --accent:#6cc3a8; --accent-soft:#1a3029; --accent-ink:#0b1712;
+  --base:#606b64; --fast:#5fb79c; --fast2:#2f7a64; --crit:#e2725f; --crit-soft:#3a201b;
+  --j:#86aee8; --j-soft:#1b2638; --c:#e0a965; --c-soft:#33261a; --shadow:rgba(0,0,0,.5); color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.75;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 72px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+.page{max-width:1000px;margin:0 auto}
+a{color:var(--accent);text-underline-offset:2px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+code{font-family:var(--f-mono);font-size:.88em;background:var(--sunk);padding:0 .3em;border-radius:4px}
+header.hero{padding-block:40px 18px;display:grid;gap:12px}
+.eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font-size:clamp(26px,4.4vw,38px);line-height:1.2;margin:0;text-wrap:balance}
+h2{font-size:24px;line-height:1.3;margin:0;text-wrap:balance}
+h2 .qn{font-family:var(--f-mono);color:var(--accent);margin-right:10px}
+h3{font-size:17px;line-height:1.4;margin:0}
+h3 .qn{font-family:var(--f-mono);font-size:14px;color:var(--accent);margin-right:8px}
+h4{font-size:14.5px;margin:0}
+p{margin:0;max-width:78ch}
+ul,ol{margin:0;padding-left:1.3em;display:grid;gap:6px;max-width:80ch}
+.lede{color:var(--ink2);max-width:72ch}
+.toc{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+@media (max-width:760px){.toc{grid-template-columns:minmax(0,1fr)}}
+.toc .q{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;display:grid;gap:4px;align-content:start}
+.toc .q a{text-decoration:none}
+.toc .q>a{font-weight:700;color:var(--ink)}
+.toc .q ul{list-style:none;padding:0;gap:2px;font-size:13.5px}
+.toc .q ul a{color:var(--ink2)}
+.toc .q ul a:hover{color:var(--accent)}
+nav.rail{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:10px;border-bottom:1px solid var(--line);margin-bottom:28px}
+nav.rail ul{list-style:none;padding:0;display:flex;gap:4px;overflow-x:auto;max-width:none}
+nav.rail a{display:block;white-space:nowrap;padding:4px 12px;border-radius:999px;text-decoration:none;color:var(--muted);font-size:13px;border:1px solid transparent}
+nav.rail a:hover{color:var(--ink);border-color:var(--line)}
+section.q{display:grid;gap:28px;margin-bottom:56px;padding-top:18px;border-top:2px solid var(--ink);scroll-margin-top:calc(env(safe-area-inset-top,0px) + 56px)}
+.sq{display:grid;gap:12px;scroll-margin-top:calc(env(safe-area-inset-top,0px) + 60px)}
+.ans{border-left:3px solid var(--accent);padding:2px 0 2px 14px;font-size:15.5px;max-width:80ch}
+.bridge{background:var(--accent-soft);border-radius:var(--r);padding:10px 14px;font-size:14.5px;max-width:84ch}
+.bridge b{color:var(--accent)}
+.note{color:var(--muted);font-size:13px}
+.tw{overflow-x:auto;min-width:0}
+table{border-collapse:collapse;width:100%;min-width:620px;font-size:14px;background:var(--surface)}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:var(--sunk);font-weight:500;font-size:13px;color:var(--ink2)}
+td.n{font-family:var(--f-mono);font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.hl td{background:var(--accent-soft)}
+.tag{display:inline-block;font-size:11.5px;border-radius:999px;padding:0 8px;margin:1px 4px 1px 0;white-space:nowrap;border:1px solid var(--line);color:var(--ink2)}
+.tag.u{border-style:dashed;color:var(--muted)}
+.tag.w{border-color:var(--crit);color:var(--crit)}
+.tag.ok{border-color:var(--accent);color:var(--accent)}
+.who{display:inline-block;font-size:11px;font-weight:700;border-radius:4px;padding:0 6px;margin:0 4px 0 0;white-space:nowrap;vertical-align:1px;line-height:1.6}
+.who.j{background:var(--j-soft);color:var(--j)}
+.who.c{background:var(--c-soft);color:var(--c)}
+.who.l{background:var(--sunk);color:var(--ink2)}
+.who.jc{background:linear-gradient(90deg,var(--j-soft) 50%,var(--c-soft) 50%);color:var(--ink)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;display:grid;gap:10px;min-width:0}
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+@media (max-width:760px){.grid2{grid-template-columns:minmax(0,1fr)}}
+.legend{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12.5px;color:var(--ink2);align-items:center}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.legend i.dash{width:16px;height:0;border-top:2px dashed var(--crit);border-radius:0;vertical-align:3px}
+/* L charts */
+.lchart{display:grid;grid-template-columns:minmax(8em,13em) minmax(0,1fr);gap:8px 14px;align-items:center;font-size:13.5px}
+.lchart .lb{line-height:1.35}
+.lchart .lb small{display:block;color:var(--muted);font-size:12px}
+.lchart .tr{position:relative;display:grid;gap:3px;min-width:0}
+.lchart .bar{display:flex;align-items:center;gap:8px;min-width:0}
+.lchart .f{height:13px;border-radius:0 4px 4px 0;flex:none;min-width:2px}
+.lchart .v{font-family:var(--f-mono);font-size:12px;color:var(--ink2);white-space:nowrap}
+.lchart .delta{position:absolute;top:-6px;bottom:-6px;border-left:2px dashed var(--crit);pointer-events:none}
+.lchart .ax{grid-column:2;position:relative;height:18px;font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+.lchart .ax span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+.lchart .ax span:first-child{transform:none}
+@media (max-width:560px){.lchart{grid-template-columns:minmax(0,1fr)}.lchart .ax{grid-column:1}}
+/* timelines */
+.tl{display:grid;gap:6px;font-size:12.5px}
+.tl .row{display:grid;grid-template-columns:5.5em minmax(0,1fr);gap:10px;align-items:center}
+.tl .lane{display:flex;height:22px;gap:2px;min-width:0}
+.tl .lane span{display:flex;align-items:center;justify-content:center;font-size:11px;white-space:nowrap;overflow:hidden;border-radius:3px;color:var(--ink)}
+.s-run{background:var(--accent-soft)}
+.s-old{background:repeating-linear-gradient(135deg,var(--accent-soft) 0 6px,var(--crit-soft) 6px 12px)}
+.s-stop{background:var(--crit-soft);color:var(--crit)!important}
+.s-plan{background:var(--base);color:var(--surface)!important}
+.s-idle{background:transparent}
+.htl{position:relative;height:46px;border-bottom:1px solid var(--line);margin:6px 0 22px}
+.htl .mk{position:absolute;bottom:0;transform:translateX(-50%)}
+.htl .mk b{display:block;width:3px;height:14px;border-radius:2px;background:var(--fast)}
+.htl .mk.d b{height:26px;background:var(--ink2)}
+.htl .mk.r b{height:20px;background:var(--crit)}
+.htl .mk span{position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:3px;white-space:nowrap;font-family:var(--f-mono);font-size:10.5px;color:var(--muted)}
+/* flow diagrams */
+.fig{display:grid;gap:6px}
+.fig .cap{font-size:12.5px;color:var(--muted)}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12.5px}
+.nd{border:1px solid var(--line);background:var(--sunk);border-radius:6px;padding:4px 9px;line-height:1.4;text-align:center;min-width:0}
+.nd small{display:block;color:var(--muted);font-size:11px}
+.nd.p{border-color:var(--fast);background:var(--accent-soft)}
+.nd.e{border-color:var(--base)}
+.nd.x{border-style:dashed;background:transparent}
+.nd.k{border-color:var(--crit);background:var(--crit-soft)}
+.ar{color:var(--muted);font-family:var(--f-mono)}
+.ar.loop{color:var(--fast)}
+.lanes{display:grid;gap:6px}
+.chain{display:flex;gap:3px;align-items:flex-end;height:64px;margin-top:16px}
+.chain span{flex:1;border-radius:3px 3px 0 0;background:var(--fast);position:relative}
+.chain span i{position:absolute;bottom:100%;left:0;right:0;text-align:center;font-style:normal;font-family:var(--f-mono);font-size:10.5px;color:var(--ink2)}
+.chainx{display:flex;gap:3px;font-family:var(--f-mono);font-size:10.5px;color:var(--muted)}
+.chainx span{flex:1;text-align:center}
+/* steps */
+.steps{display:grid;gap:10px}
+.step{display:grid;grid-template-columns:2.2em minmax(0,1fr);gap:4px 12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
+.step .no{font-family:var(--f-mono);font-size:20px;line-height:1.2;color:var(--accent)}
+.step .why{color:var(--ink2);font-size:14px}
+/* native vs WY */
+.scan{display:grid;gap:4px}
+.scan .cells{display:flex;flex-wrap:wrap;gap:1px;max-width:100%}
+.scan .cells i{display:block;width:5px;height:12px;background:var(--base);border-radius:1px}
+.scan .blocks{display:flex;gap:3px}
+.scan .blocks i{display:flex;align-items:center;justify-content:center;flex:1;height:26px;background:var(--fast2);border-radius:3px;font-style:normal;font-size:10.5px;color:var(--surface)}
+/* hover terms */
+.term{border-bottom:1.5px dotted var(--accent);cursor:help;color:inherit}
+.pop{position:fixed;z-index:30;max-width:min(360px,calc(100vw - 24px));background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 10px 28px var(--shadow);padding:12px 14px;font-size:13.5px;line-height:1.65;display:grid;gap:6px}
+.pop h4{margin:0;font-size:14px}
+.pop ol{margin:0;padding-left:1.2em;display:grid;gap:4px}
+#tips{display:none}
+/* expandable cards */
+.cards{display:grid;gap:8px}
+details.ev{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:0}
+details.ev>summary{list-style:none;cursor:pointer;padding:10px 14px;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:4px 12px;align-items:baseline}
+details.ev>summary::-webkit-details-marker{display:none}
+details.ev>summary::before{content:"▸";color:var(--muted);font-size:11px;transition:transform .15s}
+details.ev[open]>summary::before{transform:rotate(90deg)}
+details.ev .nm{font-weight:700}
+details.ev .hl{font-family:var(--f-mono);font-size:12.5px;color:var(--accent);white-space:nowrap}
+details.ev .one{grid-column:2 / -1;color:var(--ink2);font-size:13.5px;line-height:1.5}
+details.ev .body{padding:4px 14px 14px 34px;display:grid;gap:12px}
+@media (max-width:560px){details.ev .body{padding-left:14px}}
+.metric{font-size:13px;background:var(--sunk);border-radius:6px;padding:6px 10px;color:var(--ink2)}
+.metric b{color:var(--ink)}
+.mb{display:grid;grid-template-columns:minmax(7em,15em) minmax(0,1fr);gap:6px 12px;align-items:center;font-size:13px}
+.mb .bt{display:flex;align-items:center;gap:8px;min-width:0}
+.mb .f{height:11px;border-radius:0 4px 4px 0;flex:none;min-width:2px;background:var(--base)}
+.mb .f.hi{background:var(--fast)}
+.mb .v{font-family:var(--f-mono);font-size:12px;color:var(--ink2);white-space:nowrap}
+@media (max-width:560px){.mb{grid-template-columns:minmax(0,1fr)}}
+.src{font-size:12.5px;color:var(--muted)}
+/* challenge explorer */
+.chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px}
+.chips span.k{color:var(--muted);margin-right:2px}
+.chip{font:inherit;font-size:12.5px;border:1px solid var(--line);background:var(--surface);color:var(--ink2);padding:3px 11px;border-radius:999px;cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.chl{display:grid;gap:6px}
+details.ch{background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
+details.ch>summary{list-style:none;cursor:pointer;padding:10px 14px;display:grid;grid-template-columns:2em minmax(0,1fr) 6.5em;gap:2px 12px;align-items:center}
+details.ch>summary::-webkit-details-marker{display:none}
+details.ch .rk{font-family:var(--f-mono);font-size:18px;color:var(--muted);text-align:right}
+details.ch .tt{font-weight:700;line-height:1.4}
+details.ch .tt small{font-weight:400;color:var(--muted);margin-left:6px;font-family:var(--f-mono);font-size:12px}
+details.ch .kn{grid-column:2 / -1;font-size:13.5px;color:var(--ink2);line-height:1.5}
+details.ch .im{display:flex;gap:2px;justify-self:end;align-self:start;margin-top:6px}
+details.ch .im i{display:block;width:10px;height:10px;border-radius:2px;background:var(--sunk);border:1px solid var(--line)}
+details.ch .im i.on{background:var(--crit);border-color:var(--crit)}
+details.ch .bd{padding:0 14px 14px 58px;display:grid;gap:8px;font-size:14px}
+@media (max-width:560px){details.ch .bd{padding-left:14px}details.ch>summary{grid-template-columns:1.6em minmax(0,1fr) 5.6em}}
+details.ch .bd dl{display:grid;grid-template-columns:7.5em minmax(0,1fr);gap:6px 12px;margin:0}
+details.ch .bd dt{color:var(--muted);font-size:13px}
+details.ch .bd dd{margin:0;min-width:0}
+@media (max-width:560px){details.ch .bd dl{grid-template-columns:minmax(0,1fr)}}
+details.ch[hidden]{display:none}
+/* video */
+.vids{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px}
+figure.vid{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:10px;display:grid;gap:6px;min-width:0}
+figure.vid video{width:100%;max-width:100%;height:auto;border-radius:4px;background:#000;aspect-ratio:4/3}
+figure.vid figcaption{font-size:13px;color:var(--ink2);line-height:1.55}
+footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font-size:12.5px}
+@media (prefers-reduced-motion: reduce){details.ev>summary::before{transition:none}}
+</style>
+
+</head>
+<body>
+<div class="page">
+<header class="hero">
+  <div class="eyebrow">Jetson AGX Thor · 27B 规划器 + 执行器 · 11/05–11/11</div>
+  <h1>长时程任务中的规划器 + 执行器，在 Jetson Thor 上</h1>
+  <p class="lede">按三个问题组织：为什么是这个场景；这个 setting 在 Thor 上有什么独特 challenge；challenge 怎么解决、用什么指标衡量。每个子问题先给答案，再给证据。</p>
+  <div class="legend"><span><span class="who j">J</span>Jingwu 的结果</span><span><span class="who c">C</span>Chenwei 的结果</span><span><span class="who jc">J+C</span>联合发现</span><span><span class="who l">文献</span>论文</span><span>带下划虚线的词：悬停或点按看解释</span></div>
+  <div class="toc">
+    <div class="q"><a href="#q1">Q1 场景 motivation</a><ul>
+      <li><a href="#q1a">Q1a 为什么 long horizon</a></li>
+      <li><a href="#q1b">Q1b 为什么用规划器 + 执行器</a></li>
+      <li><a href="#q1c">Q1c 规划器延迟意味着什么</a></li></ul></div>
+    <div class="q"><a href="#q2">Q2 我们的 setting 有什么独特 challenge</a><ul>
+      <li><a href="#q2a">Q2a 我们的 setting 是什么</a></li>
+      <li><a href="#q2b">Q2b 有哪些 challenge，哪个影响最大</a></li>
+      <li><a href="#q2c">Q2c 主要问题：延迟</a></li></ul></div>
+    <div class="q"><a href="#q3">Q3 challenge 可以怎么解决</a><ul>
+      <li><a href="#q3a">Q3a 用什么指标</a></li>
+      <li><a href="#q3b">Q3b 延迟怎么降</a></li>
+      <li><a href="#q3c">Q3c 带宽、热态、调度</a></li>
+      <li><a href="#q3d">Q3d 还缺什么</a></li></ul></div>
+  </div>
+</header>
+
+<nav class="rail" aria-label="章节"><ul>
+  <li><a href="#q1">Q1 场景</a></li><li><a href="#q2">Q2 challenge</a></li><li><a href="#q3">Q3 解决</a></li>
+</ul></nav>
+
+<!-- ================= Q1 ================= -->
+<section class="q" id="q1">
+  <h2><span class="qn">Q1</span>场景 motivation</h2>
+
+  <div class="sq" id="q1a">
+    <h3><span class="qn">Q1a</span>为什么 long horizon</h3>
+    <div class="ans">long horizon 没有统一的形式化定义；文献的共同用法是：任务由多个有先后依赖的子任务组成，持续成百上千个控制步，执行中要追踪进度、应对部分可观测和变化的环境。真实任务以分钟计，flat 策略的错误随子任务链累积。</div>
+    <div class="tw"><table>
+      <tr><th>基准 / 工作负载</th><th>子任务数</th><th>时长</th><th>说明</th></tr>
+      <tr><td><span class="who l">文献</span>CALVIN ABC→D</td><td class="n">5（连续 5 条指令）</td><td>—</td><td>按"连续完成前 k 个子任务"计成功率</td></tr>
+      <tr><td><span class="who l">文献</span>LIBERO-Long（LIBERO-10）</td><td class="n">多为 2（"A and B"）</td><td class="n">上限 520–600 步</td><td>已接近饱和：flat π0.5 92.4，分层 95–96</td></tr>
+      <tr class="hl"><td><span class="who j">J</span>本线 W-VOLO（VoLoAgent 回放，LIBERO-10）</td><td class="n">decompose 出 1–2 个子目标</td><td class="n">800 步 = 53 s</td><td>长时程范围的短端</td></tr>
+      <tr class="hl"><td><span class="who c">C</span>W-RC（RoboCerebra 回放）</td><td class="n">平均 9.1</td><td class="n">平均 2 972 步（20 Hz 约 2.5 min）</td><td>NeurIPS 2025 的长时程基准，长于 W-VOLO</td></tr>
+      <tr><td><span class="who l">文献</span>BEHAVIOR Challenge 2025</td><td>—</td><td class="n">平均 6.6 min，最长任务平均 14 min</td><td>50 个家务任务</td></tr>
+      <tr><td><span class="who l">文献</span>π0.5 家务</td><td>多阶段</td><td class="n">2–5 min；整间清理 10–15 min</td><td>真机</td></tr>
+    </table></div>
+    <p><b>本线负载与 long horizon 的关系</b>：VoLoAgent 的 monitor 每次的输入是固定的（系统提示、回合开始与当前的图、子目标列表），单次调用的 L 不随任务长度变；任务越长，monitor 次数越多，累计等待按时长线性增加，decompose 要输出的子目标越多。Thor 上 H16 连续运行 5–9 min，前后半段 L 中位相差不到 0.1 s <span class="who j">J</span>。</p>
+    <div class="cards">
+      <details class="ev"><summary><span class="nm">CALVIN ABC→D（GR-1 论文表 1）</span><span class="hl">0.854 → 0.401</span><span class="one">连做 5 个子任务，越往后成功率越低</span></summary>
+        <div class="body">
+          <div class="metric"><b>指标</b>：1 000 条 5 指令链中，连续完成前 k 个子任务的比例（k = 1…5）。</div>
+          <div class="fig">
+            <div class="chain"><span style="height:85.4%"><i>0.854</i></span><span style="height:71.2%"><i>0.712</i></span><span style="height:59.6%"><i>0.596</i></span><span style="height:49.7%"><i>0.497</i></span><span style="height:40.1%"><i>0.401</i></span></div>
+            <div class="chainx"><span>k=1</span><span>2</span><span>3</span><span>4</span><span>5</span></div>
+            <div class="cap">GR-1：每多连一个子任务，成功率再降一截；平均连续完成 3.06 个。</div>
+          </div>
+          <div class="fig">
+            <div class="chain" style="height:48px"><span style="height:41.8%;background:var(--base)"><i>0.418</i></span><span style="height:16.5%;background:var(--base)"><i>0.165</i></span><span style="height:5.7%;background:var(--base)"><i>0.057</i></span><span style="height:1.9%;background:var(--base)"><i>0.019</i></span><span style="height:1.1%;background:var(--base)"><i>0.011</i></span></div>
+            <div class="chainx"><span>k=1</span><span>2</span><span>3</span><span>4</span><span>5</span></div>
+            <div class="cap">HULC：较弱的策略衰减更快，平均连续完成 0.67 个。</div>
+          </div>
+          <p class="src"><span class="who l">文献</span><a href="https://arxiv.org/abs/2312.13139" target="_blank" rel="noopener">GR-1, arXiv 2312.13139</a></p>
+        </div></details>
+    </div>
+  </div>
+
+  <div class="sq" id="q1b">
+    <h3><span class="qn">Q1b</span>long horizon 为什么用规划器 + 执行器</h3>
+    <div class="ans">执行器相同、只加或不加规划器的对照里，分层明显更好；增益依赖规划器的能力与编排设计，所以规划器是秒级的大 VLM。也有单模型内规划同样有效的反例。</div>
+    <div class="cards">
+      <details class="ev"><summary><span class="nm">Hi-VLA 编排研究</span><span class="hl">成功率 25.30 → 67.08 %</span><span class="one">同一 VLA、同一任务提示，只改上层编排；系统地比较了编排的各个设计选择</span></summary>
+        <div class="body">
+          <div class="metric"><b>指标</b>：MuJoCo ALOHA 仿真的任务成功率（%，每类 5 个任务、各 200 次）；真机 ALOHA 为 15 个水果里放到同色盘子上的个数。</div>
+          <div class="fig">
+            <div class="lanes">
+              <div class="flow"><span class="nd e">任务提示</span><span class="ar">→</span><span class="nd e">VLA</span><span class="ar">→</span><span class="nd x">动作</span><span class="note">flat</span></div>
+              <div class="flow"><span class="nd p">VLM 规划器<small>当前观测 + 记忆 + 任务</small></span><span class="ar">→</span><span class="nd">短指令<small>保持到切换条件触发</small></span><span class="ar">→</span><span class="nd e">同一 VLA</span><span class="ar">→</span><span class="nd x">动作</span><span class="ar loop">↺ 切换</span></div>
+            </div>
+            <div class="cap">分层结构：VLM 输出一条短指令交给 VLA，直到切换条件触发再重新规划。</div>
+          </div>
+          <div class="fig">
+            <div class="tw"><table style="min-width:520px">
+              <tr><th>设计维度</th><th>简单分层</th><th>最佳分层</th></tr>
+              <tr><td>记忆</td><td>无</td><td>跨回合记忆，总结成可供性</td></tr>
+              <tr><td>VLM 推理</td><td>不思考</td><td>开启思考</td></tr>
+              <tr><td>观测</td><td>原始图像</td><td>图像 + 接触描述</td></tr>
+              <tr><td>何时切换指令</td><td>固定时长</td><td>成功检测器</td></tr>
+            </table></div>
+            <div class="cap">论文的贡献：把编排拆成这些维度逐一比较，最佳组合的增益约是简单分层的两倍。</div>
+          </div>
+          <div class="mb">
+            <span>长时程 flat</span><span class="bt"><span class="f" style="width:25.3%"></span><span class="v">25.30 %</span></span>
+            <span>长时程 简单分层</span><span class="bt"><span class="f hi" style="width:40.56%;opacity:.6"></span><span class="v">40.56 %</span></span>
+            <span>长时程 最佳分层</span><span class="bt"><span class="f hi" style="width:67.08%"></span><span class="v">67.08 %</span></span>
+            <span>真机 flat / 简单 / 最佳</span><span class="bt"><span class="v">3 / 9 / 12 个（共 15）</span></span>
+            <span>短时程 flat / 简单 / 最佳</span><span class="bt"><span class="v">69.63 / 69.57 / 78.22 %</span></span>
+          </div>
+          <p class="src"><span class="who l">文献</span>表 1、§4.7 · <a href="https://arxiv.org/abs/2606.10267" target="_blank" rel="noopener">arXiv 2606.10267</a></p>
+        </div></details>
+      <details class="ev" id="card-volo"><summary><span class="nm">VoLo</span><span class="hl">成功率 12.57 → 41.80 %</span><span class="one">同一个 π0.5，加上 VLM 编排循环；本线 harness 的来源</span></summary>
+        <div class="body">
+          <div class="metric"><b>指标</b>：各测试套件任务成功率的平均（%）。</div>
+          <div class="fig">
+            <div class="flow"><span class="nd p">VLM：decompose<small>任务 → 子目标列表</small></span><span class="ar">→</span><span class="nd e">π0.5 执行子目标<small>8 步动作块，15 Hz</small></span><span class="ar">→</span><span class="nd p">VLM：monitor<small>约每 5 s，回合开始图 vs 当前图</small></span><span class="ar">→</span><span class="nd">continue / next / replan / 工具</span><span class="ar loop">↺</span></div>
+            <div class="cap">论文的贡献：把 VLM 作为"物理编排器"，周期检查进度、切换子目标、失败时重规划或调用工具。</div>
+          </div>
+          <div class="mb">
+            <span>π0.5 单独</span><span class="bt"><span class="f" style="width:12.57%"></span><span class="v">12.57 %</span></span>
+            <span>+ 编排（强 VLM）</span><span class="bt"><span class="f hi" style="width:41.8%"></span><span class="v">41.80 %</span></span>
+            <span>+ 编排（Qwen3-VL-8B）</span><span class="bt"><span class="f hi" style="width:19.95%;opacity:.6"></span><span class="v">19.95 %</span></span>
+          </div>
+          <p class="src"><span class="who l">文献</span>表 2、§5.4（"with weaker VLMs the gain becomes marginal"）· <a href="https://arxiv.org/abs/2606.07723" target="_blank" rel="noopener">arXiv 2606.07723</a></p>
+        </div></details>
+      <details class="ev"><summary><span class="nm">Gemini Robotics 1.5</span><span class="hl">进度分 44 → 约 80 %</span><span class="one">同一 VLA，加上推理模型做编排；编排器越强，规划失败越少</span></summary>
+        <div class="body">
+          <div class="metric"><b>指标</b>：进度分 = 多步任务部分完成程度的连续分数（%）；规划类失败 = 编排器给出错误计划或错误指令的次数占全部评测次数的比例。</div>
+          <div class="fig">
+            <div class="flow"><span class="nd x">用户指令 + 环境反馈</span><span class="ar">→</span><span class="nd p">GR-ER 1.5 编排器<small>分解任务、判断完成、可调用网络搜索等工具</small></span><span class="ar">→</span><span class="nd">短自然语言指令</span><span class="ar">→</span><span class="nd e">GR 1.5（VLA）<small>作为编排器的一个工具</small></span><span class="ar">→</span><span class="nd x">动作</span></div>
+            <div class="cap">VLA 被当作编排器调用的工具。</div>
+          </div>
+          <div class="mb">
+            <span>进度分：VLA 单独（开思考，最高）</span><span class="bt"><span class="f" style="width:44%"></span><span class="v">44 %</span></span>
+            <span>进度分：+ ER 1.5 编排</span><span class="bt"><span class="f hi" style="width:80%"></span><span class="v">常接近 80 %</span></span>
+            <span>规划类失败：Gemini 2.5 Flash 编排</span><span class="bt"><span class="f" style="width:25.5%"></span><span class="v">25.5 %</span></span>
+            <span>规划类失败：ER 1.5 编排</span><span class="bt"><span class="f hi" style="width:9%"></span><span class="v">9 %</span></span>
+          </div>
+          <p class="src"><span class="who l">文献</span>§5、表 1；逐任务数值只在图中 · <a href="https://arxiv.org/abs/2510.03342" target="_blank" rel="noopener">arXiv 2510.03342</a></p>
+        </div></details>
+      <details class="ev"><summary><span class="nm">反例：π0.5、OneTwoVLA、VLA-OS</span><span class="hl">单模型同样有效</span><span class="one">规划在同一个模型内部完成，与分层相当或更好</span></summary>
+        <div class="body">
+          <div class="fig">
+            <div class="lanes">
+              <div class="flow"><span class="nd x">观测 + 指令</span><span class="ar">→</span><span class="nd p">同一个模型<small>先输出子任务文本，再输出动作</small></span><span class="ar">→</span><span class="nd x">动作</span><span class="note">π0.5、OneTwoVLA</span></div>
+              <div class="flow"><span class="nd x">观测 + 指令</span><span class="ar">→</span><span class="nd p">VLM 规划器</span><span class="ar">→</span><span class="nd e">VLA</span><span class="ar">→</span><span class="nd x">动作</span><span class="note">分层</span></div>
+            </div>
+            <div class="cap">差别在规划是否由独立的模型完成。</div>
+          </div>
+          <ul>
+            <li>π0.5：同一模型内做子任务预测，优于人类给的高层子任务；GPT-4 零样本作高层最差（§V-E，图 13，数值只在图中）。</li>
+            <li>OneTwoVLA：单模型推理加行动，平均成功率 87 %，比 Gemini 2.5 Pro + π0 的双系统高 24 个百分点（§4.1）。</li>
+            <li>VLA-OS：单模型内规划与分层 "largely comparable"，都优于只出动作的 VLA。</li>
+            <li>输给单模型的双系统，规划器多是未经机器人数据适配的通用大模型。规划器需要成为独立大模型，前提是任务要开放词汇理解、世界知识或长记忆。</li>
+          </ul>
+          <p class="src"><span class="who l">文献</span><a href="https://arxiv.org/abs/2504.16054" target="_blank" rel="noopener">π0.5, arXiv 2504.16054</a> · <a href="https://arxiv.org/abs/2505.11917" target="_blank" rel="noopener">OneTwoVLA, arXiv 2505.11917</a> · <a href="https://arxiv.org/abs/2506.17561" target="_blank" rel="noopener">VLA-OS, arXiv 2506.17561</a></p>
+        </div></details>
+    </div>
+    <p>分成两个模型的理由：复用预训练 VLM 的推理能力、两层运行频率不同（规划器约 1 Hz 或更低）、两层可单独替换。</p>
+  </div>
+
+  <div class="sq" id="q1c">
+    <h3><span class="qn">Q1c</span>这样的系统怎么运行，规划器延迟意味着什么</h3>
+    <div class="ans">规划器每隔一个检查间隔看一次进度，执行器高频输出动作。规划器的延迟进入机器人的关键路径：<span class="term" tabindex="0" data-tip="tip-sync">同步协议</span>下机器人停着等，<span class="term" tabindex="0" data-tip="tip-async">异步协议</span>下机器人按旧指令执行。规划器延迟超过检查间隔时会怎样，文献里没有测量。</div>
+    <div class="grid2">
+      <div class="panel">
+        <div class="tl">
+          <div class="row"><b>同步</b><span class="note">机器人等规划器</span></div>
+          <div class="row"><span>规划器</span><div class="lane"><span class="s-idle" style="flex:5.33"></span><span class="s-plan" style="flex:2">L</span><span class="s-idle" style="flex:5.33"></span><span class="s-plan" style="flex:2">L</span></div></div>
+          <div class="row"><span>机器人</span><div class="lane"><span class="s-run" style="flex:5.33">执行 Δ</span><span class="s-stop" style="flex:2">停</span><span class="s-run" style="flex:5.33">执行 Δ</span><span class="s-stop" style="flex:2">停</span></div></div>
+        </div>
+        <p>代价是时间：等待占比 = L / (L + Δ)。</p>
+      </div>
+      <div class="panel">
+        <div class="tl">
+          <div class="row"><b>异步</b><span class="note">机器人不停</span></div>
+          <div class="row"><span>规划器</span><div class="lane"><span class="s-idle" style="flex:5.33"></span><span class="s-plan" style="flex:2">L</span><span class="s-idle" style="flex:3.33"></span><span class="s-plan" style="flex:2">L</span><span class="s-idle" style="flex:2"></span></div></div>
+          <div class="row"><span>机器人</span><div class="lane"><span class="s-run" style="flex:5.33">执行</span><span class="s-old" style="flex:2">旧指令</span><span class="s-run" style="flex:3.33">执行</span><span class="s-old" style="flex:2">旧指令</span><span class="s-run" style="flex:2"></span></div></div>
+        </div>
+        <p>代价是质量：L 期间按旧指令或旧观测动作；L 超过间隔时调用堆积。</p>
+      </div>
+    </div>
+    <div class="vids">
+      <figure class="vid"><video controls muted playsinline preload="metadata" src="experiments/sim_closed_loop/videos/t6e0_planner_eos_next.mp4"></video>
+        <figcaption><span class="who j">J</span>同步协议的实际样子（RTX 5090，LIBERO-10 任务 6）：规划器调用期间画面停帧、加橙色边框，机器人不动。第 160 步 monitor 判 <code>next</code>，切到第二个子目标，第 213 步成功。整个闭环里机器人约 20 % 的时间在等。</figcaption></figure>
+      <figure class="vid"><video controls muted playsinline preload="metadata" src="experiments/sim_closed_loop/videos/t6e0_planner_fast_next.mp4"></video>
+        <figcaption><span class="who j">J</span>同一回合换成<span class="term" tabindex="0" data-tip="tip-twoopt">两项优化</span>：停帧变短，轨迹与决策相同；等待占比 19.8 % → 12.0 %。</figcaption></figure>
+    </div>
+    <div class="cards">
+      <details class="ev"><summary><span class="nm">同步：机器人停下等</span><span class="hl">执行占比 28.7 → 65.6 %</span><span class="one">Fast Plans 把规划从 1 094 ms 缩到 125 ms；SmolVLA 改成异步后完成时间短约 30 %</span></summary>
+        <div class="body">
+          <div class="metric"><b>指标</b>：执行占比（motion duty cycle）= 手臂在执行动作的墙钟时间 / 总墙钟时间；完成时间 = 完成一次任务的墙钟秒数。</div>
+          <div class="fig">
+            <div class="tl">
+              <div class="row"><span>规划慢</span><div class="lane"><span class="s-stop" style="flex:7">规划</span><span class="s-run" style="flex:3">执行</span><span class="s-stop" style="flex:7">规划</span><span class="s-run" style="flex:3">执行</span></div></div>
+              <div class="row"><span>规划快</span><div class="lane"><span class="s-stop" style="flex:2">规划</span><span class="s-run" style="flex:4">执行</span><span class="s-stop" style="flex:2">规划</span><span class="s-run" style="flex:4">执行</span><span class="s-stop" style="flex:2">规划</span><span class="s-run" style="flex:4">执行</span></div></div>
+            </div>
+            <div class="cap">Fast Plans 的贡献：规划器输出短的路点计划（≤ 7 块 × 19 token），规划时间降一个数量级，手臂停的时间随之减少（示意，比例取自 28.7 % 与 65.6 %）。</div>
+          </div>
+          <div class="mb">
+            <span>Fast Plans 执行占比 前</span><span class="bt"><span class="f" style="width:28.7%"></span><span class="v">28.7 %</span></span>
+            <span>Fast Plans 执行占比 后</span><span class="bt"><span class="f hi" style="width:65.6%"></span><span class="v">65.6 %</span></span>
+            <span>SmolVLA 完成时间 同步</span><span class="bt"><span class="f" style="width:100%"></span><span class="v">13.75 s</span></span>
+            <span>SmolVLA 完成时间 异步</span><span class="bt"><span class="f hi" style="width:70.5%"></span><span class="v">9.70 s</span></span>
+          </div>
+          <p class="src"><span class="who l">文献</span>Fast Plans 表 3A · <a href="https://arxiv.org/abs/2609.30833" target="_blank" rel="noopener">arXiv 2609.30833</a>；SmolVLA §4.6 · <a href="https://arxiv.org/abs/2506.01844" target="_blank" rel="noopener">arXiv 2506.01844</a>（标题待核实）</p>
+        </div></details>
+      <details class="ev"><summary><span class="nm">异步：按旧指令执行</span><span class="hl">成功率 61.4 vs 95.5 %</span><span class="one">Leap-VLA：VLM 每 2 s 才刷新一次时，没按部署时钟训练的执行器掉得厉害</span></summary>
+        <div class="body">
+          <div class="metric"><b>指标</b>：LIBERO-Spatial 任务成功率（%），刷新周期 = 慢模型两次更新之间的时间。</div>
+          <div class="fig">
+            <div class="flow"><span class="nd p">低频 VLM<small>每 0.2–2 s 刷新一次，输出 KV</small></span><span class="ar">→</span><span class="nd e">高频动作专家<small>20 Hz，用最近一次的 KV</small></span><span class="ar">→</span><span class="nd x">动作</span></div>
+            <div class="cap">论文的贡献：按部署时的刷新周期训练执行器，让它在旧的 VLM 输出下仍然可靠。</div>
+          </div>
+          <div class="mb">
+            <span>同频训练，0.2 s 刷新</span><span class="bt"><span class="f" style="width:97.5%"></span><span class="v">97.5 %</span></span>
+            <span>同频训练，2 s 刷新</span><span class="bt"><span class="f" style="width:61.4%"></span><span class="v">61.4 %</span></span>
+            <span>按部署时钟训练，2 s 刷新</span><span class="bt"><span class="f hi" style="width:95.5%"></span><span class="v">95.5 %</span></span>
+          </div>
+          <p class="src"><span class="who l">文献</span>表 III · <a href="https://arxiv.org/abs/2611.01011" target="_blank" rel="noopener">arXiv 2611.01011</a></p>
+        </div></details>
+      <details class="ev"><summary><span class="nm">发现问题到纠正的滞后</span><span class="hl">修复 7.9 vs 12.8 s</span><span class="one">NavGPT-3（Jetson Thor 上的四足导航）：规划器与执行重叠时修复更快</span></summary>
+        <div class="body">
+          <div class="metric"><b>指标</b>：修复时间 = 发现问题到机器人按新指令纠正的秒数；过时指令 = 30 次试验里执行了过时指令的次数。</div>
+          <div class="fig">
+            <div class="tl">
+              <div class="row"><span>顺序</span><div class="lane"><span class="s-run" style="flex:4">执行</span><span class="s-stop" style="flex:4">规划</span><span class="s-run" style="flex:4">执行</span><span class="s-stop" style="flex:4">规划</span></div></div>
+              <div class="row"><span>重叠</span><div class="lane"><span class="s-run" style="flex:16">执行（规划在后台同时进行）</span></div></div>
+            </div>
+            <div class="cap">论文的贡献：规划器与板载 VLA 重叠运行的导航运行时。</div>
+          </div>
+          <div class="mb">
+            <span>修复时间 重叠</span><span class="bt"><span class="f hi" style="width:61.7%"></span><span class="v">7.9 s</span></span>
+            <span>修复时间 顺序</span><span class="bt"><span class="f" style="width:100%"></span><span class="v">12.8 s</span></span>
+            <span>过时指令 重叠 / 顺序</span><span class="bt"><span class="v">1 / 8 次（共 30）</span></span>
+          </div>
+          <p class="src"><span class="who l">文献</span>表 10 · <a href="https://arxiv.org/abs/2610.10787" target="_blank" rel="noopener">arXiv 2610.10787</a></p>
+        </div></details>
+    </div>
+    <p>文献空白：没有工作测过规划器延迟 5–7 s、超过检查间隔时周期检查的代价；同一块 SoC 上规划器延迟与执行器截止期违约的联合代价也没人测过。</p>
+  </div>
+
+  <div class="bridge"><b>→ Q2</b>　系统里有一个秒级的大规划器，周期性检查进度；它的延迟决定机器人等多久。</div>
+</section>
+
+<!-- ================= Q2 ================= -->
+<section class="q" id="q2">
+  <h2><span class="qn">Q2</span>我们的 setting 有什么独特 challenge</h2>
+
+  <div class="sq" id="q2a">
+    <h3><span class="qn">Q2a</span>我们的 setting 是什么</h3>
+    <div class="ans">27B 规划器与执行器放在机器人本体的同一块 Jetson AGX Thor 上，规划器不受网络延迟与带宽的限制。调用方式按已有的 agent / <span class="term" tabindex="0" data-tip="tip-harness">harness</span> 配置：本线用 VoLoAgent（每 <span class="term" tabindex="0" data-tip="tip-delta">Δ = 5.33 s</span> 一次 monitor，多图长上下文），Chenwei 用 RoboCerebra（短上下文、更多子任务）。</div>
+    <div class="panel">
+      <h4>VoLoAgent 一个回合里的规划器调用（LIBERO-10，800 个控制步 = 53.3 s）</h4>
+      <div class="htl" id="htl"></div>
+      <div class="legend"><span><i style="background:var(--ink2)"></i>decompose：回合开始，把任务分解成子目标列表</span><span><i style="background:var(--fast)"></i>monitor：每 80 步检查一次，输出 <code>continue</code> / <code>next</code> / <code>replan</code></span><span><i style="background:var(--crit)"></i>replan：monitor 判 replan，或最后一个子目标 next 时</span></div>
+    </div>
+    <div class="tw"><table>
+      <tr><th style="width:15%">组成</th><th><span class="who j">J</span>VoLoAgent（W-VOLO）</th><th><span class="who c">C</span>RoboCerebra（W-RC）</th></tr>
+      <tr><td>是什么</td><td>智能体式的规划–执行系统（arXiv 2606.07723），开源 harness</td><td>长时程操作基准（arXiv 2506.06677，NeurIPS 2025），自带规划器 + VLA 的评测循环</td></tr>
+      <tr><td>规划器调用</td><td>decompose（开局）、monitor（每 80 步）、replan（事件触发）</td><td>decomposition（开局，编号列表）、monitor（周期）、switch（子目标边界）</td></tr>
+      <tr><td>monitor 的输入</td><td>6 张图（回合开始与当前 × 前置、外部、腕部相机）+ 子目标列表 + 上一工具结果；4.1–5.7k token</td><td>当前观测 + 子目标；约 470 token</td></tr>
+      <tr><td>输出</td><td>JSON：<code>status</code> / <code>action</code> / <code>reason</code>，决策在第 9–16 个 token</td><td>下一子目标或修正指令、完成判断；decomposition 为编号列表</td></tr>
+      <tr><td>子任务与时长</td><td>1–2 个子目标，53 s</td><td>平均 9.1 个子步，约 2.5 min</td></tr>
+      <tr><td>节奏</td><td>Δ = 5.33 s；执行器每 533 ms 一个 8 步动作块（15 Hz）</td><td>代码每 150 步（20 Hz 下 7.5 s）切换子目标；回放中执行器每 600 ms 释放一次</td></tr>
+      <tr><td>协议</td><td>同步</td><td>同步</td></tr>
+      <tr><td>规划器（本周实测）</td><td>官方 Qwen3.8-27B（FlashRT NVFP4）</td><td>2B / 7B（HF）</td></tr>
+    </table></div>
+    <div class="panel">
+      <h4>为什么用 VoLoAgent 的调用</h4>
+      <ol>
+        <li>有对照证据的分层系统：同一 π0.5 加上它的编排，成功率 12.57 → 41.80 %（<a href="#card-volo">Q1b 卡片</a>）。</li>
+        <li>开源代码把循环定义完整：三类调用、调用时刻、提示词、输出格式与 <code>max_tokens</code> 都可读出，可以录制成可重放的调用。多数论文不报告这些参数。</li>
+        <li>monitor 是多图长上下文（4.1–5.7k token），高于已报告的所有规划器上下文，正是 Thor 上 prefill 成为瓶颈的情形；RoboCerebra 是短上下文、长任务的一端，两者互补。</li>
+        <li>只取它的调用结构与节奏，规划器模型可替换：Thor 上用官方 Qwen3.8-27B。</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="sq" id="q2b">
+    <h3><span class="qn">Q2b</span>有哪些 challenge，哪个影响最大</h3>
+    <div class="ans">按影响排序：<b>影响 = 对机器人（等待、停顿、决策）的作用大小 × 出现的频繁程度</b>，依据实测幅度判断。前三项都指向规划器延迟；带宽影响执行器；热态在真实共置下大部分自行消失。点开每项看现象、证据，以及数据中心 LLM 服务为什么没有这个问题。</div>
+    <div class="chips" id="chips-group" role="group" aria-label="来源分组">
+      <span class="k">来源</span>
+      <button class="chip" type="button" data-f="all" aria-pressed="true">全部</button>
+      <button class="chip" type="button" data-f="A" aria-pressed="false">A · Thor 硬件本身</button>
+      <button class="chip" type="button" data-f="B" aria-pressed="false">B · setting 带来、Thor 上放大</button>
+    </div>
+    <div class="chips" id="chips-aff" role="group" aria-label="影响对象">
+      <span class="k">影响</span>
+      <button class="chip" type="button" data-f="all" aria-pressed="true">全部</button>
+      <button class="chip" type="button" data-f="wait" aria-pressed="false">机器人等待</button>
+      <button class="chip" type="button" data-f="exec" aria-pressed="false">执行器截止期</button>
+      <button class="chip" type="button" data-f="dec" aria-pressed="false">决策与评估</button>
+    </div>
+    <div class="chl" id="chl">
+      <details class="ch" data-g="B" data-a="wait"><summary><span class="rk">1</span><span class="tt">规划器延迟卡在关键路径上<small>B1</small></span><span class="im" aria-label="影响 5 / 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><span class="kn">每次 monitor：L 6.9 s 超过 Δ，机器人 56 % 的时间在等，调用排队最多推迟 38 s。<span class="who j">J</span></span></summary>
+        <div class="bd"><dl>
+          <dt>现象</dt><dd>原始路径 L 6.92 s（腕部 224）/ 8.76 s（720），超过 5.33 s 的检查间隔，开始时间逐次推迟；RTX 5090 上同一调用约 1.4 s（见 Q2c）。</dd>
+          <dt>证据</dt><dd><span class="who j">J</span>H8、H16</dd>
+          <dt>数据中心为什么没有</dt><dd>请求之间互相独立，服务按大量请求的<span class="term" tabindex="0" data-tip="tip-slo">统计延迟</span>考核；没有一个物理系统按固定周期等每一次回复。</dd></dl></div></details>
+      <details class="ch" data-g="A" data-a="wait"><summary><span class="rk">2</span><span class="tt">算力结构：prefill 相对慢得多<small>A3</small></span><span class="im" aria-label="影响 5 / 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><span class="kn">B1 的直接原因：Thor 相对 5090，prefill 慢 13.8 倍、解码只慢 3.6 倍，多图长上下文下 prefill 成了大头。<span class="who j">J</span><span class="who c">C</span></span></summary>
+        <div class="bd"><dl>
+          <dt>现象</dt><dd>多图长上下文（4–5.7k token）下瓶颈从解码移到 prefill；短上下文（约 470 token）时仍是解码占 L 的 92 %。两者合成联合发现 JC-1。</dd>
+          <dt>证据</dt><dd><span class="who j">J</span>1104_h3c、H4b、H8　<span class="who c">C</span>C-#8</dd>
+          <dt>数据中心为什么没有</dt><dd>长输入由大算力 GPU 计算，prefill 很快，且可以把 prefill 与解码拆到不同 GPU。</dd></dl></div></details>
+      <details class="ch" data-g="A" data-a="wait"><summary><span class="rk">3</span><span class="tt">新架构（SM110）软件栈不成熟<small>A4</small></span><span class="im" aria-label="影响 4 / 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span class="kn">prefill 的 55 % 在一个逐 token 的 kernel 上，比分块路径慢 32 倍；手写的分块 kernel 在 Thor 上算错。<span class="who j">J</span></span></summary>
+        <div class="bd"><dl>
+          <dt>现象</dt><dd>Thor 前端为稳妥一律走逐 token 的 <code>native</code> 路径；手写 <code>wy</code> kernel 在 SM110 上结果错误（48 层里 39 层 cos &lt; 0.99）；torch.profiler 在 Thor 上记录不到 CUDA kernel，只能逐 binding 计时。这一项可以修（见 Q3b 第 3 步）。</dd>
+          <dt>证据</dt><dd><span class="who j">J</span>H4b、H9</dd>
+          <dt>数据中心为什么没有</dt><dd>数据中心 GPU 上 kernel 与工具链成熟、验证充分。</dd></dl></div></details>
+      <details class="ch" data-g="A" data-a="exec"><summary><span class="rk">4</span><span class="tt">带宽：统一内存，SM 分区隔不开<small>A1</small></span><span class="im" aria-label="影响 4 / 5"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span class="kn">不分 SM 时，执行器在 200 ms 截止期下错过 27.8 % 的释放，全部与规划器解码重叠。<span class="who c">C</span><span class="who j">J</span></span></summary>
+        <div class="bd"><dl>
+          <dt>现象</dt><dd>分 SM（16 / 4）后执行器 0 错过，代价是规划器 prefill 慢 2.2 倍，而解码几乎不受影响：算力分得开、带宽分不开。规划器解码稳态约 200 GB/s，为拷贝上限的 85 %。</dd>
+          <dt>证据</dt><dd><span class="who c">C</span>C-#9、C-#12　<span class="who j">J</span>1104_h3c</dd>
+          <dt>数据中心为什么没有</dt><dd>CPU 用独立 DDR、GPU 用 HBM，带宽是 DGX Spark 这类统一内存设备的 13–20 倍；MIG 可以划分内存控制器（<span class="who l">文献</span>Ripple）。</dd></dl></div></details>
+      <details class="ch" data-g="B" data-a="wait"><summary><span class="rk">5</span><span class="tt">解码长尾与 decompose<small>B4</small></span><span class="im" aria-label="影响 3 / 5"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span><span class="kn">decompose 贪心解码陷入循环时，开局等 65 s；不循环时 Thor 上也要 3–10 s。<span class="who c">C</span><span class="who j">J</span></span></summary>
+        <div class="bd"><dl>
+          <dt>现象</dt><dd>每次启动有一次 decompose 跑满上限；Thor 上 decompose（<code>wy_lt</code> 路径）3.1–9.7 s，把回合开头的 monitor 推迟最多 6 s。任务越长、子目标越多，decompose 越长。</dd>
+          <dt>证据</dt><dd><span class="who c">C</span>C-#13　<span class="who j">J</span>H16</dd>
+          <dt>数据中心为什么没有</dt><dd>服务设输出长度上限，长尾只影响一个请求，不会让一个物理系统停住。</dd></dl></div></details>
+      <details class="ch" data-g="B" data-a="wait"><summary><span class="rk">6</span><span class="tt">两模型节奏对不齐、单一调用流排队<small>B2</small></span><span class="im" aria-label="影响 3 / 5"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span><span class="kn">切换子目标的调用排在 monitor 后面，最多晚 1.8 s 开始。<span class="who c">C</span></span></summary>
+        <div class="bd"><dl>
+          <dt>现象</dt><dd>反应时间 = 规划器调用本身 + 等执行器下一次释放；子目标边界处若有 monitor 在跑，切换调用要排队，机器人此时已经停着。</dd>
+          <dt>证据</dt><dd><span class="who c">C</span>C-#10、C-#14</dd>
+          <dt>数据中心为什么没有</dt><dd>没有第二个按自己节奏运行、依赖规划器输出的模型。</dd></dl></div></details>
+      <details class="ch" data-g="B" data-a="exec wait"><summary><span class="rk">7</span><span class="tt">抢占粒度<small>B3</small></span><span class="im" aria-label="影响 2 / 5"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span><span class="kn">两个模型之间最小的可中断单位是一次 forward；分 SM 后一次 prefill 最长 567 ms。<span class="who c">C</span></span></summary>
+        <div class="bd"><dl>
+          <dt>现象</dt><dd>不分 SM 时中止要等一次解码步（最长约 160 ms）；分 SM 后可能要等一次 prefill。同一个 SM 分区保护了执行器，却让规划器更难被抢占。</dd>
+          <dt>证据</dt><dd><span class="who c">C</span>C-#16</dd>
+          <dt>数据中心为什么没有</dt><dd>不同服务各占 GPU 或 MIG 实例，不需要互相抢占。</dd></dl></div></details>
+      <details class="ch" data-g="A" data-a="dec"><summary><span class="rk">8</span><span class="tt">运行间不可复现<small>A5</small></span><span class="im" aria-label="影响 2 / 5"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span><span class="kn">同一提示词贪心生成 5 次，5090 一字不差；Thor 上不完全相同，接近平局的决策偶尔翻转。<span class="who j">J</span><span class="who c">C</span></span></summary>
+        <div class="bd"><dl>
+          <dt>现象</dt><dd>Thor 上第 2–5 次与第 1 次相同 44–79 / 80，差异多在 <code>reason</code> 文字或开头的 <code>```json</code> 围栏；100 次决策里约 1 次翻转。来源未找到：不在 Thor 前端的 prefill 路径里，GPU 被其他进程占用时更多。主要影响评估：单次对比说明不了"优化是否改变了回复"。执行器同样跨进程不可复现。</dd>
+          <dt>证据</dt><dd><span class="who j">J</span>H12、H14、H15、H15w　<span class="who c">C</span>C-#17</dd>
+          <dt>数据中心为什么没有</dt><dd>数据中心同样有非确定性，但评测在固定条件下做；5090 上同一测试完全可复现。</dd></dl></div></details>
+      <details class="ch" data-g="A" data-a="wait"><summary><span class="rk">9</span><span class="tt">热态：内存的冷热状态<small>A2</small></span><span class="im" aria-label="影响 1 / 5"><i class="on"></i><i></i><i></i><i></i><i></i></span><span class="kn">空闲 3–5 min 以上后解码慢 1.63 倍、持续约 1 min；共置时执行器让它大部分自行消失。<span class="who j">J</span><span class="who c">C</span></span></summary>
+        <div class="bd"><dl>
+          <dt>现象</dt><dd>空闲 120 s 以内不出现；规划器单独运行拉不起内存状态，共置时慢状态只慢 3–27 %。两者合成联合发现 JC-2。低负载的 2B 规划器在后面的回合仍会漂进慢状态。</dd>
+          <dt>证据</dt><dd><span class="who j">J</span>H6、H7、H10　<span class="who c">C</span>C-#11</dd>
+          <dt>数据中心为什么没有</dt><dd>HBM 时钟不是部署时可变的状态，服务器负载稳定、时钟高位。</dd></dl></div></details>
+      <details class="ch" data-g="A" data-a="exec wait"><summary><span class="rk">–</span><span class="tt">功耗与频率预算共享<small>A6</small></span><span class="im" aria-label="影响未知"><i></i><i></i><i></i><i></i><i></i></span><span class="kn">未测：本线一直在 MAXN、GPC 锁频下运行。<span class="tag u">未测</span></span></summary>
+        <div class="bd"><dl>
+          <dt>现象</dt><dd>文献中 Orin Nano 上两个模型并行时 GPU 频率约减半。</dd>
+          <dt>数据中心为什么没有</dt><dd>每块 GPU 有独立的板级功耗上限。</dd></dl></div></details>
+    </div>
+    <p class="note">查过、目前不是问题：CPU 发射开销（prefill 中 kernel 以外的时间占 0.9 %，eager 与 CUDA graph 一样快）<span class="who j">J</span>；内存容量（27B NVFP4、前缀 capsule 176–195 MB 与执行器都放得下）<span class="who j">J</span>。</p>
+  </div>
+
+  <div class="sq" id="q2c">
+    <h3><span class="qn">Q2c</span>主要问题：延迟</h3>
+    <div class="ans">Thor 上原始路径的 <span class="term" tabindex="0" data-tip="tip-L">L</span> 超过 Δ，调用逐次排队，机器人一半以上的时间在等；RTX 5090 上没有这个问题。带宽和热态是影响延迟与执行器的两个机制。</div>
+    <div class="panel">
+      <div class="legend"><span><i style="background:var(--base)"></i>Jetson Thor</span><span><i style="background:var(--fast2)"></i>RTX 5090</span><span><i class="dash"></i>Δ = 5.33 s</span></div>
+      <div class="lchart" id="chart-orig"></div>
+      <p class="note"><span class="who j">J</span>H16：原始路径（整段 prefill，解码到 EOS），按回复结束计；VoLoAgent 的 6 段录制按 harness 节奏回放，monitor 中位（5090 那次运行时 GPU 上另有一个进程）。Thor 原始路径的开始时间相对到期时间推迟：腕部 224 中位 9.5 s、最多 29.7 s，720 中位 20.0 s、最多 38.4 s；等待占比 56 %（224）。</p>
+    </div>
+  </div>
+
+  <div class="bridge"><b>→ Q3</b>　主问题是规划器延迟；同时不能把延迟转嫁给执行器，也不能改变决策。</div>
+</section>
+
+<!-- ================= Q3 ================= -->
+<section class="q" id="q3">
+  <h2><span class="qn">Q3</span>challenge 可以怎么解决</h2>
+
+  <div class="sq" id="q3a">
+    <h3><span class="qn">Q3a</span>用什么指标判断解决了</h3>
+    <div class="ans">主指标是 <span class="term" tabindex="0" data-tip="tip-L">L</span>，要求 L &lt; Δ、越小越好；另有两项约束，保证延迟的降低不是拿执行器或任务质量换来的。</div>
+    <div class="tw"><table>
+      <tr><th style="width:22%">指标</th><th>含义</th><th style="width:44%">不满足的后果</th></tr>
+      <tr><td><b>L &lt; Δ，越小越好</b><br><span class="note">L 中位与最大值；等待占比 L / (L + Δ)</span></td><td>每次检查的决策在下一次检查到期之前出来。</td><td>同步协议下机器人停机时间变长（等待占比 56 % 时，任务墙钟时间约为纯执行时间的 2.3 倍）。L &gt; Δ 时调用排队，开始时间逐次推迟（Thor 原始路径最多 38 s），规划器看的是几十秒前的画面：子目标早已完成或失败，决策才出来。</td></tr>
+      <tr><td><b>执行器不错过控制截止期</b><br><span class="note">执行器调用 p99；超过截止期的比例</span></td><td>执行器在旧动作块用完之前给出新动作块（严格 200 ms，宽松 600 ms）。</td><td>机器人没有新动作可执行，只能停顿或继续执行过时的动作；一次超时会让下一次释放也被丢弃（<span class="who c">C</span>C-#12：27.8 % 的释放错过，成对出现）。</td></tr>
+      <tr><td><b>决策与原始路径一致</b><br><span class="note">干预决策（<code>replan</code>、<code>next</code>）的一致数</span></td><td>同一次调用，加速后的路径给出的决策与不加速的原始路径（整段 prefill、解码到 EOS）相同。</td><td>加速改变了任务行为：该 <code>next</code> 时给 <code>continue</code>，机器人在已完成的子目标上空转；该 <code>replan</code> 时没给，失败得不到处理；不该 <code>replan</code> 时给了，白白重新规划。<span class="who j">J</span>5090 上前缀截在非对齐位置时，12 次干预决策改了 6 次。</td></tr>
+    </table></div>
+    <p>决策错了的样子（<span class="who j">J</span>RTX 5090 闭环，两段都是规划器自己看错，不是加速造成的；用来说明一次错误决策对任务的代价）：</p>
+    <div class="vids">
+      <figure class="vid"><video controls muted playsinline preload="metadata" src="experiments/sim_closed_loop/videos/t8e0_planner_eos_stall.mp4"></video>
+        <figcaption>该 <code>replan</code> 时一直 <code>continue</code>：任务 8 第 0 回合，第 160 步 <code>next</code> 之后执行器抓着第二个摩卡壶 500 步不放，monitor 6 次都判"still achievable"，没有一次 <code>replan</code>，回合超时失败。</figcaption></figure>
+      <figure class="vid"><video controls muted playsinline preload="metadata" src="experiments/sim_closed_loop/videos/t0e1_planner_eos_wrong_object.mp4"></video>
+        <figcaption>子目标认错物体、误判完成：任务 0 第 1 回合，decompose 把干扰物认成目标，执行器去抓黄油盒；第 240 步 monitor 又误判子目标已完成，之后一直 <code>continue</code>，700 步超时。只跑执行器时这一回合成功。</figcaption></figure>
+    </div>
+    <p class="note">L 拆成 L_decision（到决策可用）与 L_reply（到回复结束），Jingwu 与 Chenwei 两边共用这一定义。</p>
+  </div>
+
+  <div class="sq" id="q3b">
+    <h3><span class="qn">Q3b</span>延迟怎么降</h3>
+    <div class="ans">去掉规划器调用里的冗余计算，分三步。Thor 上 L 6.92 → 1.78 s，低于 Δ，等待占比 56 % → 25 %；同一配置下决策不变。<span class="who j">J</span></div>
+    <div class="steps">
+      <div class="step"><span class="no">1</span><div><b>复用固定前缀</b><p class="why">为什么能做：同一回合的每次 monitor，系统提示与 3 张回合开始时的图逐 token 相同，占输入的 61–65 %。回合开始时把这段算完的模型状态存起来，之后每次恢复，只编码 3 张当前图、只 prefill 剩下的 token。</p></div></div>
+      <div class="step"><span class="no">2</span><div><b><code>action</code> 闭合即停</b><p class="why">为什么能做：回复里的决策在第 9–16 个 token 就完整，其余约 80 % 是 <code>reason</code> 解释；harness 按 <code>action</code> 行动。1 + 2 合称<span class="term" tabindex="0" data-tip="tip-twoopt">两项优化</span>，先在 RTX 5090 上验证：1 057 → 338 ms，回复与决策逐 token 相同。</p></div></div>
+      <div class="step"><span class="no">3</span><div><b>prefill 换成分块路径 <code>wy_lt</code></b><p class="why">为什么能做：1、2 之后剩下的以 prefill 为主；prefill 的 55 % 在一个逐 token 递归的线性注意力 kernel 上（H4b）。5090 用的分块路径 <code>wy_lt</code> 在 Thor 上同样准确（H9），只是 Thor 前端没有用它。</p>
+        <details class="ev" style="margin-top:8px"><summary><span class="nm"><code>native</code>、<code>wy</code>、<code>wy_lt</code> 是什么</span><span class="hl">串行 4 093 步 → 64 块矩阵乘法</span><span class="one">同一个计算的三种做法</span></summary>
+          <div class="body">
+            <p>Qwen3.6 / 3.8 的 64 层里 48 层是线性注意力（Gated DeltaNet）。每层有一个状态矩阵，每读入一个 token 就按"门控 delta 规则"更新一次：先衰减，再擦掉这个 token 的 key 方向上的旧内容，再写入新的 value。prefill 要让提示词的几千个 token 依次更新它。</p>
+            <div class="fig scan">
+              <h4><code>native</code>：逐 token 递归</h4>
+              <div class="cells" id="cells"></div>
+              <div class="cap">每个 token 的更新依赖上一个 token 的结果，4 093 个 token 就是 4 093 个必须依次完成的小步，每一步的计算量很小，GPU 大部分算力闲着。</div>
+            </div>
+            <div class="fig scan">
+              <h4>WY 分块：每 64 个 token 一块</h4>
+              <div class="blocks" id="blocks"></div>
+              <div class="cap">一块内 64 次连续更新可以合并写成"单位矩阵减去两个矩阵的乘积"（WY 表示，源自 Householder 变换的乘积），于是一块的作用变成几次矩阵乘法，用 tensor core 完成；串行的只剩块与块之间的 64 步。</div>
+            </div>
+            <div class="tw"><table style="min-width:520px">
+              <tr><th>名称</th><th>算法</th><th>矩阵乘法由谁做</th><th>来源</th><th>Thor 上（H9）</th></tr>
+              <tr><td><code>native</code></td><td>逐 token 递归</td><td>—</td><td>上游 FlashRT；Thor 前端原先一律用它（PR #57）</td><td>prefill 3 994 ms</td></tr>
+              <tr><td><code>wy</code></td><td>WY 分块</td><td>手写的 kernel（直接写 tensor core 指令）</td><td>上游 FlashRT（PR #53），照 FLA 库的算法移植</td><td>结果错误</td></tr>
+              <tr><td><code>wy_lt</code></td><td>WY 分块</td><td>NVIDIA 的 cuBLASLt 库</td><td>上游 FlashRT（PR #53）；RTX 5090 的默认</td><td>与 5090 同样准确，2 294 ms</td></tr>
+            </table></div>
+            <p class="note"><code>wy</code> 与 <code>wy_lt</code> 的数学完全相同，区别只在矩阵乘法用手写 kernel 还是用库；手写 kernel 在 SM110 上出错的原因未查。<span class="who j">J</span>加了切换开关 <code>FLASHRT_QWEN36_THOR_LIN_PREFILL=parent</code>，让 Thor 前端可以走 <code>wy_lt</code>；Thor 默认仍是 <code>native</code>。</p>
+          </div></details>
+      </div></div>
+    </div>
+    <div class="panel">
+      <div class="legend"><span><i style="background:var(--base)"></i>原始路径</span><span><i style="background:var(--fast2)"></i>1 + 2</span><span><i style="background:var(--fast)"></i>1 + 2 + 3</span><span><i class="dash"></i>Δ = 5.33 s</span></div>
+      <div class="lchart" id="chart-fast"></div>
+      <p class="note"><span class="who j">J</span>Jetson Thor，H16：VoLoAgent 的 6 段录制按 harness 节奏回放，monitor 59 次的中位；原始路径按回复结束计。最大值：1 + 2 + 3 为 4.19 s（720）。等待占比（224）：56 % → 33 % → 25 %。</p>
+    </div>
+    <p><b>决策</b>：同一配置下，快路径与原始路径的 59 次 monitor 决策逐次相同。换 kernel（<code>wy_lt</code> 对 <code>native</code>）或换机器（Thor 对 5090）时，接近平局的决策翻转 4–7 / 59 次，与 A5（运行间不可复现）同源。</p>
+    <div class="cards">
+      <details class="ev"><summary><span class="nm"><span class="who j">J</span>H8 · monitor 网格（复用前缀 × 解码方式）</span><span class="hl">6.40 → 2.61 s</span><span class="one">5090 上验证过的两项优化，在 Thor 上能否把 L 压到 Δ 以下</span></summary>
+        <div class="body"><p>20 次 monitor（ep0 / ep43，腕部 224），决策 20 / 20 不变。剩下的 2.6 s 里 prefill 约 2.0 s。</p></div></details>
+      <details class="ev"><summary><span class="nm"><span class="who j">J</span>H4b · prefill 按 kernel 计时</span><span class="hl">一个 kernel 占 55 %</span><span class="one">prefill 慢在哪里</span></summary>
+        <div class="body"><p>线性注意力（<code>native</code>）占 57 %，其中一个 kernel 2 235 ms（55 %），是 5090 分块路径的 32 倍；同一次 prefill 里 fp4 GEMM 只是 3.8 倍。kernel 以外的时间 0.9 %。</p></div></details>
+      <details class="ev"><summary><span class="nm"><span class="who j">J</span>H9 · 线性注意力变体逐层比较</span><span class="hl">3 994 → 2 294 ms</span><span class="one">Thor 前端不用分块路径，是否因为它在 SM110 上不准</span></summary>
+        <div class="body"><p>7 个变体在同一份层输入上与逐 token 参考比较：<code>wy_lt</code> 逐层 cos 中位 0.999765（Thor）/ 0.999766（5090），没有 SM110 特有的漂移；只有手写 <code>wy</code> 在 Thor 上出错（48 层里 39 层 cos &lt; 0.99）。</p></div></details>
+      <details class="ev"><summary><span class="nm"><span class="who j">J</span>H11 · 闭环干预调用</span><span class="hl">27 / 27，含 3 / 3 次 next</span><span class="one">H8 的决策全是 continue，检验不了干预决策</span></summary>
+        <div class="body"><p>从 LIBERO 闭环里含 <code>next</code> 或失败的 6 个回合重建 27 次 monitor；快路径决策全部不变，L 中位 2.68 s。</p></div></details>
+      <details class="ev"><summary><span class="nm"><span class="who j">J</span>H13 · <code>wy_lt</code> 跑同一网格</span><span class="hl">2.61 → 1.77 s</span><span class="one">换路径后的实测 L、MTP 接受率与决策</span></summary>
+        <div class="body"><p>47 次调用；MTP 每次尝试接受的 token 1.83 → 1.77；参考决策与 <code>native</code> 差 3 / 47，Thor <code>native</code> 与 5090 也差 3 / 47。</p></div></details>
+      <details class="ev"><summary><span class="nm"><span class="who j">J</span>H16 · 规划器进程按 harness 节奏单独运行</span><span class="hl">66 次调用 × 3 组</span><span class="one">共置测量的单独运行基准；第一次覆盖腕部 720 与 decompose</span></summary>
+        <div class="body"><p>即上图。每组连续运行 5–9 min，前后半段 L 中位相差不到 0.1 s。decompose 也在关键路径上（<code>wy_lt</code> 下 3.1–9.7 s），把回合开头的 monitor 推迟最多 6 s。</p></div></details>
+    </div>
+  </div>
+
+  <div class="sq" id="q3c">
+    <h3><span class="qn">Q3c</span>带宽、热态、调度怎么办</h3>
+    <div class="ans">这部分主要是 Chenwei 的共置测量，本线提供规划器进程。两条联合发现：瓶颈阶段取决于上下文长度（JC-1）；热态在真实共置下大部分自行消失（JC-2）。</div>
+    <div class="tw"><table>
+      <tr><th style="width:18%">challenge</th><th>方向与证据</th><th style="width:18%">状态</th></tr>
+      <tr><td>A1 带宽 + B3 抢占</td><td><span class="who c">C</span>SM 分区保护执行器截止期（27.8 % → 0 错过），但规划器 prefill 慢 2.2 倍、抢占变难（C-#9、#12、#16）。<span class="who j">J</span>快路径把每次 monitor 的解码从约 2 s 缩到约 0.4 s，减少与执行器重叠的时间。</td><td><span class="tag w">假设，待共置实测</span></td></tr>
+      <tr><td>B2 节奏对不齐</td><td><span class="who c">C</span>按决策可用而不是回复结束释放执行器（C-#15）；边界处抢占正在跑的 monitor，切换最坏启动延迟 1.8 → 0.15 s（C-#14）。</td><td><span class="tag ok">已测</span></td></tr>
+      <tr><td>B4 decompose</td><td><span class="who c">C</span>长度上限去掉约 50 s（C-#13）；第一条子目标约在第 9–12 个 token，可用即开始（C-#15）。</td><td><span class="tag u">Thor 上 27B 未做</span></td></tr>
+      <tr><td>A2 热态</td><td><span class="who jc">J+C</span>共置时执行器的周期负载保持内存在快状态（JC-2：C-#11 与 H7 / H10）；低负载规划器在后面的回合仍会漂进慢状态。</td><td><span class="tag ok">大部分自行消失</span></td></tr>
+      <tr><td>A3 算力结构</td><td><span class="who jc">J+C</span>短上下文解码占主导（C-#8），多图长上下文 prefill 占主导（H4b、H8）：优化方向取决于负载（JC-1）。</td><td><span class="tag ok">已确认</span></td></tr>
+      <tr><td>A5 不可复现</td><td><span class="who c">C</span>执行器同样跨进程不可复现（C-#17）；等价性比较两边都要先固定可复现条件，规划器以决策为准、以运行间翻转数为参照。</td><td><span class="tag u">来源待查</span></td></tr>
+    </table></div>
+    <p class="note">已商定的接口：统一 commit；L_decision / L_reply；本线交付规划器进程（H16 为其单独运行基准）；Thor 上共用一把 GPU 独占锁。负面结果 <span class="who c">C</span>：图像复用在 RoboCerebra 负载下几乎没用（848 次调用里 3 次共享图像），在 VoLoAgent 负载下固定前缀占 61–65 %，结论取决于负载。</p>
+  </div>
+
+  <div class="sq" id="q3d">
+    <h3><span class="qn">Q3d</span>还缺什么</h3>
+    <ul>
+      <li><span class="tag u">未测</span>27B 规划器与执行器在 Thor 上的真实共置（执行器 p99、规划器 L），由 Chenwei 的共置测量用规划器进程驱动。</li>
+      <li><span class="tag u">未测</span>功耗约束（A6）。</li>
+      <li><span class="tag u">未测</span>子目标多的长任务上 decompose 的耗时（W-VOLO 只有 1–2 个子目标）。</li>
+      <li><span class="tag w">待定</span><code>wy_lt</code> 是否作为 Thor 默认：先定决策一致性的判据（以运行间与跨机器的翻转数为参照）。</li>
+      <li><span class="tag">待做</span>decompose 的规则：第一条子目标可用即开始、长度上限。</li>
+      <li><span class="tag">待做</span>回复不可复现的来源（A5）。</li>
+    </ul>
+  </div>
+</section>
+
+<footer>数据：Jingwu 的 Jetson Thor 轮次 1104–1111（H4–H16）与 RTX 5090 对照、LIBERO 闭环；Chenwei 的 C- 系列发现（RoboCerebra 回放）；文献见各卡片链接。</footer>
+</div>
+
+<div id="tips" aria-hidden="true">
+  <div id="tip-L"><h4>L：从调用开始到决策可用</h4><p>harness 发起调用（当前画面已拍下）到回复里 <code>action</code> 的值完整生成、可以解析的时刻。包括图像预处理、ViT、prefill、解码到 <code>action</code> 闭合；不包括其后的 <code>reason</code>。</p></div>
+  <div id="tip-delta"><h4>Δ = 5.33 s：检查间隔</h4><p>VoLoAgent 每 80 个控制步调用一次 monitor，控制频率 15 Hz：80 / 15 = 5.33 s。取自已有的 agent / harness 配置。</p></div>
+  <div id="tip-sync"><h4>同步协议</h4><p>检查到期时机器人停下，规划器回复完再继续执行。规划器的延迟直接变成机器人的停机时间。VoLoAgent 与 RoboCerebra 的开源代码都是这种协议。</p></div>
+  <div id="tip-async"><h4>异步协议</h4><p>规划器在后台运行，机器人继续执行当前子目标；决策晚 L 才到，这段时间按旧指令或旧观测动作。L 超过检查间隔时调用堆积。</p></div>
+  <div id="tip-harness"><h4>harness</h4><p>把规划器、执行器与环境串起来的控制循环：什么时候调用规划器、每次给它什么输入、它的输出怎么变成执行器的指令。</p></div>
+  <div id="tip-slo"><h4>LLM 服务的延迟考核</h4><p>数据中心的 LLM 服务用 SLO（服务等级目标）考核延迟，常用两个量：TTFT（time to first token，从请求到第一个输出 token 的时间）和 TPOT（time per output token，之后每个 token 的时间），看大量请求上的 p50 / p99。单个请求慢一点只影响统计分布，不会让某台机器停住。</p></div>
+  <div id="tip-twoopt"><h4>两项优化（RTX 5090 上先验证）</h4><ol>
+    <li><b>复用固定前缀</b>：回合开始时把系统提示与 3 张回合开始时的图算完后的模型状态存起来，之后每次调用恢复它，只编码 3 张当前图、只 prefill 剩下的 token。前缀截在 2 048 token 的整数倍上，结果与整段 prefill 逐 token 相同。</li>
+    <li><b><code>action</code> 闭合即停</b>：<code>action</code> 的值一闭合就停止解码，不生成 <code>reason</code>。</li></ol>
+    <p>5090（官方模型，腕部 224）：1 057 → 338 ms，回复与决策逐 token 相同。</p></div>
+</div>
+
+<script>
+(function(){
+  function chart(id, rows, max){
+    var el=document.getElementById(id), h="", sc=88/max;
+    rows.forEach(function(r){
+      h+='<div class="lb">'+r.lb+'<small>'+(r.sub||'腕部 224 / 720')+'</small></div><div class="tr">';
+      r.v.forEach(function(x,i){h+='<div class="bar"><span class="f" style="width:'+(x*sc)+'%;background:'+r.c+';opacity:'+(i?0.7:1)+'"></span><span class="v">'+x.toFixed(2)+' s · '+(i?'720':'224')+'</span></div>';});
+      h+='<span class="delta" style="left:'+(5.33*sc)+'%"></span></div>';
+    });
+    h+='<div class="ax">';[0,2,4,6,8,10].forEach(function(t){h+='<span style="left:'+(t*sc)+'%">'+t+' s</span>';});h+='</div>';
+    el.innerHTML=h;
+  }
+  chart("chart-orig",[
+    {lb:"Jetson Thor",c:"var(--base)",v:[6.92,8.76]},
+    {lb:"RTX 5090",c:"var(--fast2)",v:[1.44,1.64]}
+  ],10);
+  chart("chart-fast",[
+    {lb:"原始路径",c:"var(--base)",v:[6.92,8.76]},
+    {lb:"1 + 2",sub:"复用前缀 + 闭合即停",c:"var(--fast2)",v:[2.63,4.38]},
+    {lb:"1 + 2 + 3",sub:"再换 wy_lt",c:"var(--fast)",v:[1.78,2.86]}
+  ],10);
+
+  var t=document.getElementById("htl"), s="";
+  s+='<div class="mk d" style="left:1%"><b></b><span>0 s</span></div>';
+  for(var k=1;k<=10;k++){var p=1+k*9.6;s+='<div class="mk" style="left:'+p+'%"><b></b>'+(k%2===0?'<span>'+(k*5.33).toFixed(1)+' s</span>':'')+'</div>';}
+  s+='<div class="mk r" style="left:'+(1+9*9.6+2.2)+'%"><b></b></div>';
+  t.innerHTML=s;
+
+  // native: 4 093 tokens drawn as 1 cell per 16 tokens; WY: 64 chunks drawn as 16 blocks of 4
+  var c=document.getElementById("cells"), ch=""; for(var i=0;i<256;i++) ch+="<i></i>"; c.innerHTML=ch;
+  var b=document.getElementById("blocks"), bh=""; for(var j=0;j<16;j++) bh+="<i>"+(j===0?"64×":"")+"</i>"; b.innerHTML=bh;
+
+  // challenge filters
+  var fg="all", fa="all";
+  function apply(){
+    document.querySelectorAll("#chl details.ch").forEach(function(d){
+      var okg = fg==="all" || d.getAttribute("data-g")===fg;
+      var oka = fa==="all" || (" "+d.getAttribute("data-a")+" ").indexOf(" "+fa+" ")>=0;
+      d.hidden = !(okg && oka);
+    });
+  }
+  function bind(groupId, set){
+    var g=document.getElementById(groupId);
+    g.querySelectorAll(".chip").forEach(function(btn){
+      btn.addEventListener("click",function(){
+        g.querySelectorAll(".chip").forEach(function(x){x.setAttribute("aria-pressed", String(x===btn));});
+        set(btn.getAttribute("data-f")); apply();
+      });
+    });
+  }
+  bind("chips-group",function(v){fg=v;});
+  bind("chips-aff",function(v){fa=v;});
+
+  // hover / tap cards
+  var pop=null, owner=null;
+  function hide(){if(pop){pop.remove();pop=null;owner=null;}}
+  function show(el){
+    var src=document.getElementById(el.getAttribute("data-tip")); if(!src) return;
+    hide(); pop=document.createElement("div"); pop.className="pop"; pop.setAttribute("role","tooltip");
+    pop.innerHTML=src.innerHTML; document.body.appendChild(pop); owner=el;
+    var r=el.getBoundingClientRect(), w=pop.offsetWidth, hgt=pop.offsetHeight, m=12;
+    var left=Math.min(Math.max(m,r.left), window.innerWidth-w-m);
+    var top=r.bottom+8; if(top+hgt>window.innerHeight-m) top=Math.max(m,r.top-hgt-8);
+    pop.style.left=left+"px"; pop.style.top=top+"px";
+  }
+  document.querySelectorAll(".term").forEach(function(el){
+    el.addEventListener("mouseenter",function(){show(el);});
+    el.addEventListener("mouseleave",function(){hide();});
+    el.addEventListener("focus",function(){show(el);});
+    el.addEventListener("blur",function(){hide();});
+    el.addEventListener("click",function(e){e.preventDefault(); e.stopPropagation(); if(owner===el) hide(); else show(el);});
+  });
+  document.addEventListener("click",hide);
+  window.addEventListener("scroll",hide,{passive:true});
+  document.addEventListener("keydown",function(e){if(e.key==="Escape") hide();});
+})();
+</script>
+</body>
+</html>

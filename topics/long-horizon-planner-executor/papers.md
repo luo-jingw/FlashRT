@@ -18,7 +18,7 @@
   - 同一个 π0.5 加 VLM 调度：跨套件成功率 12.57 → 41.80（表 2）；规划器换成 Qwen3-VL-8B 只有 19.95，"with weaker VLMs the gain becomes marginal"（§5.4）
 - **Gemini Robotics 1.5** · 2025 · 预印本 · [arXiv 2510.03342](https://arxiv.org/abs/2510.03342)
   - Gemini Robotics 1.5: Pushing the Frontier of Generalist Robots with Advanced Embodied Reasoning, Thinking, and Motion Transfer
-  - 同一 VLA：单独思考进度分最高 44%，加 ER 编排器常接近 80%（§5）；规划失败 25.5% → 9%（表 1）
+  - 同一 VLA：单独思考进度分最高 44%，加 ER 1.5 编排器常接近 80%（§5）；规划类失败占评测次数：编排器为 Gemini 2.5 Flash 时 25.5%，为 ER 1.5 时 9%（表 1，两种编排器之间的比较）
 - **Hi Robot** · 2025 · 预印本 · [arXiv 2502.19417](https://arxiv.org/abs/2502.19417)
   - Hi Robot: Open-Ended Instruction Following with Hierarchical Vision-Language-Action Models
   - 同一 π0 低层；对 GPT-4o 高层指令准确率高 40% 以上（§5.3）；对 flat π0 的数值仅图；作者称两层分开 "not fundamental"（§6）
