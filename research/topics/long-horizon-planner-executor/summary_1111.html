@@ -570,7 +570,20 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
     <div class="grid3">
       <div class="mcard"><span class="mn">M1 · 机器人</span><b>L 与等待占比</b><p>L = 从调用开始到决策可用（<span class="term" tabindex="0" data-tip="tip-L">定义</span>）。同步协议下等待占比 = L / (L + Δ)；异步协议下 L &gt; Δ 时调用排队。</p></div>
       <div class="mcard"><span class="mn">M2 · 执行器</span><b>截止期错过率</b><p>执行器没能在旧动作块用完前给出新动作块的比例；看 p99 与错过率（严格 200 ms，宽松 600 ms）。</p></div>
-      <div class="mcard"><span class="mn">M3 · 任务决策</span><b>决策一致数</b><p>同一次调用，加速或换条件后，<code>continue</code> / <code>next</code> / <code>replan</code> 与<span class="term" tabindex="0" data-tip="tip-orig">原始路径</span>相同的次数。</p></div>
+      <div class="mcard"><span class="mn">M3 · 任务决策</span><b>决策一致数</b><p>同一次调用，加速或换条件后，<code>continue</code> / <code>next</code> / <code>replan</code> 与<span class="term" tabindex="0" data-tip="tip-orig">原始路径</span>相同的次数。读法见下表。</p></div>
+    </div>
+    <div class="panel" id="m3read">
+      <h4>决策一致数怎么读</h4>
+      <p>每次 monitor 的回复里有一个 <code>action</code> 字段，harness 按它行动。把同一次调用（同样的提示词与图像）在两种条件下各跑一次，比较两次的 <code>action</code>；"x / N"是 N 次调用里 <code>action</code> 相同的次数。只比决策，不比后面的 <code>reason</code> 文本。没有标准答案：一致说明加速没有改变规划器的判断，不说明判断是对的。</p>
+      <div class="tw"><table style="min-width:620px">
+        <tr><th style="width:30%">比较（H16，同样 59 次 monitor）</th><th>两次之间变了什么</th><th style="width:12%">一致</th></tr>
+        <tr><td>原始路径 vs 两项优化，Thor 上</td><td>只改调用方式：复用固定前缀、<code>action</code> 闭合即停</td><td class="n">59 / 59</td></tr>
+        <tr><td>原始路径 vs 两项优化，RTX 5090 上</td><td>同上</td><td class="n">59 / 59</td></tr>
+        <tr><td>两项优化 vs 三步优化，Thor 上</td><td>prefill 的线性注意力 kernel：<code>native</code> → <code>wy_lt</code></td><td class="n">54 / 59</td></tr>
+        <tr><td>Thor vs RTX 5090，同为两项优化</td><td>机器：kernel 实现、硬件，以及权重编码（Thor 那份有 63 个张量码值不同，<span class="ref" data-ref="ISSUE-115">ISSUE-115</span>）</td><td class="n">52 / 59</td></tr>
+        <tr><td>Thor 三步优化 vs RTX 5090</td><td>机器 + kernel</td><td class="n">55 / 59</td></tr>
+      </table></div>
+      <p class="note">不同的 5–7 次都在 <code>continue</code> / <code>replan</code> / <code>next</code> 之间，集中在 ep188 与 ep43 两段录制。参照：Thor 上同一提示词重复生成本身就不完全相同（<span class="ref" data-ref="H15">H12–H15</span>），所以只要换了数值路径（kernel、机器、权重），少量翻转是预期内的；判断一项优化是否改变了决策，看它的翻转数是否超出这条参照。页面里其他的一致数是同一种比较、不同的调用集合：H8 20 次、H11 27 次（专挑含 <code>next</code> 或失败的回合）、H13 47 次（换 kernel）、Chenwei B25 的 58–60 / 66（他的 Thor 运行对 RTX 5090 的记录）。</p>
     </div>
   </div>
 
@@ -685,7 +698,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
       <tr><th style="width:22%">量与目标</th><th style="width:30%">本周达到</th><th>不满足的后果</th></tr>
       <tr><td><span class="m">M1</span><b>L &lt; Δ，越小越好</b></td><td>Thor 上 6.92 → 1.78 s（腕部 224），等待占比 56 % → 25 % <span class="who j">J</span></td><td>同步协议：机器人停机时间变长（等待占比 56 % 时，任务墙钟时间约为纯执行时间的 2.3 倍）。异步协议：L 期间按旧指令动；L &gt; Δ 时调用排队，规划器看的是几十秒前的画面，子目标早已完成或失败，决策才出来。</td></tr>
       <tr><td><span class="m">M2</span><b>执行器不错过截止期</b></td><td>27B 不隔离：p99 321–327 ms，533 ms 守得住、200 ms 守不住；限制规划器 SM 后 p99 68.8 ms，但规划器超过 Δ <span class="ref c" data-ref="C-#18">C-#18</span></td><td>机器人没有新动作可执行，只能停顿或继续执行过时的动作；一次超时会让下一次释放也被丢弃（<span class="ref c" data-ref="C-#12">C-#12</span>：27.8 % 错过，成对出现）。</td></tr>
-      <tr><td><span class="m">M3</span><b>决策与<span class="term" tabindex="0" data-tip="tip-orig">原始路径</span>一致</b></td><td>同一配置 59 / 59；换 kernel 或机器 52–55 / 59 <span class="who j">J</span></td><td>加速改变了任务行为：该 <code>next</code> 时给 <code>continue</code>，机器人在已完成的子目标上空转；该 <code>replan</code> 时没给，失败得不到处理；不该 <code>replan</code> 时给了，白白重新规划。5090 上前缀截在非对齐位置时，12 次干预决策改了 6 次（<span class="ref" data-ref="MC5090">monitor 调用</span>）。</td></tr>
+      <tr><td><span class="m">M3</span><b>决策与<span class="term" tabindex="0" data-tip="tip-orig">原始路径</span>一致</b></td><td>两项优化前后 59 / 59；换 prefill kernel 54 / 59；换机器 52 / 59（读法见 <a href="#m3read">Q2b</a>）<span class="who j">J</span></td><td>加速改变了任务行为：该 <code>next</code> 时给 <code>continue</code>，机器人在已完成的子目标上空转；该 <code>replan</code> 时没给，失败得不到处理；不该 <code>replan</code> 时给了，白白重新规划。5090 上前缀截在非对齐位置时，12 次干预决策改了 6 次（<span class="ref" data-ref="MC5090">monitor 调用</span>）。</td></tr>
     </table></div>
     <p>M3 不满足时任务会怎样（<span class="who j">J</span>RTX 5090 闭环；这两段是规划器自己看错，不是加速造成的，用来说明一次错误决策的代价）：</p>
     <div class="vids">
@@ -698,7 +711,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
 
   <div class="sq" id="q3b">
     <h3><span class="qn">Q3b</span>常规方法已解决的部分</h3>
-    <div class="ans">先清掉不需要新方法的问题。最主要的是规划器自身的延迟：Thor 上原始路径 L 超过检查间隔，用三步常规方法降到 1.78 s；<span class="m">M3</span> 同一配置下决策 59 / 59 不变。<span class="who j">J</span></div>
+    <div class="ans">先清掉不需要新方法的问题。最主要的是规划器自身的延迟：Thor 上原始路径 L 超过检查间隔，用三步常规方法降到 1.78 s；<span class="m">M3</span> 前两步不改变决策（59 / 59），第三步换 kernel 后 5 / 59 次不同（<a href="#m3read">读法</a>）。<span class="who j">J</span></div>
     <div class="panel">
       <h4>问题：Thor 上原始路径的 L 超过检查间隔，5090 上没有这个问题</h4>
       <div class="legend"><span><i style="background:var(--base)"></i>Jetson Thor</span><span><i style="background:var(--fast2)"></i>RTX 5090</span><span><i class="dash"></i>Δ = 5.33 s</span></div>
@@ -722,7 +735,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
     <div class="panel">
       <div class="legend"><span><i style="background:var(--base)"></i>原始路径</span><span><i style="background:var(--fast2)"></i>1 + 2</span><span><i style="background:var(--fast)"></i>1 + 2 + 3</span><span><i class="dash"></i>Δ = 5.33 s</span></div>
       <div class="lchart" id="chart-fast"></div>
-      <p class="note"><span class="ref" data-ref="H16">H16</span>：Jetson Thor，VoLoAgent 的 6 段录制回放，monitor 59 次的中位；原始路径按回复结束计。最大值：1 + 2 + 3 为 4.19 s（720）。同步协议下等待占比（224）56 % → 33 % → 25 %。换 kernel 或换机器时，接近平局的决策翻转 4–7 / 59 次。</p>
+      <p class="note"><span class="ref" data-ref="H16">H16</span>：Jetson Thor，VoLoAgent 的 6 段录制回放，monitor 59 次的中位；原始路径按回复结束计。最大值：1 + 2 + 3 为 4.19 s（720）。同步协议下等待占比（224）56 % → 33 % → 25 %。两项优化前后决策 59 / 59 相同；换 prefill kernel 时 5 / 59 次不同，换机器时 7 / 59 次（<a href="#m3read">Q2b 的表</a>）。</p>
     </div>
     <div class="tw"><table style="min-width:600px">
       <tr><th style="width:24%">其他已用常规方法处理的</th><th>方法</th><th style="width:30%">结果</th></tr>
@@ -837,7 +850,7 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
       <details class="tg" open><summary>常规部分的收尾</summary>
         <ul>
           <li><details class="ti"><summary><code>wy_lt</code> 是否作为 Thor 默认<span class="tag w">待定</span></summary>
-            <div class="tb"><p>它让 L 再降 0.85 s，但换 kernel 改了 4–5 / 59 次接近平局的决策。先定判据（以同条件下运行间与跨机器的翻转数为参照），满足后改默认并在 Thor 上复核。</p></div></details></li>
+            <div class="tb"><p>它让 L 再降 0.85 s，但换 kernel 后 59 次 monitor 里有 5 次决策不同。先定判据（以同条件下运行间与跨机器的翻转数为参照），满足后改默认并在 Thor 上复核。</p></div></details></li>
           <li><details class="ti"><summary>decompose：第一条子目标可用即开始；子目标多时的耗时<span class="tag w">27B 上 Chenwei B26 进行中</span></summary>
             <div class="tb"><p>2B / 7B 已测：从第一条子目标开始执行，开局停机 1.6–17.8 s → 0.35–0.98 s（<span class="ref c" data-ref="C-#20">C-#20</span>，W-RC）。27B 上的长度上限与第一条子目标即开始由 B26 做；W-VOLO 只有 1–2 个子目标，子目标多时的耗时仍要另测。</p></div></details></li>
           <li><details class="ti"><summary>异步协议下的代价<span class="tag u">未测</span></summary>
