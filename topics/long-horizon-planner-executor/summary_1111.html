@@ -52,7 +52,8 @@ h4{font-size:14.5px;margin:0}
 p{margin:0;max-width:78ch}
 ul,ol{margin:0;padding-left:1.3em;display:grid;gap:6px;max-width:80ch}
 .lede{color:var(--ink2);max-width:72ch}
-.toc{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.toc{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+@media (max-width:1000px){.toc{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:760px){.toc{grid-template-columns:minmax(0,1fr)}}
 .toc .q{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;display:grid;gap:4px;align-content:start}
 .toc .q a{text-decoration:none}
@@ -257,11 +258,15 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
       <li><a href="#q3c">Q3c 带宽、热态、调度</a></li>
       <li><a href="#q3x">Q3d 本周实验：各自回答什么</a></li>
       <li><a href="#q3d">Q3e 还缺什么</a></li></ul></div>
+    <div class="q"><a href="#q4">Q4 本周的发现与 contribution</a><ul>
+      <li><a href="#q4a">Q4a 文献没测过、本周测到的</a></li>
+      <li><a href="#q4b">Q4b 哪些算 contribution</a></li>
+      <li><a href="#q4c">Q4c 最可能的方向</a></li></ul></div>
   </div>
 </header>
 
 <nav class="rail" aria-label="章节"><ul>
-  <li><a href="#q1">Q1 场景</a></li><li><a href="#q2">Q2 challenge</a></li><li><a href="#q3">Q3 解决</a></li><li><a href="#q3x">本周实验</a></li><li><a href="#q3d">还缺什么</a></li>
+  <li><a href="#q1">Q1 场景</a></li><li><a href="#q2">Q2 challenge</a></li><li><a href="#q3">Q3 解决</a></li><li><a href="#q3x">本周实验</a></li><li><a href="#q3d">还缺什么</a></li><li><a href="#q4">Q4 contribution</a></li>
 </ul></nav>
 
 <!-- ================= Q1 ================= -->
@@ -723,10 +728,74 @@ footer{border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font
   </div>
 </section>
 
+<!-- ================= Q4 ================= -->
+<section class="q" id="q4">
+  <h2><span class="qn">Q4</span>本周的发现与 contribution</h2>
+
+  <div class="sq" id="q4a">
+    <h3><span class="qn">Q4a</span>文献里没测过、本周测到了的问题</h3>
+    <div class="ans">调研里记下的 7 个文献空白，本周有 6 个拿到了实测数据：Jingwu 2 个、Chenwei 2 个、双方都有 2 个；其中几个只覆盖了一部分（见"状态"列），1 个没测。"没测过"指在本线调研范围内没有找到（快照 2026-11-09，非穷尽检索）。</div>
+    <div class="tw"><table style="min-width:780px">
+      <tr><th style="width:20%">文献空白</th><th style="width:22%">文献现状</th><th>本周的测量</th><th style="width:12%">状态</th></tr>
+      <tr><td><b>规划器延迟超过检查间隔时，周期检查付出什么代价</b>（操作任务）</td><td>Leap-VLA 只扫到 2 s 刷新；Slow Brain 是导航、云端 VLM；NavGPT-3 的检查按步数计。</td><td><span class="who j">J</span>Thor 上 27B 规划器在 VoLoAgent 节奏下 L = 6.92 s（腕部 224）/ 8.76 s（720），超过 5.33 s 的检查间隔：固定时钟下调用排队，最多推迟 38 s；同步下等待占比 56 %（推算）。快路径降到 1.78 / 2.86 s，不再排队。<span class="ref" data-ref="H16">H16</span></td><td><span class="tag ok">已测（规划器一侧）</span><br><span class="tag u">机器人一侧的质量代价未测</span></td></tr>
+      <tr><td><b>子目标完成到执行器收到下一个子目标之间的滞后</b></td><td>没有论文定义或测量过。</td><td><span class="who c">C</span>反应时间（子目标边界 → 执行器按新子目标出第一个动作）：7B 2.9–3.6 s、2B 0.93–1.36 s；由切换调用本身 + 等执行器下一次释放组成；边界处若有 monitor 在跑，切换最多晚 1.8 s 开始，中止 monitor 后降到 0.15 s。<span class="ref c" data-ref="C-#10">C-#10</span> <span class="ref c" data-ref="C-#14">C-#14</span></td><td><span class="tag ok">已测（RoboCerebra，2B / 7B）</span></td></tr>
+      <tr><td><b>同一块 SoC 上规划器延迟与执行器截止期违约的联合代价</b></td><td>OxyGen 只报动作频率；DualVLN on Thor 只有摘要，且仿真在模型计算期间冻结场景。</td><td><span class="who c">C</span>Thor 上 7B 规划器 + 执行器：不分 SM 时执行器在 200 ms 截止期下错过 27.8 % 的释放，超时全部与规划器 decode 重叠；分 SM 后 0 错过，但规划器切换调用慢 17 %、prefill 慢 2.2 倍。<span class="ref c" data-ref="C-#12">C-#12</span> <span class="ref c" data-ref="C-#9">C-#9</span></td><td><span class="tag ok">已测（2B / 7B）</span><br><span class="tag u">27B 未测</span></td></tr>
+      <tr><td><b>SoC 空闲几分钟后 decode 在约一分钟内变慢</b></td><td>没有直接测量；最接近的是 Edge-Inference Governors 的高 EMC 档方差、StarSD 的几十毫秒级空闲后变慢。</td><td><span class="who j">J</span>Thor 上空闲 120 s 以内不出现，180 s 后 1 / 2 次、300 s 后 2 / 2 次出现，decode 慢 1.63 倍、持续 35–60 s，GPU / CPU 频率不变。<span class="who c">C</span>共置时执行器让慢状态只慢 3–27 %。<span class="ref" data-ref="H6H7H10">H6 / H7 / H10</span> <span class="ref c" data-ref="C-#11">C-#11</span></td><td><span class="tag ok">已测</span><br><span class="tag u">机制未查明</span></td></tr>
+      <tr><td><b>Thor 上 LLM 的带宽、warm-up 数据</b></td><td>Hydra 刻画了 Thor 上 LLM 的分阶段特性，但没有带宽、功耗模式与 warm-up 数据。</td><td><span class="who j">J</span>拷贝带宽约 256 GB/s；27B 规划器 decode 稳态约 200 GB/s（上限的 85 %）；prefill 约 55 TFLOP/s、按 kernel 拆分的构成；warm-up：空闲后的慢状态见上一行，另外首次调用要按提示词长度录制 CUDA graph，需要先热身一遍。<span class="ref" data-ref="1104_h3c">1104_h3c</span> <span class="ref" data-ref="H4b">H4b</span></td><td><span class="tag ok">已测</span><br><span class="tag u">功耗未测</span></td></tr>
+      <tr><td><b>主流基准不计推理延迟</b></td><td>BEHAVIOR 用与硬件无关的仿真时间；vla-eval 阻塞式评测、只统计成功率。</td><td><span class="who jc">J+C</span>定义 L_decision（到决策可用）与 L_reply（到回复结束），在真实 harness 节奏下逐次调用测量；monitor 的 L_decision / L_reply 约 0.5–0.9，decompose 的第一条子目标约 0.1。<span class="ref c" data-ref="C-#15">C-#15</span> <span class="ref" data-ref="H16">H16</span></td><td><span class="tag ok">指标与测量</span><br><span class="tag u">未接入基准</span></td></tr>
+      <tr><td><b>事件触发与周期调用的闭环对比</b>（秒级 VLM 规划器）</td><td>只有动作层的 VLA-Corrector 有评测。</td><td>本周没有测。</td><td><span class="tag u">未测</span></td></tr>
+    </table></div>
+  </div>
+
+  <div class="sq" id="q4b">
+    <h3><span class="qn">Q4b</span>哪些算 contribution，哪些不算</h3>
+    <div class="ans">本周的贡献在"观察"这一层：上面的实测，加上几条有新意的发现。用到的加速手段本身是现成的，属于工程。系统论文的"新机制"部分还没有。</div>
+    <div class="grid2">
+      <div class="panel">
+        <h4>有新意的发现（有实测支撑）</h4>
+        <ol>
+          <li><b>边缘规划器的瓶颈阶段取决于上下文长度</b>（JC-1）：多图长上下文时 prefill 是瓶颈（Thor 上 prefill 占快路径 L 的 2 / 3），短上下文时 decode 占 92 %。数据中心 LLM 服务通常把 decode 当主要矛盾。<span class="ref" data-ref="H4b">H4b</span> <span class="ref c" data-ref="C-#8">C-#8</span></li>
+          <li><b>评估规划器加速必须看干预决策</b>：前缀截在非对齐位置时，<code>continue</code> 全部不变、文本一致率看起来很好，但 12 次干预决策改了 6 次；Thor 上回复本身不可复现，所以"是否改变决策"要以运行间的翻转为参照。<span class="ref" data-ref="MC5090">monitor 调用</span> <span class="ref" data-ref="H15">H12–H15</span></li>
+          <li><b>混合线性注意力模型的前缀复用有精度约束</b>：前缀必须截在 prefill 分块的边界上，否则结果改变；纯 Transformer 的 KV 复用没有这个问题。<span class="ref" data-ref="MC5090">monitor 调用</span> <span class="ref" data-ref="H13">H13</span></li>
+          <li><b>Thor 的 prefill 差距里，一半是算法选择</b>：逐 token 路径慢 32 倍、是可修的；修完剩下约 7 倍是硬件差距。<span class="ref" data-ref="H4b">H4b</span> <span class="ref" data-ref="H9">H9</span></li>
+          <li><b>热态在真实共置下大部分自行消失</b>（JC-2）。<span class="ref" data-ref="H6H7H10">H10</span> <span class="ref c" data-ref="C-#11">C-#11</span></li>
+        </ol>
+      </div>
+      <div class="panel">
+        <h4>现成手段，属于工程</h4>
+        <ul>
+          <li>复用前缀：即 LLM 服务里的 prefix caching（如 vLLM）。</li>
+          <li><code>action</code> 闭合即停：提前停止解码。</li>
+          <li>prefill 换 <code>wy_lt</code>：选用上游现成的 kernel。</li>
+        </ul>
+        <p class="note">L 6.92 → 1.78 s 是有用的结果，也是后续工作的前提，但单独不构成论文贡献。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="sq" id="q4c">
+    <h3><span class="qn">Q4c</span>最可能长成 contribution 的方向</h3>
+    <div class="ans"><b>按阶段感知的两模型协同调度</b>：规划器与执行器在同一块统一内存 SoC 上，按规划器当前所处的阶段（prefill 抢算力、decode 抢带宽）与执行器的截止期，决定规划器什么时候跑、用多少资源，目标是 L_decision，约束是执行器截止期与决策一致（M1–M3）。</div>
+    <div class="tw"><table style="min-width:640px">
+      <tr><th style="width:30%">需要的证据</th><th>现在有什么</th><th style="width:16%">状态</th></tr>
+      <tr><td>两个阶段争的资源不同</td><td>分 SM 让规划器 prefill 慢 2.2 倍，decode 只慢 1.06 倍（<span class="ref c" data-ref="C-#9">C-#9</span>）；prefill 计算密集、decode 访存密集（Q2c 的分析）。</td><td><span class="tag ok">有</span></td></tr>
+      <tr><td>执行器的违约来自 decode 而不是 prefill</td><td>超时全部与规划器 decode 重叠（<span class="ref c" data-ref="C-#12">C-#12</span>）；<span class="who j">J</span>Thor 上用替身规划器共置（1030 轮）时，执行器变慢集中在与 decode 重叠的调用上（1.3–1.7 倍），与 prefill 重叠几乎不慢。</td><td><span class="tag ok">有</span></td></tr>
+      <tr><td>现有手段（SM 分区）有缺口</td><td>SM 分区拦不住 decode 的带宽争用，还让规划器更难被抢占（<span class="ref c" data-ref="C-#16">C-#16</span>）。</td><td><span class="tag ok">有</span></td></tr>
+      <tr><td>规划器调用可以拆成可控的阶段</td><td>前缀状态恢复、少量 prefill、只解码到决策为止；decode 已从约 2 s 缩到约 0.4 s。<span class="ref" data-ref="H16">H16</span></td><td><span class="tag ok">有</span></td></tr>
+      <tr><td>27B 规划器 + 执行器在 Thor 上的真实共置</td><td>规划器进程与 GPU 锁已交付；共置测量待做。</td><td><span class="tag w">缺，关键</span></td></tr>
+      <tr><td>机制本身与它的评估</td><td>未开始。</td><td><span class="tag u">未做</span></td></tr>
+    </table></div>
+    <p class="note">数据中心没有这个问题（没有统一内存与周期截止期）；调研里的边缘调度工作按 SM 或优先级划分，不区分规划器的阶段。备选方向：<span class="term" tabindex="0" data-tip="tip-alt">另外两个</span>。</p>
+  </div>
+</section>
+
 <footer>数据：Jingwu 的 Jetson Thor 轮次 1104–1111（H4–H16）、RTX 5090 对照与 LIBERO 闭环；Chenwei 的 C- 系列发现（RoboCerebra 回放，Findings_1110_v2）；文献见各卡片链接。</footer>
 </div>
 
 <div id="tips" aria-hidden="true">
+  <div id="tip-alt"><h4>备选方向</h4><ol>
+    <li><b>面向决策的规划器服务</b>：以 L_decision 为目标，包括 decompose 的第一条子目标流式交付、<code>action</code> 闭合即停、混合模型的精确前缀复用，并以干预决策评估。较容易做出来，新意较弱。</li>
+    <li><b>边缘规划器加速的评估方法</b>：不可复现条件下以决策为准的等价性判据。适合作为论文里的一节。</li></ol></div>
   <div id="tip-twomodel"><h4>为什么仍研究两模型系统</h4><ol>
     <li>任务需要开放词汇理解、世界知识或长记忆时，强的独立规划器有明确收益（VoLo、Gemini Robotics 1.5）。</li>
     <li>两层运行频率不同：规划器约 1 Hz 或更低，执行器每秒十几到几十次。</li>
