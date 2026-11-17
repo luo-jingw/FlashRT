@@ -1,6 +1,6 @@
 # Serafini 博士论文第 6 章：用 Green Contexts 限制 GPU 的 SM 数，可以降低合并访存对 CPU 的带宽干扰；Thor 上跨步写只用 1 个 SM 就能把 CPU 拖慢约 4.5–5 倍
 
-- **Serafini 博士论文（第 6 章）** · 2026 · 博士论文（UNIMORE，第 XXXVIII 期）· [链接](https://iris.unimore.it/handle/11380/1403093)（PDF：`/retrieve/07522302-a25c-4b05-9214-dd7e0b4c108d/Serafini.pdf`，176 页）
+- **Serafini 博士论文（第 6 章）** · 2026 · 博士学位论文（意大利摩德纳与雷焦艾米利亚大学 UNIMORE，Computer and Data Science for Technological and Social Innovation 博士项目，第 XXXVIII 期）· [链接](https://iris.unimore.it/handle/11380/1403093)（PDF：`/retrieve/07522302-a25c-4b05-9214-dd7e0b4c108d/Serafini.pdf`，176 页）
 - Demystifying Memory Interference: Analysis and Mitigation of the Memory Contention Problem in Heterogeneous Systems-on-Chip（意大利语题名：Smascherare l'Interferenza di Memoria …）
 - 作者：Andrea Serafini；导师 Paolo Valente，共同导师 Andrea Marongiu，企业导师 Alessandro Biasci（Evidence S.R.L.）。IRIS 元数据：`DCTERMS.issued` = 2026-03-31，入库 2026-04-29；PDF 生成日期 2026-03-23。
 - 同行评审版本：**第 6 章没有找到同行评审版本**。论文没有"发表列表"章节，也不自引；第 6 章结尾写 "Our current work is focusing on integrating time-domain and space-domain technique…"（§6.6）。另外两章有对应期刊论文（Crossref 核对）：
