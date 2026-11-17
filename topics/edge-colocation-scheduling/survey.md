@@ -58,41 +58,43 @@
    - 空间：分 SM；
    - 带宽：给 CPU 限流；
    - 放弃并发。
-3. **硬件**：独立显卡（HBM 归 GPU 独占），或集成 SoC（CPU 与 GPU 共用 LPDDR）。
+3. **硬件**：数据中心或桌面独立显卡（HBM 或 GDDR 归 GPU 独占），或 Jetson 一类集成 SoC（CPU 与 GPU 共用 LPDDR）。
 4. **时限形式**：统计 SLO（P99 或达成率）、可调度性分析（周期加截止期），或只报均值。
 
-| 编号 | 工作 | 受保护方 / 让步方 | 控制维度 | 硬件 | 时限形式 |
-|---|---|---|---|---|---|
-| A01 | REEF | 固定频率小 DNN / 闭环小 DNN | 时间（重置抢占）+ 空间（kernel padding） | 独显 | 时延近独占 |
-| A02 | Orion | HP 推理或训练 / BE | 空间 + 按计算或访存特征配对 | 独显 | P99 近独占 |
-| A03 | Clockwork | 各请求 / batch 请求 | 放弃并发 | 独显 | 请求级 SLO |
-| A04 | Paella | 多客户端 | 时间（软件逐 kernel 下发） | 独显 | P99 |
-| A05 | XSched | 前台 / 后台（含 SoC 上跨引擎） | 时间（三级抢占） | 独显 + Jetson Orin | P99 倍数 |
-| A06 | LithOS | HP 推理（含 LLM）/ BE 训练 | 空间（TPC mask）+ kernel 切分 | 独显 | MLPerf 时延约束 |
-| A07 | GCAPS | 周期实时任务 / BE | 时间（驱动 TSG 抢占） | Jetson Xavier NX / Orin Nano | 可调度性 |
-| A08 | BLESS | 按配额的多应用 | 空间（预建 MPS context）+ 时间 | 独显 | 配额 |
-| A09 | Hummingbird | LLM serving / 离线 LLM 或训练 | 时间（block 级切分） | 独显 | P99 TTFT / TPOT |
-| B10 | DistServe | 同一模型的 decode / prefill | 分到不同 GPU | 独显集群 | TTFT / TPOT 达成率 |
-| B11 | Sarathi-Serve | decode / prefill | 时间（chunked prefill + token budget） | 独显 | TBT P99 |
-| B12 | semi-PD | decode / prefill | 空间（MPS 百分比） | 独显 | TTFT / TPOT |
-| B13 | MuxWise（Drift） | decode / prefill | 空间（green context）+ 按层下发 | 独显 | P99 TBT / TTFT |
-| B14 | Nexus | decode / prefill | 空间（green context） | 独显 | TTFT / TBT |
-| B15 | Bullet | decode / prefill | 空间（MPS + SM mask） | 独显 | P90 TTFT / TPOT |
-| B16 | DuetServe | decode / prefill | 空间（TPC mask，按需开启） | 独显 | TBT |
-| C17 | Miriam | 关键 DNN / 普通 DNN | 空间（elastic kernel） | RTX 2060 / Xavier | 时延近独占 |
-| C18 | RT-mDL | 周期 DNN 任务 | 串行 + 模型缩放 | Jetson Xavier 等 | 截止期错过率 |
-| C19 | Twill | DNN 与 transformer 混合 | 映射 + 冻结 + DVFS | Jetson Orin NX | 功耗预算 |
-| C20 | Martín et al. | 两个对称推理进程 | 空间（MPS / green context / MIG）对比 | A100 + Jetson Orin | 超时比例 |
-| C21 | BWLOCK++ | GPU 实时 kernel / CPU 任务 | 带宽（CPU 限流） | Jetson TX2 | 最坏 slowdown |
-| C22 | 动态带宽分配 | GPU 实时 kernel / CPU 任务 | 带宽（按进度放宽限流） | Jetson TX2 | WCET |
-| C23 | Serafini 第 6 章 | CPU 关键任务 / GPU kernel | 空间（用 green context 限 SM 来限带宽） | Jetson AGX Orin / Thor | slowdown |
-| D24 | TRT-Edge-LLM PR #193 | 轨迹模型 / 7B VLM 规划器 | stream 优先级（同进程） | Jetson Thor | 平均与最坏 tick |
-| D25 | DualVLN on Thor | System 1 / System 2 | 运行时设置 | Jetson Thor | 观测年龄 p95 |
-| D26 | NavGPT-3 | 安全监视 / 规划器与 VLA | 软件层控制权转移 | Thor 上的 VLA + 远端规划器 | halt p95 |
-| D27 | OxyGen | 动作 / 语言（同一模型） | 同一进程串行 + 合批 | RTX 4090 / Thor | 平均频率 |
-| D28 | FiS-VLA | 快系统 / 慢系统（参数共享） | 训练时异步采样 | RTX 4090 | 平均频率 |
-| D29 | RTC | 执行器 / 远端推理 | 执行器侧动作块 inpainting | 远端 RTX 4090 | 推理延迟作为 deadline d |
-| D30 | SmolVLA | 客户端 / 远端策略 | 动作队列阈值 | 远端 | 任务完成时间 |
+发表状态的写法：已发表的写会议或期刊加年份；"arXiv 预印本"表示没有找到发表处；学位论文写学校、学位和届别；其他来源（GitHub PR、workshop）照实写。标 † 的有未核实项，见 [papers.md](papers.md) 对应条目。硬件列写论文评估用的具体型号。
+
+| 编号 | 工作 | 发表状态 | 受保护方 / 让步方 | 控制维度 | 硬件（具体型号） | 时限形式 |
+|---|---|---|---|---|---|---|
+| A01 | REEF | OSDI 2022 | 固定频率小 DNN / 闭环小 DNN | 时间（重置抢占）+ 空间（kernel padding） | AMD Radeon Instinct MI50；REEF-N 在 NVIDIA V100 | 时延近独占 |
+| A02 | Orion | EuroSys 2024 | HP 推理或训练 / BE | 空间 + 按计算或访存特征配对 | NVIDIA V100-16GB；A100-40GB | P99 近独占 |
+| A03 | Clockwork | OSDI 2020 | 各请求 / batch 请求 | 放弃并发 | 每台 worker 2 × NVIDIA V100 | 请求级 SLO |
+| A04 | Paella | SOSP 2023 | 多客户端 | 时间（软件逐 kernel 下发） | NVIDIA Tesla T4；P100 | P99 |
+| A05 | XSched | OSDI 2025 | 前台 / 后台（含 SoC 上跨引擎） | 时间（三级抢占） | NVIDIA GV100、K40m；AMD MI50；Intel Arc iGPU 与 NPU3720；Ascend 910b；Jetson Orin 的 DLA / PVA / OFA 与 iGPU；Xilinx VU9P FPGA | P99 倍数 |
+| A06 | LithOS | SOSP 2025 | HP 推理（含 LLM）/ BE 训练 | 空间（TPC mask）+ kernel 切分 | NVIDIA A100-40GB | MLPerf 时延约束 |
+| A07 | GCAPS | ECRTS 2024 | 周期实时任务 / BE | 时间（驱动 TSG 抢占） | Jetson Xavier NX；Jetson Orin Nano | 可调度性 |
+| A08 | BLESS | EuroSys 2025 | 按配额的多应用 | 空间（预建 MPS context）+ 时间 | NVIDIA A100 | 配额 |
+| A09 | Hummingbird | arXiv 预印本（2601.04071，v2 2026-02） | LLM serving / 离线 LLM 或训练 | 时间（block 级切分） | NVIDIA A100-80GB；L40s；H100；16 × A100 多机 | P99 TTFT / TPOT |
+| B10 | DistServe | OSDI 2024 | 同一模型的 decode / prefill | 分到不同 GPU | 4 节点 × 8 × NVIDIA A100-80GB | TTFT / TPOT 达成率 |
+| B11 | Sarathi-Serve | OSDI 2024 | decode / prefill | 时间（chunked prefill + token budget） | NVIDIA A100（1–8 卡）；A40 | TBT P99 |
+| B12 | semi-PD | arXiv 预印本（2504.19867） | decode / prefill | 空间（MPS 百分比） | NVIDIA A100-80GB、A100-40GB、H200、A800 | TTFT / TPOT |
+| B13 | MuxWise（Drift） | ASPLOS 2026 † | decode / prefill | 空间（green context）+ 按层下发 | 8 × NVIDIA A100-80GB；8 × H100-SXM5；8 × H200-SXM5 | P99 TBT / TTFT |
+| B14 | Nexus | arXiv 预印本（2507.06608） | decode / prefill | 空间（green context） | 1–2 × NVIDIA L20-48GB | TTFT / TBT |
+| B15 | Bullet | ASPLOS 2026 † | decode / prefill | 空间（MPS + SM mask） | 8 × NVIDIA A100-80GB；8 × H100；8 × H20 | P90 TTFT / TPOT |
+| B16 | DuetServe | ICML 2026 | decode / prefill | 空间（TPC mask，按需开启） | 2 × NVIDIA H100-80GB | TBT |
+| C17 | Miriam | SenSys 2023 | 关键 DNN / 普通 DNN | 空间（elastic kernel） | NVIDIA GeForce RTX 2060；Jetson AGX Xavier | 时延近独占 |
+| C18 | RT-mDL | SenSys 2021 | 周期 DNN 任务 | 串行 + 模型缩放 | Jetson AGX Xavier、TX2、Nano；RTX 2080 | 截止期错过率 |
+| C19 | Twill | ICCAD 2025 | DNN 与 transformer 混合 | 映射 + 冻结 + DVFS | Jetson Orin NX | 功耗预算 |
+| C20 | Martín et al. | arXiv 预印本（2601.07600） | 两个对称推理进程 | 空间（MPS / green context / MIG）对比 | NVIDIA A100；Jetson Orin Nano；Jetson Orin AGX | 超时比例 |
+| C21 | BWLOCK++ | ECRTS 2018 | GPU 实时 kernel / CPU 任务 | 带宽（CPU 限流） | Jetson TX2 | 最坏 slowdown |
+| C22 | 动态带宽分配 | IEEE TCAD 2020（期刊） | GPU 实时 kernel / CPU 任务 | 带宽（按进度放宽限流） | Jetson TX2 | WCET |
+| C23 | Serafini 第 6 章 | 博士学位论文：意大利摩德纳与雷焦艾米利亚大学（UNIMORE），Computer and Data Science for Technological and Social Innovation 博士项目，第 XXXVIII 期，2026；第 6 章没有同行评审版本 | CPU 关键任务 / GPU kernel | 空间（用 green context 限 SM 来限带宽） | Jetson AGX Orin；Jetson AGX Thor | slowdown |
+| D24 | TRT-Edge-LLM PR #193 | GitHub PR（NVIDIA/TensorRT-Edge-LLM，2026-08-24 提交，open，未合并） | 轨迹模型 / 7B VLM 规划器 | stream 优先级（同进程） | Jetson Thor | 平均与最坏 tick |
+| D25 | DualVLN on Thor | NeurIPS 2026 workshop poster（On-Device Intelligence），只读到摘要 | System 1 / System 2 | 运行时设置 | Jetson Thor | 观测年龄 p95 |
+| D26 | NavGPT-3 | arXiv 预印本（2610.10787） | 安全监视 / 规划器与 VLA | 软件层控制权转移 | VLA 在 Jetson Thor；规划器为远端商用模型服务 | halt p95 |
+| D27 | OxyGen | NeurIPS 2026（主会 poster） | 动作 / 语言（同一模型） | 同一进程串行 + 合批 | NVIDIA RTX 4090；Jetson AGX Thor | 平均频率 |
+| D28 | FiS-VLA | NeurIPS 2025 † | 快系统 / 慢系统（参数共享） | 训练时异步采样 | NVIDIA RTX 4090 | 平均频率 |
+| D29 | RTC | NeurIPS 2025 † | 执行器 / 远端推理 | 执行器侧动作块 inpainting | 远端 NVIDIA RTX 4090 | 推理延迟作为 deadline d |
+| D30 | SmolVLA | arXiv 预印本（2506.01844） | 客户端 / 远端策略 | 动作队列阈值 | 推理硬件论文未写 | 任务完成时间 |
 
 ## 2. 各类脉络
 
@@ -107,7 +109,7 @@
   - **放弃并发换可预测性**：Clockwork 让每个 GPU 一次只跑一个推理 [A03]。它的依据是，用线程池并发跑推理，吞吐最多 +25 %，尾时延却升约 100 倍 [A03 §2、Fig.2b]。
 - **带宽残余干扰**：多篇独立测到"计算资源隔离之后仍有带宽干扰"，见 3.4 节。没有一篇在机制上做内存带宽隔离；Hummingbird、BLESS、XSched 都把它列为空间共享解决不了的部分。
 - **与本场景差别最大的前提**：
-  - 硬件：几乎都在独立显卡上评估。
+  - 硬件：除 GCAPS（Jetson Xavier NX、Orin Nano）和 XSched 的 Jetson Orin 实验外，都在独立显卡上评估：V100、A100、L40s、H100、T4、P100、MI50。
   - 让步方：多为训练或离线批处理，没有自己的时延要求。
   - 让步方的不可抢占单元：在 µs 到 ms 量级。最长的是 LithOS 报告的 DLRM 训练 kernel，超过 30 ms [A06 §5]；Hummingbird 报告的 LLM GEMM 达 7.49 ms [A09 §1]。
 
@@ -127,7 +129,7 @@
 - **带宽争用的结论不一致**（见 3.4 节）。这些测量都在 HBM 上做，最大的数字也只到约 36 %。
 - **与本场景差别最大的前提**：
   - 受保护方始终是同一模型的 decode。prefill 一方虽然让步，但有 TTFT 要求，这一点与本场景"让步方也有时延要求"同形。
-  - SM 规模为 78–132 个，分区粒度 2–16 SM。
+  - 硬件全是数据中心独立显卡（A100、A800、A40、L20、H20、H100、H200），SM 规模 78–132 个，分区粒度 2–16 SM。
   - 文献中的切分（token 块或层）都假定不改变数值，但都没有做输出一致性测试。
 
 ### 2.3 C. 边缘 SoC 上的多模型实时推理与内存带宽争用
@@ -153,8 +155,8 @@
 ### 2.4 D. 机器人双系统的部署
 
 - **部署位置分三种**：
-  - 两块独立 GPU：Helix，未收入目录，见 search_log.md；
-  - 规划器在远端：NavGPT-3 [D26]、RTC [D29]、SmolVLA [D30]；
+  - 机器人上两块 GPU 各跑一个系统：Helix（Figure AI 技术博客，未收入目录，见 search_log.md）；
+  - 规划器或策略在远端：NavGPT-3 [D26]（规划器为远端商用模型服务）、RTC [D29]（远端 RTX 4090）、SmolVLA [D30]（硬件未写）；
   - 同一设备：PR #193 [D24]、DualVLN on Thor [D25]、OxyGen [D27]、FiS-VLA [D28]。
 - **同一设备的工作里测了两模型干扰的只有 PR #193**：
   - 规划器是 Qwen2.5-VL-7B，prefill 1024 token、约 75 ms。

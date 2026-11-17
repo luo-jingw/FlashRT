@@ -3,7 +3,7 @@
 - 快照日期：2026-11-17
 - 范围：第一轮略读的 30 篇，按 [survey.md](survey.md) 的 A–D 四类分节；编号 A01–D30 是 survey.md 的引用编号。
 - 年份：首次公开的年份（arXiv 或正式发表，取较早者）。
-- 会议：取自论文首页的会议印记或 DOI、会议论文集页面、arXiv comment 或 Crossref；"预印本"表示没有找到发表处。标 † 的条目有未核实项，未核实项写在条目内。
+- 发表状态：已发表的写会议或期刊；"arXiv 预印本"表示没有找到发表处；学位论文写学校、学位和届别。来源取自论文首页的会议印记或 DOI、会议论文集页面、arXiv comment 或 Crossref。标 † 的条目有未核实项，未核实项写在条目内。
 - 数字取自正文并注明位置；只在图中出现的写"仅图"，只读到摘要的写"仅摘要"。"判断"是本综述的判断，不是论文的结论。
 - "本场景"指 survey.md §0.2 的场景参照。
 - 有精读笔记的 5 篇在条目末尾给出链接；条目与笔记不一致时以笔记为准。
@@ -165,7 +165,7 @@ Shulai Zhang et al.
 
 ### A09. Hummingbird
 
-**Hummingbird** · 2026 · 预印本 · [链接](https://arxiv.org/abs/2601.04071)
+**Hummingbird** · 2026 · arXiv 预印本 · [链接](https://arxiv.org/abs/2601.04071)
 Hummingbird: SLO-Oriented GPU Preemption at Microsecond-scale
 Tiancheng Hu et al.
 
@@ -232,7 +232,7 @@ Amey Agrawal et al.
 
 ### B12. semi-PD
 
-**semi-PD** · 2025 · 预印本 · [链接](https://arxiv.org/abs/2504.19867)
+**semi-PD** · 2025 · arXiv 预印本 · [链接](https://arxiv.org/abs/2504.19867)
 semi-PD: Towards Efficient LLM Serving via Phase-Wise Disaggregated Computation and Unified Storage
 Ke Hong et al.
 
@@ -277,7 +277,7 @@ Yukang Chen et al.（v3 作者顺序；v2 为 Weihao Cui 第一）
 
 ### B14. Nexus
 
-**Nexus** · 2025 · 预印本 · [链接](https://arxiv.org/abs/2507.06608)
+**Nexus** · 2025 · arXiv 预印本 · [链接](https://arxiv.org/abs/2507.06608)
 Nexus: Proactive Intra-GPU Disaggregation of Prefill and Decode in LLM Serving
 Xiaoxiang Shi et al.
 
@@ -395,7 +395,7 @@ Zain Taufique et al.
 
 ### C20. Edge GPU 隔离对比
 
-**Edge GPU 隔离对比** · 2026 · 预印本 · [链接](https://arxiv.org/abs/2601.07600)
+**Edge GPU 隔离对比** · 2026 · arXiv 预印本 · [链接](https://arxiv.org/abs/2601.07600)
 Peformance Isolation for Inference Processes in Edge GPU Systems（标题原文拼写如此）
 Juan José Martín et al.
 
@@ -448,7 +448,7 @@ Homa Aghilinasab et al.
 
 ### C23. Serafini 博士论文第 6 章
 
-**Serafini 博士论文（第 6 章）** · 2026 · 博士论文（UNIMORE；IRIS 记录的 issued 日期 2026-03-31；第 6 章没有同行评审版本）· [链接](https://iris.unimore.it/handle/11380/1403093)
+**Serafini 博士论文（第 6 章）** · 2026 · 博士学位论文（意大利摩德纳与雷焦艾米利亚大学 UNIMORE，Computer and Data Science for Technological and Social Innovation 博士项目，第 XXXVIII 期；IRIS 记录的 issued 日期 2026-03-31；第 6 章没有同行评审版本）· [链接](https://iris.unimore.it/handle/11380/1403093)
 Demystifying Memory Interference: Analysis and Mitigation of the Memory Contention Problem in Heterogeneous Systems-on-Chip
 Andrea Serafini
 
@@ -507,7 +507,7 @@ Yoojin Lim et al.
 
 ### D26. NavGPT-3
 
-**NavGPT-3** · 2026 · 预印本 · [arXiv 2610.10787](https://arxiv.org/abs/2610.10787)
+**NavGPT-3** · 2026 · arXiv 预印本 · [arXiv 2610.10787](https://arxiv.org/abs/2610.10787)
 NavGPT-3: Harnessing Context in a Hierarchical Navigation Runtime
 Gengze Zhou et al.
 
@@ -568,7 +568,7 @@ Kevin Black et al.
 
 ### D30. SmolVLA
 
-**SmolVLA** · 2025 · 预印本 · [arXiv 2506.01844](https://arxiv.org/abs/2506.01844)
+**SmolVLA** · 2025 · arXiv 预印本 · [arXiv 2506.01844](https://arxiv.org/abs/2506.01844)
 SmolVLA: A Vision-Language-Action Model for Affordable and Efficient Robotics
 Mustafa Shukor et al. †（作者名未在本次打开的页面核对）
 

@@ -1,6 +1,6 @@
 # Hummingbird：把低优先级 kernel 按 thread block 切成一波（one wave）大小的 split-kernel，在 NVIDIA 闭源 GPU 上得到 µs 级抢占，并只在高优先级的空闲气泡里运行低优先级
 
-- **Hummingbird** · 2026 · 预印本 · [链接](https://arxiv.org/abs/2601.04071)
+- **Hummingbird** · 2026 · arXiv 预印本 · [链接](https://arxiv.org/abs/2601.04071)
 - Hummingbird: SLO-Oriented GPU Preemption at Microsecond-scale
 - 作者：Tiancheng Hu, Chenxi Wang\*, Ting Cao, Jin Qin, Lei Chen, Xinyu Xiao, Junhao Hu, Hongliang Tian, Shoumeng Yan, Huimin Cui, Quan Chen, Tao Xie\*（北大、国科大、清华 AIR、华科、蚂蚁、上交；\*通讯作者）；arXiv v1 2026-01-07，v2 2026-02-10（本笔记读 v2，cs.DC）。
 - 元数据核对：arXiv abs 页面（标题、作者、版本日期）。abs 页面**没有 Comments 字段**，PDF 首页与页脚也没有会议印记，因此标"预印本"，会议未知。
