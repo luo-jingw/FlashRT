@@ -1,7 +1,7 @@
 # 一块边缘 SoC 上周期截止期模型与 LLM 的共置：系统文献综述
 
 - 快照日期：2026-11-17（第一轮）。
-- 引用格式：方括号里是 [papers.md](papers.md) 的编号（如 [A05]），后面注明原文位置。
+- 引用格式：（编号 + 原文位置），编号是 [papers.md](papers.md) 的条目编号，链接指向论文页面。
 - 精读笔记在 `notes/` 下；论文目录中卡片与笔记不一致的地方，以笔记为准。
 
 ## 0. 范围与方法
@@ -65,53 +65,53 @@
 
 | 编号 | 工作 | 发表状态 | 受保护方 / 让步方 | 控制维度 | 硬件（具体型号） | 时限形式 |
 |---|---|---|---|---|---|---|
-| A01 | REEF | OSDI 2022 | 固定频率小 DNN / 闭环小 DNN | 时间（重置抢占）+ 空间（kernel padding） | AMD Radeon Instinct MI50；REEF-N 在 NVIDIA V100 | 时延近独占 |
-| A02 | Orion | EuroSys 2024 | HP 推理或训练 / BE | 空间 + 按计算或访存特征配对 | NVIDIA V100-16GB；A100-40GB | P99 近独占 |
-| A03 | Clockwork | OSDI 2020 | 各请求 / batch 请求 | 放弃并发 | 每台 worker 2 × NVIDIA V100 | 请求级 SLO |
-| A04 | Paella | SOSP 2023 | 多客户端 | 时间（软件逐 kernel 下发） | NVIDIA Tesla T4；P100 | P99 |
-| A05 | XSched | OSDI 2025 | 前台 / 后台（含 SoC 上跨引擎） | 时间（三级抢占） | NVIDIA GV100、K40m；AMD MI50；Intel Arc iGPU 与 NPU3720；Ascend 910b；Jetson Orin 的 DLA / PVA / OFA 与 iGPU；Xilinx VU9P FPGA | P99 倍数 |
-| A06 | LithOS | SOSP 2025 | HP 推理（含 LLM）/ BE 训练 | 空间（TPC mask）+ kernel 切分 | NVIDIA A100-40GB | MLPerf 时延约束 |
-| A07 | GCAPS | ECRTS 2024 | 周期实时任务 / BE | 时间（驱动 TSG 抢占） | Jetson Xavier NX；Jetson Orin Nano | 可调度性 |
-| A08 | BLESS | EuroSys 2025 | 按配额的多应用 | 空间（预建 MPS context）+ 时间 | NVIDIA A100 | 配额 |
-| A09 | Hummingbird | arXiv 预印本（2601.04071，v2 2026-02） | LLM serving / 离线 LLM 或训练 | 时间（block 级切分） | NVIDIA A100-80GB；L40s；H100；16 × A100 多机 | P99 TTFT / TPOT |
-| B10 | DistServe | OSDI 2024 | 同一模型的 decode / prefill | 分到不同 GPU | 4 节点 × 8 × NVIDIA A100-80GB | TTFT / TPOT 达成率 |
-| B11 | Sarathi-Serve | OSDI 2024 | decode / prefill | 时间（chunked prefill + token budget） | NVIDIA A100（1–8 卡）；A40 | TBT P99 |
-| B12 | semi-PD | arXiv 预印本（2504.19867） | decode / prefill | 空间（MPS 百分比） | NVIDIA A100-80GB、A100-40GB、H200、A800 | TTFT / TPOT |
-| B13 | MuxWise（Drift） | ASPLOS 2026 † | decode / prefill | 空间（green context）+ 按层下发 | 8 × NVIDIA A100-80GB；8 × H100-SXM5；8 × H200-SXM5 | P99 TBT / TTFT |
-| B14 | Nexus | arXiv 预印本（2507.06608） | decode / prefill | 空间（green context） | 1–2 × NVIDIA L20-48GB | TTFT / TBT |
-| B15 | Bullet | ASPLOS 2026 † | decode / prefill | 空间（MPS + SM mask） | 8 × NVIDIA A100-80GB；8 × H100；8 × H20 | P90 TTFT / TPOT |
-| B16 | DuetServe | ICML 2026 | decode / prefill | 空间（TPC mask，按需开启） | 2 × NVIDIA H100-80GB | TBT |
-| C17 | Miriam | SenSys 2023 | 关键 DNN / 普通 DNN | 空间（elastic kernel） | NVIDIA GeForce RTX 2060；Jetson AGX Xavier | 时延近独占 |
-| C18 | RT-mDL | SenSys 2021 | 周期 DNN 任务 | 串行 + 模型缩放 | Jetson AGX Xavier、TX2、Nano；RTX 2080 | 截止期错过率 |
-| C19 | Twill | ICCAD 2025 | DNN 与 transformer 混合 | 映射 + 冻结 + DVFS | Jetson Orin NX | 功耗预算 |
-| C20 | Martín et al. | arXiv 预印本（2601.07600） | 两个对称推理进程 | 空间（MPS / green context / MIG）对比 | NVIDIA A100；Jetson Orin Nano；Jetson Orin AGX | 超时比例 |
-| C21 | BWLOCK++ | ECRTS 2018 | GPU 实时 kernel / CPU 任务 | 带宽（CPU 限流） | Jetson TX2 | 最坏 slowdown |
-| C22 | 动态带宽分配 | IEEE TCAD 2020（期刊） | GPU 实时 kernel / CPU 任务 | 带宽（按进度放宽限流） | Jetson TX2 | WCET |
-| C23 | Serafini 第 6 章 | 博士学位论文：意大利摩德纳与雷焦艾米利亚大学（UNIMORE），Computer and Data Science for Technological and Social Innovation 博士项目，第 XXXVIII 期，2026；第 6 章没有同行评审版本 | CPU 关键任务 / GPU kernel | 空间（用 green context 限 SM 来限带宽） | Jetson AGX Orin；Jetson AGX Thor | slowdown |
-| D24 | TRT-Edge-LLM PR #193 | GitHub PR（NVIDIA/TensorRT-Edge-LLM，2026-08-24 提交，open，未合并） | 轨迹模型 / 7B VLM 规划器 | stream 优先级（同进程） | Jetson Thor | 平均与最坏 tick |
-| D25 | DualVLN on Thor | NeurIPS 2026 workshop poster（On-Device Intelligence），只读到摘要 | System 1 / System 2 | 运行时设置 | Jetson Thor | 观测年龄 p95 |
-| D26 | NavGPT-3 | arXiv 预印本（2610.10787） | 安全监视 / 规划器与 VLA | 软件层控制权转移 | VLA 在 Jetson Thor；规划器为远端商用模型服务 | halt p95 |
-| D27 | OxyGen | NeurIPS 2026（主会 poster） | 动作 / 语言（同一模型） | 同一进程串行 + 合批 | NVIDIA RTX 4090；Jetson AGX Thor | 平均频率 |
-| D28 | FiS-VLA | NeurIPS 2025 † | 快系统 / 慢系统（参数共享） | 训练时异步采样 | NVIDIA RTX 4090 | 平均频率 |
-| D29 | RTC | NeurIPS 2025 † | 执行器 / 远端推理 | 执行器侧动作块 inpainting | 远端 NVIDIA RTX 4090 | 推理延迟作为 deadline d |
-| D30 | SmolVLA | arXiv 预印本（2506.01844） | 客户端 / 远端策略 | 动作队列阈值 | 推理硬件论文未写 | 任务完成时间 |
+| A01 | [REEF](https://www.usenix.org/conference/osdi22/presentation/han) | OSDI 2022 | 固定频率小 DNN / 闭环小 DNN | 时间（重置抢占）+ 空间（kernel padding） | AMD Radeon Instinct MI50；REEF-N 在 NVIDIA V100 | 时延近独占 |
+| A02 | [Orion](https://doi.org/10.1145/3627703.3629578) | EuroSys 2024 | HP 推理或训练 / BE | 空间 + 按计算或访存特征配对 | NVIDIA V100-16GB；A100-40GB | P99 近独占 |
+| A03 | [Clockwork](https://www.usenix.org/conference/osdi20/presentation/gujarati) | OSDI 2020 | 各请求 / batch 请求 | 放弃并发 | 每台 worker 2 × NVIDIA V100 | 请求级 SLO |
+| A04 | [Paella](https://doi.org/10.1145/3600006.3613163) | SOSP 2023 | 多客户端 | 时间（软件逐 kernel 下发） | NVIDIA Tesla T4；P100 | P99 |
+| A05 | [XSched](https://www.usenix.org/conference/osdi25/presentation/shen-weihang) | OSDI 2025 | 前台 / 后台（含 SoC 上跨引擎） | 时间（三级抢占） | NVIDIA GV100、K40m；AMD MI50；Intel Arc iGPU 与 NPU3720；Ascend 910b；Jetson Orin 的 DLA / PVA / OFA 与 iGPU；Xilinx VU9P FPGA | P99 倍数 |
+| A06 | [LithOS](https://doi.org/10.1145/3731569.3764818) | SOSP 2025 | HP 推理（含 LLM）/ BE 训练 | 空间（TPC mask）+ kernel 切分 | NVIDIA A100-40GB | MLPerf 时延约束 |
+| A07 | [GCAPS](https://doi.org/10.4230/LIPIcs.ECRTS.2024.14) | ECRTS 2024 | 周期实时任务 / BE | 时间（驱动 TSG 抢占） | Jetson Xavier NX；Jetson Orin Nano | 可调度性 |
+| A08 | [BLESS](https://doi.org/10.1145/3689031.3696070) | EuroSys 2025 | 按配额的多应用 | 空间（预建 MPS context）+ 时间 | NVIDIA A100 | 配额 |
+| A09 | [Hummingbird](https://arxiv.org/abs/2601.04071) | arXiv 预印本（2601.04071，v2 2026-02） | LLM serving / 离线 LLM 或训练 | 时间（block 级切分） | NVIDIA A100-80GB；L40s；H100；16 × A100 多机 | P99 TTFT / TPOT |
+| B10 | [DistServe](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin) | OSDI 2024 | 同一模型的 decode / prefill | 分到不同 GPU | 4 节点 × 8 × NVIDIA A100-80GB | TTFT / TPOT 达成率 |
+| B11 | [Sarathi-Serve](https://www.usenix.org/conference/osdi24/presentation/agrawal) | OSDI 2024 | decode / prefill | 时间（chunked prefill + token budget） | NVIDIA A100（1–8 卡）；A40 | TBT P99 |
+| B12 | [semi-PD](https://arxiv.org/abs/2504.19867) | arXiv 预印本（2504.19867） | decode / prefill | 空间（MPS 百分比） | NVIDIA A100-80GB、A100-40GB、H200、A800 | TTFT / TPOT |
+| B13 | [MuxWise（Drift）](https://arxiv.org/abs/2504.14489) | ASPLOS 2026 † | decode / prefill | 空间（green context）+ 按层下发 | 8 × NVIDIA A100-80GB；8 × H100-SXM5；8 × H200-SXM5 | P99 TBT / TTFT |
+| B14 | [Nexus](https://arxiv.org/abs/2507.06608) | arXiv 预印本（2507.06608） | decode / prefill | 空间（green context） | 1–2 × NVIDIA L20-48GB | TTFT / TBT |
+| B15 | [Bullet](https://arxiv.org/abs/2504.19516) | ASPLOS 2026 † | decode / prefill | 空间（MPS + SM mask） | 8 × NVIDIA A100-80GB；8 × H100；8 × H20 | P90 TTFT / TPOT |
+| B16 | [DuetServe](https://proceedings.mlr.press/v306/gao26m.html) | ICML 2026 | decode / prefill | 空间（TPC mask，按需开启） | 2 × NVIDIA H100-80GB | TBT |
+| C17 | [Miriam](https://doi.org/10.1145/3625687.3625789) | SenSys 2023 | 关键 DNN / 普通 DNN | 空间（elastic kernel） | NVIDIA GeForce RTX 2060；Jetson AGX Xavier | 时延近独占 |
+| C18 | [RT-mDL](https://doi.org/10.1145/3485730.3485938) | SenSys 2021 | 周期 DNN 任务 | 串行 + 模型缩放 | Jetson AGX Xavier、TX2、Nano；RTX 2080 | 截止期错过率 |
+| C19 | [Twill](https://doi.org/10.1109/ICCAD66269.2025.11240767) | ICCAD 2025 | DNN 与 transformer 混合 | 映射 + 冻结 + DVFS | Jetson Orin NX | 功耗预算 |
+| C20 | [Martín et al.](https://arxiv.org/abs/2601.07600) | arXiv 预印本（2601.07600） | 两个对称推理进程 | 空间（MPS / green context / MIG）对比 | NVIDIA A100；Jetson Orin Nano；Jetson Orin AGX | 超时比例 |
+| C21 | [BWLOCK++](https://doi.org/10.4230/LIPIcs.ECRTS.2018.19) | ECRTS 2018 | GPU 实时 kernel / CPU 任务 | 带宽（CPU 限流） | Jetson TX2 | 最坏 slowdown |
+| C22 | [动态带宽分配](https://doi.org/10.1109/TCAD.2020.3012210) | IEEE TCAD 2020（期刊） | GPU 实时 kernel / CPU 任务 | 带宽（按进度放宽限流） | Jetson TX2 | WCET |
+| C23 | [Serafini 第 6 章](https://iris.unimore.it/handle/11380/1403093) | 博士学位论文：意大利摩德纳与雷焦艾米利亚大学（UNIMORE），Computer and Data Science for Technological and Social Innovation 博士项目，第 XXXVIII 期，2026；第 6 章没有同行评审版本 | CPU 关键任务 / GPU kernel | 空间（用 green context 限 SM 来限带宽） | Jetson AGX Orin；Jetson AGX Thor | slowdown |
+| D24 | [TRT-Edge-LLM PR #193](https://github.com/NVIDIA/TensorRT-Edge-LLM/pull/193) | GitHub PR（NVIDIA/TensorRT-Edge-LLM，2026-08-24 提交，open，未合并） | 轨迹模型 / 7B VLM 规划器 | stream 优先级（同进程） | Jetson Thor | 平均与最坏 tick |
+| D25 | [DualVLN on Thor](https://openreview.net/forum?id=Ei1Wgdo2I0) | NeurIPS 2026 workshop poster（On-Device Intelligence），只读到摘要 | System 1 / System 2 | 运行时设置 | Jetson Thor | 观测年龄 p95 |
+| D26 | [NavGPT-3](https://arxiv.org/abs/2610.10787) | arXiv 预印本（2610.10787） | 安全监视 / 规划器与 VLA | 软件层控制权转移 | VLA 在 Jetson Thor；规划器为远端商用模型服务 | halt p95 |
+| D27 | [OxyGen](https://arxiv.org/abs/2603.14371) | NeurIPS 2026（主会 poster） | 动作 / 语言（同一模型） | 同一进程串行 + 合批 | NVIDIA RTX 4090；Jetson AGX Thor | 平均频率 |
+| D28 | [FiS-VLA](https://arxiv.org/abs/2506.01953) | NeurIPS 2025 † | 快系统 / 慢系统（参数共享） | 训练时异步采样 | NVIDIA RTX 4090 | 平均频率 |
+| D29 | [RTC](https://arxiv.org/abs/2506.07339) | NeurIPS 2025 † | 执行器 / 远端推理 | 执行器侧动作块 inpainting | 远端 NVIDIA RTX 4090 | 推理延迟作为 deadline d |
+| D30 | [SmolVLA](https://arxiv.org/abs/2506.01844) | arXiv 预印本（2506.01844） | 客户端 / 远端策略 | 动作队列阈值 | 推理硬件论文未写 | 任务完成时间 |
 
 ## 2. 各类脉络
 
 ### 2.1 A. GPU 共享与抢占
 
-- **问题表述**：一块 GPU 上有一个高优先级任务和若干可让步任务。目标是"高优先级时延接近独占，同时最大化低优先级吞吐或总利用率"。BLESS 是例外，按配额做公平。只有 GCAPS [A07] 使用周期、截止期和响应时间分析。
+- **问题表述**：一块 GPU 上有一个高优先级任务和若干可让步任务。目标是"高优先级时延接近独占，同时最大化低优先级吞吐或总利用率"。BLESS 是例外，按配额做公平。只有 GCAPS（[A07](https://doi.org/10.4230/LIPIcs.ECRTS.2024.14)） 使用周期、截止期和响应时间分析。
 - **约束**：NVIDIA GPU 不支持主动抢占已经在运行的 kernel，各工作对这一点的描述一致。因此机制的主线是"控制让步方占用设备的时长"：
-  - **限制在途命令**：REEF-N 只清空排队中的 kernel [A01 §4.4]；Orion 在途 BE 时长不超过 HP 时延的 2.5 % [A02 §5.1]；XSched Lv1 的在途阈值使抢占延迟约为阈值 × 命令时长 [A05 Fig.11a]；Paella 逐 kernel 下发 [A04 §6]。
-  - **撤回或中断**：REEF 在 AMD 上杀掉幂等 kernel，抢占延迟 35–38 µs [A01 Fig.12b]；XSched Lv2 改写 SASS，Lv3 用 TSG 时间片或未公开 ioctl [A05 §6]；GCAPS 修改驱动 runlist [A07 §5]。
-  - **切小让步方的 kernel**：LithOS 的 atomizer [A06 §7]；Hummingbird 按 thread block 切成一波大小，平均每段 77 µs，平均抢占延迟 139 µs [A09 §4.2、Fig.13a]。
-  - **空间**：stream 优先级、MPS 限 SM、TPC mask [A06]、预建多个 SM 受限的 context [A08 §4.5]、按计算或访存特征配对 kernel [A02]。
-  - **放弃并发换可预测性**：Clockwork 让每个 GPU 一次只跑一个推理 [A03]。它的依据是，用线程池并发跑推理，吞吐最多 +25 %，尾时延却升约 100 倍 [A03 §2、Fig.2b]。
+  - **限制在途命令**：REEF-N 只清空排队中的 kernel（[A01](https://www.usenix.org/conference/osdi22/presentation/han) §4.4）；Orion 在途 BE 时长不超过 HP 时延的 2.5 %（[A02](https://doi.org/10.1145/3627703.3629578) §5.1）；XSched Lv1 的在途阈值使抢占延迟约为阈值 × 命令时长（[A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang) Fig.11a）；Paella 逐 kernel 下发（[A04](https://doi.org/10.1145/3600006.3613163) §6）。
+  - **撤回或中断**：REEF 在 AMD 上杀掉幂等 kernel，抢占延迟 35–38 µs（[A01](https://www.usenix.org/conference/osdi22/presentation/han) Fig.12b）；XSched Lv2 改写 SASS，Lv3 用 TSG 时间片或未公开 ioctl（[A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang) §6）；GCAPS 修改驱动 runlist（[A07](https://doi.org/10.4230/LIPIcs.ECRTS.2024.14) §5）。
+  - **切小让步方的 kernel**：LithOS 的 atomizer（[A06](https://doi.org/10.1145/3731569.3764818) §7）；Hummingbird 按 thread block 切成一波大小，平均每段 77 µs，平均抢占延迟 139 µs（[A09](https://arxiv.org/abs/2601.04071) §4.2、Fig.13a）。
+  - **空间**：stream 优先级、MPS 限 SM、TPC mask（[A06](https://doi.org/10.1145/3731569.3764818)）、预建多个 SM 受限的 context（[A08](https://doi.org/10.1145/3689031.3696070) §4.5）、按计算或访存特征配对 kernel（[A02](https://doi.org/10.1145/3627703.3629578)）。
+  - **放弃并发换可预测性**：Clockwork 让每个 GPU 一次只跑一个推理（[A03](https://www.usenix.org/conference/osdi20/presentation/gujarati)）。它的依据是，用线程池并发跑推理，吞吐最多 +25 %，尾时延却升约 100 倍（[A03](https://www.usenix.org/conference/osdi20/presentation/gujarati) §2、Fig.2b）。
 - **带宽残余干扰**：多篇独立测到"计算资源隔离之后仍有带宽干扰"，见 3.4 节。没有一篇在机制上做内存带宽隔离；Hummingbird、BLESS、XSched 都把它列为空间共享解决不了的部分。
 - **与本场景差别最大的前提**：
   - 硬件：除 GCAPS（Jetson Xavier NX、Orin Nano）和 XSched 的 Jetson Orin 实验外，都在独立显卡上评估：V100、A100、L40s、H100、T4、P100、MI50。
   - 让步方：多为训练或离线批处理，没有自己的时延要求。
-  - 让步方的不可抢占单元：在 µs 到 ms 量级。最长的是 LithOS 报告的 DLRM 训练 kernel，超过 30 ms [A06 §5]；Hummingbird 报告的 LLM GEMM 达 7.49 ms [A09 §1]。
+  - 让步方的不可抢占单元：在 µs 到 ms 量级。最长的是 LithOS 报告的 DLRM 训练 kernel，超过 30 ms（[A06](https://doi.org/10.1145/3731569.3764818) §5）；Hummingbird 报告的 LLM GEMM 达 7.49 ms（[A09](https://arxiv.org/abs/2601.04071) §1）。
 
 ### 2.2 B. LLM 服务的阶段调度
 
@@ -119,13 +119,13 @@
   - 指标是 TTFT 和 TBT（或 TPOT）的 P90 / P99，加上达成率；或者用"满足 SLO 的最大请求率"（goodput）。
   - SLO 一般定义为无干扰时延的若干倍：Sarathi 5× / 25×，semi-PD 7.5× / 10×。
 - **约束干扰的三条路**：
-  - **时间**：Sarathi-Serve 用 token budget 限制每轮的 prefill 量 [B11 §4.3]。代价是：1k 块 chunked prefill 的计算效率从 71 % 降到 61 %，总 prefill 时延为不切块的 1.13 倍 [B15 §2.3.2]。MuxWise 按 transformer 层下发 prefill，在层边界抢占 [B13 §3.2.3、§3.4]。
+  - **时间**：Sarathi-Serve 用 token budget 限制每轮的 prefill 量（[B11](https://www.usenix.org/conference/osdi24/presentation/agrawal) §4.3）。代价是：1k 块 chunked prefill 的计算效率从 71 % 降到 61 %，总 prefill 时延为不切块的 1.13 倍（[B15](https://arxiv.org/abs/2504.19516) §2.3.2）。MuxWise 按 transformer 层下发 prefill，在层边界抢占（[B13](https://arxiv.org/abs/2504.14489) §3.2.3、§3.4）。
   - **空间（同一 GPU 内分 SM）**：
-    - semi-PD 用 MPS 百分比，调整比例要重启进程 [B12 §5]；
-    - MuxWise 和 Nexus 用 green context，所有分区在启动时预建，运行时只切换 [B13、B14 §5]；
-    - Bullet 在 MPS 下用 libsmctrl 设 SM mask，重配置约 4.1 µs [B15 Table 5]；
-    - DuetServe 用 TPC mask，只在预测会违反 TBT 时才开启分区 [B16 §4]。
-  - **分离到不同 GPU**：DistServe [B10]。它论证"同卡上分开排队、优先任一阶段都会损害另一阶段" [B10 §2.3]。
+    - semi-PD 用 MPS 百分比，调整比例要重启进程（[B12](https://arxiv.org/abs/2504.19867) §5）；
+    - MuxWise 和 Nexus 用 green context，所有分区在启动时预建，运行时只切换（[B13](https://arxiv.org/abs/2504.14489)、[B14](https://arxiv.org/abs/2507.06608) §5）；
+    - Bullet 在 MPS 下用 libsmctrl 设 SM mask，重配置约 4.1 µs（[B15](https://arxiv.org/abs/2504.19516) Table 5）；
+    - DuetServe 用 TPC mask，只在预测会违反 TBT 时才开启分区（[B16](https://proceedings.mlr.press/v306/gao26m.html) §4）。
+  - **分离到不同 GPU**：DistServe（[B10](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin)）。它论证"同卡上分开排队、优先任一阶段都会损害另一阶段"（[B10](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin) §2.3）。
 - **带宽争用的结论不一致**（见 3.4 节）。这些测量都在 HBM 上做，最大的数字也只到约 36 %。
 - **与本场景差别最大的前提**：
   - 受保护方始终是同一模型的 decode。prefill 一方虽然让步，但有 TTFT 要求，这一点与本场景"让步方也有时延要求"同形。
@@ -135,16 +135,16 @@
 ### 2.3 C. 边缘 SoC 上的多模型实时推理与内存带宽争用
 
 - **C1 多 DNN 实时调度**：负载都是毫秒级 CNN 或小 transformer。
-  - RT-mDL [C18] 有周期任务和错过率指标，用 mutex 让 GPU 子任务串行执行，截止期设为平均执行时间的 4 或 6 倍。
-  - Miriam [C17] 用 source-to-source 变换得到 elastic kernel，把普通任务填进关键 kernel 剩下的 SM。它的前提是"边缘 GPU 上没有 MPS"，这在 Thor 上不成立。
-  - Twill [C19] 一个 cluster 同时只跑一个模型。
-  - Martín et al. [C20] 在 Orin 上直接比较了 MPS 与 green context，结论是：
+  - RT-mDL（[C18](https://doi.org/10.1145/3485730.3485938)） 有周期任务和错过率指标，用 mutex 让 GPU 子任务串行执行，截止期设为平均执行时间的 4 或 6 倍。
+  - Miriam（[C17](https://doi.org/10.1145/3625687.3625789)） 用 source-to-source 变换得到 elastic kernel，把普通任务填进关键 kernel 剩下的 SM。它的前提是"边缘 GPU 上没有 MPS"，这在 Thor 上不成立。
+  - Twill（[C19](https://doi.org/10.1109/ICCAD66269.2025.11240767)） 一个 cluster 同时只跑一个模型。
+  - Martín et al.（[C20](https://arxiv.org/abs/2601.07600)） 在 Orin 上直接比较了 MPS 与 green context，结论是：
     - green context 不隔离内存；
     - Orin Nano 受功耗限制时 GPU 降频，隔离更差；
     - Orin AGX 固定 GPU 频率后，隔离接近 A100 上的 MIG。
 - **C2 带宽调节**：
-  - BWLOCK++ [C21] 和动态带宽分配 [C22] 只处理"CPU 拖慢 GPU"这一个方向：用 PMC 按 1 ms 周期给 CPU 核限流，并假设 GPU 上一次只有一个实时 kernel。
-  - Serafini 第 6 章 [C23] 是唯一在 Thor 上测量的工作：
+  - BWLOCK++（[C21](https://doi.org/10.4230/LIPIcs.ECRTS.2018.19)） 和动态带宽分配（[C22](https://doi.org/10.1109/TCAD.2020.3012210)） 只处理"CPU 拖慢 GPU"这一个方向：用 PMC 按 1 ms 周期给 CPU 核限流，并假设 GPU 上一次只有一个实时 kernel。
+  - Serafini 第 6 章（[C23](https://iris.unimore.it/handle/11380/1403093)） 是唯一在 Thor 上测量的工作：
     - 方向相反，是 GPU 拖慢 CPU；
     - GPU 合并写约 4 个 SM 就让 CPU slowdown 达到最大值 2.5×；
     - 512 B 跨步写只用 1–2 个 SM 就把 CPU 拖慢约 4.5–5×；
@@ -156,8 +156,8 @@
 
 - **部署位置分三种**：
   - 机器人上两块 GPU 各跑一个系统：Helix（Figure AI 技术博客，未收入目录，见 search_log.md）；
-  - 规划器或策略在远端：NavGPT-3 [D26]（规划器为远端商用模型服务）、RTC [D29]（远端 RTX 4090）、SmolVLA [D30]（硬件未写）；
-  - 同一设备：PR #193 [D24]、DualVLN on Thor [D25]、OxyGen [D27]、FiS-VLA [D28]。
+  - 规划器或策略在远端：NavGPT-3（[D26](https://arxiv.org/abs/2610.10787)）（规划器为远端商用模型服务）、RTC（[D29](https://arxiv.org/abs/2506.07339)）（远端 RTX 4090）、SmolVLA（[D30](https://arxiv.org/abs/2506.01844)）（硬件未写）；
+  - 同一设备：PR #193（[D24](https://github.com/NVIDIA/TensorRT-Edge-LLM/pull/193)）、DualVLN on Thor（[D25](https://openreview.net/forum?id=Ei1Wgdo2I0)）、OxyGen（[D27](https://arxiv.org/abs/2603.14371)）、FiS-VLA（[D28](https://arxiv.org/abs/2506.01953)）。
 - **同一设备的工作里测了两模型干扰的只有 PR #193**：
   - 规划器是 Qwen2.5-VL-7B，prefill 1024 token、约 75 ms。
   - 执行器每条轨迹耗时：
@@ -168,9 +168,9 @@
 - **运行方式几乎都是异步**：执行器读最新的规划，staleness 被当作设计的一部分。
 - **指标以均值为主**：Hz、中位时延、任务时间。报尾部的只有三处：NavGPT-3 的 halt p95、DualVLN on Thor 的观测年龄 p95、PR #193 的最坏 tick。没有一篇统计执行器的截止期错过率。
 - **问题表述最接近"约束一方、优化另一方"的是 OxyGen**：
-  - 式 3：max τ = Bk/T，s.t. f = H/T ≥ f_min [D27 §3.1]。
+  - 式 3：max τ = Bk/T，s.t. f = H/T ≥ f_min（[D27](https://arxiv.org/abs/2603.14371) §3.1）。
   - 但 v5 没有给出 f_min 的取值，实验中也没有检验这个约束。
-  - 它在 Thor 上的 MPS 两进程并行比顺序执行慢约 15–25 %，这个数只在图中出现 [D27 §4.2、Fig.4、Fig.6]。
+  - 它在 Thor 上的 MPS 两进程并行比顺序执行慢约 15–25 %，这个数只在图中出现（[D27](https://arxiv.org/abs/2603.14371) §4.2、Fig.4、Fig.6）。
 
 ## 3. 跨类综合
 
@@ -178,56 +178,56 @@
 
 | 模板 | 形式 | 代表 |
 |---|---|---|
-| 保护一方、收割空闲 | 高优先级时延接近独占（P99 倍数或 SLO 达成率），最大化低优先级吞吐或利用率 | A01、A02、A05、A06、A09、C17 |
-| 统计 SLO 下的容量 | 满足 TTFT / TBT 的 P90 / P99 前提下，最大请求率或 goodput | B10–B16、A03 |
-| 约束一方频率、最大化另一方吞吐 | max τ s.t. f ≥ f_min | D27 |
+| 保护一方、收割空闲 | 高优先级时延接近独占（P99 倍数或 SLO 达成率），最大化低优先级吞吐或利用率 | [A01](https://www.usenix.org/conference/osdi22/presentation/han)、[A02](https://doi.org/10.1145/3627703.3629578)、[A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang)、[A06](https://doi.org/10.1145/3731569.3764818)、[A09](https://arxiv.org/abs/2601.04071)、[C17](https://doi.org/10.1145/3625687.3625789) |
+| 统计 SLO 下的容量 | 满足 TTFT / TBT 的 P90 / P99 前提下，最大请求率或 goodput | [B10](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin)–[B16](https://proceedings.mlr.press/v306/gao26m.html)、[A03](https://www.usenix.org/conference/osdi20/presentation/gujarati) |
+| 约束一方频率、最大化另一方吞吐 | max τ s.t. f ≥ f_min | [D27](https://arxiv.org/abs/2603.14371) |
 
-实时系统方向的 GCAPS [A07] 和 RT-mDL [C18] 用的是可调度性或错过率，负载都是小任务。
+实时系统方向的 GCAPS（[A07](https://doi.org/10.4230/LIPIcs.ECRTS.2024.14)） 和 RT-mDL（[C18](https://doi.org/10.1145/3485730.3485938)） 用的是可调度性或错过率，负载都是小任务。
 
 ### 3.2 指标
 
 | 指标 | 用在哪里 | 怎么定义 |
 |---|---|---|
-| 高优先级 P99 相对独占的倍数 | A01、A02、A05 | 单独运行为 1 |
-| SLO 达成率 | A06、A09、B 类 | SLO = 独占 P99 或其若干倍 |
-| goodput / 容量 | A03、B10、B13 | 满足 SLO 的最大请求率 |
-| 抢占延迟 | A01、A05、A09 | 从高优先级到达到开始执行，µs 级 |
-| 可调度性、WCRT、错过率 | A07、C18、C20 | 周期任务集 |
-| 平均频率 | D24、D27、D28 | H / 平均帧时延 |
-| 观测年龄、halt 时延的 p95 | D25、D26 | 决策所依据的观测有多旧；从触发到停车 |
+| 高优先级 P99 相对独占的倍数 | [A01](https://www.usenix.org/conference/osdi22/presentation/han)、[A02](https://doi.org/10.1145/3627703.3629578)、[A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang) | 单独运行为 1 |
+| SLO 达成率 | [A06](https://doi.org/10.1145/3731569.3764818)、[A09](https://arxiv.org/abs/2601.04071)、B 类 | SLO = 独占 P99 或其若干倍 |
+| goodput / 容量 | [A03](https://www.usenix.org/conference/osdi20/presentation/gujarati)、[B10](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin)、[B13](https://arxiv.org/abs/2504.14489) | 满足 SLO 的最大请求率 |
+| 抢占延迟 | [A01](https://www.usenix.org/conference/osdi22/presentation/han)、[A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang)、[A09](https://arxiv.org/abs/2601.04071) | 从高优先级到达到开始执行，µs 级 |
+| 可调度性、WCRT、错过率 | [A07](https://doi.org/10.4230/LIPIcs.ECRTS.2024.14)、[C18](https://doi.org/10.1145/3485730.3485938)、[C20](https://arxiv.org/abs/2601.07600) | 周期任务集 |
+| 平均频率 | [D24](https://github.com/NVIDIA/TensorRT-Edge-LLM/pull/193)、[D27](https://arxiv.org/abs/2603.14371)、[D28](https://arxiv.org/abs/2506.01953) | H / 平均帧时延 |
+| 观测年龄、halt 时延的 p95 | [D25](https://openreview.net/forum?id=Ei1Wgdo2I0)、[D26](https://arxiv.org/abs/2610.10787) | 决策所依据的观测有多旧；从触发到停车 |
 
 ### 3.3 机制谱系与在 Thor 上的条件
 
 | 机制 | 代表 | 依赖什么 | 在本场景能否成立 |
 |---|---|---|---|
-| stream 优先级 | A02、D24 | 只在同一 context 内有效 | 只适用于两个模型在同一进程内；D24 测得执行器仍慢约 16 % |
-| MPS 按百分比限 SM | B12、C20 | MPS；改比例要重启 | 可用；Thor 上最少 8 SM |
+| stream 优先级 | [A02](https://doi.org/10.1145/3627703.3629578)、[D24](https://github.com/NVIDIA/TensorRT-Edge-LLM/pull/193) | 只在同一 context 内有效 | 只适用于两个模型在同一进程内；[D24](https://github.com/NVIDIA/TensorRT-Edge-LLM/pull/193) 测得执行器仍慢约 16 % |
+| MPS 按百分比限 SM | [B12](https://arxiv.org/abs/2504.19867)、[C20](https://arxiv.org/abs/2601.07600) | MPS；改比例要重启 | 可用；Thor 上最少 8 SM |
 | MPS 客户端优先级 | 无 | MPS | 本轮的 30 篇中没有一篇评估过 |
-| 预建多个 SM 受限的 context | A08、B13、B14 | green context 或 cuCtxCreate_v3；CUDA Graph 每个分区要各捕获一套 | 可用；20 SM 下可选的分区很少，粒度待核实（见第 6 节） |
-| TPC mask（libsmctrl） | A06、B15、B16 | 逆向得到的接口 | Thor 上是否可用，文献中没有证据 |
-| 限制在途命令 | A04、A05 Lv1 | 拦截公开的 driver API | 一个 CUDA graph 只算一条命令 [A05 §9]，graph 运行期间无法抢占 |
-| block 级切分 kernel | A06、A09 | PTX 改写；cuBLAS / cuDNN 不支持；CUDA graph 未评估 | 规划器的 kernel 是否带 PTX 未知；数值是否一致论文没有讨论 |
-| 按层下发 | B13 | 框架层改写下发逻辑 | 不改变 token 块的大小；输出是否一致没有实测 |
-| 撤回或中断 kernel（Lv2 / Lv3、TSG） | A05、A07 | SASS 插桩、未公开 ioctl 或改驱动；TSG 只在进程之间有效 | 论文只覆盖 Kepler / Volta / Ampere；TSG 与 MPS 不兼容 |
-| 计算 / 访存配对 | A02 | 离线给 kernel 打标签 | 在带宽受限的 SoC 上，A09 §3 指出这种标签太粗 |
-| CPU 带宽限流 | C21、C22 | PMC + 内核模块 | 只处理 CPU 拖慢 GPU；Thor 的 CPU 是 Neoverse-V3AE，文献用的是 TX2 |
-| 用 green context 限 SM 来限带宽 | C23 | green context | 对合并访存有效，对跨步写无效 |
-| 放弃并发 | A03 | 无 | 让步方的单元约 1.17 s，远大于 200 ms 的周期 |
+| 预建多个 SM 受限的 context | [A08](https://doi.org/10.1145/3689031.3696070)、[B13](https://arxiv.org/abs/2504.14489)、[B14](https://arxiv.org/abs/2507.06608) | green context 或 cuCtxCreate_v3；CUDA Graph 每个分区要各捕获一套 | 可用；20 SM 下可选的分区很少，粒度待核实（见第 6 节） |
+| TPC mask（libsmctrl） | [A06](https://doi.org/10.1145/3731569.3764818)、[B15](https://arxiv.org/abs/2504.19516)、[B16](https://proceedings.mlr.press/v306/gao26m.html) | 逆向得到的接口 | Thor 上是否可用，文献中没有证据 |
+| 限制在途命令 | [A04](https://doi.org/10.1145/3600006.3613163)、[A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang) Lv1 | 拦截公开的 driver API | 一个 CUDA graph 只算一条命令（[A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang) §9），graph 运行期间无法抢占 |
+| block 级切分 kernel | [A06](https://doi.org/10.1145/3731569.3764818)、[A09](https://arxiv.org/abs/2601.04071) | PTX 改写；cuBLAS / cuDNN 不支持；CUDA graph 未评估 | 规划器的 kernel 是否带 PTX 未知；数值是否一致论文没有讨论 |
+| 按层下发 | [B13](https://arxiv.org/abs/2504.14489) | 框架层改写下发逻辑 | 不改变 token 块的大小；输出是否一致没有实测 |
+| 撤回或中断 kernel（Lv2 / Lv3、TSG） | [A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang)、[A07](https://doi.org/10.4230/LIPIcs.ECRTS.2024.14) | SASS 插桩、未公开 ioctl 或改驱动；TSG 只在进程之间有效 | 论文只覆盖 Kepler / Volta / Ampere；TSG 与 MPS 不兼容 |
+| 计算 / 访存配对 | [A02](https://doi.org/10.1145/3627703.3629578) | 离线给 kernel 打标签 | 在带宽受限的 SoC 上，[A09](https://arxiv.org/abs/2601.04071) §3 指出这种标签太粗 |
+| CPU 带宽限流 | [C21](https://doi.org/10.4230/LIPIcs.ECRTS.2018.19)、[C22](https://doi.org/10.1109/TCAD.2020.3012210) | PMC + 内核模块 | 只处理 CPU 拖慢 GPU；Thor 的 CPU 是 Neoverse-V3AE，文献用的是 TX2 |
+| 用 green context 限 SM 来限带宽 | [C23](https://iris.unimore.it/handle/11380/1403093) | green context | 对合并访存有效，对跨步写无效 |
+| 放弃并发 | [A03](https://www.usenix.org/conference/osdi20/presentation/gujarati) | 无 | 让步方的单元约 1.17 s，远大于 200 ms 的周期 |
 
 ### 3.4 带宽干扰：已有测量
 
 | 工作 | 平台 | 谁干扰谁 | 结果 | 位置 |
 |---|---|---|---|---|
-| Orion [A02] | V100 | 两个访存密集算子并发 | 只有小幅加速；计算 + 访存配对快 1.41× | §3、Table 2 |
-| XSched [A05] | Jetson Orin | GPU 后台访存任务干扰 DLA 前台 | 前台 P99 为单独运行的 1.67×，统一优先级后 1.18× | §7.2、Fig.10 |
-| Hummingbird [A09] | A100 | 空间共享下 LLM decode 受干扰 | Orion 下 TPOT 波动是独占的 10.9 倍；论文没有测带宽 | §3、Fig.5 |
-| MuxWise [B13] | A100 / H100 | prefill 与 decode 并发 | v2：P90 < 7 %，最大 17 %（prefill 至少占一半 SM）；v3：0–30 %，称不可预测 | v2 Principle 1；v3 Fig.11 |
-| Nexus [B14] | L20 | prefill 的 KV 变长干扰 decode | decode 最多慢 36 % | §3.3、Fig.6 |
-| DuetServe [B16] | H100 | 带宽随 SM 数的变化 | 约 20 % 的 SM 就拿到约 60 % 峰值带宽 | §3、Fig.3a |
-| Martín et al. [C20] | Orin Nano / AGX | 两个推理进程 | green context 不隔离内存；功耗限制会使隔离更差 | 结论节 |
-| BWLOCK++ [C21] | TX2 | CPU 干扰 GPU | 最坏约 3× | Fig.7 |
-| Serafini [C23] | Thor | GPU 干扰 CPU | 合并写 2.5×，跨步写约 4.5–5×；1–2 个 SM 就够 | Fig.6.10、6.12 |
-| PR #193 [D24] | Thor | 7B 规划器干扰执行器 | 同进程加高优先级 stream 时慢约 16 %；没有带宽数据 | PR 正文 Validation 节 |
+| Orion（[A02](https://doi.org/10.1145/3627703.3629578)） | V100 | 两个访存密集算子并发 | 只有小幅加速；计算 + 访存配对快 1.41× | §3、Table 2 |
+| XSched（[A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang)） | Jetson Orin | GPU 后台访存任务干扰 DLA 前台 | 前台 P99 为单独运行的 1.67×，统一优先级后 1.18× | §7.2、Fig.10 |
+| Hummingbird（[A09](https://arxiv.org/abs/2601.04071)） | A100 | 空间共享下 LLM decode 受干扰 | Orion 下 TPOT 波动是独占的 10.9 倍；论文没有测带宽 | §3、Fig.5 |
+| MuxWise（[B13](https://arxiv.org/abs/2504.14489)） | A100 / H100 | prefill 与 decode 并发 | v2：P90 < 7 %，最大 17 %（prefill 至少占一半 SM）；v3：0–30 %，称不可预测 | v2 Principle 1；v3 Fig.11 |
+| Nexus（[B14](https://arxiv.org/abs/2507.06608)） | L20 | prefill 的 KV 变长干扰 decode | decode 最多慢 36 % | §3.3、Fig.6 |
+| DuetServe（[B16](https://proceedings.mlr.press/v306/gao26m.html)） | H100 | 带宽随 SM 数的变化 | 约 20 % 的 SM 就拿到约 60 % 峰值带宽 | §3、Fig.3a |
+| Martín et al.（[C20](https://arxiv.org/abs/2601.07600)） | Orin Nano / AGX | 两个推理进程 | green context 不隔离内存；功耗限制会使隔离更差 | 结论节 |
+| BWLOCK++（[C21](https://doi.org/10.4230/LIPIcs.ECRTS.2018.19)） | TX2 | CPU 干扰 GPU | 最坏约 3× | Fig.7 |
+| Serafini（[C23](https://iris.unimore.it/handle/11380/1403093)） | Thor | GPU 干扰 CPU | 合并写 2.5×，跨步写约 4.5–5×；1–2 个 SM 就够 | Fig.6.10、6.12 |
+| PR #193（[D24](https://github.com/NVIDIA/TensorRT-Edge-LLM/pull/193)） | Thor | 7B 规划器干扰执行器 | 同进程加高优先级 stream 时慢约 16 %；没有带宽数据 | PR 正文 Validation 节 |
 
 在统一内存 SoC 上，以下几种方向文献都没有量化：GPU 负载干扰 GPU 负载；CPU 负载干扰 GPU 上的 LLM；三方同时争用。
 
@@ -235,25 +235,25 @@
 
 | 来源 | 单元 | 时长 |
 |---|---|---|
-| REEF [A01] | 小 DNN 的 kernel | 10–255 µs（VGG，Fig.10） |
-| Hummingbird [A09] | LLM 推理中的 kernel；thread block | kernel 最长 7.49 ms；99.999 % 的 block 在 390 µs 以内（Fig.3） |
-| LithOS [A06] | 训练 kernel | DLRM 超过 30 ms（§5） |
-| Sarathi-Serve [B11] | 4k prompt 的一次迭代（Falcon-180B，流水并行） | 约 1150 ms（§3.3） |
-| XSched [A05] | CUDA graph | 整个 graph 是一条命令（§9） |
+| REEF（[A01](https://www.usenix.org/conference/osdi22/presentation/han)） | 小 DNN 的 kernel | 10–255 µs（VGG，Fig.10） |
+| Hummingbird（[A09](https://arxiv.org/abs/2601.04071)） | LLM 推理中的 kernel；thread block | kernel 最长 7.49 ms；99.999 % 的 block 在 390 µs 以内（Fig.3） |
+| LithOS（[A06](https://doi.org/10.1145/3731569.3764818)） | 训练 kernel | DLRM 超过 30 ms（§5） |
+| Sarathi-Serve（[B11](https://www.usenix.org/conference/osdi24/presentation/agrawal)） | 4k prompt 的一次迭代（Falcon-180B，流水并行） | 约 1150 ms（§3.3） |
+| XSched（[A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang)） | CUDA graph | 整个 graph 是一条命令（§9） |
 | 本场景 | 规划器一个 2048 token 的 prefill 块（一个 graph） | 约 1.17 s；切更小会改变输出 |
 
 ### 3.6 前提对照
 
 | 本场景前提 | 文献中具备该前提的工作 |
 |---|---|
-| P1 集成 GPU，CPU 与 GPU 共用 LPDDR 带宽 | A05（Orin 实验）、A07、C17–C23、D24、D25、D27 |
-| P2 两个独立模型共置 | A 类全部、C17–C20、D24、D25 |
-| P3 受保护方是周期性、截止期严格的小模型 | A07、C18；A01 和 C17 是固定频率但没有截止期；A05 的案例 2 是 25 FPS |
-| P4 让步方是 LLM，且自己有时延要求 | B 类中 prefill 的 TTFT（同一模型）；A05 案例 2 用 laxity 策略保后台周期（whisper.cpp 每 3 s 一段）；A09 的 LLM 让步方没有时延要求 |
-| P5 让步方的最小下发单元约 1 s，且切小会改变输出 | 只有 B11 的迭代时长同一量级（流水并行下）；文献中没有"切小会改变输出"这一约束 |
-| P6 可用控制只有 MPS 百分比、green context、MPS 客户端优先级、stream 优先级 | B12、C20（MPS）；B13、B14、C20、C23（green context）；A02、D24（stream 优先级）；MPS 客户端优先级没有 |
+| P1 集成 GPU，CPU 与 GPU 共用 LPDDR 带宽 | [A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang)（Orin 实验）、[A07](https://doi.org/10.4230/LIPIcs.ECRTS.2024.14)、[C17](https://doi.org/10.1145/3625687.3625789)–[C23](https://iris.unimore.it/handle/11380/1403093)、[D24](https://github.com/NVIDIA/TensorRT-Edge-LLM/pull/193)、[D25](https://openreview.net/forum?id=Ei1Wgdo2I0)、[D27](https://arxiv.org/abs/2603.14371) |
+| P2 两个独立模型共置 | A 类全部、[C17](https://doi.org/10.1145/3625687.3625789)–[C20](https://arxiv.org/abs/2601.07600)、[D24](https://github.com/NVIDIA/TensorRT-Edge-LLM/pull/193)、[D25](https://openreview.net/forum?id=Ei1Wgdo2I0) |
+| P3 受保护方是周期性、截止期严格的小模型 | [A07](https://doi.org/10.4230/LIPIcs.ECRTS.2024.14)、[C18](https://doi.org/10.1145/3485730.3485938)；[A01](https://www.usenix.org/conference/osdi22/presentation/han) 和 [C17](https://doi.org/10.1145/3625687.3625789) 是固定频率但没有截止期；[A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang) 的案例 2 是 25 FPS |
+| P4 让步方是 LLM，且自己有时延要求 | B 类中 prefill 的 TTFT（同一模型）；[A05](https://www.usenix.org/conference/osdi25/presentation/shen-weihang) 案例 2 用 laxity 策略保后台周期（whisper.cpp 每 3 s 一段）；[A09](https://arxiv.org/abs/2601.04071) 的 LLM 让步方没有时延要求 |
+| P5 让步方的最小下发单元约 1 s，且切小会改变输出 | 只有 [B11](https://www.usenix.org/conference/osdi24/presentation/agrawal) 的迭代时长同一量级（流水并行下）；文献中没有"切小会改变输出"这一约束 |
+| P6 可用控制只有 MPS 百分比、green context、MPS 客户端优先级、stream 优先级 | [B12](https://arxiv.org/abs/2504.19867)、[C20](https://arxiv.org/abs/2601.07600)（MPS）；[B13](https://arxiv.org/abs/2504.14489)、[B14](https://arxiv.org/abs/2507.06608)、[C20](https://arxiv.org/abs/2601.07600)、[C23](https://iris.unimore.it/handle/11380/1403093)（green context）；[A02](https://doi.org/10.1145/3627703.3629578)、[D24](https://github.com/NVIDIA/TensorRT-Edge-LLM/pull/193)（stream 优先级）；MPS 客户端优先级没有 |
 
-同时具备 P1–P3 的只有 D24 和 D25，两者的规划器都是 7B，prefill 在百毫秒以内。D25 的全文没有拿到。
+同时具备 P1–P3 的只有 [D24](https://github.com/NVIDIA/TensorRT-Edge-LLM/pull/193) 和 [D25](https://openreview.net/forum?id=Ei1Wgdo2I0)，两者的规划器都是 7B，prefill 在百毫秒以内。[D25](https://openreview.net/forum?id=Ei1Wgdo2I0) 的全文没有拿到。
 
 ## 4. 本轮检索范围内没有找到的组合
 
@@ -261,7 +261,7 @@
 2. 对 MPS 客户端优先级（`CUDA_MPS_CLIENT_PRIORITY`）的评估。
 3. 统一内存 SoC 上 GPU 负载之间带宽干扰的量化，以及 CPU、GPU 三方同时争用的量化。
 4. 不可抢占单元在秒级、且切小会改变输出时的调度。文献中的切分（thread block、层、token 块）都没有做输出一致性测试。
-5. 机器人双系统里执行器的截止期错过率，以及执行器动作块余量与调度之间的关系。RTC [D29] 把推理时延写成执行器侧的 deadline d，但它的推理在远端。
+5. 机器人双系统里执行器的截止期错过率，以及执行器动作块余量与调度之间的关系。RTC（[D29](https://arxiv.org/abs/2506.07339)） 把推理时延写成执行器侧的 deadline d，但它的推理在远端。
 
 ## 5. 精读笔记与阅读顺序
 
@@ -276,10 +276,10 @@
 ## 6. 待核实
 
 - **green context 在 Thor 上的 SM 粒度**：
-  - 文档和 C23 都说 Tegra 是 2 SM 的倍数，C23 引的是 NVIDIA 文档、没有实测；CUDA Driver API 文档 v13.5 也这么写。
+  - 文档和 [C23](https://iris.unimore.it/handle/11380/1403093) 都说 Tegra 是 2 SM 的倍数，[C23](https://iris.unimore.it/handle/11380/1403093) 引的是 NVIDIA 文档、没有实测；CUDA Driver API 文档 v13.5 也这么写。
   - 本组实测请求 4 SM 实得 8 SM。可能的原因是分区 API 不同（`SplitByCount` 还是 `cuDevSmResourceSplit`）、对齐规则不同，或 CUDA 版本不同，都是推测。
   - 检查方法：在 Thor 上读 `minSmPartitionSize` / `smCoscheduledAlignment`，并用 `%smid` 测分区实际用到的 SM。
-- **DualVLN on Thor [D25]**：OpenReview 全文需要人机验证，只读到摘要；两模型在 Thor 上的进程和 stream 结构未知。
+- **DualVLN on Thor（[D25](https://openreview.net/forum?id=Ei1Wgdo2I0)）**：OpenReview 全文需要人机验证，只读到摘要；两模型在 Thor 上的进程和 stream 结构未知。
 - **会议元数据**：
   - MuxWise 的 DOI 未在 ACM DL 打开。
   - Bullet 的 ASPLOS '26 只由 camera-ready 首页确认。
