@@ -78,7 +78,7 @@ novelty 几乎都在"洞察"这一步：发现一个现有系统没有利用的�
 **已定设置**：
 - 规划器：HF 原版 Qwen3.8-27B（Qwen3.6 结构，约 3/4 的层是 linear attention）。
 - 执行器：π0.5、ImageWAM 或其他约 4B、能跟随指令的 VLA/WAM。Thor 的 128 GB 放得下，限制在于每次调用要守住 200 ms。
-- 环境：不用 LIBERO。多数场景只对应一个任务，指令几乎不起作用（[LIBERO-Plus](https://arxiv.org/abs/2510.13626)；本组 sim_closed_loop 的 Finding 1）。改用 RoboTwin 等指令能决定任务的基准。
+- 环境：不用 LIBERO。多数场景只对应一个任务，指令几乎不起作用（[LIBERO-Plus](https://arxiv.org/abs/2510.13626)；本组 sim_closed_loop 的 Finding 1）。改用 RoboTwin：ImageWAM 的 RoboTwin 版本会读指令，6 个任务里有 5 个在指令被替换后从 9–10/10 掉到 0/10，但它从场景布局而不是指令里决定放到左边还是右边（[robotwin_instruction](../long-horizon-planner-executor/experiments/robotwin_instruction/README.md)）。
 - harness：替换 VoLo，改用两个长时程 harness。Chenwei 用 RoboCerebra；Jingwu 用 [MemER](https://arxiv.org/abs/2510.20328)（ICLR 2026，Stanford）。MemER 异步运行，规划器约 1 Hz；输入是最近 8 帧加检索出的关键帧，上下文会随回合变长。
 
 **系统侧要点**：
