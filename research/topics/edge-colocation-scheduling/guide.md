@@ -63,16 +63,33 @@ novelty 几乎都在"洞察"这一步：发现一个现有系统没有利用的�
 2. [Hummingbird 笔记](notes/2026-hummingbird.md)：与本场景最接近的抢占机制，以及它的前提哪些不成立。
 3. [Serafini 第 6 章笔记](notes/2026-serafini-thesis-ch6.md)：Thor 上带宽和 SM 数的关系，属于硬件事实。
 
-## 7. 主线与核心问题
+## 7. 主线、已定设置与优先级
 
-- **设定**：异步协议是主战场，同步协议作基线。执行器 200 ms 截止期是门槛（余量 > 0 即可）；规划器的决策延迟 L 要小于检查间隔 Δ。
-- **核心问题**：异步下，规划器的决策延迟 L 怎样影响任务质量（SR、完成时间）？文献里没有人在固定调用周期下单独改变 L 并测 SR（[harnesses.md](harnesses.md)）。最接近的证据是 NavGPT-3（规划器与 VLA 重叠并配优先级中断后，真机 SR 73.3 → 83.3）和 Fast Plans（规划提速 8.7 倍，机器人在动的时间占比 29 % → 66 %，SR 基本不变）。
-- **答案决定排序指标**（[latency_quality_metrics.md](latency_quality_metrics.md)）：
-  - 门槛型（L < Δ 时质量不变）：用能力排序，即两个余量都 > 0 时能支持的最小 Δ、最长上下文、最大 CPU 负载，类比 goodput；
-  - 连续型（L 越小越好）：用按完成时间加权的成功率（SCT 类）排序。
-- **要画的图**：质量随注入延迟的变化曲线；规划器余量的直方图，标出 Δ。前提是执行器会跟随指令。
-- **上下文何时变长**（[long_horizon_conditions.md](long_horizon_conditions.md)）：需要记住看不见的状态（分钟级）、多轮 agent 对话保留工具返回、周期性重读累积的历史、长路径的部分可观测导航、重规划使调用次数长尾。多数已发表系统刻意把上下文控制在 1–12k token；只有 NavGPT-3 一直增长，单次调用从约 8k 到约 30k。
-- **硬件不只 Thor**（[unified_memory_socs.md](unified_memory_socs.md)）：DGX Spark 与 Thor 同为 128 GB、273 GB/s；Apple M 系列、AMD Strix Halo 也是统一内存。有官方 GPU 分区的只有 Thor（MIG，论坛称 JetPack 7.2 有 6 / 12 / 20 SM 档，待核实）和 MI300A，两者都不分内存带宽。
+**主线**：
+- 一块统一内存 SoC（Jetson AGX Thor）上，长时程规划器与周期执行器异步共置；同步协议作基线。
+- 执行器的 200 ms 截止期是门槛；规划器的决策延迟 L 要小于检查间隔 Δ。
+
+**核心问题**：异步下，L 怎样影响任务质量（SR、完成时间）？
+- 答案决定排序指标：
+  - 门槛型：比能力，即最小 Δ、最长上下文、最大 CPU 负载；
+  - 连续型：比按完成时间加权的成功率。
+- 文献里没有人在固定调用周期下单独改变 L 并测 SR（[harnesses.md](harnesses.md)，[latency_quality_metrics.md](latency_quality_metrics.md)）。
+
+**已定设置**：
+- 规划器：HF 原版 Qwen3.8-27B（Qwen3.6 结构，约 3/4 的层是 linear attention）。
+- 执行器：π0.5、ImageWAM 或其他约 4B、能跟随指令的 VLA/WAM。Thor 的 128 GB 放得下，限制在于每次调用要守住 200 ms。
+- 环境：不用 LIBERO。多数场景只对应一个任务，指令几乎不起作用（[LIBERO-Plus](https://arxiv.org/abs/2510.13626)；本组 sim_closed_loop 的 Finding 1）。改用 RoboTwin 等指令能决定任务的基准。
+- harness：替换 VoLo，改用两个长时程 harness。Chenwei 用 RoboCerebra，Jingwu 从候选中选一个。
+
+**系统侧要点**：
+- 瓶颈是 CPU 与 GPU 共享带宽，SM 隔离不了带宽。
+- 20 个 SM 可以直接网格搜索，也可以按时间片近似非整数分配。
+- CPU 算力空闲，但它的带宽与 GPU 共享。
+- 待核实：Thor 上的 MIG（JetPack 7.2，6 / 12 / 20 SM）。
+
+**优先级**：
+1. 统一内存 SoC 上的推理框架调研。
+2. 开思考模式，在 RoboTwin 等基准上测"L 怎样影响 SR 与完成时间"。
 
 ## 需要查证时
 
