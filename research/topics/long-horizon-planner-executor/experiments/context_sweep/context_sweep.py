@@ -37,6 +37,7 @@ SPEC_K = 6             # the frontend's prompt-length table, as in monitor_call_
 DECODE_TOKENS = 256    # fixed decode count per cell
 WARMUP_DECODE = DECODE_TOKENS  # CUDA graphs are recorded lazily per decode position
 LOOKAHEAD_ROWS = 32    # qwen36_vl_rtx._SPEC_LOOKAHEAD_ROWS
+MIN_MAX_SEQ = 8448     # monitor_call_bench.py MAX_SEQ
 MAX_IMAGE_TOKENS = 64  # text-only prompts; the frontend still sizes an image-row table
 QUESTION = ("Summarize the robot log above in detail. For every subtask, list the steps where it started and ended, "
             "the status changes, and the reason for each replan.")
@@ -64,7 +65,8 @@ def log_line(i: int) -> str:
 
 class Sweep:
     def __init__(self, frontend: str, max_len: int) -> None:
-        self.fe = FRONTENDS[frontend](CKPT, max_seq=max_len + DECODE_TOKENS + LOOKAHEAD_ROWS + 64,
+        # at least the monitor_call_bench.py size: below it a short prompt does not take the long-context route
+        self.fe = FRONTENDS[frontend](CKPT, max_seq=max(MIN_MAX_SEQ, max_len + DECODE_TOKENS + LOOKAHEAD_ROWS + 64),
                                       max_image_tokens=MAX_IMAGE_TOKENS)
         self.llm = self.fe.llm
         self.tok = self.fe.processor.tokenizer
