@@ -362,6 +362,7 @@ package registries, model hubs, cloud APIs).
 
 | Service | Scope | Source | Notes |
 |---|---|---|---|
+| SSH to a Jetson AGX Thor | user `jingwu` on host `thortwo` (L4T R38.2.2, 14 CPU cores, 122 GiB RAM visible), reached from this machine | `~/.ssh/config` entry `Host thor`; key `~/.ssh/id_rsa_B200-75` (outside the repository, mode 600), the user's own key; first connected 2026-11-18 | shared with user `thor3` (the co-location rounds; the lock file `/tmp/lingbot_va_gpu_exclusive.lock` exists there); the Thor rules below (pull-only, no global state changes, GPU lock) apply to it |
 | git remote `origin` | `luo-jingw/FlashRT` (personal fork, public) | global git identity for authorship; push token read per command by a credential helper from `github_token` at the repository root | not `flashrt-project/FlashRT` upstream; no upstream PR is planned for this work; `github_token` is excluded through `.git/info/exclude` (local, not committed) and must never be added to the index |
 
 Do not assume a global or default identity applies.
