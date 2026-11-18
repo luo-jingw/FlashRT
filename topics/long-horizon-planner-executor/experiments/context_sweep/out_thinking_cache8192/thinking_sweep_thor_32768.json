@@ -1,0 +1,88 @@
+{
+ "frontend": "thor",
+ "ckpt": "/home/jingwu/thor_val/ckpt/qwen38-27b-nvfp4-official-5090",
+ "cap": 4096,
+ "spec_k": 6,
+ "torch": "2.9.1+cu130",
+ "device": "NVIDIA Thor",
+ "cells": [
+  {
+   "question": "next_subtask",
+   "thinking": false,
+   "context_tokens": 32767,
+   "prefill_ms": 26355.20428046584,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 94,
+   "decode_ms": 3707.2771843522787,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.8484848484848486,
+   "answer": "{\"subtask\": \"pick up the red block\", \"reason\": \"The log shows a repeating cycle of 8 subtasks. The last completed step in the sequence before the cut-off is 'close the drawer' (Step 7864). Following the established pattern (e.g., Step 0, 64, 128...), the subtask following 'close the drawer' is 'pick"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": false,
+   "context_tokens": 32768,
+   "prefill_ms": 26356.47833161056,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 21,
+   "decode_ms": 561.0060580074787,
+   "hit_cap": false,
+   "tokens_per_attempt": 4.2,
+   "answer": "```json\n{\"count\": 100, \"last_status\": \"continue\"}\n```"
+  },
+  {
+   "question": "replan_check",
+   "thinking": false,
+   "context_tokens": 32767,
+   "prefill_ms": 26358.632154762745,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 61,
+   "decode_ms": 1907.2535764425993,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.588235294117647,
+   "answer": "```json\n{\"subtasks\": [\"pick up the red block\", \"press the bell\", \"lift the pot\", \"move the can next to the pot\", \"open the drawer\", \"place it in the bowl\", \"put the hammer on the block\", \"close the drawer\"]}\n```"
+  },
+  {
+   "question": "next_subtask",
+   "thinking": true,
+   "context_tokens": 32768,
+   "prefill_ms": 26357.78176598251,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 4096,
+   "decode_ms": 181974.02186878026,
+   "hit_cap": true,
+   "tokens_per_attempt": 3.6056338028169015,
+   "answer": "We need answer user's request. Need analyze log and determine next subtask to execute. Need output JSON {\"subtask\": ..., \"reason\": ...}. Need infer from sequence. The log is long repetitive with subtasks cycling? Need identify pattern and current last step. User provided log up to Step 7864: subtask"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": true,
+   "context_tokens": 32768,
+   "prefill_ms": 26447.345942258835,
+   "think_tokens": 3022,
+   "think_ms": 126329.71528172493,
+   "answer_tokens": 17,
+   "decode_ms": 126680.17851747572,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.7702825888787603,
+   "answer": "{\"count\": 123, \"last_status\": \"next\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": true,
+   "context_tokens": 32768,
+   "prefill_ms": 26443.23719665408,
+   "think_tokens": 2636,
+   "think_ms": 96370.56571245193,
+   "answer_tokens": 35,
+   "decode_ms": 97183.68741497397,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.293464858199753,
+   "answer": "{\"subtasks\": [\"press the bell\", \"place it in the bowl\", \"put the hammer on the block\", \"move the can next to the pot\"]}"
+  }
+ ]
+}
