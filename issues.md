@@ -1498,7 +1498,7 @@ the MTP draft length K
 ## Observation
 
 Greedy decode is meant to give the same tokens for every draft length K (the main model's argmax decides every
-token). On a Qwen3.8-27B NVFP4 planner checkpoint (official Qwen3.8-27B-FP8 MTP head), 25 of 26 prompts give the
+token). On the planner (LoRA-merged Qwen3.8-27B master, official Qwen3.8-27B-FP8 MTP head), 25 of 26 prompts give the
 same output crc for K = 1, 3, 5, 7 and the length table; the synthetic 16 315-token prompt gives a different output with
 K = 1 (crc 816102686, 13 tokens before EOS) than with K = 3, 5, 7 and the table (crc 972381506, 11 tokens)
 (`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/cells/mtp_speedup.json`).
