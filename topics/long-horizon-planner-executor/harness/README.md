@@ -15,6 +15,9 @@ HPE 与 MemER 要在同一个运行时里比较：同样的环境、执行器、
 | `runtime.py` | `Runtime`：一个回合的事件循环，同步或异步 |
 | `jsonl_log.py` | 把回合结果写成 JSONL |
 | `qwen_backend.py` | 规划器模型：HF 官方 Qwen3.8-27B（FlashRT NVFP4），一次图文对话请求，思考可开可关，解码到 EOS 即停，返回各阶段实测时间 |
+| `memer_memory.py` | MemER 的关键帧记忆：候选帧一维单链聚类，每簇取下中位，保留最近 8 个（按论文描述实现，未复制 MemER 代码） |
+| `memer_prompt.py` | MemER 的零样本提示词（子任务词表、关键帧定义、输出格式、提前量）与回复解析 |
+| `memer_planner.py` | MemER 高层作为 `Planner`：最近 8 帧 + 记忆帧 → 当前子任务与新关键帧；解析失败或词表外时保留当前指令 |
 | `toy_world.py` | 用于检查运行时的玩具环境、执行器与标注规划器 |
 | `check_runtime.py` | 观测式检查：L = 0 时同步与异步一致；玩具环境上 SR、用时随 L 的变化 |
 
