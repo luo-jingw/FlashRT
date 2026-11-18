@@ -79,7 +79,7 @@ novelty 几乎都在"洞察"这一步：发现一个现有系统没有利用的�
 - 规划器：HF 原版 Qwen3.8-27B（Qwen3.6 结构，约 3/4 的层是 linear attention）。
 - 执行器：π0.5、ImageWAM 或其他约 4B、能跟随指令的 VLA/WAM。Thor 的 128 GB 放得下，限制在于每次调用要守住 200 ms。
 - 环境：不用 LIBERO。多数场景只对应一个任务，指令几乎不起作用（[LIBERO-Plus](https://arxiv.org/abs/2510.13626)；本组 sim_closed_loop 的 Finding 1）。改用 RoboTwin 等指令能决定任务的基准。
-- harness：替换 VoLo，改用两个长时程 harness。Chenwei 用 RoboCerebra，Jingwu 从候选中选一个。
+- harness：替换 VoLo，改用两个长时程 harness。Chenwei 用 RoboCerebra；Jingwu 用 [MemER](https://arxiv.org/abs/2510.20328)（ICLR 2026，Stanford）。MemER 异步运行，规划器约 1 Hz；输入是最近 8 帧加检索出的关键帧，上下文会随回合变长。
 
 **系统侧要点**：
 - 瓶颈是 CPU 与 GPU 共享带宽，SM 隔离不了带宽。
@@ -87,9 +87,12 @@ novelty 几乎都在"洞察"这一步：发现一个现有系统没有利用的�
 - CPU 算力空闲，但它的带宽与 GPU 共享。
 - 待核实：Thor 上的 MIG（JetPack 7.2，6 / 12 / 20 SM）。
 
-**优先级**：
-1. 统一内存 SoC 上的推理框架调研。
-2. 开思考模式，在 RoboTwin 等基准上测"L 怎样影响 SR 与完成时间"。
+**核心任务**（按顺序）：
+1. 搭 MemER harness：先确认代码，再把规划器换成 HF 原版 Qwen3.8-27B，执行器用 π0.5。
+2. 定基准：在 RoboTwin 上做换指令和空指令测试，确认执行器真的读指令。
+3. 测质量：异步对同步，注入不同的 L，思考模式开或关；测 SR、完成时间及其分布。质量曲线不依赖具体硬件，可以先在 RTX 5090 上测。
+4. 测 Thor：按 SM 分配、上下文长度、思考模式、CPU 带宽分档做网格，画出可行区域，并把慢下来的部分分别归到 prefill 和 decode。
+5. 推理侧：规划器 decode 提速（TensorRT-Edge-LLM 的树状 MTP 在 Thor 上报告 14.68 ms/token），以及按执行器余量让出带宽（参考 SERENO）。
 
 ## 需要查证时
 
