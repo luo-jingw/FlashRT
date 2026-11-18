@@ -1817,3 +1817,28 @@ replies of the same prompt in one process are not always token-identical.
 On the Thor, "same reply as the reference" from a single reference run cannot separate a path's own numerical change
 from run-to-run variation. Thor comparisons of reply text need a run-to-run baseline cell (here `generate` against
 `generate`); decision equality is the comparison that this round supports.
+
+# ISSUE-117
+
+## Observation
+
+On Jetson Thor the planner's decode on the long-context agent path takes 29-35 ms per token for contexts of 1k-32k
+tokens and 97-101 ms per token at 64k and 128k (`research/topics/long-horizon-planner-executor/experiments/context_sweep/`,
+2026-11-18, GPU exclusive, one process per length).
+
+## Evidence
+
+- ms/token by context: 1k 29.8, 2k 28.6, 4k 29.9, 8k 34.5, 16k 33.0, 32k 35.4, 64k 97.1, 128k 101.3; MTP tokens per
+  attempt 2.9-3.7 in every cell, so acceptance does not explain the step.
+- FP8 KV is 32 KiB per token (16 full-attention layers), about 2 GiB at 64k against roughly 15 GB of NVFP4 weights read
+  per forward: the extra bytes account for about 13 %, not 3x.
+
+## Hypotheses
+
+- The decode attention takes a different kernel or bucket above 32k (TurboQuant packed cache, XQA bucket table).
+- A buffer or CUDA graph sized to the 64k+ `max_seq` changes the decode forward even for the same position.
+
+## Next Experiment
+
+- Run 64k with an nsys trace of one decode step and compare kernel names and times with the 32k cell.
+- Run a 32k prompt with `max_seq` sized for 64k to separate prompt length from buffer size.
