@@ -1,0 +1,7 @@
+main place_a2b_left rc=0 839s original success=9/10 wall=89s still success=0/10 wall=144s other success=9/10 wall=435s empty success=0/10 wall=145s 
+main place_a2b_right rc=0 833s original success=10/10 wall=85s still success=0/10 wall=149s other success=10/10 wall=424s empty success=0/10 wall=152s 
+main move_can_pot rc=0 1018s original success=9/10 wall=161s still success=0/10 wall=231s other success=0/10 wall=376s empty success=0/10 wall=233s 
+main lift_pot rc=0 670s original success=10/10 wall=88s still success=0/10 wall=186s other success=0/10 wall=186s empty success=0/10 wall=191s 
+main click_bell rc=0 337s original success=10/10 wall=42s still success=6/10 wall=80s other success=5/10 wall=84s empty success=3/10 wall=114s 
+main beat_block_hammer rc=0 490s original success=10/10 wall=65s still success=3/10 wall=123s other success=0/10 wall=137s empty success=0/10 wall=147s 
+SUITE_DONE main
