@@ -38,6 +38,7 @@ GPU preemption, spatial / temporal GPU sharing, MPS, green context, TPC mask, co
 | [harnesses.md](harnesses.md) | 14 个长时程规划器-执行器 harness：调用方式、规划器输入、时延、质量指标、代码 |
 | [latency_quality_metrics.md](latency_quality_metrics.md) | 推理时延怎样影响任务质量，以及都满足时限时的排序指标 |
 | [unified_memory_socs.md](unified_memory_socs.md) | 统一内存 SoC 规格对照（以 Thor 为基线）：架构、计算单元、内存、带宽、功耗、分区机制 |
+| [unified_memory_inference.md](unified_memory_inference.md) | 统一内存设备上的推理框架与系统 16 篇：哪些离散 GPU 的优化变得多余、哪些更重要，谁把带宽当作调度对象（SERENO、Agent.xpu 等），空白与候选问题 |
 | [papers.md](papers.md) | 30 篇略读卡片：场景、目标与指标、核心观察、challenge、机制、基线与评估、与本场景的关系 |
 | [search_log.md](search_log.md) | 每类的检索词、来源、元数据核对方式、候选清单与取舍理由 |
 | `notes/` | 精读笔记：[XSched](notes/2025-xsched.md)、[Hummingbird](notes/2026-hummingbird.md)、[MuxWise（Drift）](notes/2025-drift.md)、[Serafini 博士论文第 6 章](notes/2026-serafini-thesis-ch6.md)、[OxyGen](notes/2026-oxygen.md) |
