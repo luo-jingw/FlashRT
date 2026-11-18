@@ -1,0 +1,12 @@
+gpu_lock: waiting 2026-11-18T01:30:39-05:00
+gpu_lock: acquired 2026-11-18T01:30:39-05:00
+
+actions: shape=(10, 7), sample=[-0.3851  0.5115 -0.438  -0.0022 -0.0486]
+  range: [-0.4380, 1.0025]
+  sanity: PASS
+  reuse prompt: shape=(10, 7) OK
+
+Benchmark (50 iter, warmup=300):
+  P50: 41.0 ms (24 Hz)
+  min: 40.9, mean: 41.0, max: 41.7 ms
+gpu_lock: released 2026-11-18T01:31:00-05:00 rc=0

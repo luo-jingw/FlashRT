@@ -389,6 +389,11 @@ Do not record token values or other secrets here.
   Everything runs in the existing power mode (MAXN) with DVFS-managed
   clocks. `flash_rt/hardware/jetson_clock_state.py` only reads and
   records that state, and latency baselines are measured in it.
+- Planner weights on the Thor: `~/thor_val/ckpt/qwen38-27b-nvfp4-official-5090`, the HF official
+  `Qwen/Qwen3.8-27B-FP8` converted to compressed-tensors NVFP4 on the RTX 5090 host and copied over;
+  tensor-identical to the 5090 copy (hash-list sha256 `7c01884414cd…`, 2026-11-18). MTP head from
+  `~/thor_val/ckpt/qwen38-27b-fp8-official`. The planner needs `~/thor_val/pydeps_tf5` (transformers 5.17)
+  prepended to `PYTHONPATH`; see `research/topics/long-horizon-planner-executor/experiments/thor_bringup/`.
 - GPU jobs on the Thor run under the board's shared exclusive lock
   `/tmp/lingbot_va_gpu_exclusive.lock` (agreed with the co-location
   measurement on 2026-11-11): the file is opened read-only and held with
