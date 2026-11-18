@@ -25,8 +25,11 @@ GPU preemption, spatial / temporal GPU sharing, MPS, green context, TPC mask, co
 
 ## 文件
 
+从 [guide.md](guide.md) 开始读；其余文件是查证用的资料。
+
 | 文件 | 内容 |
 |---|---|
+| [guide.md](guide.md) | 导读：系统论文贡献的论证链（以 Clockwork、vLLM 为例）、洞察的四种来源、评估要回答的三个问题、本方向文献的现状、用这条链检查自己的五个问题、先读的三篇 |
 | [survey.md](survey.md) | 范围与方法、场景参照、系统论文怎样提出核心贡献（论证链、8 种模式、评估闭环、5 篇精读的对应）、30 篇按核心要点拆解的总表、分类框架（30 篇按受保护方 / 控制维度 / 硬件 / 时限形式归类）、四类脉络、跨类综合（问题表述模板、指标、机制谱系与在 Thor 上的条件、带宽干扰测量、不可抢占单元粒度、前提对照）、未覆盖的组合、阅读顺序、待核实 |
 | [classics_general.md](classics_general.md) | 通用系统经典论文 10 篇（MapReduce、GFS、Dynamo、Spanner、Raft、Arrakis、IX、Shenango、Wasted Cores、Borg）与三篇写作和评审指南：论点、观察、洞察、贡献类型、评估如何对应论点，以及归纳的模式 |
 | [classics_mlsys.md](classics_mlsys.md) | ML 与 GPU 系统高分论文 10 篇（vLLM、Orca、Clockwork、AlpaServe、PipeDream、Gandiva、FlashAttention、DistServe、Pollux、Mooncake）：同样的拆解与归纳的模式 |
