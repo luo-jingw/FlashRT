@@ -99,4 +99,4 @@ novelty 几乎都在"洞察"这一步：发现一个现有系统没有利用的�
 | 某篇相关论文的原句、贡献、证据 | [decomposition.md](decomposition.md)，[papers.md](papers.md) |
 | 经典论文的完整拆解 | [classics_general.md](classics_general.md)，[classics_mlsys.md](classics_mlsys.md) |
 | 精读 | `notes/` |
-| long horizon 的条件、harness、延迟与质量的指标、统一内存硬件 | [long_horizon_conditions.md](long_horizon_conditions.md)，[harnesses.md](harnesses.md)，[latency_quality_metrics.md](latency_quality_metrics.md)，[unified_memory_socs.md](unified_memory_socs.md) |
+| long horizon 的条件、harness、延迟与质量的指标、统一内存硬件 | [long_horizon_conditions.md](long_horizon_conditions.md)，[harnesses.md](harnesses.md)，[latency_quality_metrics.md](latency_quality_metrics.md)，[unified_memory_socs.md](unified_memory_socs.md)，[unified_memory_inference.md](unified_memory_inference.md) |
