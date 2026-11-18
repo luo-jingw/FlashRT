@@ -5,8 +5,11 @@ second run is reported). If the per-token time changes with the budget, the budg
 decode cost.
 
 usage: PLANNER_CKPT=DIR PLANNER_MTP_DIR=DIR python budget_probe.py {rtx|thor} OUT_JSON CONTEXT_TOKENS BUDGET [BUDGET ...]
+  MODES (env, default "plain"): comma list of plain / stop (pass the end-of-sequence ids as stop_token_ids) /
+  sync (torch.cuda.synchronize after every streamed chunk)
 """
 import json
+import os
 import sys
 import time
 
@@ -17,14 +20,17 @@ FIRST = 256
 
 
 @torch.inference_mode()
-def first_tokens_ms(sw: Sweep, ids: torch.Tensor, budget: int) -> tuple[float, int, int]:
+def first_tokens_ms(sw: Sweep, ids: torch.Tensor, budget: int, mode: str) -> tuple[float, int, int]:
     sw.llm._spec_attempts = 0
     sw.llm.prefill_long_ctx_nvfp4_agent(ids, max_new_tokens=budget, K=SPEC_K)
     torch.cuda.synchronize()
+    stop = sorted(sw.fe._eos_token_ids) if mode == "stop" else None
     t0 = time.perf_counter()
     n = 0
-    for chunk in sw.llm.decode_long_ctx_nvfp4_committed_stream(max_new_tokens=budget, K=SPEC_K):
+    for chunk in sw.llm.decode_long_ctx_nvfp4_committed_stream(max_new_tokens=budget, K=SPEC_K, stop_token_ids=stop):
         n += len(chunk)
+        if mode == "sync":
+            torch.cuda.synchronize()
         if n >= FIRST:
             break
     torch.cuda.synchronize()
@@ -37,13 +43,15 @@ def main() -> None:
     sw = Sweep(frontend, ctx + max(budgets))
     ids = sw.prompt_ids(ctx)
     rows = []
-    for b in budgets:
-        first_tokens_ms(sw, ids, b)
-        ms, n, att = first_tokens_ms(sw, ids, b)
-        k = sw.llm._long_tq_effective_k(int(ids.shape[1]), SPEC_K, b)
-        rows.append({"budget": b, "tokens": n, "ms": ms, "ms_per_token": ms / n, "attempts": att, "effective_k": k})
-        print(f"budget {b:>5}: first {n} tokens {ms / n:6.1f} ms/token, {n / max(1, att):.2f} tokens/attempt, K {k}",
-              flush=True)
+    for mode in os.environ.get("MODES", "plain").split(","):
+        for b in budgets:
+            first_tokens_ms(sw, ids, b, mode)
+            ms, n, att = first_tokens_ms(sw, ids, b, mode)
+            k = sw.llm._long_tq_effective_k(int(ids.shape[1]), SPEC_K, b)
+            rows.append({"mode": mode, "budget": b, "tokens": n, "ms": ms, "ms_per_token": ms / n, "attempts": att,
+                         "effective_k": k})
+            print(f"{mode:<5} budget {b:>5}: first {n} tokens {ms / n:6.1f} ms/token, "
+                  f"{n / max(1, att):.2f} tokens/attempt, K {k}", flush=True)
     with open(out, "w") as f:
         json.dump({"frontend": frontend, "context_tokens": int(ids.shape[1]), "rows": rows}, f, indent=1)
 
