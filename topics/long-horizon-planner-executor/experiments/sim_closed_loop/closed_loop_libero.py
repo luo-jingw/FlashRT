@@ -6,8 +6,8 @@ Executor: ImageWAM LIBERO fp8 (FlashRT), loaded without its GPU text encoder and
 mapping, 30 wait steps, 10 executed actions per query, seed 7, per-episode action noise seed 1000 * task + episode and
 700 control steps are those of `wam-inference-acceleration/experiments/e8_libero_closed_loop`.
 
-Planner (mode "planner_eos" / "planner_fast"): Qwen3.8-27B master, FlashRT NVFP4, driving VoLoAgent's Full-loop
-decision logic as `harness_replay_5090/record_calls.py` does: decompose at step 0, monitor every 80 control steps
+Planner (mode "planner_eos" / "planner_fast"): the Qwen3.8-27B checkpoint set by `planner_qwen27b.CKPT`, FlashRT NVFP4,
+driving VoLoAgent's Full-loop decision logic as `harness_replay_5090/record_calls.py` does: decompose at step 0, monitor every 80 control steps
 (next / replan / continue; at most 3 replans; tool actions run no tool and count as continue), replan with the
 original subgoal list. Images are the simulator's agentview (front and exterior) and wrist frames, upright, letterboxed
 to the harness's camera sizes (wrist 224) and JPEG-encoded at quality 90. Synchronous protocol: during a planner call

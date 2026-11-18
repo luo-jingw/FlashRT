@@ -6,7 +6,7 @@ format of `harness_replay_5090/calls/*.jsonl` (one file per episode), for `../mo
 Each call is rebuilt with `volo_calls.monitor_call` from the run's task instruction, the subgoal list in force and the
 event's subgoal index, the step-0 frames (BEFORE) and the step's frames (NOW). The frames are copied to
 `calls/frames/t<task>e<episode>/`; image paths in the rows are relative to `harness_replay_5090/` (the bench's base
-directory). `output_text` / `output_tokens` are the run's reply (LoRA-merged master) and its token count.
+directory). `output_text` / `output_tokens` are the run's reply and its token count.
 
 usage (cwd = this directory): python build_monitor_calls.py runs/planner_eos.json calls
 """
