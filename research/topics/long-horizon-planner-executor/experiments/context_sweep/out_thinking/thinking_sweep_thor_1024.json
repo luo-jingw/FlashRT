@@ -1,0 +1,88 @@
+{
+ "frontend": "thor",
+ "ckpt": "/home/jingwu/thor_val/ckpt/qwen38-27b-nvfp4-official-5090",
+ "cap": 4096,
+ "spec_k": 6,
+ "torch": "2.9.1+cu130",
+ "device": "NVIDIA Thor",
+ "cells": [
+  {
+   "question": "next_subtask",
+   "thinking": false,
+   "context_tokens": 1023,
+   "prefill_ms": 564.1583520919085,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 128,
+   "decode_ms": 5037.916807457805,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.4594594594594597,
+   "answer": "```json\n{\n  \"subtask\": \"lift the pot\",\n  \"reason\": \"The subtask sequence follows a repeating cycle of 8 steps: 'pick up the red block', 'place it in the bowl', 'open the drawer', 'move the can next to the pot', 'press the bell', 'lift the pot', 'put the hammer on the block', 'close the drawer'. The "
+  },
+  {
+   "question": "drawer_count",
+   "thinking": false,
+   "context_tokens": 1024,
+   "prefill_ms": 564.6522212773561,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 176,
+   "decode_ms": 7081.931343302131,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.3846153846153846,
+   "answer": "To determine the count and the last status of the subtask 'open the drawer', I will scan the provided log for entries where the subtask is 'open the drawer'.\n\n1.  **Step 16**: subtask 'open the drawer', status **continue**\n2.  **Step 80**: subtask 'open the drawer', status **continue**\n3.  **Step 14"
+  },
+  {
+   "question": "replan_check",
+   "thinking": false,
+   "context_tokens": 1023,
+   "prefill_ms": 564.689664170146,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 15,
+   "decode_ms": 682.537630200386,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.0,
+   "answer": "```json\n{\"subtasks\": [\"lift the pot\"]}\n```"
+  },
+  {
+   "question": "next_subtask",
+   "thinking": true,
+   "context_tokens": 1024,
+   "prefill_ms": 536.7115065455437,
+   "think_tokens": 2006,
+   "think_ms": 207327.4136763066,
+   "answer_tokens": 60,
+   "decode_ms": 212650.58585815132,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.8694444444444445,
+   "answer": "{\"subtask\": \"put the hammer on the block\", \"reason\": \"The log follows a repeating 8-subtask cycle, and step 232 is 'lift the pot', so the next subtask in the cycle is 'put the hammer on the block'.\"}"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": true,
+   "context_tokens": 1024,
+   "prefill_ms": 536.6630721837282,
+   "think_tokens": 1121,
+   "think_ms": 95983.04358124733,
+   "answer_tokens": 15,
+   "decode_ms": 97167.76937246323,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.452887537993921,
+   "answer": "{\"count\": 4, \"last_status\": \"continue\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": true,
+   "context_tokens": 1024,
+   "prefill_ms": 537.5163573771715,
+   "think_tokens": 3240,
+   "think_ms": 327408.8214356452,
+   "answer_tokens": 30,
+   "decode_ms": 329793.38170960546,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.9406474820143886,
+   "answer": "{\"subtasks\": [\"put the hammer on the block\", \"move the can next to the pot\", \"pick up the red block\"]}"
+  }
+ ]
+}

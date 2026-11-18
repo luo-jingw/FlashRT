@@ -1,0 +1,88 @@
+{
+ "frontend": "thor",
+ "ckpt": "/home/jingwu/thor_val/ckpt/qwen38-27b-nvfp4-official-5090",
+ "cap": 4096,
+ "spec_k": 6,
+ "torch": "2.9.1+cu130",
+ "device": "NVIDIA Thor",
+ "cells": [
+  {
+   "question": "next_subtask",
+   "thinking": false,
+   "context_tokens": 4096,
+   "prefill_ms": 2293.760223314166,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 323,
+   "decode_ms": 9784.004537388682,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.8839285714285716,
+   "answer": "```json\n{\n  \"subtask\": \"lift the pot\",\n  \"reason\": \"The last entry in the log is Step 1000, which indicates the subtask 'lift the pot' is currently being processed or has just been initiated with a status that implies continuation or completion of the current step. Following the cyclic pattern of th"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": false,
+   "context_tokens": 4096,
+   "prefill_ms": 2292.7685491740704,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 15,
+   "decode_ms": 436.01933121681213,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.0,
+   "answer": "{\"count\": 13, \"last_status\": \"continue\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": false,
+   "context_tokens": 4096,
+   "prefill_ms": 2292.525503784418,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 15,
+   "decode_ms": 350.4834156483412,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.75,
+   "answer": "```json\n{\"subtasks\": [\"press the bell\"]}\n```"
+  },
+  {
+   "question": "next_subtask",
+   "thinking": true,
+   "context_tokens": 4096,
+   "prefill_ms": 2331.1076425015926,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 4096,
+   "decode_ms": 107087.55872026086,
+   "hit_cap": true,
+   "tokens_per_attempt": 3.354627354627355,
+   "answer": "We need answer user's request. Need infer next subtask from robot log. Need output JSON {\"subtask\": ..., \"reason\": ...}. Need analyze pattern.\n\nWe have log steps from 0 to 992? Let's inspect. It lists subtasks in a repeating sequence? Let's parse.\n\nGiven:\nStep 0: subtask 'pick up the red block', gri"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": true,
+   "context_tokens": 4095,
+   "prefill_ms": 2292.1957690268755,
+   "think_tokens": 1526,
+   "think_ms": 41706.52626082301,
+   "answer_tokens": 16,
+   "decode_ms": 42057.67512880266,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.2058212058212057,
+   "answer": "{\"count\": 16, \"last_status\": \"continue\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": true,
+   "context_tokens": 4096,
+   "prefill_ms": 2320.804661139846,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 4096,
+   "decode_ms": 133015.90228639543,
+   "hit_cap": true,
+   "tokens_per_attempt": 2.7036303630363037,
+   "answer": "We need answer user's question. Need parse log. Need identify subtasks ended with status replan in last 20 steps of the log above. Need output JSON {\"subtasks\": [...]}. Need be careful: \"last 20 steps\" likely last 20 log entries? The log has steps from 0 to 992? Let's inspect. User provided many ste"
+  }
+ ]
+}

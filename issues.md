@@ -1832,6 +1832,13 @@ tokens and 97-101 ms per token at 64k and 128k (`research/topics/long-horizon-pl
   attempt 2.9-3.7 in every cell, so acceptance does not explain the step.
 - FP8 KV is 32 KiB per token (16 full-attention layers), about 2 GiB at 64k against roughly 15 GB of NVFP4 weights read
   per forward: the extra bytes account for about 13 %, not 3x.
+- Long decodes are a separate effect: CUDA graphs are recorded per decode position and each cache keeps at most
+  `GRAPH_CACHE_MAX` = 256 (`qwen36_rtx.py`). Decoding 3 072 tokens at 1k context took about 100 ms/token in both runs
+  of one process with the default, and 24-30 ms/token in the second run with `FLASHRT_QWEN36_GRAPH_CACHE_MAX=4096`
+  (`experiments/context_sweep/decode_probe.py`, 2026-11-18, one lock session). Graph recording at a new position costs
+  about 70 ms per decode cycle on Thor.
+- The 64k cell with `FLASHRT_QWEN36_GRAPH_CACHE_MAX=8192` still decodes at 105.6 ms/token (256 tokens), so the graph
+  cache does not explain the step at 64k.
 
 ## Hypotheses
 
