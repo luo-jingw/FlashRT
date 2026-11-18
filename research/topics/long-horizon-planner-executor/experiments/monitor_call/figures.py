@@ -66,8 +66,8 @@ def fig_structure(structure: list[dict], out: str) -> None:
     ax.set_title("一次 monitor 调用的组成：大半输入与上一次相同，决策只占回复的前一小段", loc="left", fontsize=12.5,
                  color=INK, pad=10)
     n_ep = len({s["episode"] for s in structure})
-    fig.text(0.01, 0.01, f"VoLoAgent Full-loop 的 monitor 调用，LIBERO-10 回合 0 / 43 / 188 的记录（{len(structure)} 次，"
-             f"{n_ep} 份记录）；输出 token 为中位数。", fontsize=9, color=MUTED)
+    fig.text(0.01, 0.01, f"VoLoAgent Full-loop 的 monitor 调用记录（{len(structure)} 次，{n_ep} 份记录）；"
+             f"输出 token 为中位数。", fontsize=9, color=MUTED)
     fig.tight_layout(rect=(0, 0.06, 1, 1))
     fig.savefig(out)
 

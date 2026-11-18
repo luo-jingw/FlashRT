@@ -1710,10 +1710,10 @@ Experiment 1 result (`docs/imagewam_rtx5090_batched_m_step.md`, `benchmarks/imag
 
 Candidate 1 experiment 1 → candidate 1 experiment 2 → candidates 2 and 3.
 
-# OPT-039: MTP speculative decode on the planner (LoRA-merged Qwen3.8-27B master, RTX 5090)
+# OPT-039: MTP speculative decode on the planner (official Qwen3.8-27B, RTX 5090)
 
 Status: candidates 1-3 and 5 done (the RTX long route runs the MTP prompt-tail prefill for FP8-source heads; the tail
-fc runs on cuBLASLt, on RTX and Thor; `Qwen36VlTorchFrontendRtx.generate` takes the draft length); candidate 4 proposed.
+fc runs on cuBLASLt, on RTX and Thor; `Qwen36VlTorchFrontendRtx.generate` takes the draft length).
 
 Area: `flash_rt/frontends/torch/qwen36_rtx.py` (`_generate_long_ctx_speculative_KN_nvfp4`,
 `_long_tq_effective_k`, `_long_mtp_prefill_tail_for_prompt`, `_prefill_mtp_tail_kv_nvfp4`,
@@ -1721,31 +1721,21 @@ Area: `flash_rt/frontends/torch/qwen36_rtx.py` (`_generate_long_ctx_speculative_
 
 ## Observation
 
-`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/cells/mtp_tail_{master,base}.json`, 22 recorded harness calls (ep0, ep43,
-wrist 224), each model decoding to its own EOS; tokens per main-model forward / decode ms per call, K = 3, tail fc on
+`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/cells/mtp_tail_base.json`, 22 recorded harness calls (ep0, ep43,
+wrist 224), decoding to the model's own EOS; tokens per main-model forward / decode ms per call, K = 3, tail fc on
 cuBLASLt:
 
 | main model | MTP prompt tail | monitor x 20 | decompose x 2 |
 |---|---|---|---|
-| LoRA-merged master | off | 2.13 / 623 | 1.52 / 374 |
-| LoRA-merged master | frontend table (512 / 2 048 rows) | 2.60 / 511 | 2.61 / 218 |
-| LoRA-merged master | whole prompt | 2.85 / 468 | 2.47 / 230 |
 | official Qwen3.8-27B | off | 2.46 / 726 | 2.30 / 398 |
-| official Qwen3.8-27B | frontend table | 2.72 / 656 | 2.92 / 314 |
+| official Qwen3.8-27B | frontend table (512 / 2 048 rows) | 2.72 / 656 | 2.92 / 314 |
 | official Qwen3.8-27B | whole prompt | 3.05 / 587 | 3.04 / 302 |
 
-- The merged checkpoint has no MTP tensors; the drafter is the official Qwen3.8-27B-FP8 MTP head, trained against the
-  base model. The official model decodes longer replies (monitor median 72 tokens, master 52), so the two rows of a
-  tail setting are not a controlled comparison of the head alone.
-- The prompt tail is the larger factor for the master (monitor +22 % / +34 % tokens per forward, decompose +72 %);
-  the official model with its matching head is 5-15 % higher on monitor at the same tail setting.
-- With the tail, K = 3 is the fastest K on both call kinds of the master; K = 5 / 7 accept more but cost more per
-  cycle. The prompt-length table gives K = 6 for decompose (241 ms against 218 ms at K = 3).
+- The drafter is the official Qwen3.8-27B-FP8 MTP head. Monitor replies have a median of 72 tokens.
+- The prompt tail raises tokens per forward on monitor by 11 % (table) / 24 % (whole prompt) and on decompose by
+  27 % / 32 %.
 - The tail's fc projection (rows x 10 240 -> 5 120) on the shared small-M kernel costs 21 / 84 ms at 512 /
-  2 048 rows; `bf16_matmul_cublaslt_bf16` costs 0.4 / 1.2 ms. Tokens per forward differ by at most 2 % between the
-  two (monitor 2.66 / 2.60), and tail + decode is shorter with cuBLASLt (decompose 302 -> 219 ms).
-- Single-token decode estimate (Kv = 1 forward graph x decoded tokens): monitor speedup 1.74x without the tail,
-  2.12x / 2.31x with the table / whole-prompt tail.
+  2 048 rows; `bf16_matmul_cublaslt_bf16` costs 0.4 / 1.2 ms.
 
 ## Candidates
 
@@ -1757,10 +1747,7 @@ cuBLASLt:
    (`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/thor/planner_calls_vl_rtx.json`). Not measured: the Spark frontend,
    which inherits the hook, and BF16-source MTP heads (Qwen3.6), whose tail also runs through it.
 3. Done: `generate(spec_k=...)` on the image frontend (below 6 caps the prompt-length table). Official model:
-   decompose 312 ms at K = 3 against 320 ms at the table's K = 6, monitor unchanged (the table gives 3); the master
-   (grid) 218 against 241 ms. Selecting K by measured acceptance per call is not implemented.
-4. An MTP head adapted to the LoRA master (training the MTP layer on the master's own hidden states and outputs).
-   Observation: tokens per forward on the recorded calls, against the official model's 2.72-3.05 (monitor).
+   decompose 312 ms at K = 3 against 320 ms at the table's K = 6, monitor unchanged (the table gives 3). Selecting K by measured acceptance per call is not implemented.
 5. Done: the tail fc on the Jetson Thor. `Qwen36TorchFrontendThor` no longer overrides `_mtp_tail_fc_matmul` and
    runs the RTX frontend's cuBLASLt GEMM. Round `1104_h3b` (THOR_STATUS_SUMMARY.md): 0.89 / 3.46 / 14.7 ms at
    512 / 2 048 / 4 071 rows against 380 / 1 519 / 3 019 ms on the M-tile kernel it used before; on the 22 recorded
@@ -1849,8 +1836,7 @@ Measurements: `research/topics/wam-inference-acceleration/experiments/harness_re
    the `native` runs the reference decision changes in 3 of 47 calls (t0e1 step 240 `next` -> `continue`, t0e1 step
    480 `continue` -> `replan`, t8e1 step 240 `continue` -> `next`), in every cell of the run; the `native` path did not
    change a decision between repeated runs in H8, H11, H12, H14. Thor `native` and the 5090 (`wy_lt`) differ in 3 of
-   the 47 as well (ep43 step 800, t6e1 step 160, t8e1 step 240). Agreement of the reference decision with the recorded
-   master decisions: `wy_lt` 43 / 47, `native` 44 / 47, 5090 43 / 47. The capsule cut at the first NOW image changes
+   the 47 as well (ep43 step 800, t6e1 step 160, t8e1 step 240). The capsule cut at the first NOW image changes
    the reply in 47 / 47 and the decision in 3 / 47 with the route (none with `native`), as on the 5090: a chunk
    boundary at 2 641 instead of 2 048 changes the WY chunk scan's arithmetic (inference). The Thor default stays
    `thor` until the planner's decision criterion is set (plan.md, Phase 8).

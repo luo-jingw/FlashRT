@@ -1498,7 +1498,7 @@ the MTP draft length K
 ## Observation
 
 Greedy decode is meant to give the same tokens for every draft length K (the main model's argmax decides every
-token). On the planner (LoRA-merged Qwen3.8-27B master, official Qwen3.8-27B-FP8 MTP head), 25 of 26 prompts give the
+token). On a Qwen3.8-27B NVFP4 planner checkpoint (official Qwen3.8-27B-FP8 MTP head), 25 of 26 prompts give the
 same output crc for K = 1, 3, 5, 7 and the length table; the synthetic 16 315-token prompt gives a different output with
 K = 1 (crc 816102686, 13 tokens before EOS) than with K = 3, 5, 7 and the table (crc 972381506, 11 tokens)
 (`research/topics/wam-inference-acceleration/experiments/harness_replay_5090/cells/mtp_speedup.json`).
@@ -1540,14 +1540,11 @@ Same weights, prompt, decode path and draft length; only the prefill chunking di
 fluent and on topic, so the prefill result is not broken but numerically different.
 
 One extra chunk split is enough. Restoring the episode-constant monitor prefix from a capsule and appending the rest
-(`research/topics/long-horizon-planner-executor/experiments/monitor_call/`, master, 59 monitor calls of six
-recordings) is token-identical to the full prefill when the boundary is a multiple of the 2 048-token chunk (59 of
-59 replies); with the boundary at the first NOW image (2 641 / 3 457 tokens, not chunk-aligned) 57 of 59 replies
-change wording, none of the 57 `continue` actions change, and both non-`continue` actions change to `continue`
-(ep188 wrist 224 step 720 `grasp_tool`, ep0 wrist 720 step 720 `next`). Episode 0 step 720 is also the call whose
-decision changed with 256-token chunks above (there `continue` -> `next`). The official Qwen3.8-27B on the same experiment (ep0 / ep43
-wrist 224, 20 calls, its own replies as reference): aligned 20 of 20 replies unchanged; unaligned, its only
-non-`continue` action (ep43 step 800 `replan`) changes to `continue` and one reply becomes `{}` (ep43 step 560).
+(`research/topics/long-horizon-planner-executor/experiments/monitor_call/`, official Qwen3.8-27B, ep0 / ep43 wrist
+224, 20 calls, its own replies as reference) is token-identical to the full prefill when the boundary is a multiple
+of the 2 048-token chunk (20 of 20 replies); with the boundary at the first NOW image (2 641 tokens, not
+chunk-aligned), its only non-`continue` action (ep43 step 800 `replan`) changes to `continue` and one reply becomes
+`{}` (ep43 step 560).
 
 ## Hypotheses
 

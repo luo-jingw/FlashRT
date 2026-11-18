@@ -19,7 +19,7 @@ Grid per call (each cell: one warm-up call, one timed call):
   plus one reference cell per call: the image frontend's `generate` with the "eos" budget (the replay's path).
 
 Reference reply (REPLIES):
-  recorded : the recorded reply (the replies were recorded by the LoRA-merged master; use with that checkpoint);
+  recorded : the reply stored in the call file (use with the checkpoint that produced it);
   own      : the model's own reply, from one untimed `generate` per call with OWN_BUDGET new tokens, cut at EOS.
 
 Capsules are built once per episode from the episode's first monitor call (one warm-up build, one timed build).
@@ -102,7 +102,7 @@ class CellRecord:
     same_reply: bool | None     # eos budget: reply equals the reference reply
     decision: str | None        # action parsed from the emitted text
     same_decision: bool         # action equals the reference reply's action
-    recorded_decision: str | None  # action of the recorded (master) reply
+    recorded_decision: str | None  # action of the reply stored in the call file
 
 
 @dataclass

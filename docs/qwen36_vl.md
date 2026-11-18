@@ -1,7 +1,7 @@
 # Image input for Qwen3.6 / Qwen3.8-27B NVFP4 on RTX 5090 and Thor
 
 `Qwen36VlTorchFrontendRtx` (`flash_rt/frontends/torch/qwen36_vl_rtx.py`) adds image input to the Qwen3.5-architecture
-27B models (`Qwen3_5ForConditionalGeneration`: Qwen3.6-27B, Qwen3.8-27B and fine-tunes of them) on the NVFP4
+27B models (`Qwen3_5ForConditionalGeneration`: Qwen3.6-27B, Qwen3.8-27B) on the NVFP4
 language-model path of `Qwen36TorchFrontendRtx`. Video input is not supported.
 
 ## How it works
