@@ -1,0 +1,35 @@
+gpu_lock: waiting 2026-11-18T23:38:59-05:00
+gpu_lock: acquired 2026-11-19T00:19:57-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=    256  prefill      162.2 ms  decode  28.36 ms/token  (256 tokens, 3.05 per attempt)
+gpu_lock: released 2026-11-19T00:20:53-05:00 rc=0
+gpu_lock: waiting 2026-11-19T00:20:53-05:00
+gpu_lock: acquired 2026-11-19T00:20:53-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=    511  prefill      264.3 ms  decode  29.69 ms/token  (256 tokens, 2.91 per attempt)
+gpu_lock: released 2026-11-19T00:21:50-05:00 rc=0
+gpu_lock: waiting 2026-11-19T00:21:50-05:00
+gpu_lock: acquired 2026-11-19T00:21:50-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=    768  prefill      391.9 ms  decode  28.71 ms/token  (256 tokens, 3.01 per attempt)
+gpu_lock: released 2026-11-19T00:22:45-05:00 rc=0
+gpu_lock: waiting 2026-11-19T00:22:45-05:00
+gpu_lock: acquired 2026-11-19T00:22:45-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=   1024  prefill      535.8 ms  decode  29.80 ms/token  (256 tokens, 2.91 per attempt)
+gpu_lock: released 2026-11-19T00:23:43-05:00 rc=0
+gpu_lock: waiting 2026-11-19T00:23:43-05:00
+gpu_lock: acquired 2026-11-19T00:23:43-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=   1536  prefill      817.9 ms  decode  27.06 ms/token  (256 tokens, 3.94 per attempt)
+gpu_lock: released 2026-11-19T00:24:38-05:00 rc=0
+gpu_lock: waiting 2026-11-19T00:24:38-05:00
+gpu_lock: acquired 2026-11-19T00:24:38-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=   2048  prefill     1120.8 ms  decode  28.49 ms/token  (256 tokens, 3.71 per attempt)
+gpu_lock: released 2026-11-19T00:25:36-05:00 rc=0
+gpu_lock: waiting 2026-11-19T00:25:36-05:00
+gpu_lock: acquired 2026-11-19T00:25:36-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=   3072  prefill     1668.7 ms  decode  30.63 ms/token  (256 tokens, 2.84 per attempt)
+gpu_lock: released 2026-11-19T00:26:39-05:00 rc=0

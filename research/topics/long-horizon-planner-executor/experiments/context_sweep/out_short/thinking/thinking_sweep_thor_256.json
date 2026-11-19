@@ -1,0 +1,88 @@
+{
+ "frontend": "thor",
+ "ckpt": "/home/jingwu/thor_val/ckpt/qwen38-27b-nvfp4-official-5090",
+ "cap": 4096,
+ "spec_k": 6,
+ "torch": "2.9.1+cu130",
+ "device": "NVIDIA Thor",
+ "cells": [
+  {
+   "question": "next_subtask",
+   "thinking": false,
+   "context_tokens": 256,
+   "prefill_ms": 162.9578284919262,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 89,
+   "decode_ms": 2773.6211642622948,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.78125,
+   "answer": "```json\n{\n\"subtask\": \"put the hammer on the block\",\n\"reason\": \"The log ends at Step 48 with the subtask 'put the hammer on the block' and a missing status. In a sequential execution log, the next step is the continuation or completion of the current active subtask. Therefore, the robot should contin"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": false,
+   "context_tokens": 256,
+   "prefill_ms": 163.1861198693514,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 14,
+   "decode_ms": 345.40050476789474,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.5,
+   "answer": "{\"count\": 1, \"last_status\": \"continue\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": false,
+   "context_tokens": 256,
+   "prefill_ms": 162.72548027336597,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 10,
+   "decode_ms": 257.6572746038437,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.3333333333333335,
+   "answer": "{\"subtasks\": [\"press the bell\"]}"
+  },
+  {
+   "question": "next_subtask",
+   "thinking": true,
+   "context_tokens": 256,
+   "prefill_ms": 162.6342535018921,
+   "think_tokens": 3829,
+   "think_ms": 127030.04876896739,
+   "answer_tokens": 43,
+   "decode_ms": 127993.1502006948,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.6448087431693987,
+   "answer": "{\"subtask\": \"lift the pot\", \"reason\": \"The most recent log entry after the replan status is 'lift the pot', so it is the current subtask to execute next.\"}"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": true,
+   "context_tokens": 256,
+   "prefill_ms": 162.52171620726585,
+   "think_tokens": 275,
+   "think_ms": 7007.208786904812,
+   "answer_tokens": 15,
+   "decode_ms": 7354.985235258937,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.411764705882353,
+   "answer": "{\"count\": 1, \"last_status\": \"continue\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": true,
+   "context_tokens": 256,
+   "prefill_ms": 161.88927926123142,
+   "think_tokens": 714,
+   "think_ms": 22203.677451238036,
+   "answer_tokens": 11,
+   "decode_ms": 22465.72213061154,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.799227799227799,
+   "answer": "{\"subtasks\": [\"press the bell\"]}"
+  }
+ ]
+}

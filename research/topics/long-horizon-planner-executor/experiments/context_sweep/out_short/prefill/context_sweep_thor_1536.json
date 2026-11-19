@@ -1,0 +1,20 @@
+{
+ "frontend": "thor",
+ "ckpt": "/home/jingwu/thor_val/ckpt/qwen38-27b-nvfp4-official-5090",
+ "decode_tokens": 256,
+ "spec_k": 6,
+ "torch": "2.9.1+cu130",
+ "device": "NVIDIA Thor",
+ "cells": [
+  {
+   "context_tokens": 1536,
+   "prefill_ms": 817.8606294095516,
+   "decode_ms": 6926.423909142613,
+   "decode_tokens": 256,
+   "decode_ms_per_token": 27.056343395088334,
+   "spec_attempts": 65,
+   "spec_accepts": 191,
+   "tokens_per_attempt": 3.9384615384615387
+  }
+ ]
+}

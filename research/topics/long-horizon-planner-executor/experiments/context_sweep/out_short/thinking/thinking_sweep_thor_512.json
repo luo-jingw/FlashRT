@@ -1,0 +1,88 @@
+{
+ "frontend": "thor",
+ "ckpt": "/home/jingwu/thor_val/ckpt/qwen38-27b-nvfp4-official-5090",
+ "cap": 4096,
+ "spec_k": 6,
+ "torch": "2.9.1+cu130",
+ "device": "NVIDIA Thor",
+ "cells": [
+  {
+   "question": "next_subtask",
+   "thinking": false,
+   "context_tokens": 512,
+   "prefill_ms": 263.29932920634747,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 117,
+   "decode_ms": 3030.428593978286,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.342857142857143,
+   "answer": "{\"subtask\": \"close the drawer\", \"reason\": \"The subtasks follow a repeating cycle of 7 actions: 'pick up the red block', 'place it in the bowl', 'open the drawer', 'move the can next to the pot', 'press the bell', 'lift the pot', 'put the hammer on the block', and 'close the drawer'. The last execute"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": false,
+   "context_tokens": 512,
+   "prefill_ms": 264.3187250941992,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 14,
+   "decode_ms": 346.6304484754801,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.5,
+   "answer": "{\"count\": 2, \"last_status\": \"continue\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": false,
+   "context_tokens": 512,
+   "prefill_ms": 264.33068327605724,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 18,
+   "decode_ms": 519.2806832492352,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.0,
+   "answer": "```json\n{\"subtasks\": [\"put the hammer on the block\"]}\n```"
+  },
+  {
+   "question": "next_subtask",
+   "thinking": true,
+   "context_tokens": 512,
+   "prefill_ms": 263.8378385454416,
+   "think_tokens": 3941,
+   "think_ms": 121720.07761709392,
+   "answer_tokens": 102,
+   "decode_ms": 124090.11592157185,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.8471830985915494,
+   "answer": "{\"subtask\": \"put the hammer on the block\", \"reason\": \"The log follows a repeating 8-subtask cycle: pick up the red block, place it in the bowl, open the drawer, move the can next to the pot, press the bell, lift the pot, put the hammer on the block, close the drawer. Since the last logged subtask is"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": true,
+   "context_tokens": 512,
+   "prefill_ms": 264.9362441152334,
+   "think_tokens": 522,
+   "think_ms": 12451.299605891109,
+   "answer_tokens": 15,
+   "decode_ms": 12798.021929338574,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.6283783783783785,
+   "answer": "{\"count\": 2, \"last_status\": \"continue\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": true,
+   "context_tokens": 512,
+   "prefill_ms": 263.4661979973316,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 4096,
+   "decode_ms": 148866.96851998568,
+   "hit_cap": true,
+   "tokens_per_attempt": 2.6256410256410256,
+   "answer": "We need answer user's question. Need parse log. User asks: \"Which subtasks ended with status replan in the last 20 steps of the log above? Reply with JSON {\"subtasks\": [...]}.\n\nWe have log steps:\nStep 0: subtask 'pick up the red block', gripper closed, object at (0, 0), status continue.\nStep 8: subt"
+  }
+ ]
+}
