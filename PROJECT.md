@@ -372,6 +372,12 @@ Do not record token values or other secrets here.
 
 ## Project-Specific Constraints
 
+- Every experiment, survey, Thor round and collaborator task starts with a
+  six-field brief (why and the link to the main question; measured
+  quantities and pre-stated readings; prior work; setup with the source of
+  every fixed value; cost and stop conditions; result against the readings),
+  as defined in `.claude/skills/brief/SKILL.md`. Reports, including a
+  collaborator's, open with the brief they were run under.
 - The Thor used for validation has **no GitHub credentials**: it is pull-only.
   Nothing is committed or pushed there, and a local commit on that machine is
   a backup, not a route into the repository. Anything the repository must
