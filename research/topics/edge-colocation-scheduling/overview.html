@@ -153,12 +153,10 @@ body.deck-on { overflow: hidden; }
 .deck-title { color: var(--fg-3); font-size: 12.5px; max-width: 40vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .deck-progress { position: fixed; top: env(safe-area-inset-top, 0px); left: 0; height: 3px; background: var(--accent); z-index: 31; transition: width .2s; }
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bg); }
-.toc-slides { display: grid; gap: 6px 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-top: 18px; }
-.toc-slides a { color: var(--fg-2); text-decoration: none; font-size: 13.5px; padding: 6px 10px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--surface); }
-.toc-slides a:hover { color: var(--accent); border-color: var(--accent); }
-.toc-slides a.toc-sec { color: var(--fg); font-weight: 600; }
-.toc-slides a span { color: var(--fg-3); margin-right: 6px; font-variant-numeric: tabular-nums; }
+.title-slide .slide-inner { min-height: 100%; display: flex; flex-direction: column; justify-content: center; }
+.title-slide h1 { font-size: 38px; margin-bottom: 12px; }
+.title-slide .sub { font-size: 16px; }
+.title-slide .mainline { font-size: 16.5px; margin-top: 28px; padding: 18px 22px; }
 @media (max-width: 560px) { .deck-title { display: none; } }
 /* ---- term notes ---- */
 .term { text-decoration: underline dotted var(--accent); text-decoration-thickness: 1.5px; text-underline-offset: 3px;
@@ -888,6 +886,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   }
   var first = newSlide(header.querySelector('h1').textContent, 'top');
   first.appendChild(header);
+  slides[0].el.classList.add('title-slide');
   sections.forEach(function (sec) {
     var h2 = sec.querySelector('h2');
     var no = h2.querySelector('.no') ? h2.querySelector('.no').textContent : '';
@@ -910,17 +909,6 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     sec.remove();
   });
   if (footer) slides[slides.length - 1].inner.appendChild(footer);
-  // contents on the title slide
-  var toc = document.createElement('div'); toc.className = 'toc-slides';
-  slides.forEach(function (s, i) {
-    if (i === 0) return;
-    var a = document.createElement('a'); a.href = '#s' + (i + 1);
-    a.innerHTML = '<span>' + s.label + '</span>' + s.title;
-    if (s.label.indexOf('.') < 0) a.className = 'toc-sec';
-    a.addEventListener('click', function (e) { e.preventDefault(); go(i); });
-    toc.appendChild(a);
-  });
-  header.appendChild(toc);
   wrap.replaceWith(deck);
   document.body.classList.add('deck-on');
   // controls
