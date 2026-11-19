@@ -120,6 +120,7 @@ footer { margin-top: 56px; color: var(--fg-3); font-size: 12.5px; border-top: 1p
 .t-classics td:nth-child(1), .t-classics td:nth-child(2), .t-classics td:nth-child(4) { white-space: nowrap; }
 .t-harness td:nth-child(1), .t-harness td:nth-child(2) { white-space: nowrap; }
 .t-metric td:nth-child(1), .t-metric td:nth-child(3) { white-space: nowrap; }
+.t-flash td { padding-top: 6px; padding-bottom: 6px; }
 .t-flash td:nth-child(1) { min-width: 11em; }
 .t-flash td:nth-child(2), .t-flash td:nth-child(3) { min-width: 12em; }
 .t-flash td:nth-child(4) { min-width: 14em; }
@@ -131,7 +132,7 @@ html, body { height: 100%; }
 body.deck-on { overflow: hidden; }
 .deck { position: fixed; inset: 0; }
 .slide { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; display: none;
-  padding-top: calc(28px + env(safe-area-inset-top, 0px)); padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  padding-top: calc(20px + env(safe-area-inset-top, 0px)); padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 .slide.active { display: block; }
 .slide-inner { max-width: 1080px; margin: 0 auto; }
@@ -139,6 +140,7 @@ body.deck-on { overflow: hidden; }
 .kicker { font-size: 12.5px; letter-spacing: .06em; color: var(--fg-3); margin: 0 0 6px; }
 .kicker b { color: var(--accent); margin-right: 6px; }
 .slide h3 { font-size: 19px; margin: 0 0 12px; }
+.slide h3.join { font-size: 17px; margin-top: 26px; }
 .slide h2 + .lead { margin-top: 6px; }
 .deck-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; align-items: center; gap: 10px;
   justify-content: center; background: var(--bg); border-top: 1px solid var(--line);
@@ -221,7 +223,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     <div class="card"><h4>④ 部分可观测的导航</h4><p>路径长且方差大：VLN-CE 平均 55.9 个低层动作，RxR 上限 40 m。不压缩的视频历史随步数线性增长。</p></div>
     <div class="card"><h4>⑤ 多轮 agent 对话累积</h4><p>工具返回留在对话里，每次检查重读全部历史。NavGPT-3 每 episode 155k–721k token。</p></div>
   </div>
-  <h3>规划器每次调用的上下文有三种形态</h3>
+  <h3 class="join">规划器每次调用的上下文有三种形态</h3>
   <div class="fig">
     <svg viewBox="0 0 820 200" role="img" aria-label="三种上下文形态随 episode 进度的 token 增长">
       <line class="ax" x1="50" y1="170" x2="540" y2="170"/>
@@ -305,7 +307,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     <div class="card"><h4>SM 隔离不了带宽</h4><p>按 SM 分开后，执行器剩下的干扰来自规划器 decode 的带宽占用。MIG 也只切计算，不切内存。</p></div>
     <div class="card"><h4>CPU 的内存流量也挤占 GPU</h4><p>CPU 不占 SM，但它每读写一个字节都走同一条带宽。在 CPU 上注入满载的内存负载，规划器 decode 慢约 2.2 倍（B28）。</p></div>
   </div>
-  <h3>本组在 Thor 上的实测（2026-11-18，官方 Qwen3.8-27B）</h3>
+  <h3 class="join">本组在 Thor 上的实测（2026-11-18，官方 Qwen3.8-27B）</h3>
   <div class="tablebox">
   <table>
     <thead><tr><th>量</th><th class="num">Thor</th><th class="num">RTX 5090</th><th>说明</th></tr></thead>
@@ -316,6 +318,22 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     </tbody>
   </table>
   </div>
+  <h3 class="join">同类统一内存 SoC</h3>
+  <div class="tablebox">
+  <table>
+    <thead><tr><th>设备</th><th>GPU</th><th>内存</th><th class="num">带宽 GB/s</th><th>功耗</th><th>GPU 分区</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td><b>Jetson AGX Thor T5000</b>（基线）</td><td>Blackwell，20 SM †</td><td>128 GB LPDDR5X</td><td class="num">273</td><td>40–130 W</td><td>MIG，只切 SM、不切内存 †</td></tr>
+      <tr><td>Jetson T4000</td><td>Blackwell，6 TPC</td><td>64 GB LPDDR5X</td><td class="num">273</td><td>40–70 W</td><td>MIG</td></tr>
+      <tr><td>DGX Spark（GB10）</td><td>Blackwell，约 48 SM（推算）</td><td>128 GB LPDDR5X</td><td class="num">273</td><td>140 W</td><td>官方未提</td></tr>
+      <tr><td>Jetson AGX Orin 64GB</td><td>Ampere，16 SM（推算）</td><td>64 GB LPDDR5</td><td class="num">204.8</td><td>15–60 W</td><td>无；另有 2 个 DLA</td></tr>
+      <tr><td>AMD Ryzen AI Max+ 395</td><td>RDNA 3.5，40 CU</td><td>128 GB LPDDR5x</td><td class="num">256</td><td>45–120 W</td><td>未公开</td></tr>
+      <tr><td>Apple M4 Max / M5 Max</td><td>40 GPU 核</td><td>128 GB</td><td class="num">546 / 614</td><td>未公开</td><td>未公开</td></tr>
+      <tr><td>AMD Instinct MI300A</td><td>CDNA 3，228 CU</td><td>128 GB HBM3</td><td class="num">5 300</td><td>550 W</td><td>按 XCD 切，不隔离内存</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">完整表（含 Orin NX、Snapdragon、Lunar Lake 与来源）：<code>unified_memory_socs.md</code>。GH200 是两块物理内存，不算统一内存。</p>
   <h3>规划器 + 执行器的内存随上下文长度</h3>
   <div class="fig">
     <svg viewBox="0 0 760 300" role="img" aria-label="规划器与执行器的内存占用随上下文长度变化">
@@ -333,14 +351,14 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
       <g id="timechart"></g>
     </svg>
   </div>
-  <p class="cap">2026-11-18 在 Thor 上实测，HF 官方 Qwen3.8-27B，纯文本提示词（合成的机器人日志 + 一个规划器式问题）。蓝线：整段 prefill。点：整次调用（prefill + 贪心解码到 EOS），每个上下文长度 3 个问题（下一步做哪个子任务、某子任务出现几次、最近哪些被重规划），思考关或开。开思考的上限 4 096 token，空心点表示到上限仍未想完，实际更长。CUDA graph 缓存上限设为 8 192（见下）。双对数坐标，悬停看数值。</p>
+  <p class="cap">2026-11-18 Thor 实测，HF 官方 Qwen3.8-27B，合成的机器人日志 + 一个规划器式问题。蓝线：整段 prefill；点：整次调用（prefill + 解码到 EOS），每个长度 3 个问题；开思考上限 4 096 token，空心点为到上限仍未想完。graph 缓存上限 8 192。悬停看数值。</p>
   <div class="grid" style="margin-top:12px">
     <div class="card"><h4>关思考：瓶颈是 prefill</h4><p>回复 15–650 token，1k 上下文时整次调用 1–5 s；4k 以上主要是 prefill，16k 约 11–28 s，32k 约 27–30 s。约 9k token 时单是 prefill 就超过 Δ。</p></div>
     <div class="card"><h4>开思考：一次调用要 1–3 分钟</h4><p>思考长度 1 100–3 300 token，12 次里有 5 次到 4 096 上限仍未想完。即使 1k 上下文，整次调用也要 61–101 s，是 Δ 的 11–19 倍。解码 25–44 ms/token，随上下文变长。</p></div>
     <div class="card"><h4>Thor 上长解码的一个坑：graph 缓存上限</h4><p>FlashRT 按解码位置录制 CUDA graph，默认最多缓存 256 张。解码超过约 750 token 后旧 graph 被挤掉、反复重录，每 token 从约 30 ms 变成约 100 ms。把上限调到 8 192 后恢复。64k 以上 decode 约 100 ms/token 是另一个问题（ISSUE-117），调大缓存无效。</p></div>
 
   </div>
-  <h3>同类统一内存 SoC 的带宽</h3>
+  <h3>同类统一内存 SoC 的带宽对比</h3>
   <div class="fig">
     <svg viewBox="0 0 760 372" role="img" aria-label="统一内存 SoC 的内存带宽对比，按厂商分色">
       <!-- x scale: 0..1200 GB/s -> 190..720 -->
@@ -354,22 +372,6 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     </svg>
   </div>
   <p class="cap"><span class="sw sw1"></span>NVIDIA　<span class="sw sw2"></span>Apple　<span class="sw sw3"></span>AMD / Qualcomm。Thor（基线）、T4000、DGX Spark、M4 Pro 同为 273 GB/s。AMD MI300A（5 300 GB/s，HBM3）不在图中。悬停可看容量与分区机制。</p>
-  <div class="tablebox" style="margin-top:12px">
-  <table>
-    <thead><tr><th>设备</th><th>GPU</th><th>内存</th><th class="num">带宽 GB/s</th><th>功耗</th><th>GPU 分区</th></tr></thead>
-    <tbody>
-      <tr class="hl"><td><b>Jetson AGX Thor T5000</b>（基线）</td><td>Blackwell，20 SM †</td><td>128 GB LPDDR5X</td><td class="num">273</td><td>40–130 W</td><td>MIG，只切 SM、不切内存 †</td></tr>
-      <tr><td>Jetson T4000</td><td>Blackwell，6 TPC</td><td>64 GB LPDDR5X</td><td class="num">273</td><td>40–70 W</td><td>MIG</td></tr>
-      <tr><td>DGX Spark（GB10）</td><td>Blackwell，约 48 SM（推算）</td><td>128 GB LPDDR5X</td><td class="num">273</td><td>140 W</td><td>官方未提</td></tr>
-      <tr><td>Jetson AGX Orin 64GB</td><td>Ampere，16 SM（推算）</td><td>64 GB LPDDR5</td><td class="num">204.8</td><td>15–60 W</td><td>无；另有 2 个 DLA</td></tr>
-      <tr><td>AMD Ryzen AI Max+ 395</td><td>RDNA 3.5，40 CU</td><td>128 GB LPDDR5x</td><td class="num">256</td><td>45–120 W</td><td>未公开</td></tr>
-      <tr><td>Apple M4 Max / M5 Max</td><td>40 GPU 核</td><td>128 GB</td><td class="num">546 / 614</td><td>未公开</td><td>未公开</td></tr>
-      <tr><td>Apple M5 Ultra</td><td>80 GPU 核</td><td>512 GB</td><td class="num">1 200</td><td>未公开</td><td>未公开</td></tr>
-      <tr><td>AMD Instinct MI300A</td><td>CDNA 3，228 CU</td><td>128 GB HBM3</td><td class="num">5 300</td><td>550 W</td><td>按 XCD 切，不隔离内存</td></tr>
-    </tbody>
-  </table>
-  </div>
-  <p class="note">完整表（含 Orin NX、Snapdragon、Lunar Lake 与来源）：<code>unified_memory_socs.md</code>。GH200 是两块物理内存，不算统一内存。</p>
 </section>
 
 <!-- 4 -->
@@ -407,6 +409,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   </div>
   <p class="cap">5090 显存带宽与 PCIe 5.0 为官方规格；Thor 从 CPU 到 iGPU 支持硬件全一致（CUDA for Tegra 应用说明 §3.2），这是零拷贝高效的前提。</p>
 
+  <h3>四类优化选项</h3>
   <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); margin-top:14px">
     <div class="card"><h4>① 数据进出：省掉拷贝</h4>
       <ul class="pts">
@@ -452,7 +455,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   </table>
   </div>
   <p class="note">与本场景的不同：被保护的一方和让步的一方都在同一块 iGPU 上，CPU 也在抢同一条带宽；让步只能落在不改输出的分块边界上。</p>
-  <h3>推理过程中动态调整 SM</h3>
+  <h3 class="join">推理过程中动态调整 SM</h3>
   <div class="tablebox">
   <table class="t-ref">
     <thead><tr><th>机制</th><th>怎么切换</th><th>能多快切</th><th>在 Thor 上</th></tr></thead>
@@ -485,9 +488,9 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     </tbody>
   </table>
   </div>
-  <h3>扩展工作的代码量</h3>
+  <h3 class="join">扩展工作的代码量</h3>
   <div class="fig">
-    <svg viewBox="0 0 760 190" role="img" aria-label="基于 FlashRT 扩展的代码量">
+    <svg viewBox="0 0 760 190" role="img" aria-label="基于 FlashRT 扩展的代码量" style="max-width:700px;margin:0 auto">
       <!-- x: 0..3000 lines -> 230..720 -->
       <line class="grid" x1="230" y1="10" x2="230" y2="160"/><line class="grid" x1="393.3" y1="10" x2="393.3" y2="160"/>
       <line class="grid" x1="556.7" y1="10" x2="556.7" y2="160"/><line class="grid" x1="720" y1="10" x2="720" y2="160"/>
@@ -496,7 +499,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
       <g id="locbars"></g>
     </svg>
   </div>
-  <p class="cap">条的浅色段是区间，深色段到下界。颜色表示语言：蓝 = Python，橙 = CUDA/C++。代码量为估算。</p>
+  <p class="cap">深色到下界、浅色为区间；蓝 = Python，橙 = CUDA/C++。估算。</p>
 </section>
 
 <!-- 6 -->
@@ -504,7 +507,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   <h2><span class="no">6</span>两个时限都满足后，怎样给系统排序</h2>
   <p class="lead">余量只是门槛，不是目标。门槛之上用什么排序，取决于 L 对质量的影响是哪种形状。</p>
   <div class="fig">
-    <svg viewBox="0 0 760 262" role="img" aria-label="同步与异步协议的时间线">
+    <svg viewBox="0 0 760 262" role="img" aria-label="同步与异步协议的时间线" style="max-width:680px;margin:0 auto">
       <text class="t1" x="10" y="34">同步</text>
       <text class="t1" x="10" y="140">异步</text>
       <text class="t3" x="10" y="52">执行器</text><text class="t3" x="10" y="82">规划器</text>
@@ -516,14 +519,14 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     </svg>
   </div>
   <p class="cap">示意，比例不准。同步时执行器在 L 期间停下；异步时执行器继续按旧子任务走。门槛一：执行器每次推理 &lt; 200 ms；门槛二：L &lt; Δ。</p>
-  <h3>两个余量现在有多大</h3>
+  <h3 class="join">两个余量现在有多大</h3>
   <div class="tablebox">
   <table class="t-margin">
     <thead><tr><th>余量</th><th>单独运行</th><th>共置（MPS 客户端优先级）</th><th>再加 CPU 内存负载</th><th>来源</th></tr></thead>
     <tbody>
       <tr><td>执行器：200 ms − p99</td><td class="num">162 ms（37.5 ms）</td><td class="num">130 ms（p99 70 ms）</td><td class="num">约 60 ms（p99 约翻倍）</td><td>ImageWAM 动作模型，Chenwei B27 / B28</td></tr>
       <tr><td>规划器：Δ − L，VoLo 节奏（Δ = 5.33 s）</td><td class="num">3.56 s（L = 1.77 s）</td><td class="num">2.8 / 0.3 s（p95 2.5 / 5.0 s，腕部 224 / 720）</td><td>decode 慢约 2.2 倍</td><td>本组 Thor 实测；B27 / B28</td></tr>
-      <tr><td>规划器：Δ − L，MemER 节奏（Δ ≈ 1 s）</td><td class="num">约 −1 s（L ≈ 2 s）</td><td>&lt; 0</td><td>&lt; 0</td><td>推算：MemER 约 1 Hz 调用；2k token 的 prefill 约 1.1 s，加约 30 token 的解码约 0.9 s（均为 Thor 实测）</td></tr>
+      <tr><td>规划器：Δ − L，MemER 节奏（Δ ≈ 1 s）</td><td class="num">约 −1 s（L ≈ 2 s）</td><td>&lt; 0</td><td>&lt; 0</td><td>推算：MemER 约 1 Hz；2k token prefill 1.1 s + 30 token 解码 0.9 s</td></tr>
     </tbody>
   </table>
   </div>
@@ -536,7 +539,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   <h3>时延怎样影响质量：文献里实测到的三种形状</h3>
   <p class="lead">下面三组都是原文数据。只有 Fast Plans 改的是规划器时延，但它是同步阻塞协议，时延靠换解码方式改变，和方法本身混在一起；其余改的是执行器或单一策略的推理时延。没有一篇在固定调用周期下单独改变规划器的 L 并测 SR。</p>
   <div class="fig">
-    <svg viewBox="0 0 780 250" role="img" aria-label="三篇论文中时延对质量的实测曲线">
+    <svg viewBox="0 0 780 250" role="img" aria-label="三篇论文中时延对质量的实测曲线" style="max-width:820px;margin:0 auto">
       <g id="shapes"></g>
     </svg>
   </div>
@@ -552,10 +555,6 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
       <tr><td>只影响用时</td><td><a href="https://arxiv.org/abs/2506.01844">SmolVLA</a>，图 5</td><td>同步 vs 异步推理（真机三任务）</td><td>成功率 78.3 % vs 73.3 %；平均用时 13.75 → 9.70 s；固定时间内完成 9 → 19 次</td></tr>
     </tbody>
   </table>
-  </div>
-  <div class="grid" style="margin-top:12px">
-    <div class="card"><h4>形状取决于协议，不只取决于时延</h4><p>同样的时延，RTC 不受影响、同步线性下降、朴素异步出现门槛。所以"异步 vs 同步"本身就是要比的变量。</p></div>
-    <div class="card"><h4>时延常常先体现在用时上</h4><p>Fast Plans 和 SmolVLA 的成功率基本不变，用时和动作时间占比变化很大。只看 SR 会漏掉时延的代价。</p></div>
   </div>
 
   <h3>异步协议下延迟与成功率：已发表的数据点</h3>
@@ -585,6 +584,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     <div class="card"><h4>决定曲线形状的是第 ③ 维</h4><p>不补偿的朴素异步在 Kinetix 上从 88.9 % 掉到 51.2 %；RTC、A2C2、VLASH 做了补偿，曲线平得多。</p></div>
     <div class="card"><h4>规划器层几乎没有补偿</h4><p>执行器层的补偿已经很成熟，规划器层只有 MemER 的标签平移。让规划器知道自己的 L、或用最新观测修正旧决策，是一个空白。</p></div>
     <div class="card"><h4>实验里这几个维度都是变量</h4><p>至少比较同步、朴素异步、带补偿的异步三种，在不同的 L 下看 SR 曲线的形状。</p></div>
+    <div class="card"><h4>时延常常先体现在用时上</h4><p>Fast Plans 和 SmolVLA 的成功率基本不变，用时和动作时间占比变化很大。只看 SR 会漏掉时延的代价。</p></div>
   </div>
   <h3>相关论文用的指标</h3>
   <div class="tablebox">
@@ -602,7 +602,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     </tbody>
   </table>
   </div>
-  <h3>我们的排序思路（判断）</h3>
+  <h3 class="join">我们的排序思路（判断）</h3>
   <div class="grid">
     <div class="card"><h4>第一步：画出 SR 与完成时间随 L 的曲线</h4><p>在 RoboCerebra 上按仿真时间，固定调用周期，注入不同的 L，异步与同步各一条。曲线的形状决定用哪种指标。</p></div>
     <div class="card"><h4>门槛型 → 比能力</h4><p>比在两个余量都 &gt; 0、且 SR 不低于目标时，能支持的最小 Δ、最长上下文或最大 CPU 负载。这是 goodput 的直接翻译。</p></div>
@@ -897,7 +897,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     slides[slides.length - 1].label = no;
     var sub = 0;
     nodes.forEach(function (n) {
-      if (n.nodeType === 1 && n.tagName === 'H3') {
+      if (n.nodeType === 1 && n.tagName === 'H3' && !n.classList.contains('join')) {
         inner = newSlide(n.textContent, sec.id);
         sub += 1;
         slides[slides.length - 1].label = no + '.' + sub;
