@@ -1,0 +1,1152 @@
+<title>Thor 共置研究文档</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="layout" content="page">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #fbfaf7; --surface: #ffffff; --surface-2: #f3f1ec; --line: #e2dfd7;
+  --fg: #1b1a17; --fg-2: #55524b; --fg-3: #858177;
+  --accent: #2a78d6; --accent-soft: #e4eefb;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+  --ok: #1a7f37; --warn: #a15c00; --bad: #c0362c;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161614; --surface: #1d1d1b; --surface-2: #262623; --line: #36352f;
+    --fg: #f0efec; --fg-2: #c3c2b7; --fg-3: #8f8d84;
+    --accent: #3987e5; --accent-soft: #1e2a3a;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+    --ok: #4cc06a; --warn: #e0a040; --bad: #ef6b60;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161614; --surface: #1d1d1b; --surface-2: #262623; --line: #36352f;
+  --fg: #f0efec; --fg-2: #c3c2b7; --fg-3: #8f8d84;
+  --accent: #3987e5; --accent-soft: #1e2a3a;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+  --ok: #4cc06a; --warn: #e0a040; --bad: #ef6b60;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.65 -apple-system, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+.wrap {
+  max-width: 1080px; margin: 0 auto;
+  padding-block: 32px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+header h1 { font-size: 28px; line-height: 1.3; margin: 0 0 6px; text-wrap: balance; }
+header .sub { color: var(--fg-2); margin: 0; }
+.mainline {
+  margin-top: 18px; padding: 14px 18px; border-left: 4px solid var(--accent);
+  background: var(--accent-soft); border-radius: 0 8px 8px 0;
+}
+.mainline b { color: var(--fg); }
+section { margin-top: 48px; }
+h2 { font-size: 21px; margin: 0 0 4px; text-wrap: balance; }
+h2 .no { color: var(--accent); margin-right: 8px; font-variant-numeric: tabular-nums; }
+.lead { color: var(--fg-2); margin: 0 0 16px; max-width: 70ch; }
+h3 { font-size: 16px; margin: 24px 0 8px; }
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; min-width: 0;
+}
+.card h4 { margin: 0 0 4px; font-size: 14.5px; }
+.card p { margin: 0; color: var(--fg-2); font-size: 14px; }
+.tag {
+  display: inline-block; font-size: 11.5px; letter-spacing: .04em; padding: 1px 7px; border-radius: 4px;
+  background: var(--surface-2); color: var(--fg-2); margin-left: 6px; vertical-align: 1px; white-space: nowrap;
+}
+.tag.ok { color: var(--ok); } .tag.warn { color: var(--warn); } .tag.bad { color: var(--bad); }
+.tablebox { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { padding: 8px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+th { background: var(--surface-2); color: var(--fg-2); font-weight: 600; font-size: 12.5px; letter-spacing: .02em; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.t-req td.y { color: var(--ok); white-space: nowrap; }
+.t-req td.n { color: var(--bad); white-space: nowrap; }
+.t-req td:first-child { white-space: nowrap; }
+.t-ref td:first-child { white-space: nowrap; }
+.t-margin td:first-child { white-space: nowrap; }
+.t-shape td:nth-child(1), .t-shape td:nth-child(2) { white-space: nowrap; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.hl td { background: var(--accent-soft); }
+a { color: var(--accent); }
+.fig { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 560px; }
+.cap { color: var(--fg-3); font-size: 12.5px; margin: 6px 2px 0; }
+.note { color: var(--fg-3); font-size: 12.5px; margin-top: 8px; }
+ul.pts { margin: 0; padding-left: 20px; }
+ul.pts li { margin: 4px 0; }
+.card ul.pts { color: var(--fg-2); font-size: 14px; margin-top: 4px; }
+.card .note { margin-top: 6px; }
+.chain { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; margin-bottom: 14px; }
+.chain .step {
+  flex: 1 1 150px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0;
+}
+.chain .step b { display: block; font-size: 13.5px; }
+.chain .step span { color: var(--fg-2); font-size: 12.5px; }
+.chain .step.key { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+svg text { fill: var(--fg-2); font-size: 12px; font-family: inherit; }
+svg .t1 { fill: var(--fg); }
+svg .t3 { fill: var(--fg-3); font-size: 11px; }
+svg .ax { stroke: var(--line); stroke-width: 1; }
+svg .grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 3; }
+svg .bar { fill: var(--s1); }
+svg .bar2 { fill: var(--s2); }
+svg .bar3 { fill: var(--s3); }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: 0; }
+.sw1 { background: var(--s1); } .sw2 { background: var(--s2); } .sw3 { background: var(--s3); }
+svg .muted { fill: var(--surface-2); stroke: var(--line); }
+svg .hit:hover + .bar, svg .bar:hover, svg .bar2:hover, svg .bar3:hover { opacity: .8; }
+svg .ln1 { stroke: var(--s1); stroke-width: 2; fill: none; }
+svg .ln2 { stroke: var(--s2); stroke-width: 2; fill: none; }
+svg .ln3 { stroke: var(--s3); stroke-width: 2; fill: none; }
+svg .dash { stroke: var(--fg-3); stroke-width: 1; stroke-dasharray: 4 3; }
+svg .brace { stroke: var(--fg-2); stroke-width: 1; fill: none; }
+footer { margin-top: 56px; color: var(--fg-3); font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 14px; }
+@media (max-width: 560px) { header h1 { font-size: 23px; } }
+.lead { max-width: none; }
+.t-classics td:nth-child(1), .t-classics td:nth-child(2), .t-classics td:nth-child(4) { white-space: nowrap; }
+.t-harness td:nth-child(1), .t-harness td:nth-child(2) { white-space: nowrap; }
+.t-metric td:nth-child(1), .t-metric td:nth-child(3) { white-space: nowrap; }
+.t-flash td { padding-top: 6px; padding-bottom: 6px; }
+.t-flash td:nth-child(1) { min-width: 11em; }
+.t-flash td:nth-child(2), .t-flash td:nth-child(3) { min-width: 12em; }
+.t-flash td:nth-child(4) { min-width: 14em; }
+.tag { white-space: nowrap; }
+td, .card p, .lead, .cap, .note, .mainline { text-wrap: pretty; }
+
+/* ---- slide deck ---- */
+html, body { height: 100%; }
+body.deck-on { overflow: hidden; }
+.deck { position: fixed; inset: 0; }
+.slide { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; display: none;
+  padding-top: calc(20px + env(safe-area-inset-top, 0px)); padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.slide.active { display: block; }
+.slide-inner { max-width: 1080px; margin: 0 auto; }
+.slide-inner > section, .slide-inner > header { margin-top: 0; }
+.kicker { font-size: 12.5px; letter-spacing: .06em; color: var(--fg-3); margin: 0 0 6px; }
+.kicker b { color: var(--accent); margin-right: 6px; }
+.slide h3 { font-size: 19px; margin: 0 0 12px; }
+.slide h3.join { font-size: 17px; margin-top: 26px; }
+.slide h2 + .lead { margin-top: 6px; }
+.deck-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; align-items: center; gap: 10px;
+  justify-content: center; background: var(--bg); border-top: 1px solid var(--line);
+  padding: 8px max(16px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+.deck-bar button { font: inherit; font-size: 14px; color: var(--fg); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 14px; cursor: pointer; }
+.deck-bar button:hover { border-color: var(--accent); color: var(--accent); }
+.deck-bar button:disabled { opacity: .35; cursor: default; }
+.deck-count { font-variant-numeric: tabular-nums; color: var(--fg-2); font-size: 13.5px; min-width: 64px; text-align: center; }
+.deck-title { color: var(--fg-3); font-size: 12.5px; max-width: 40vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deck-progress { position: fixed; top: env(safe-area-inset-top, 0px); left: 0; height: 3px; background: var(--accent); z-index: 31; transition: width .2s; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bg); }
+.title-slide .slide-inner { min-height: 100%; display: flex; flex-direction: column; justify-content: center; }
+.title-slide h1 { font-size: 38px; margin-bottom: 12px; }
+.title-slide .sub { font-size: 16px; }
+.title-slide .mainline { font-size: 16.5px; margin-top: 20px; padding: 18px 22px; }
+.toc { display: grid; gap: 10px 14px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); align-items: start; margin-top: 22px; }
+.toc-sec { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 10px 14px; min-width: 0; }
+.toc-sec > a { color: var(--fg); font-weight: 600; text-decoration: none; font-size: 14.5px; }
+.toc-sec > a span { color: var(--accent); margin-right: 8px; font-variant-numeric: tabular-nums; }
+.toc-sec ul { margin: 4px 0 0; padding-left: 18px; }
+.toc-sec li { font-size: 13px; line-height: 1.6; color: var(--fg-3); }
+.toc-sec li a { color: var(--fg-2); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+.page .pg.sec-start { margin-top: 56px; padding-top: 8px; border-top: 1px solid var(--line); }
+.page .pg { scroll-margin-top: 16px; }
+.page .pg-inner > h3:first-child { margin-top: 32px; }
+.toc-lead { margin: 6px 0 0; font-size: 13px; line-height: 1.6; color: var(--fg-3); }
+@media (max-width: 560px) { .deck-title { display: none; } }
+/* ---- term notes ---- */
+.term { text-decoration: underline dotted var(--accent); text-decoration-thickness: 1.5px; text-underline-offset: 3px;
+  cursor: help; border-radius: 2px; }
+.term:focus { outline: 2px solid var(--accent-soft); }
+.tip { position: fixed; z-index: 40; max-width: min(320px, calc(100vw - 32px)); background: var(--fg); color: var(--bg);
+  font-size: 12.5px; line-height: 1.55; padding: 8px 10px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.18); }
+.tip b { display: block; margin-bottom: 2px; }
+</style>
+<div class="wrap" lang="zh-CN">
+
+<header>
+  <h1>Thor 上的规划器–执行器共置：导览</h1>
+  <p class="sub">长时程任务、harness、统一内存硬件、推理优化与评估指标。快照 2026-11-18；† 表示未核实，「判断」表示推断。</p>
+  <div class="mainline">
+    <b>主线：</b>一块统一内存 SoC（Jetson AGX Thor）上，长时程规划器（HF 原版 Qwen3.8-27B）与周期执行器（约 4B 的 VLA/WAM）异步共置，同步协议作基线。
+    <b>核心问题：</b>两个时限都满足之后，规划器的决策延迟 L 怎样影响任务质量（SR、完成时间）？
+  </div>
+</header>
+
+<!-- 0 -->
+<section id="classics">
+  <h2><span class="no">0</span>经典系统论文的核心贡献</h2>
+  <p class="lead">几乎每篇都走同一条链；novelty 在第 3 步：发现一个现有系统没有利用、且能单独测出来的性质。</p>
+  <div class="chain">
+    <div class="step"><b>1 隐含假设</b><span>现有系统默认了什么</span></div>
+    <div class="step"><b>2 量化损失</b><span>一张"实际 vs 理想上界"的图</span></div>
+    <div class="step key"><b>3 洞察</b><span>"X 成立，所以可以 Y"</span></div>
+    <div class="step"><b>4 机制</b><span>按洞察命名，是它的直接推论</span></div>
+    <div class="step"><b>5 对齐的评估</b><span>主指标就是第 2 步那个量</span></div>
+  </div>
+  <div class="tablebox">
+  <table class="t-classics">
+    <thead><tr><th>论文</th><th>发表</th><th>核心贡献</th><th>模式</th></tr></thead>
+    <tbody>
+    <tr><td><a href="https://www.usenix.org/legacy/events/osdi04/tech/dean.html">MapReduce</a></td><td>OSDI'04</td><td>用户函数是确定的、无副作用的，所以失败的任务重跑即可容错。框架因此能把分布、调度、容错全部藏在两个函数后面。</td><td>可利用的性质</td></tr>
+    <tr><td><a href="https://research.google/pubs/the-google-file-system/">GFS</a></td><td>SOSP'03</td><td>前提变了：机器故障是常态，文件大且以追加为主。于是放宽一致性、用单一元数据节点加大块，换来简单和吞吐。</td><td>前提变了</td></tr>
+    <tr><td><a href="https://www.usenix.org/conference/osdi14/technical-sessions/presentation/belay">IX</a></td><td>OSDI'14</td><td>公认吞吐、时延、保护不可兼得。IX 用数据面与控制面分离、批处理到完成，同时拿到三者。</td><td>打破权衡</td></tr>
+    <tr><td><a href="https://www.usenix.org/conference/nsdi19/presentation/ousterhout">Shenango</a></td><td>NSDI'19</td><td>µs 级突发负载下，按 ms 级重分配 CPU 核会同时浪费核又拖慢尾时延。它用专用核每 5 µs 重新分配一次核。</td><td>前提变了 / 改粒度</td></tr>
+    <tr><td><a href="https://people.ece.ubc.ca/sasha/papers/eurosys16-final29.pdf">Wasted Cores</a></td><td>EuroSys'16</td><td>先写下一个不变量："有空闲核时，就绪线程不应等待"。再测出 Linux 调度器违反它的 4 个 bug，刻画本身就是贡献。</td><td>刻画</td></tr>
+    <tr><td><a href="https://www.usenix.org/conference/atc14/technical-sessions/presentation/ongaro">Raft</a></td><td>ATC'14</td><td>把目标从"性能"换成"可理解性"。为这个新目标设计了用户研究作评估。</td><td>重定义指标</td></tr>
+    <tr><td><a href="https://www.usenix.org/conference/osdi20/presentation/gujarati">Clockwork</a></td><td>OSDI'20</td><td>现有服务假设推理时延不可预测，只能并发、事后补救；并发吞吐最多 +25 %，尾时延却升约 100 倍。关键在于 DNN 推理时延几乎确定（p99.99 与中位只差 0.03 %），所以可以集中调度、提前拒绝赶不上的请求。</td><td>可利用的性质</td></tr>
+    <tr><td><a href="https://www.usenix.org/conference/osdi22/presentation/yu">Orca</a></td><td>OSDI'22</td><td>按请求调度与"逐 token 生成"的天然边界不匹配。把调度单元改成一次迭代（continuous batching），新请求随时加入、完成的随时退出。</td><td>改粒度</td></tr>
+    <tr><td><a href="https://doi.org/10.1145/3600006.3613165">vLLM</a></td><td>SOSP'23</td><td>KV cache 按最大长度连续预留，只有 20.4–38.2 % 的内存真正存了 token。KV 的困境与进程内存同构，于是借用分页（PagedAttention），吞吐 2–4 倍。</td><td>借经典抽象</td></tr>
+    <tr><td><a href="https://proceedings.neurips.cc/paper_files/paper/2022/hash/67d57c32e20fd0a7a302cb81d36e40d5-Abstract-Conference.html">FlashAttention</a></td><td>NeurIPS'22</td><td>默认代价是 FLOPs，但 attention 的瓶颈是 HBM 读写。用分块与重算多算一点、少读写约 9 倍。</td><td>重定义代价 / 付代价</td></tr>
+    <tr><td><a href="https://www.usenix.org/conference/osdi22/presentation/han">REEF</a></td><td>OSDI'22</td><td>GPU 不能打断正在跑的 kernel，被认为无法 µs 级抢占。发现 DNN kernel 大多幂等，所以直接杀掉、之后重跑即可。</td><td>可利用的性质</td></tr>
+    <tr><td><a href="https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin">DistServe</a></td><td>OSDI'24</td><td>prefill 与 decode 同卡互相干扰、并行配置被绑死。拆到不同 GPU 各自优化，并定义 goodput（满足 SLO 的最大请求率）作主指标。</td><td>拆耦合 / 重定义指标</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">8 种模式与 30 篇相关论文的总结：<code>survey.md</code> §1–2；完整拆解：<code>classics_general.md</code>、<code>classics_mlsys.md</code>。</p>
+</section>
+
+<!-- 1 -->
+<section id="scenes">
+  <h2><span class="no">1</span>long horizon 在什么情况下出现</h2>
+  <p class="lead">"子任务多"本身不够：CALVIN、LIBERO-Long 单段 ≤ 1 分钟且不需要记忆。需要规划器长上下文的，是下面几条叠加分钟级时长。</p>
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">
+    <div class="card"><h4>① 要回忆看不到的状态</h4><p>遮挡物位置、计数、恢复原位，跨度到分钟级。代表：MemER 三任务（&gt; 1000 帧）、MemoryBench、BEHAVIOR（平均 6.6 min）。</p></div>
+    <div class="card"><h4>② 子任务多、episode 长</h4><p>RoboCerebra 平均 9.1 个子任务、约 2 972 仿真步，约为已有数据集的 6 倍。CALVIN 每链 5 个，≤ 60 s。</p></div>
+    <div class="card"><h4>③ 出错后重规划</h4><p>重规划次数决定调用次数和 episode 长度，长度分布是长尾（判断）。代表：RoboCerebra 的随机扰动、VoLo 的 recovery。</p></div>
+    <div class="card"><h4>④ 部分可观测的导航</h4><p>路径长且方差大：VLN-CE 平均 55.9 个低层动作，RxR 上限 40 m。不压缩的视频历史随步数线性增长。</p></div>
+    <div class="card"><h4>⑤ 多轮 agent 对话累积</h4><p>工具返回留在对话里，每次检查重读全部历史。NavGPT-3 每 episode 155k–721k token。</p></div>
+  </div>
+  <h3 class="join">规划器每次调用的上下文有三种形态</h3>
+  <div class="fig">
+    <svg viewBox="0 0 820 200" role="img" aria-label="三种上下文形态随 episode 进度的 token 增长">
+      <line class="ax" x1="50" y1="170" x2="540" y2="170"/>
+      <line class="ax" x1="50" y1="20" x2="50" y2="170"/>
+      <text x="295" y="192" text-anchor="middle">episode 进度 →</text>
+      <text x="20" y="96" transform="rotate(-90 20 96)" text-anchor="middle">每次调用的 token</text>
+      <path class="ln1" d="M50 140 L540 140"><title>A 定长：约 1–2k token（Hi Robot、VoLo、LoHo-Manip）</title></path>
+      <path class="ln2" d="M50 152 Q160 92 250 88 L540 88"><title>B 有上界的压缩记忆：约 1.6k–12.5k（MemER、StreamVLN、NaVILA）</title></path>
+      <path class="ln3" d="M50 162 L540 26"><title>C 对话累积：线性增长，单次 8k→30k（NavGPT-3）</title></path>
+      <text class="t1" x="556" y="30">C 对话累积，线性增长</text>
+      <text class="t3" x="556" y="46">每次重读全部历史：NavGPT-3</text>
+      <text class="t1" x="556" y="92">B 有上界的压缩记忆</text>
+      <text class="t3" x="556" y="108">近期帧 + ≤ 8 关键帧：MemER、StreamVLN</text>
+      <text class="t1" x="556" y="144">A 定长</text>
+      <text class="t3" x="556" y="160">当前帧 + 文本：Hi Robot、VoLo</text>
+    </svg>
+  </div>
+  <p class="cap">示意图，形状按论文归纳，纵轴不按比例。机械臂规划器大多主动把上下文压到 A 或 B；开思考模式时，思考 token 是另一个不定长的量。</p>
+</section>
+
+<!-- 2 -->
+<section id="harness">
+  <h2><span class="no">2</span>long horizon 的 harness 与 agent</h2>
+  <p class="lead">引用数取自 Semantic Scholar（2026-11-18）。我们的方案：在同一套 RoboCerebra 任务上，比较 <b>MemER</b> 与 RoboCerebra 自带的 HPE 基线。</p>
+  <div class="tablebox">
+  <table class="t-harness">
+    <thead><tr><th>系统</th><th>发表</th><th class="num">引用</th><th>规划器与执行器怎么配合</th><th>上下文</th></tr></thead>
+    <tbody>
+    <tr><td><a href="https://arxiv.org/abs/2204.01691">SayCan</a> / <a href="https://arxiv.org/abs/2207.05608">Inner Monologue</a></td><td>CoRL 2022</td><td class="num">4209 / 1848</td><td>技能结束时触发；把成功检测、场景描述作为文本追加进 prompt。</td><td>对话累积</td></tr>
+    <tr><td><a href="https://arxiv.org/abs/2502.19417">Hi Robot</a></td><td>ICML 2025</td><td class="num">344</td><td>每 1 s 重算子任务，用户插话时立即重算。</td><td>只看当前帧</td></tr>
+    <tr><td><a href="https://arxiv.org/abs/2505.11917">OneTwoVLA</a></td><td>ICLR 2026</td><td class="num">139</td><td>单模型，只在关键时刻推理；推理 200 token 要 4.4 s，机器人需暂停。</td><td>两张图 + 最近推理</td></tr>
+    <tr><td><a href="https://arxiv.org/abs/2510.03342">Gemini Robotics 1.5</a></td><td>技术报告 2025</td><td class="num">114</td><td>编排器分解任务、做成功检测决定何时切换；周期未公开。</td><td>未公开 †</td></tr>
+    <tr><td><a href="https://arxiv.org/abs/2512.08186">DualVLN</a>（导航）</td><td>ICLR 2026 †</td><td class="num">110</td><td>异步：System 2 约 2 Hz，System 1 约 30 Hz，执行端总有最新轨迹。</td><td>当前 + 历史帧</td></tr>
+    <tr class="hl"><td><a href="https://arxiv.org/abs/2510.20328">MemER</a></td><td>ICLR 2026</td><td class="num">100</td><td>论文中异步：高层约 1 Hz，低层用最新子任务；开源代码是同步循环。</td><td>近期 8 帧 + ≤ 8 关键帧</td></tr>
+    <tr class="hl"><td><a href="https://arxiv.org/abs/2506.06677">RoboCerebra</a></td><td>NeurIPS 2025 †</td><td class="num">53</td><td>先生成子目标存入记忆，再周期性监控进度、偏离时更新。</td><td>近期观测 + 记忆库</td></tr>
+    <tr><td><a href="https://arxiv.org/abs/2505.23450">Agentic Robot</a></td><td>arXiv 2025</td><td class="num">46</td><td>规划一次；3B 验证器每 20 帧检查，失败时恢复。</td><td>当前帧</td></tr>
+    <tr><td><a href="https://arxiv.org/abs/2606.07723">VoLo</a></td><td>arXiv 2026</td><td class="num">27</td><td>异步，0.2 Hz 监控 + 事件触发重规划；执行器是可中断的工具。</td><td>BEFORE + NOW 图 + 文本</td></tr>
+    <tr><td><a href="https://arxiv.org/abs/2606.10267">Hi-VLA 编排研究</a></td><td>arXiv 2026</td><td class="num">18</td><td>VLM 出命令，VLA 运行固定 4–8 s 后再调用。</td><td>历史长短影响不大</td></tr>
+    <tr><td><a href="https://arxiv.org/abs/2604.21924">LoHo-Manip</a></td><td>arXiv 2026</td><td class="num">16</td><td>receding horizon：规划器约 2 Hz、执行器约 10 Hz。</td><td>当前帧 + 进度文本</td></tr>
+    <tr><td><a href="https://arxiv.org/abs/2603.05185">Tri-System</a></td><td>arXiv 2026</td><td class="num">7</td><td>规划器休眠；20 Hz 的小 Critic 判定完成或失败时才唤醒。</td><td>—</td></tr>
+    <tr><td><a href="https://arxiv.org/abs/2610.10787">NavGPT-3</a>（导航）</td><td>arXiv 2026</td><td class="num">3</td><td>OS 式 runtime，支持重叠执行与优先级中断。</td><td>对话累积，155k–721k</td></tr>
+    <tr><td><a href="https://arxiv.org/abs/2609.30833">Fast Plans</a></td><td>arXiv 2026</td><td class="num">0</td><td>同步阻塞；把规划时延 1094 → 125 ms，成功率基本不变。</td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <h3>选型要求</h3>
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">
+    <div class="card"><h4>① 代码开源</h4><p>能复现，也能接上我们自己的规划器和运行时。</p></div>
+    <div class="card"><h4>② 规划器与执行器分开</h4><p>两个独立的模型，才有共置和调用时序的问题。</p></div>
+    <div class="card"><h4>③ 机械臂操作</h4><p>与执行器（VLA/WAM）和 RoboTwin 一致，不是导航。</p></div>
+    <div class="card"><h4>④ 上下文随任务变化</h4><p>任务需要记忆，规划器的输入会变长或变化。</p></div>
+  </div>
+  <div class="tablebox t-req" style="margin-top:12px">
+  <table>
+    <thead><tr><th>系统</th><th class="num">引用</th><th>① 开源</th><th>② 分开</th><th>③ 操作</th><th>④ 上下文变化</th></tr></thead>
+    <tbody>
+    <tr><td>SayCan / Inner Monologue</td><td class="num">4209 / 1848</td><td>部分</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+    <tr><td>Hi Robot</td><td class="num">344</td><td class="n">✗</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗ 只看当前帧</td></tr>
+    <tr><td>OneTwoVLA</td><td class="num">139</td><td class="y">✓ †</td><td class="n">✗ 单模型</td><td class="y">✓</td><td class="n">✗</td></tr>
+    <tr><td>Gemini Robotics 1.5</td><td class="num">114</td><td class="n">✗</td><td class="y">✓</td><td class="y">✓</td><td>未公开</td></tr>
+    <tr><td>DualVLN</td><td class="num">110</td><td class="y">✓ †</td><td class="y">✓</td><td class="n">✗ 导航</td><td class="y">✓</td></tr>
+    <tr class="hl"><td><b>MemER</b></td><td class="num">100</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓ 近期帧 + 关键帧</td></tr>
+    <tr class="hl"><td><b>RoboCerebra</b></td><td class="num">53</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓ 记忆库</td></tr>
+    <tr><td>VoLo</td><td class="num">27</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗ 固定两张图</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">MemER 和 RoboCerebra 是四条都满足的系统里引用最高的两个。风险：RoboCerebra 搭在 LIBERO 平台上，执行器是否读指令要先测；MemER 仓库没有 LICENSE 文件。</p>
+  <div class="grid" style="margin-top:12px">
+    <div class="card"><h4>共性</h4><p>主流是"周期监控 + 事件重规划"，周期凭经验取 0.2–2 Hz。大模型做低频编排，小模型做高频检测。</p></div>
+    <div class="card"><h4>空白</h4><p>没有人在固定调用周期下单独注入规划器时延 L 并测 SR。只有 NavGPT-3 做过受控的时序对比（SR 73.3 → 83.3）。</p></div>
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="thor">
+  <h2><span class="no">3</span>Thor 的硬件特点：CPU 与 GPU 共用一块内存</h2>
+  <div class="grid">
+    <div class="card"><h4>一块 DRAM，一条带宽</h4><p>128 GB LPDDR5X，273 GB/s，CPU、GPU 与其他引擎共用。容量不再是瓶颈，带宽才是。</p></div>
+    <div class="card"><h4>20 个 SM，粒度很粗</h4><p>可以直接网格搜索 SM 分配。MIG 按 TPC 切（JetPack 7.2 实测 6 / 12 / 20 SM †），但不切内存。</p></div>
+    <div class="card"><h4>SM 隔离不了带宽</h4><p>按 SM 分开后，执行器剩下的干扰来自规划器 decode 的带宽占用。MIG 也只切计算，不切内存。</p></div>
+    <div class="card"><h4>CPU 的内存流量也挤占 GPU</h4><p>CPU 不占 SM，但它每读写一个字节都走同一条带宽。在 CPU 上注入满载的内存负载，规划器 decode 慢约 2.2 倍（B28）。</p></div>
+  </div>
+  <h3 class="join">本组在 Thor 上的实测（2026-11-18，官方 Qwen3.8-27B）</h3>
+  <div class="tablebox">
+  <table>
+    <thead><tr><th>量</th><th class="num">Thor</th><th class="num">RTX 5090</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>规划器 monitor 调用：前缀复用 + 决策闭合即停</td><td class="num">1.77 s</td><td class="num">0.34 s</td><td>VoLo 式 monitor 调用；原始做法 Thor 6.40 s</td></tr>
+      <tr><td>规划器 decode 每 token</td><td class="num">31.5 ms</td><td class="num">—</td><td>线性 MTP，每次验证接受约 1.77 个 token</td></tr>
+      <tr><td>π0.5 单次推理</td><td class="num">41.0 ms</td><td class="num">—</td><td>独占，两路相机；执行器时限 200 ms</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <h3 class="join">同类统一内存 SoC</h3>
+  <div class="tablebox">
+  <table>
+    <thead><tr><th>设备</th><th>GPU</th><th>内存</th><th class="num">带宽 GB/s</th><th>功耗</th><th>GPU 分区</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td><b>Jetson AGX Thor T5000</b>（基线）</td><td>Blackwell，20 SM †</td><td>128 GB LPDDR5X</td><td class="num">273</td><td>40–130 W</td><td>MIG，只切 SM、不切内存 †</td></tr>
+      <tr><td>Jetson T4000</td><td>Blackwell，6 TPC</td><td>64 GB LPDDR5X</td><td class="num">273</td><td>40–70 W</td><td>MIG</td></tr>
+      <tr><td>DGX Spark（GB10）</td><td>Blackwell，约 48 SM（推算）</td><td>128 GB LPDDR5X</td><td class="num">273</td><td>140 W</td><td>官方未提</td></tr>
+      <tr><td>Jetson AGX Orin 64GB</td><td>Ampere，16 SM（推算）</td><td>64 GB LPDDR5</td><td class="num">204.8</td><td>15–60 W</td><td>无；另有 2 个 DLA</td></tr>
+      <tr><td>AMD Ryzen AI Max+ 395</td><td>RDNA 3.5，40 CU</td><td>128 GB LPDDR5x</td><td class="num">256</td><td>45–120 W</td><td>未公开</td></tr>
+      <tr><td>Apple M4 Max / M5 Max</td><td>40 GPU 核</td><td>128 GB</td><td class="num">546 / 614</td><td>未公开</td><td>未公开</td></tr>
+      <tr><td>AMD Instinct MI300A</td><td>CDNA 3，228 CU</td><td>128 GB HBM3</td><td class="num">5 300</td><td>550 W</td><td>按 XCD 切，不隔离内存</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">完整表（含 Orin NX、Snapdragon、Lunar Lake 与来源）：<code>unified_memory_socs.md</code>。GH200 是两块物理内存，不算统一内存。</p>
+  <h3>规划器 + 执行器的内存随上下文长度</h3>
+  <div class="fig">
+    <svg viewBox="0 0 760 300" role="img" aria-label="规划器与执行器的内存占用随上下文长度变化">
+      <g id="memchart"></g>
+    </svg>
+  </div>
+  <p class="cap">规划器：Qwen3.8-27B NVFP4 权重 25.8 GiB + MTP 头 0.45 GiB + 线性注意力状态约 0.1 GiB，FP8 KV 每 token 32 KiB（16 层全注意力 × K/V × 4 头 × 256 维）。执行器：ImageWAM RoboTwin 权重 8.5 GiB。都按文件大小计，不含激活、workspace 与 CUDA graph。横轴为对数。</p>
+  <div class="grid" style="margin-top:12px">
+    <div class="card"><h4>容量不是问题</h4><p>上下文拉到模型上限 262k token，两个模型合计约 43 GiB，Thor 的 122 GiB 还剩一大半。同样的组合放不进 RTX 5090 的 31 GiB。</p></div>
+    <div class="card"><h4>KV 的字节也不大</h4><p>只有 1/4 的层有 KV，64k token 时 decode 每步多读约 2 GiB，比权重的约 15 GB 小得多。瓶颈要看时间，见下图。</p></div>
+  </div>
+  <h3>规划器单次调用的耗时随上下文长度（Thor 实测）</h3>
+  <div class="fig">
+    <svg viewBox="0 0 760 320" role="img" aria-label="规划器 prefill 与 decode 耗时随上下文长度变化">
+      <g id="timechart"></g>
+    </svg>
+  </div>
+  <p class="cap">2026-11-19 Thor 实测，HF 官方 Qwen3.8-27B，合成的机器人日志 + 一个规划器式问题，7 个长度在同一轮里测完。蓝线：整段 prefill；点：整次调用（prefill + 解码到 EOS），每个长度 3 个问题；开思考上限 4 096 token，空心点为到上限仍未想完。graph 缓存上限 8 192。悬停看数值。</p>
+  <div class="grid" style="margin-top:12px">
+    <div class="card"><h4>关思考：能否在 1 s 内看回复长度</h4><p>3k 以内 prefill 只要 0.16–1.67 s，几乎随长度线性增长。回复 10–18 token 的调用 0.4–2.2 s，1k 以内都不到 1 s；回复 89–176 token 的要 2.9–5.7 s，多出的是解码。</p></div>
+    <div class="card"><h4>开思考：一次调用要 8–150 s</h4><p>思考长度 275 到 4 096 以上，随问题变化远大于随上下文变化；21 次里 2 次到上限仍未想完。约是 MemER 1 s 周期的 8–150 倍，瓶颈是解码而不是上下文。</p></div>
+    <div class="card"><h4>解码速度与上下文长度基本无关</h4><p>3k 以内每 token 24–36 ms。FlashRT 按解码位置录制 CUDA graph，默认最多缓存 256 张，解码超过约 750 token 后反复重录、每 token 变成约 100 ms；本图把上限调到 8 192。</p></div>
+
+  </div>
+  <h3>规划器实际需要多长的上下文：输入 token 数与 SR</h3>
+  <div class="fig">
+    <svg viewBox="0 0 860 400" role="img" aria-label="单次调用的视觉 token 数与成功率" style="max-width:860px;margin:0 auto">
+      <g id="ctxsr"></g>
+    </svg>
+  </div>
+  <p class="cap">横轴：单次调用里图像部分的 token 数（对数），刻度下是 Thor 上同长度整段 prefill 的实测时间。StreamVLN 每帧 196 token、Uni-NaVid 当前帧 64 token 加短期记忆每帧 4 token × 64 帧，均为原文所给；MemER 原文未给，按其发布模型 Qwen3-VL 的处理器推算，两路 320×180 拼成一张约 112 token（虚线）。SR 取自 MemER 表 1（擦拭 / 放回 4 任务，各 20 次）、StreamVLN 表 IV（R2R-CE）、Uni-NaVid 表 X（VLN）。悬停看数值。</p>
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-top:12px">
+    <div class="card"><h4>几百到两千 token 就够</h4><p>StreamVLN 在 1 568 token 时最好（45.5 %）；MemER 896 token 的近期画面已到 64 %。</p></div>
+    <div class="card"><h4>挑关键帧比加长更有效</h4><p>MemER 3 584 token 的原始历史不如 896 token（57.5 % 对 63.8 %）；不超过 1 792 token 的关键帧记忆到 96 %。</p></div>
+    <div class="card"><h4>无界增长：代价大、收益小</h4><p>StreamVLN 保留全部记忆降到 40.0 %；NavGPT-3 每回合累计 token 涨 13 倍，SR 只多 6 个点；Hi-VLA 历史从 1 步到整个回合，SR 差不到 2 个点（后两篇给不出单次序列长度，不在图里）。</p></div>
+    <div class="card"><h4>对 Thor 的含义（判断）</h4><p>需要的 1–2k token 在 Thor 上 prefill 0.5–1.1 s（实测）。规划器慢在思考和解码，不在上下文长度。</p></div>
+  </div>
+  <h3>同类统一内存 SoC 的带宽对比</h3>
+  <div class="fig">
+    <svg viewBox="0 0 760 372" role="img" aria-label="统一内存 SoC 的内存带宽对比，按厂商分色">
+      <!-- x scale: 0..1200 GB/s -> 190..720 -->
+      <line class="grid" x1="190" y1="16" x2="190" y2="338"/><line class="grid" x1="322.5" y1="16" x2="322.5" y2="338"/>
+      <line class="grid" x1="455" y1="16" x2="455" y2="338"/><line class="grid" x1="587.5" y1="16" x2="587.5" y2="338"/>
+      <line class="grid" x1="720" y1="16" x2="720" y2="338"/>
+      <text class="t3" x="190" y="356" text-anchor="middle">0</text><text class="t3" x="322.5" y="356" text-anchor="middle">300</text>
+      <text class="t3" x="455" y="356" text-anchor="middle">600</text><text class="t3" x="587.5" y="356" text-anchor="middle">900</text>
+      <text class="t3" x="720" y="356" text-anchor="middle">1200 GB/s</text>
+      <g id="socbars"></g>
+    </svg>
+  </div>
+  <p class="cap"><span class="sw sw1"></span>NVIDIA　<span class="sw sw2"></span>Apple　<span class="sw sw3"></span>AMD / Qualcomm。Thor（基线）、T4000、DGX Spark、M4 Pro 同为 273 GB/s。AMD MI300A（5 300 GB/s，HBM3）不在图中。悬停可看容量与分区机制。</p>
+</section>
+
+<!-- 4 -->
+<section id="opt">
+  <h2><span class="no">4</span>Thor 上特有的推理优化</h2>
+  <p class="lead">先看数据怎么从 CPU 到 GPU：独立显卡要跨一条慢总线，统一内存没有这条总线，但所有流量都挤在同一条 273 GB/s 上。</p>
+  <div class="fig">
+    <svg viewBox="0 0 900 330" role="img" aria-label="独立显卡与统一内存的数据流对比" style="min-width:680px">
+      <text class="t1" x="20" y="24" style="font-weight:600">独立显卡（RTX 5090）</text>
+      <rect x="30" y="50" width="130" height="44" rx="6" class="muted"/><text class="t1" x="95" y="77" text-anchor="middle">CPU</text>
+      <rect x="30" y="170" width="130" height="44" rx="6" class="muted"/><text class="t1" x="95" y="190" text-anchor="middle">主存 DDR5</text><text class="t3" x="95" y="206" text-anchor="middle">CPU 独用的带宽</text>
+      <rect x="290" y="50" width="130" height="44" rx="6" class="muted"/><text class="t1" x="355" y="77" text-anchor="middle">GPU</text>
+      <rect x="290" y="170" width="130" height="44" rx="6" class="muted"/><text class="t1" x="355" y="190" text-anchor="middle">显存 GDDR7 32 GB</text><text class="t3" x="355" y="206" text-anchor="middle">1 792 GB/s，GPU 独用</text>
+      <line x1="95" y1="94" x2="95" y2="170" class="ln3"/><line x1="355" y1="94" x2="355" y2="170" class="ln1"/>
+      <line x1="160" y1="192" x2="290" y2="192" class="ln2"/>
+      <text x="225" y="160" text-anchor="middle">PCIe 5.0 x16</text><text class="t3" x="225" y="176" text-anchor="middle">约 64 GB/s</text>
+      <text class="t3" x="225" y="226" text-anchor="middle">cudaMemcpy H2D</text>
+      <text x="20" y="262">① 主存里 malloc 或 cudaMallocHost　② 显存里 cudaMalloc</text>
+      <text x="20" y="282">③ cudaMemcpy 经 PCIe 把数据搬进显存　④ kernel 只读显存</text>
+      <text class="t3" x="20" y="306">两份内存、两条带宽：拷贝慢，但 CPU 的流量碰不到 GPU。</text>
+
+      <line x1="455" y1="10" x2="455" y2="320" class="ax"/>
+
+      <text class="t1" x="475" y="24" style="font-weight:600">统一内存（Jetson AGX Thor）</text>
+      <rect x="480" y="50" width="130" height="44" rx="6" class="muted"/><text class="t1" x="545" y="77" text-anchor="middle">CPU（14 核）</text>
+      <rect x="750" y="50" width="130" height="44" rx="6" class="muted"/><text class="t1" x="815" y="77" text-anchor="middle">GPU（20 SM）</text>
+      <rect x="500" y="170" width="360" height="44" rx="6" class="muted"/><text class="t1" x="680" y="190" text-anchor="middle">LPDDR5X 128 GB</text><text class="t3" x="680" y="206" text-anchor="middle">273 GB/s，CPU、GPU 与其他引擎共用</text>
+      <line x1="545" y1="94" x2="545" y2="170" class="ln3"/><line x1="815" y1="94" x2="815" y2="170" class="ln1"/>
+      <text class="t3" x="680" y="120" text-anchor="middle">malloc 与 cudaMalloc 都从这一块分配</text>
+      <text class="t3" x="680" y="136" text-anchor="middle">零拷贝：GPU 直接读 CPU 写的 buffer</text>
+      <text x="475" y="262">① 分配：同一块 DRAM，只是缓存属性不同</text>
+      <text x="475" y="282">② cudaMemcpy 变成 DRAM → DRAM：读一遍、写一遍，都占共享带宽</text>
+      <text class="t3" x="475" y="306">没有慢总线，但拷贝、CPU 和两个模型都在抢同一条带宽。</text>
+    </svg>
+  </div>
+  <p class="cap">5090 显存带宽与 PCIe 5.0 为官方规格；Thor 从 CPU 到 iGPU 支持硬件全一致（CUDA for Tegra 应用说明 §3.2），这是零拷贝高效的前提。</p>
+
+  <h3>四类优化选项</h3>
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); margin-top:14px">
+    <div class="card"><h4>① 数据进出：省掉拷贝</h4>
+      <ul class="pts">
+        <li>零拷贝：CUDA 本身提供（pinned 或 managed 内存），但 FlashRT 没有用，输入仍走 cudaMalloc + 拷贝。要用就得手动改输入路径，省掉一次 DRAM → DRAM 拷贝。</li>
+        <li>前缀状态和记忆快照可以多存几份，不再受显存容量限制。</li>
+        <li>分配方式要实测：MI300A 上同一块内存，GPU 带宽可差 35 倍；llama.cpp 的 iGPU 零拷贝因输出损坏已关闭。</li>
+      </ul>
+      <p class="note">输入只有 MB 级，单次收益小，优先级靠后。</p></div>
+    <div class="card"><h4>② 规划器：每次调用少读少算</h4>
+      <ul class="pts">
+        <li>低比特：NVFP4 权重 + FP8 KV <span class="tag ok">已有</span></li>
+        <li>推测解码：线性 MTP <span class="tag ok">已有</span>；树状 MTP <span class="tag warn">没有</span>，TRT Edge-LLM 在 Thor 上 14.68 ms/token。</li>
+        <li>少做 prefill：固定前缀复用、决策闭合即停 <span class="tag ok">已有</span>；按帧缓存 ViT 输出 <span class="tag warn">没有</span>：MemER 每次约 16 帧，相邻两次调用大多是同一批帧，只需对新帧跑 ViT。</li>
+      </ul>
+      <p class="note">monitor 调用已从 6.40 s 降到 1.77 s，剩下的大头是 prefill。</p></div>
+    <div class="card"><h4>③ 共置：两个模型和 CPU 怎么分带宽</h4>
+      <ul class="pts">
+        <li>分 SM：20 个 SM 直接网格搜索；轮换几种配置，近似非整数的分配。</li>
+        <li>运行中动态调 SM：按执行器余量做负反馈，余量大就把 SM 让给规划器，余量小就收回（机制见下表）。</li>
+        <li>优先级与让步：MPS 客户端优先级（实测执行器 0 % 错过）；按执行器余量暂停规划器 decode 或缩小推测树。</li>
+        <li>CPU 负载预算：CPU 算力空闲可用，但它的内存流量计入同一预算；满载时规划器 decode 慢约 2.2 倍。</li>
+      </ul>
+      <p class="note">约束：改 prefill 分块边界会改变规划器决策，让步只能放在分块边界上。</p></div>
+    <div class="card"><h4>④ 硬件旋钮（需要 sudo）</h4>
+      <ul class="pts">
+        <li>MIG：按 TPC 切成 6 / 12 / 20 SM †，只切计算，不切内存。</li>
+        <li>时钟：nvpmodel 功耗模式，GPU 与内存（EMC）时钟。</li>
+        <li>内存控制器节流或 QoS：RT-Gang++ 在 Jetson Nano 上用过，Thor 上是否开放待查 †。</li>
+      </ul>
+      <p class="note">这些设置作用于整块板，要和同板的其他实验错开时间。</p></div>
+  </div>
+  <h3>共置调度可以借的经典抽象</h3>
+  <div class="tablebox">
+  <table class="t-ref">
+    <thead><tr><th>来源</th><th>原来解决什么</th><th>对应到我们</th></tr></thead>
+    <tbody>
+      <tr><td>Heracles（ISCA'15）/ PARTIES（ASPLOS'19）</td><td>时延敏感服务与批处理任务同机共置：控制器盯着尾时延的余量，动态调核数、缓存、内存带宽 †</td><td>执行器是时延敏感的一方，规划器是让步的一方；按执行器余量调规划器拿到的 SM 与带宽</td></tr>
+      <tr><td>MemGuard（RTAS'13）</td><td>多核共享 DRAM：给每个核预留带宽，用性能计数器计量，超额就在本周期内节流 †</td><td>给规划器一份带宽预算，按执行器周期补充；超额时在分块边界暂停 decode</td></tr>
+      <tr><td>CBS 带宽服务器（RTSS'98）</td><td>硬实时任务与软实时任务共存：软任务按预留的份额运行，不会挤垮硬任务 †</td><td>执行器 200 ms 是硬时限，规划器 L &lt; Δ 是软时限</td></tr>
+      <tr><td>比例份额调度：lottery / stride（OSDI'94 等）</td><td>按份额分 CPU 时间，用时间片实现非整数份额 †</td><td>在几种 SM 配置之间按比例轮换，近似非整数的 SM 分配</td></tr>
+      <tr><td>gpulet（ATC'22）</td><td>用 MPS 把 GPU 按比例切给多个模型，并用干扰模型预测切分后的时延 †</td><td>按 SM 网格加干扰预测，选出两个余量都 &gt; 0 的配置</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">与本场景的不同：被保护的一方和让步的一方都在同一块 iGPU 上，CPU 也在抢同一条带宽；让步只能落在不改输出的分块边界上。</p>
+  <h3 class="join">推理过程中动态调整 SM</h3>
+  <div class="tablebox">
+  <table class="t-ref">
+    <thead><tr><th>机制</th><th>怎么切换</th><th>能多快切</th><th>在 Thor 上</th></tr></thead>
+    <tbody>
+      <tr><td>Green context（CUDA 12.4 起）</td><td>预先建几个 SM 数不同的 green context，各带一条 stream；下一段工作发到哪条 stream，就用哪份 SM</td><td>每次 kernel 或 CUDA graph 发射之间</td><td>本组实测粒度为 8 SM（请求 4 得 8）；graph 发到 green stream 后是否受限，待测 †</td></tr>
+      <tr><td>MPS 多 context（exec affinity）</td><td>同一进程建几个限定 SM 数的 context，按需切换 †</td><td>context 之间，开销较大 †</td><td>MPS 最少 8 SM；需验证 †</td></tr>
+      <tr><td>libsmctrl（RTAS'23）</td><td>按 TPC 设置 stream 或下一次发射的掩码，非官方接口 †</td><td>每次发射</td><td>原作者在 Jetson 上验证过 †，Thor 未知</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">反馈信号：执行器最近一个窗口的 p99 余量。切换点：规划器的每个 prefill 分块（Thor 上约 1.2 s 一块）或每个 decode 步（约 30–55 ms）。SM 只能缓解 prefill 的计算干扰；decode 的干扰在带宽上，要靠暂停 decode 或缩小推测长度。</p>
+</section>
+
+<!-- 5 -->
+<section id="flashrt">
+  <h2><span class="no">5</span>FlashRT 是否支持，别人有没有做，扩展要多少工作</h2>
+  <div class="tablebox">
+  <table class="t-flash">
+    <thead><tr><th>优化</th><th>FlashRT 现状</th><th>其他框架</th><th>基于 FlashRT 扩展：代码量 / 难度</th></tr></thead>
+    <tbody>
+      <tr><td>NVFP4 权重 + FP8 KV</td><td><span class="tag ok">已有</span> Thor 前端</td><td>TRT Edge-LLM 有</td><td>—</td></tr>
+      <tr><td>线性 MTP 推测解码</td><td><span class="tag ok">已有</span> 官方 MTP 头，按长度查表取 K</td><td>TRT Edge-LLM 有</td><td>—</td></tr>
+      <tr><td>线性注意力 prefill 走 WY 分块</td><td><span class="tag ok">已有</span> Thor 上 2.61 → 1.77 s</td><td>—</td><td>—</td></tr>
+      <tr><td>固定前缀状态复用（capsule）</td><td><span class="tag ok">已有</span> 含线性注意力的递归状态</td><td>未见针对 Thor 的实现 †</td><td>—</td></tr>
+      <tr><td>按帧缓存 ViT 输出 + 记忆帧前缀</td><td><span class="tag warn">没有</span> 每张图每次都跑 ViT</td><td>未见</td><td>约 200–300 行 Python / 低到中</td></tr>
+      <tr><td>两模型共置的 SM 分配与优先级网格</td><td><span class="tag warn">只有实验脚本</span>（colocation_thor）</td><td>没有面向 Thor 的框架</td><td>约 300 行 / 中（共享板，测量噪声大）</td></tr>
+      <tr><td>按执行器余量让出带宽</td><td><span class="tag bad">没有</span></td><td>手机上：SERENO、Agent.xpu；Thor 上没有</td><td>机制约 400 行 + 干扰预测约 300 行，Python / 中到高</td></tr>
+      <tr><td>树状 MTP</td><td><span class="tag bad">没有</span></td><td>TRT Edge-LLM（14.68 ms/token）</td><td>约 1 500–3 000 行 CUDA/C++ / 高：线性注意力状态要按树分叉</td></tr>
+      <tr><td>统一内存零拷贝</td><td><span class="tag warn">没有</span> 与独显相同：cudaMalloc + H2D memcpy</td><td>CUDA 提供 pinned / managed 内存；llama.cpp 的 iGPU 零拷贝因输出损坏已关闭</td><td>需手动改输入路径，约 50–100 行 / 低；每次调用只拷 MB 级，收益≈0，暂不做</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <h3 class="join">扩展工作的代码量</h3>
+  <div class="fig">
+    <svg viewBox="0 0 760 190" role="img" aria-label="基于 FlashRT 扩展的代码量" style="max-width:700px;margin:0 auto">
+      <!-- x: 0..3000 lines -> 230..720 -->
+      <line class="grid" x1="230" y1="10" x2="230" y2="160"/><line class="grid" x1="393.3" y1="10" x2="393.3" y2="160"/>
+      <line class="grid" x1="556.7" y1="10" x2="556.7" y2="160"/><line class="grid" x1="720" y1="10" x2="720" y2="160"/>
+      <text class="t3" x="230" y="178" text-anchor="middle">0</text><text class="t3" x="393.3" y="178" text-anchor="middle">1000</text>
+      <text class="t3" x="556.7" y="178" text-anchor="middle">2000</text><text class="t3" x="720" y="178" text-anchor="middle">3000 行</text>
+      <g id="locbars"></g>
+    </svg>
+  </div>
+  <p class="cap">深色到下界、浅色为区间；蓝 = Python，橙 = CUDA/C++。估算。</p>
+</section>
+
+<!-- 6 -->
+<section id="metric">
+  <h2><span class="no">6</span>两个时限都满足后，怎样给系统排序</h2>
+  <p class="lead">余量只是门槛，不是目标。门槛之上用什么排序，取决于 L 对质量的影响是哪种形状。</p>
+  <div class="fig">
+    <svg viewBox="0 0 760 262" role="img" aria-label="同步与异步协议的时间线" style="max-width:680px;margin:0 auto">
+      <text class="t1" x="10" y="34">同步</text>
+      <text class="t1" x="10" y="140">异步</text>
+      <text class="t3" x="10" y="52">执行器</text><text class="t3" x="10" y="82">规划器</text>
+      <text class="t3" x="10" y="158">执行器</text><text class="t3" x="10" y="188">规划器</text>
+      <g id="tl"></g>
+      <line class="dash" x1="120" y1="20" x2="120" y2="225"/><line class="dash" x1="560" y1="20" x2="560" y2="225"/>
+      <text class="t3" x="340" y="254" text-anchor="middle">检查间隔 Δ</text>
+      <path class="brace" d="M120 232 L120 236 L560 236 L560 232"/>
+    </svg>
+  </div>
+  <p class="cap">示意，比例不准。同步时执行器在 L 期间停下；异步时执行器继续按旧子任务走。门槛一：执行器每次推理 &lt; 200 ms；门槛二：L &lt; Δ。</p>
+  <h3 class="join">两个余量现在有多大</h3>
+  <div class="tablebox">
+  <table class="t-margin">
+    <thead><tr><th>余量</th><th>单独运行</th><th>共置（MPS 客户端优先级）</th><th>再加 CPU 内存负载</th><th>来源</th></tr></thead>
+    <tbody>
+      <tr><td>执行器：200 ms − p99</td><td class="num">162 ms（37.5 ms）</td><td class="num">130 ms（p99 70 ms）</td><td class="num">约 60 ms（p99 约翻倍）</td><td>ImageWAM 动作模型，Chenwei B27 / B28</td></tr>
+      <tr><td>规划器：Δ − L，MemER 节奏（Δ ≈ 1 s）</td><td class="num">约 −1 s（L ≈ 2 s）</td><td>&lt; 0</td><td>&lt; 0</td><td>推算：MemER 约 1 Hz；2k token prefill 1.1 s + 30 token 解码 0.9 s</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="grid" style="margin-top:12px">
+    <div class="card"><h4>执行器的余量很大</h4><p>即使共置再加 CPU 内存负载，ImageWAM 动作模型的 p99 仍离 200 ms 有约 60 ms。单纯"保护执行器"不是紧约束。</p></div>
+    <div class="card"><h4>规划器的余量为负</h4><p>按 MemER 的约 1 Hz，现有 L（约 2 s）已经超过 Δ，开思考更远。紧的是规划器这一侧。</p></div>
+    <div class="card"><h4>所以目标是：在执行器余量 &gt; 0 的前提下压低规划器的 L</h4><p>执行器用不完的余量，应该通过 SM 和带宽让给规划器。这也是动态调 SM 的意义。</p></div>
+  </div>
+
+  <h3>时延怎样影响质量：文献里实测到的三种形状</h3>
+  <p class="lead">下面三组都是原文数据。只有 Fast Plans 改的是规划器时延，但它是同步阻塞协议，时延靠换解码方式改变，和方法本身混在一起；其余改的是执行器或单一策略的推理时延。没有一篇在固定调用周期下单独改变规划器的 L 并测 SR。</p>
+  <div class="fig">
+    <svg viewBox="0 0 780 250" role="img" aria-label="三篇论文中时延对质量的实测曲线" style="max-width:820px;margin:0 auto">
+      <g id="shapes"></g>
+    </svg>
+  </div>
+  <p class="cap">悬停可看每个点的数值。三组的纵轴指标不同，不能互相比较高低，只看形状。</p>
+  <div class="tablebox" style="margin-top:12px">
+  <table class="t-shape">
+    <thead><tr><th>形状</th><th>论文</th><th>改变的是什么</th><th>结果</th></tr></thead>
+    <tbody>
+      <tr><td>无影响</td><td><a href="https://arxiv.org/abs/2609.30833">Fast Plans</a>，表 3、表 5</td><td>规划器出计划的时延 1 094 → 125 ms（真机；由 Token-AR 换成 Block-AR 解码）</td><td>成功 48/60 → 46/60，基本不变；变的是动作时间占比，28.7 % → 65.6 %</td></tr>
+      <tr><td>无影响</td><td><a href="https://arxiv.org/abs/2506.07339">RTC</a>，图 6</td><td>注入 +0 / +100 / +200 ms（约 6 / 11 / 16 个控制步）</td><td>RTC 的吞吐（完成比例 / 用时）不下降；同一组实验里同步执行线性下降</td></tr>
+      <tr><td>连续</td><td><a href="https://arxiv.org/abs/2601.07393">端到端驾驶软硬协同</a>，表 2</td><td>UniAD 的推理频率 1 → 30 FPS（CARLA，推理期间沿用上一个控制）</td><td>驾驶分 32.85 → 39.53（20 FPS），24 FPS 以上约 40，不再上升</td></tr>
+      <tr><td>门槛</td><td><a href="https://arxiv.org/abs/2509.23224">A2C2</a>，附录表 4</td><td>推理延迟 d = 1–4 个控制步（Kinetix，执行步数 e = d）</td><td>朴素异步 78.1 → 75.7 → 59.3 → 51.2 %，d 从 2 到 3 掉 16 个点；A2C2 稳在 86.5–89.5 %</td></tr>
+      <tr><td>只影响用时</td><td><a href="https://arxiv.org/abs/2506.01844">SmolVLA</a>，图 5</td><td>同步 vs 异步推理（真机三任务）</td><td>成功率 78.3 % vs 73.3 %；平均用时 13.75 → 9.70 s；固定时间内完成 9 → 19 次</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>异步协议下延迟与成功率：已发表的数据点</h3>
+  <div class="fig">
+    <svg viewBox="0 0 760 330" role="img" aria-label="异步协议下推理延迟与成功率的散点图">
+      <g id="asyncscatter"></g>
+    </svg>
+  </div>
+  <p class="cap">只收原文表格里的数字。横轴是推理延迟 d（控制步）：A2C2 与 VLASH 都没有写明一步多少毫秒，所以不换算成 ms。圆点为 Kinetix，方块为 LIBERO；橙色为朴素异步，蓝色为带延迟补偿的异步（RTC、A2C2、VLASH）。悬停可看来源。</p>
+  <div class="grid" style="margin-top:12px">
+    <div class="card"><h4>数据点全部来自执行器层</h4><p>延迟最多 10 个控制步，都是动作块的推理延迟。规划器层面没有一组可用的"L 与 SR"数值：MemER 只说 10–15 s 的 API 规划器"完全失败"，NavGPT-3 报的是修复用时而不是推理时延。</p></div>
+    <div class="card"><h4>带延迟补偿的异步几乎不受延迟影响</h4><p>A2C2 在 Kinetix 上 d = 0–4 都在 86.5–88.9 %，VLASH 在 LIBERO 上 d = 0–3 在 94.6–97.2 %。朴素异步在 Kinetix 上从 88.9 % 掉到 51.2 %。</p></div>
+  </div>
+  <h3>异步协议的四个维度</h3>
+  <div class="tablebox">
+  <table class="t-ref">
+    <thead><tr><th>维度</th><th>选项</th><th>执行器层（动作块）</th><th>规划器层（子任务）</th></tr></thead>
+    <tbody>
+      <tr><td>① 何时发起下一次推理</td><td>周期 / 队列见底 / 事件触发</td><td>SmolVLA：剩余动作低于阈值 g 就发新观测</td><td>MemER：上一次结束立刻发下一次；VoLo：0.2 Hz 周期，出错时事件触发；Tri-System：Critic 判定完成或失败才唤醒</td></tr>
+      <tr><td>② 新结果何时生效</td><td>立即替换 / 等到边界 / 平滑拼接</td><td>朴素异步：新动作块到了直接替换</td><td>Hi Robot、MemER、Helix、DualVLN：写进"最新值"，执行器下次读取时生效</td></tr>
+      <tr><td>③ 是否补偿推理期间的延迟</td><td>不补偿 / 冻结已承诺的部分 / 用最新观测修正 / 预测执行时刻的状态</td><td>朴素异步不补偿；RTC 冻结推理期间要执行的动作，只补全后面的；A2C2 每步用最新观测做小修正；VLASH 用上一个动作块把机器人状态推到执行时刻再推理</td><td>MemER 训练时把子任务标签往后挪约 0.5 s，让规划器预测略未来的子任务；其余基本不补偿</td></tr>
+      <tr><td>④ 能否打断正在执行的</td><td>不可打断 / 优先级中断</td><td>一般不打断</td><td>NavGPT-3 的 overlap + priority；VoLo 的 recovery 会停下执行器</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="grid" style="margin-top:12px">
+    <div class="card"><h4>决定曲线形状的是第 ③ 维</h4><p>不补偿的朴素异步在 Kinetix 上从 88.9 % 掉到 51.2 %；RTC、A2C2、VLASH 做了补偿，曲线平得多。</p></div>
+    <div class="card"><h4>规划器层几乎没有补偿</h4><p>执行器层的补偿已经很成熟，规划器层只有 MemER 的标签平移。让规划器知道自己的 L、或用最新观测修正旧决策，是一个空白。</p></div>
+    <div class="card"><h4>实验里这几个维度都是变量</h4><p>至少比较同步、朴素异步、带补偿的异步三种，在不同的 L 下看 SR 曲线的形状。</p></div>
+    <div class="card"><h4>时延常常先体现在用时上</h4><p>Fast Plans 和 SmolVLA 的成功率基本不变，用时和动作时间占比变化很大。只看 SR 会漏掉时延的代价。</p></div>
+  </div>
+  <h3>相关论文用的指标</h3>
+  <div class="tablebox">
+  <table class="t-metric">
+    <thead><tr><th>指标</th><th>定义</th><th>出处</th><th>对"都满足时限"的区分力</th></tr></thead>
+    <tbody>
+      <tr><td>SCT</td><td>成功 × 最短可能时间 / 实际完成时间</td><td><a href="https://arxiv.org/abs/2103.08022">Yokoyama et al.</a></td><td>高：慢、等待和返工都扣分</td></tr>
+      <tr><td>Throughput</td><td>完成比例 / episode 时长</td><td><a href="https://arxiv.org/abs/2506.07339">RTC</a>（NeurIPS'25）</td><td>高</td></tr>
+      <tr><td>完成时间、固定时长内完成数</td><td>平均完成时间；60 s 内完成几次</td><td><a href="https://arxiv.org/abs/2506.01844">SmolVLA</a></td><td>高</td></tr>
+      <tr><td>Motion duty cycle</td><td>执行动作的时间 / 墙钟时间</td><td><a href="https://arxiv.org/abs/2609.30833">Fast Plans</a></td><td>中：只量"没在等"，不量"做得对"</td></tr>
+      <tr><td>Goodput / capacity</td><td>满足 SLO 的最大请求率</td><td><a href="https://arxiv.org/abs/2401.09670">DistServe</a>（OSDI'24）</td><td>高：比"还能收紧多少"</td></tr>
+      <tr><td>Time-utility function</td><td>每个任务的价值是完成时刻的函数，累加</td><td>Jensen et al.，RTSS'85 †</td><td>高，但要选效用形状</td></tr>
+      <tr><td>Observation age p95</td><td>动作所依据的观测有多旧</td><td><a href="https://neurips.cc/virtual/2026/170076">DualVLN on Thor</a>（workshop）</td><td>中：是中间量</td></tr>
+      <tr><td>Halt p95、漏停次数</td><td>事件到物理效果的尾时延</td><td><a href="https://arxiv.org/abs/2610.10787">NavGPT-3</a></td><td>只适合安全事件</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <h3 class="join">我们的排序思路（判断）</h3>
+  <div class="grid">
+    <div class="card"><h4>第一步：画出 SR 与完成时间随 L 的曲线</h4><p>在 RoboCerebra 上按仿真时间，固定调用周期，注入不同的 L，异步与同步各一条。曲线的形状决定用哪种指标。</p></div>
+    <div class="card"><h4>门槛型 → 比能力</h4><p>比在两个余量都 &gt; 0、且 SR 不低于目标时，能支持的最小 Δ、最长上下文或最大 CPU 负载。这是 goodput 的直接翻译。</p></div>
+    <div class="card"><h4>连续型 → 比 SCT</h4><p>用 SCT 或 throughput 这类"成功率 × 时间效率"的单一分数。系统优化把 L 降下来，分数就应该升。</p></div>
+    <div class="card"><h4>评估要对齐</h4><p>主指标就是"实际 vs 理想"图里的那个量。理想值：规划器独占时的 L，执行器独占时的时延。</p></div>
+  </div>
+</section>
+
+<footer>
+  资料：<code>guide.md</code>、<code>long_horizon_conditions.md</code>、<code>harnesses.md</code>、<code>unified_memory_socs.md</code>、<code>unified_memory_inference.md</code>、<code>latency_quality_metrics.md</code>；Thor 实测见 <code>long-horizon-planner-executor/experiments/thor_bringup</code>。
+</footer>
+</div>
+
+<script>
+(function () {
+  var NS = 'http://www.w3.org/2000/svg';
+  function el(tag, attrs, parent, title) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (title) { var t = document.createElementNS(NS, 'title'); t.textContent = title; e.appendChild(t); }
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function text(x, y, s, cls, parent, anchor) {
+    var t = el('text', { x: x, y: y, 'class': cls || '', 'text-anchor': anchor || 'start' }, parent);
+    t.textContent = s; return t;
+  }
+
+  // SoC bandwidth bars
+  var soc = [
+    ['Jetson AGX Thor T5000（基线）', 273, '128 GB LPDDR5X；MIG 只切 SM †', 'nv'],
+    ['Jetson T4000', 273, '64 GB；MIG', 'nv'],
+    ['DGX Spark (GB10)', 273, '128 GB；官方未提分区', 'nv'],
+    ['Jetson AGX Orin 64GB', 204.8, '64 GB LPDDR5；无 MIG，有 DLA', 'nv'],
+    ['Jetson Orin NX 16GB', 102.4, '16 GB；无 MIG', 'nv'],
+    ['Apple M5 Ultra', 1200, '512 GB；分区未公开', 'ap'],
+    ['Apple M3 Ultra', 819, '最大 512 GB；分区未公开', 'ap'],
+    ['Apple M5 Max', 614, '128 GB；分区未公开', 'ap'],
+    ['Apple M4 Max', 546, '128 GB；分区未公开', 'ap'],
+    ['Apple M4 Pro', 273, '64 GB；分区未公开', 'ap'],
+    ['AMD Ryzen AI Max+ 395', 256, '128 GB（最多 96 GB 给 GPU）', 'ot'],
+    ['Snapdragon X Elite', 135, '64 GB；分区未公开', 'ot']
+  ];
+  var cls = { nv: 'bar', ap: 'bar2', ot: 'bar3' };
+  var g = document.getElementById('socbars');
+  var x0 = 190, sx = 530 / 1200, bh = 18, gap = 7;
+  soc.forEach(function (d, i) {
+    var y = 18 + i * (bh + gap) + (d[3] === 'ap' ? 4 : d[3] === 'ot' ? 8 : 0);
+    var w = Math.max(2, d[1] * sx);
+    text(x0 - 8, y + 13, d[0], i === 0 ? 't1' : '', g, 'end');
+    el('rect', { x: x0, y: y, width: w, height: bh, rx: 3, 'class': cls[d[3]] }, g, d[0] + '：' + d[1] + ' GB/s；' + d[2]);
+    text(x0 + w + 6, y + 13, String(d[1]), 't3', g);
+  });
+
+  // Memory vs context length (log x)
+  (function () {
+    var mg = document.getElementById('memchart');
+    var X0 = 70, X1 = 600, Y0 = 250, Y1 = 24, ymax = 130;
+    var lmin = Math.log2(1024), lmax = Math.log2(262144);
+    function px(n) { return X0 + (Math.log2(n) - lmin) / (lmax - lmin) * (X1 - X0); }
+    function py(v) { return Y0 - v / ymax * (Y0 - Y1); }
+    el('line', { x1: X0, y1: Y0, x2: X1, y2: Y0, 'class': 'ax' }, mg);
+    el('line', { x1: X0, y1: Y0, x2: X0, y2: Y1, 'class': 'ax' }, mg);
+    [0, 32, 64, 96, 128].forEach(function (v) {
+      el('line', { x1: X0, y1: py(v), x2: X1, y2: py(v), 'class': 'grid' }, mg);
+      text(X0 - 6, py(v) + 4, String(v), 't3', mg, 'end');
+    });
+    text(X0 - 6, Y1 - 8, 'GiB', 't3', mg, 'end');
+    [[1024, '1k'], [4096, '4k'], [16384, '16k'], [65536, '64k'], [262144, '256k']].forEach(function (t) {
+      text(px(t[0]), Y0 + 16, t[1], 't3', mg, 'middle');
+    });
+    text((X0 + X1) / 2, Y0 + 36, '规划器上下文长度（token）', '', mg, 'middle');
+    var base = 25.8 + 0.45 + 0.1, kv = 32768 / Math.pow(1024, 3), ex = 8.5;
+    var pts1 = [], pts2 = [];
+    for (var e = lmin; e <= lmax + 1e-9; e += 0.25) {
+      var n = Math.pow(2, e);
+      pts1.push(px(n) + ',' + py(base + kv * n));
+      pts2.push(px(n) + ',' + py(base + kv * n + ex));
+    }
+    [['Thor 可用 122 GiB', 122, -6], ['虚线：RTX 5090 可用 31.4 GiB', 31.35, 44]].forEach(function (r) {
+      el('line', { x1: X0, y1: py(r[1]), x2: X1, y2: py(r[1]), 'class': 'dash' }, mg);
+      text(X0 + 6, py(r[1]) + r[2], r[0], 't1', mg);
+    });
+    el('polyline', { points: pts1.join(' '), 'class': 'ln1' }, mg, '规划器：权重 + MTP + 线性状态 + FP8 KV');
+    el('polyline', { points: pts2.join(' '), 'class': 'ln2' }, mg, '规划器 + 执行器（ImageWAM 8.5 GiB）');
+    text(X1 + 8, py(base + kv * 262144) + 4, '规划器', '', mg);
+    text(X1 + 8, py(base + kv * 262144 + ex) - 2, '规划器 + 执行器', '', mg);
+    [[2048, 'MemER 每次约 2–4k'], [30000, 'NavGPT-3 单次约 30k'], [262144, '模型上限 262k']].forEach(function (m, i) {
+      el('line', { x1: px(m[0]), y1: Y0, x2: px(m[0]), y2: py(60), 'class': 'dash' }, mg);
+      text(px(m[0]) + (i === 2 ? -4 : 4), py(60) - 4 - (i === 1 ? 14 : 0), m[1], 't3', mg, i === 2 ? 'end' : 'start');
+    });
+    [1024, 4096, 16384, 65536, 262144].forEach(function (n) {
+      var v1 = base + kv * n, v2 = v1 + ex;
+      el('circle', { cx: px(n), cy: py(v2), r: 8, fill: 'transparent' }, mg, n + ' token：规划器 ' + v1.toFixed(1) + ' GiB，合计 ' + v2.toFixed(1) + ' GiB');
+      el('circle', { cx: px(n), cy: py(v1), r: 8, fill: 'transparent' }, mg, n + ' token：规划器 ' + v1.toFixed(1) + ' GiB（其中 KV ' + (kv * n).toFixed(2) + ' GiB）');
+    });
+  })();
+
+
+  // Planner call time vs context (log-log), Thor measurements 2026-11-19, 256-3k tokens
+  (function () {
+    var tg = document.getElementById('timechart');
+    var X0 = 70, X1 = 560, Y0 = 270, Y1 = 20;
+    var lmin = Math.log2(220), lmax = Math.log2(3400);
+    var vmin = Math.log10(0.1), vmax = Math.log10(300);
+    function px(n) { return X0 + (Math.log2(n) - lmin) / (lmax - lmin) * (X1 - X0); }
+    function py(v) { return Y0 - (Math.log10(v) - vmin) / (vmax - vmin) * (Y0 - Y1); }
+    el('line', { x1: X0, y1: Y0, x2: X1, y2: Y0, 'class': 'ax' }, tg);
+    el('line', { x1: X0, y1: Y0, x2: X0, y2: Y1, 'class': 'ax' }, tg);
+    [[0.1, '0.1 s'], [1, '1 s'], [10, '10 s'], [100, '100 s']].forEach(function (v) {
+      el('line', { x1: X0, y1: py(v[0]), x2: X1, y2: py(v[0]), 'class': 'grid' }, tg);
+      text(X0 - 6, py(v[0]) + 4, v[1], 't3', tg, 'end');
+    });
+    [[256, '256'], [512, '512'], [768, '768'], [1024, '1k'], [1536, '1.5k'], [2048, '2k'], [3072, '3k']].forEach(function (t) {
+      text(px(t[0]), Y0 + 16, t[1], 't3', tg, 'middle');
+    });
+    text((X0 + X1) / 2, Y0 + 36, '规划器上下文长度（token，对数）', '', tg, 'middle');
+    el('line', { x1: X0, y1: py(1), x2: X1, y2: py(1), 'class': 'dash' }, tg);
+    text(X1 + 8, py(1) + 4, 'MemER 约 1 s（论文值）', 't1', tg);
+    var P = [[256, 0.162], [511, 0.264], [768, 0.392], [1024, 0.536], [1536, 0.818], [2048, 1.121], [3072, 1.669]];
+    el('polyline', { points: P.map(function (m) { return px(m[0]) + ',' + py(m[1]); }).join(' '), 'class': 'ln1' }, tg, '整段 prefill');
+    P.forEach(function (m) {
+      el('circle', { cx: px(m[0]), cy: py(m[1]), r: 3, 'class': 'bar' }, tg);
+      el('circle', { cx: px(m[0]), cy: py(m[1]), r: 9, fill: 'transparent' }, tg, '整段 prefill：' + m[0] + ' token，' + m[1].toFixed(2) + ' s');
+    });
+    text(X1 + 8, py(0.55) + 4, '整段 prefill', 't1', tg);
+    // whole call = prefill + decode to EOS; [ctx, seconds, question, output tokens, capped]
+    var OFF = [[256, 0.42, "重规划", 10], [256, 0.51, "计数", 14], [256, 2.94, "下一步", 89], [512, 0.61, "计数", 14], [512, 0.78, "重规划", 18], [512, 3.29, "下一步", 117], [768, 0.74, "计数", 14], [768, 0.74, "重规划", 10], [768, 3.33, "下一步", 111], [1024, 0.97, "重规划", 15], [1024, 3.75, "下一步", 128], [1024, 5.05, "计数", 176], [1536, 1.14, "重规划", 10], [1536, 1.25, "计数", 14], [1536, 4.76, "下一步", 151], [2048, 1.55, "计数", 14], [2048, 1.55, "重规划", 12], [2048, 4.0, "下一步", 94], [3072, 2.02, "计数", 15], [3072, 2.19, "重规划", 15], [3072, 5.67, "下一步", 146]];
+    var ON = [[256, 7.52, "计数", 290, 0], [256, 22.63, "重规划", 725, 0], [256, 128.16, "下一步", 3872, 0], [512, 13.06, "计数", 537, 0], [512, 124.35, "下一步", 4043, 0], [512, 149.13, "重规划", 4096, 1], [768, 11.29, "计数", 420, 0], [768, 24.67, "下一步", 809, 0], [768, 84.09, "重规划", 2752, 0], [1024, 29.11, "计数", 1136, 0], [1024, 63.33, "下一步", 2066, 0], [1024, 97.7, "重规划", 3270, 0], [1536, 25.99, "计数", 933, 0], [1536, 53.11, "下一步", 1632, 0], [1536, 99.12, "重规划", 2811, 0], [2048, 33.41, "计数", 1038, 0], [2048, 75.44, "下一步", 2240, 0], [2048, 122.69, "重规划", 3497, 0], [3072, 32.93, "计数", 1207, 0], [3072, 58.85, "重规划", 1917, 0], [3072, 145.65, "下一步", 4096, 1]];
+    var jit = { '下一步': -6, '计数': 0, '重规划': 6 };
+    OFF.forEach(function (m) {
+      el('circle', { cx: px(m[0]) + jit[m[2]], cy: py(m[1]), r: 4, 'class': 'bar2' }, tg,
+         '关思考 · ' + m[2] + '：' + m[0] + ' token 上下文，整次 ' + m[1].toFixed(2) + ' s，输出 ' + m[3] + ' token');
+    });
+    ON.forEach(function (m) {
+      var c = el('circle', { cx: px(m[0]) + jit[m[2]], cy: py(m[1]), r: 4.5, 'class': 'bar3' }, tg,
+         '开思考 · ' + m[2] + '：' + m[0] + ' token 上下文，整次 ' + (m[4] ? '≥ ' : '') + m[1].toFixed(1) + ' s，输出 ' + (m[4] ? '≥ ' : '') + m[3] + ' token' + (m[4] ? '（到 4 096 上限仍未想完）' : ''));
+      if (m[4]) { c.style.fill = 'var(--surface)'; c.style.stroke = 'var(--s3)'; c.style.strokeWidth = '2px'; }
+    });
+    el('circle', { cx: X1 + 2, cy: py(60), r: 4, 'class': 'bar3' }, tg);
+    text(X1 + 10, py(60) + 4, '开思考整次调用', 't1', tg);
+    text(X1 + 10, py(60) + 20, '（空心：到上限未想完）', 't3', tg);
+    el('circle', { cx: X1 + 2, cy: py(2.6), r: 4, 'class': 'bar2' }, tg);
+    text(X1 + 10, py(2.6) + 4, '关思考整次调用', 't1', tg);
+  })();
+
+
+  // Async delay vs SR scatter (table values only)
+  (function () {
+    var g2 = document.getElementById('asyncscatter');
+    var X0 = 70, X1 = 560, Y0 = 280, Y1 = 20;
+    function px(d) { return X0 + d / 10 * (X1 - X0); }
+    function py(v) { return Y0 - (v - 40) / 60 * (Y0 - Y1); }
+    el('line', { x1: X0, y1: Y0, x2: X1, y2: Y0, 'class': 'ax' }, g2);
+    el('line', { x1: X0, y1: Y0, x2: X0, y2: Y1, 'class': 'ax' }, g2);
+    [40, 60, 80, 100].forEach(function (v) { el('line', { x1: X0, y1: py(v), x2: X1, y2: py(v), 'class': 'grid' }, g2); text(X0 - 6, py(v) + 4, v + ' %', 't3', g2, 'end'); });
+    [0, 2, 4, 6, 8, 10].forEach(function (d) { text(px(d), Y0 + 16, String(d), 't3', g2, 'middle'); });
+    text((X0 + X1) / 2, Y0 + 36, '推理延迟 d（控制步）', '', g2, 'middle');
+    var S = [
+      { n: 'A2C2 论文·朴素异步（Kinetix，e = 4）', c: 'ln2', f: 'bar2', sh: 'o', src: 'A2C2 附录表 4', p: [[0, 88.9], [1, 80.9], [2, 70.1], [3, 59.5], [4, 51.2]] },
+      { n: 'RTC（Kinetix，e = 4，A2C2 论文复现）', c: 'ln1', f: 'bar', sh: 'o', src: 'A2C2 附录表 4', p: [[0, 88.6], [1, 84.8], [2, 79.3], [3, 71.0], [4, 62.9]], dash: true },
+      { n: 'A2C2（Kinetix，e = 4）', c: 'ln1', f: 'bar', sh: 'o', src: 'A2C2 附录表 4', p: [[0, 88.9], [1, 88.3], [2, 87.5], [3, 87.2], [4, 86.5]] },
+      { n: 'A2C2 论文·朴素异步（LIBERO-Spatial，e = 10）', c: 'ln2', f: 'bar2', sh: 's', src: 'A2C2 附录表 7', p: [[1, 83], [3, 81], [5, 82], [10, 75]] },
+      { n: 'A2C2（LIBERO-Spatial，e = 10）', c: 'ln1', f: 'bar', sh: 's', src: 'A2C2 附录表 7', p: [[1, 92], [3, 89], [5, 92], [10, 88]] },
+      { n: 'VLASH·π0.5（LIBERO 四套件平均，d = 0 为同步）', c: 'ln1', f: 'bar', sh: 's', src: 'VLASH 表 I', p: [[0, 96.8], [1, 97.2], [2, 97.1], [3, 94.6]] },
+      { n: 'VLASH·SmolVLA（LIBERO 四套件平均，d = 0 为同步）', c: 'ln1', f: 'bar', sh: 's', src: 'VLASH 表 I', p: [[0, 79.0], [1, 77.1], [2, 78.1], [3, 79.1]] }
+    ];
+    S.forEach(function (sr) {
+      var line = el('polyline', { points: sr.p.map(function (q) { return px(q[0]) + ',' + py(q[1]); }).join(' '), 'class': sr.c, opacity: 0.45 }, g2);
+      if (sr.dash) line.setAttribute('stroke-dasharray', '4 3');
+      sr.p.forEach(function (q) {
+        var tip = sr.n + '：d = ' + q[0] + '，' + q[1] + ' %（' + sr.src + '）';
+        if (sr.sh === 'o') el('circle', { cx: px(q[0]), cy: py(q[1]), r: 4.5, 'class': sr.f }, g2, tip);
+        else el('rect', { x: px(q[0]) - 4.5, y: py(q[1]) - 4.5, width: 9, height: 9, rx: 1.5, 'class': sr.f }, g2, tip);
+      });
+    });
+    var lab = [['VLASH·π0.5（LIBERO）', 3, 96.8], ['A2C2（LIBERO）', 10, 88], ['A2C2（Kinetix）', 4, 86.5], ['VLASH·SmolVLA（LIBERO）', 3, 79.1],
+               ['朴素异步（LIBERO）', 10, 75], ['RTC（Kinetix）', 4, 62.9], ['朴素异步（Kinetix）', 4, 51.2]];
+    lab.forEach(function (l) { text(px(l[1]) + 10, py(l[2]) + 4, l[0], 't3', g2); });
+  })();
+
+
+  // Visual tokens per call vs SR (table values; MemER tokens estimated)
+  (function () {
+    var g = document.getElementById('ctxsr');
+    var X0 = 80, X1 = 620, Y0 = 320, Y1 = 30;
+    var lmin = Math.log2(48), lmax = Math.log2(5000);
+    function px(n) { return X0 + (Math.log2(n) - lmin) / (lmax - lmin) * (X1 - X0); }
+    function py(v) { return Y0 - v / 100 * (Y0 - Y1); }
+    el('line', { x1: X0, y1: Y0, x2: X1, y2: Y0, 'class': 'ax' }, g);
+    el('line', { x1: X0, y1: Y0, x2: X0, y2: Y1, 'class': 'ax' }, g);
+    [0, 25, 50, 75, 100].forEach(function (v) {
+      el('line', { x1: X0, y1: py(v), x2: X1, y2: py(v), 'class': 'grid' }, g);
+      text(X0 - 6, py(v) + 4, v + '%', 't3', g, 'end');
+    });
+    [[64, '64', ''], [256, '256', ''], [1024, '1k', 'prefill 0.5 s'], [2048, '2k', '1.1 s'], [4096, '4k', '2.3 s']].forEach(function (t) {
+      text(px(t[0]), Y0 + 16, t[1], 't3', g, 'middle');
+      if (t[2]) text(px(t[0]), Y0 + 30, t[2], 't3', g, 'middle');
+    });
+    text((X0 + X1) / 2, Y0 + 52, '单次调用的图像 token 数（Thor 实测 prefill 时间）', '', g, 'middle');
+    text(X0 - 6, Y1 - 12, 'SR', 't3', g, 'end');
+    var S = [
+      { n: 'MemER 原始历史（推算）', c: 'ln1', f: 'bar', dash: true, p: [[112, 26.3, '1 帧'], [896, 63.8, '8 帧'], [3584, 57.5, '32 帧']] },
+      { n: 'StreamVLN', c: 'ln2', f: 'bar2', p: [[392, 37.3, '记忆 2 帧'], [784, 38.9, '记忆 4 帧'], [1568, 45.5, '记忆 8 帧']] },
+      { n: 'Uni-NaVid', c: 'ln3', f: 'bar3', p: [[64, 9.61, '只有当前帧'], [320, 39.7, '加短期记忆']] }
+    ];
+    S.forEach(function (sr) {
+      var line = el('polyline', { points: sr.p.map(function (q) { return px(q[0]) + ',' + py(q[1]); }).join(' '), 'class': sr.c }, g, sr.n);
+      if (sr.dash) line.setAttribute('stroke-dasharray', '5 4');
+      sr.p.forEach(function (q) {
+        el('circle', { cx: px(q[0]), cy: py(q[1]), r: 4.5, 'class': sr.f }, g);
+        el('circle', { cx: px(q[0]), cy: py(q[1]), r: 10, fill: 'transparent' }, g, sr.n + '：' + q[0] + ' token（' + q[2] + '），SR ' + q[1] + ' %');
+      });
+    });
+    // MemER keyframe memory: at most 1 792 tokens
+    var kx = px(1792), ky = py(96.3);
+    el('rect', { x: kx - 5, y: ky - 5, width: 10, height: 10, transform: 'rotate(45 ' + kx + ' ' + ky + ')', 'class': 'bar' }, g);
+    el('circle', { cx: kx, cy: ky, r: 10, fill: 'transparent' }, g, 'MemER 关键帧记忆：不超过 1 792 token（近期 8 帧 + 至多 8 张关键帧），SR 96.3 %');
+    text(kx - 10, ky + 4, 'MemER 关键帧记忆', 't1', g, 'end');
+    // legend
+    var ly = 60;
+    [['ln1', 'bar', 'MemER 原始历史（推算）', true], ['ln2', 'bar2', 'StreamVLN（R2R-CE）', false], ['ln3', 'bar3', 'Uni-NaVid（VLN）', false]].forEach(function (l, i) {
+      var y = ly + i * 24;
+      var ln = el('line', { x1: 650, y1: y, x2: 674, y2: y, 'class': l[0] }, g);
+      if (l[3]) ln.setAttribute('stroke-dasharray', '5 4');
+      el('circle', { cx: 662, cy: y, r: 4, 'class': l[1] }, g);
+      text(682, y + 4, l[2], '', g);
+    });
+    el('rect', { x: 657, y: ly + 72 - 5, width: 10, height: 10, transform: 'rotate(45 662 ' + (ly + 72) + ')', 'class': 'bar' }, g);
+    text(682, ly + 76, 'MemER 关键帧记忆', '', g);
+  })();
+
+  // LOC bars: [label, low, high, lang]
+  var loc = [
+    ['按帧缓存 ViT + 记忆帧前缀', 200, 300, 'py', '低到中'],
+    ['共置 SM / 优先级网格', 300, 300, 'py', '中'],
+    ['按余量让出带宽 + 干扰预测', 700, 700, 'py', '中到高'],
+    ['树状 MTP', 1500, 3000, 'cu', '高']
+  ];
+  var lg = document.getElementById('locbars');
+  var lx0 = 230, lsx = 490 / 3000;
+  loc.forEach(function (d, i) {
+    var y = 18 + i * 36, cls = d[3] === 'py' ? 'bar' : 'bar2';
+    text(lx0 - 8, y + 14, d[0], 't1', lg, 'end');
+    var tip = d[0] + '：约 ' + (d[1] === d[2] ? d[1] : d[1] + '–' + d[2]) + ' 行，' + (d[3] === 'py' ? 'Python' : 'CUDA/C++') + '，难度' + d[4];
+    if (d[2] > d[1]) el('rect', { x: lx0, y: y, width: d[2] * lsx, height: 20, rx: 3, 'class': cls, opacity: 0.35 }, lg, tip);
+    el('rect', { x: lx0, y: y, width: Math.max(3, d[1] * lsx), height: 20, rx: 3, 'class': cls }, lg, tip);
+    text(lx0 + d[2] * lsx + 6, y + 14, '难度' + d[4], 't3', lg);
+  });
+
+  // Timeline: sync vs async
+  var tl = document.getElementById('tl');
+  function lane(yExec, yPlan, sync) {
+    var t0 = 120, L = 160, period = 44;
+    for (var x = 70; x < 730; x += period) {
+      var paused = sync && x >= t0 && x < t0 + L;
+      var paused2 = sync && x >= 560 && x < 560 + L;
+      if (paused || paused2) {
+        el('rect', { x: x, y: yExec - 10, width: 30, height: 14, rx: 2, 'class': 'muted' }, tl, '执行器停下等待规划器');
+      } else {
+        el('rect', { x: x, y: yExec - 10, width: 14, height: 14, rx: 2, 'class': 'bar3' }, tl, '执行器一次推理（< 200 ms），之后执行动作块');
+      }
+    }
+    [120, 560].forEach(function (s) {
+      el('rect', { x: s, y: yPlan - 10, width: L, height: 14, rx: 2, 'class': 'bar' }, tl, '规划器一次调用，决策延迟 L');
+      text(s + L / 2, yPlan + 18, 'L', 't3', tl, 'middle');
+    });
+    if (!sync) {
+      text(282, yExec - 16, '执行器继续按旧子任务执行，新决策在 t₀+L 后生效', 't3', tl);
+    } else {
+      text(175, yExec - 16, '执行器停下等待', 't3', tl);
+    }
+  }
+  lane(52, 82, true);
+  lane(158, 188, false);
+
+  // Measured latency-quality shapes from three papers
+  var sg = document.getElementById('shapes');
+  function panel(ox, title, sub, xr, yr, xt, yt, xlab, ylab, series, logx) {
+    var W = 200, H = 150, oy = 40;
+    var gg = el('g', { transform: 'translate(' + ox + ',' + oy + ')' }, sg);
+    function fx(v) { return logx ? (Math.log10(v) - Math.log10(xr[0])) / (Math.log10(xr[1]) - Math.log10(xr[0])) * W : (v - xr[0]) / (xr[1] - xr[0]) * W; }
+    function fy(v) { return H - (v - yr[0]) / (yr[1] - yr[0]) * H; }
+    text(W / 2, -24, title, 't1', gg, 'middle');
+    text(W / 2, -9, sub, 't3', gg, 'middle');
+    yt.forEach(function (v) { el('line', { x1: 0, y1: fy(v), x2: W, y2: fy(v), 'class': 'grid' }, gg); text(-6, fy(v) + 4, String(v), 't3', gg, 'end'); });
+    xt.forEach(function (v) { text(fx(v), H + 15, String(v), 't3', gg, 'middle'); });
+    el('line', { x1: 0, y1: H, x2: W, y2: H, 'class': 'ax' }, gg);
+    el('line', { x1: 0, y1: 0, x2: 0, y2: H, 'class': 'ax' }, gg);
+    text(W / 2, H + 32, xlab, 't3', gg, 'middle');
+    text(-6, -9, ylab, 't3', gg, 'end');
+    series.forEach(function (sr) {
+      el('polyline', { points: sr.pts.map(function (q) { return fx(q[0]) + ',' + fy(q[1]); }).join(' '), 'class': sr.cls }, gg, sr.name);
+      sr.pts.forEach(function (q) {
+        el('circle', { cx: fx(q[0]), cy: fy(q[1]), r: 3.5, 'class': sr.dot }, gg);
+        el('circle', { cx: fx(q[0]), cy: fy(q[1]), r: 9, fill: 'transparent' }, gg, sr.name + '：' + q[2]);
+      });
+      if (sr.label) text(fx(sr.label[0]), fy(sr.label[1]), sr.name, 't3', gg, sr.label[2] || 'start');
+    });
+  }
+  panel(50, '无影响：Fast Plans', '规划时延 → 真机成功率', [0, 1200], [50, 100], [0, 600, 1200], [50, 75, 100], '规划时延（ms）', '成功率 %',
+    [{ name: 'Fast Plans', cls: 'ln1', dot: 'bar', pts: [[125, 76.7, '125 ms：46/60'], [1094, 80.0, '1 094 ms：48/60']] }]);
+  text(0, 0, '', '', sg);
+  panel(300, '连续：CARLA UniAD', '推理间隔 → 驾驶分', [33, 1000], [30, 42], [33, 100, 1000], [30, 36, 42], '推理间隔（ms，对数）', '驾驶分',
+    [{ name: 'UniAD', cls: 'ln2', dot: 'bar2', pts: [[1000, 32.85, '1 FPS：32.85'], [500, 33.50, '2 FPS：33.50'], [333, 35.59, '3 FPS：35.59'], [200, 33.74, '5 FPS：33.74'], [125, 36.70, '8 FPS：36.70'], [100, 37.55, '10 FPS：37.55'], [71.4, 37.15, '14 FPS：37.15'], [55.6, 38.01, '18 FPS：38.01'], [50, 39.53, '20 FPS：39.53'], [41.7, 40.63, '24 FPS：40.63'], [35.7, 39.68, '28 FPS：39.68'], [33.3, 40.15, '30 FPS：40.15']] }], true);
+  panel(550, '门槛：A2C2（Kinetix）', '推理延迟 → 成功率', [1, 4], [40, 100], [1, 2, 3, 4], [40, 70, 100], '推理延迟 d（控制步）', '成功率 %',
+    [{ name: '朴素异步', cls: 'ln2', dot: 'bar2', label: [2.6, 47], pts: [[1, 78.1, 'd=1：78.1 %'], [2, 75.7, 'd=2：75.7 %'], [3, 59.3, 'd=3：59.3 %'], [4, 51.2, 'd=4：51.2 %']] },
+     { name: 'A2C2', cls: 'ln1', dot: 'bar', label: [2.4, 93], pts: [[1, 89.5, 'd=1：89.5 %'], [2, 87.4, 'd=2：87.4 %'], [3, 87.4, 'd=3：87.4 %'], [4, 86.5, 'd=4：86.5 %']] }]);
+})();
+</script>
+
+<div class="tip" id="term-tip" hidden></div>
+<script>
+// Layout: the title header is unit 1; each section starts a unit at its h2 and a new unit at every h3.
+// <meta name="layout" content="page"> shows one unit per screen; content="page" lays the units out as one long page.
+(function () {
+  var PAGE = !!document.querySelector('meta[name="layout"][content="page"]');
+  var tip = document.getElementById('term-tip');
+  var wrap = document.querySelector('.wrap');
+  var header = wrap.querySelector('header');
+  var sections = Array.prototype.slice.call(wrap.querySelectorAll(':scope > section'));
+  var footer = wrap.querySelector('footer');
+  var deck = document.createElement('div');
+  deck.className = PAGE ? 'wrap page' : 'deck';
+  var slides = [];
+  function newSlide(title, sectionId) {
+    var sl = document.createElement('div'); sl.className = PAGE ? 'pg' : 'slide';
+    if (PAGE) sl.id = 's' + (slides.length + 1);
+    var inner = document.createElement('div'); inner.className = PAGE ? 'pg-inner' : 'slide-inner';
+    sl.appendChild(inner); deck.appendChild(sl);
+    slides.push({ el: sl, inner: inner, title: title, section: sectionId, label: '', joins: [], lead: '' });
+    return inner;
+  }
+  var first = newSlide(header.querySelector('h1').textContent, 'top');
+  first.appendChild(header);
+  slides[0].el.classList.add('title-slide');
+  sections.forEach(function (sec) {
+    var h2 = sec.querySelector('h2');
+    var no = h2.querySelector('.no') ? h2.querySelector('.no').textContent : '';
+    var name = h2.textContent.replace(no, '').trim();
+    var nodes = Array.prototype.slice.call(sec.childNodes);
+    var inner = newSlide(name, sec.id);
+    slides[slides.length - 1].label = no;
+    slides[slides.length - 1].el.classList.add('sec-start');
+    var lead = sec.querySelector(':scope > .lead');
+    var chain = sec.querySelectorAll(':scope > .chain .step b');
+    if (chain.length) slides[slides.length - 1].lead = Array.prototype.map.call(chain, function (b) { return b.textContent.replace(/^\d+\s*/, ''); }).join(' → ');
+    else if (lead) slides[slides.length - 1].lead = lead.textContent.split(/[；。]/)[0];
+    nodes.forEach(function (n) {
+      if (n.nodeType === 1 && n.tagName === 'H3' && n.classList.contains('join')) slides[slides.length - 1].joins.push(n.textContent);
+      if (n.nodeType === 1 && n.tagName === 'H3' && !n.classList.contains('join')) {
+        inner = newSlide(n.textContent, sec.id);
+        if (!PAGE) {
+          var k = document.createElement('p'); k.className = 'kicker';
+          k.innerHTML = '<b>' + no + '</b>' + name;
+          inner.appendChild(k);
+        }
+      }
+      inner.appendChild(n);
+    });
+    sec.remove();
+  });
+  if (footer) slides[slides.length - 1].inner.appendChild(footer);
+  // contents on the title slide: one card per section, its later pages listed beneath
+  var toc = document.createElement('nav'); toc.className = 'toc';
+  var box = null, list = null;
+  function link(i, html) {
+    var a = document.createElement('a'); a.href = '#s' + (i + 1); a.innerHTML = html;
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (PAGE) slides[i].el.scrollIntoView({ behavior: 'smooth', block: 'start' }); else go(i);
+    });
+    return a;
+  }
+  function item(i, t) {
+    if (!list) { list = document.createElement('ul'); box.appendChild(list); }
+    var li = document.createElement('li'); li.appendChild(link(i, t)); list.appendChild(li);
+  }
+  slides.forEach(function (s, i) {
+    if (i === 0) return;
+    if (s.label) {
+      box = document.createElement('div'); box.className = 'toc-sec';
+      box.appendChild(link(i, '<span>' + s.label + '</span>' + s.title));
+      list = null; toc.appendChild(box);
+      var nextIsSec = i + 1 >= slides.length || slides[i + 1].label;
+      if (!s.joins.length && nextIsSec && s.lead) {
+        var p = document.createElement('p'); p.className = 'toc-lead'; p.textContent = s.lead; box.appendChild(p);
+      }
+    } else {
+      item(i, s.title);
+    }
+    s.joins.forEach(function (t) { item(i, t); });
+  });
+  header.appendChild(toc);
+  wrap.replaceWith(deck);
+  var cur = 0, bar, prog, btnPrev, btnNext, count, title;
+  function go(i) {
+    i = Math.max(0, Math.min(slides.length - 1, i));
+    slides[cur].el.classList.remove('active');
+    cur = i;
+    slides[cur].el.classList.add('active');
+    slides[cur].el.scrollTop = 0;
+    count.textContent = (cur + 1) + ' / ' + slides.length;
+    title.textContent = slides[cur].title;
+    btnPrev.disabled = cur === 0; btnNext.disabled = cur === slides.length - 1;
+    prog.style.width = ((cur + 1) / slides.length * 100) + '%';
+    hideTip();
+  }
+  var m = /^#s(\d+)$/.exec(location.hash || '');
+  if (PAGE) {
+    if (m && slides[Number(m[1]) - 1]) slides[Number(m[1]) - 1].el.scrollIntoView();
+    window.addEventListener('scroll', hideTip, { passive: true });
+  } else {
+  document.body.classList.add('deck-on');
+  // controls
+  bar = document.createElement('div'); bar.className = 'deck-bar';
+  bar.innerHTML = '<button type="button" data-d="-1" aria-label="上一页">‹ 上一页</button>' +
+    '<span class="deck-count"></span><span class="deck-title"></span>' +
+    '<button type="button" data-d="1" aria-label="下一页">下一页 ›</button>';
+  document.body.appendChild(bar);
+  prog = document.createElement('div'); prog.className = 'deck-progress'; document.body.appendChild(prog);
+  btnPrev = bar.querySelector('[data-d="-1"]'); btnNext = bar.querySelector('[data-d="1"]');
+  count = bar.querySelector('.deck-count'); title = bar.querySelector('.deck-title');
+  bar.addEventListener('click', function (e) {
+    var b = e.target.closest('button'); if (b) go(cur + Number(b.getAttribute('data-d')));
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.target.closest && e.target.closest('input, textarea')) return;
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey)) { e.preventDefault(); go(cur + 1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp' || (e.key === ' ' && e.shiftKey)) { e.preventDefault(); go(cur - 1); }
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(slides.length - 1);
+  });
+  var tx = null, ty = null;
+  deck.addEventListener('touchstart', function (e) { tx = e.touches[0].clientX; ty = e.touches[0].clientY; }, { passive: true });
+  deck.addEventListener('touchend', function (e) {
+    if (tx === null) return;
+    var dx = e.changedTouches[0].clientX - tx, dy = e.changedTouches[0].clientY - ty;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy) && !e.target.closest('.tablebox, .fig')) go(cur + (dx < 0 ? 1 : -1));
+    tx = null;
+  });
+  slides[0].el.classList.add('active');
+  go(m ? Number(m[1]) - 1 : 0);
+  }
+
+  // ---- term notes: dotted underline on the first occurrence per slide; hover, focus or tap shows the note ----
+  var TERMS = [
+    ['带延迟补偿的异步', '异步之上专门处理推理延迟：冻结推理期间已承诺的动作（RTC）、用最新观测修正（A2C2），或预测执行时刻的状态再推理（VLASH）。'],
+    ['朴素异步', '推理期间机器人照旧执行，结果一到就直接替换，不处理"结果依据的是 L 之前的状态"。'],
+    ['异步', '规划器推理时执行器不停，继续按旧指令执行；新决策生效后才换。'],
+    ['同步', '规划器推理时执行器停下等待，结果到了再继续。'],
+    ['L', '规划器的决策延迟：从取观测快照，到执行器第一次用上这个决策的时间。'],
+    ['Δ', '检查间隔：周期调用规划器的间隔，是 HPE 这类周期触发的参数，RoboCerebra 论文没有给出取值。MemER 上一次结束就发下一次，Δ 约等于 L；论文中高层约 1 Hz。'],
+    ['余量', '时限减去实际时延，大于 0 才算满足时限：执行器为 200 ms − 推理时延，规划器为 Δ − L。'],
+    ['prefill', '把整段输入一次算过模型，生成 KV 和线性注意力的状态；计算密集。'],
+    ['decode', '逐 token 生成输出；每一步都要读一遍权重，带宽密集。'],
+    ['MTP', '多 token 预测头：先草拟几个 token，再用主模型一次验证，接受的越多越快（推测解码）。'],
+    ['SCT', '成功 × 最短用时 / 实际用时：把成功率和用时合成一个分数，越慢扣得越多。'],
+    ['goodput', '满足时延要求（SLO）的前提下能承受的最大请求率（DistServe）。'],
+    ['SM', 'GPU 的流式多处理器，分配计算的基本单位；Thor 有 20 个。'],
+    ['MPS', 'NVIDIA 多进程服务：多个进程共用 GPU，可以限制每个进程用的 SM 比例，并设两档客户端优先级。'],
+    ['green context', 'CUDA 12.4 起的接口：把 SM 划成几份，每份绑定一条 stream，发到哪条 stream 就用哪份 SM。'],
+    ['MIG', '把 GPU 切成独立实例；Thor 上只切计算，不切内存。'],
+    ['capsule', '把固定前缀算完后的模型状态（KV 与线性注意力的递归状态）存下来，下次调用直接恢复，省掉这段 prefill。'],
+    ['CUDA graph', '把一串 kernel 录成一张图，之后一次发射，省掉逐个发射的 CPU 开销；FlashRT 按解码位置分别录制。'],
+    ['统一内存', 'CPU 和 GPU 共用同一块物理内存和同一条带宽，没有独立显存。'],
+    ['零拷贝', 'GPU 直接读 CPU 写的内存，不经过 memcpy。'],
+    ['HPE', 'RoboCerebra 论文自带的分层基线：开始时把任务拆成子目标，之后周期监控、遇到完成或偏离就更新。'],
+    ['harness', '把规划器、执行器、调用节奏和记忆组织起来的运行框架，例如 MemER、VoLo、HPE。'],
+    ['NVFP4', 'NVIDIA 的 4 bit 浮点权重格式，每 16 个值共用一个缩放因子。'],
+    ['线性注意力', '用固定大小的递归状态代替随长度增长的 KV；Qwen3.8-27B 有 3/4 的层是这种。'],
+    ['MemER', '用关键帧记忆的分层策略（ICLR 2026）：高层每次看最近帧和检索出的关键帧，输出当前子任务。'],
+    ['RoboCerebra', '长时程操作基准：平均 9.1 个子任务、约 2 972 步，含记忆和扰动类任务，搭在 LIBERO 平台上。']
+  ];
+  function rx(term) {
+    var esc = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return /^[A-Za-z0-9 ]+$/.test(term) ? new RegExp('(^|[^A-Za-z0-9_])(' + esc + ')(?![A-Za-z0-9_])') : new RegExp('()(' + esc + ')');
+  }
+  var COMPILED = TERMS.map(function (t) { return { t: t[0], note: t[1], re: rx(t[0]) }; });
+  var SKIP = { SCRIPT: 1, STYLE: 1, A: 1, CODE: 1, BUTTON: 1, H1: 1, H2: 1, H3: 1 };
+  function textNodes(root) {
+    var out = [], w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        for (var p = n.parentNode; p && p !== root; p = p.parentNode) {
+          if (SKIP[p.tagName] || p.namespaceURI === 'http://www.w3.org/2000/svg' || (p.classList && (p.classList.contains('term') || p.classList.contains('kicker')))) return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      } });
+    while (w.nextNode()) out.push(w.currentNode);
+    return out;
+  }
+  slides.forEach(function (s) {
+    COMPILED.forEach(function (c) {
+      var nodes = textNodes(s.inner);
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i], mm = c.re.exec(n.nodeValue);
+        if (!mm) continue;
+        var start = mm.index + mm[1].length;
+        var after = n.splitText(start);
+        after.splitText(c.t.length);
+        var span = document.createElement('span');
+        span.className = 'term'; span.tabIndex = 0; span.setAttribute('data-term', c.t); span.setAttribute('data-note', c.note);
+        span.textContent = c.t;
+        after.parentNode.replaceChild(span, after);
+        break;
+      }
+    });
+  });
+  function showTip(el) {
+    tip.innerHTML = '<b></b><span></span>';
+    tip.firstChild.textContent = el.getAttribute('data-term');
+    tip.lastChild.textContent = el.getAttribute('data-note');
+    tip.hidden = false;
+    var r = el.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+    var left = Math.min(Math.max(8, r.left), window.innerWidth - tw - 8);
+    var top = r.bottom + 6 + th > window.innerHeight - 60 ? r.top - th - 6 : r.bottom + 6;
+    tip.style.left = left + 'px'; tip.style.top = Math.max(8, top) + 'px';
+  }
+  function hideTip() { tip.hidden = true; }
+  document.addEventListener('mouseover', function (e) { var t = e.target.closest && e.target.closest('.term'); if (t) showTip(t); });
+  document.addEventListener('mouseout', function (e) { if (e.target.closest && e.target.closest('.term')) hideTip(); });
+  document.addEventListener('focusin', function (e) { if (e.target.classList && e.target.classList.contains('term')) showTip(e.target); });
+  document.addEventListener('focusout', function (e) { if (e.target.classList && e.target.classList.contains('term')) hideTip(); });
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest && e.target.closest('.term');
+    if (t) showTip(t); else hideTip();
+  });
+  deck.addEventListener('scroll', hideTip, true);
+})();
+</script>

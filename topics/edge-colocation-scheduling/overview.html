@@ -1,5 +1,6 @@
 <title>Thor 共置研究导览</title>
 <meta name="claude:viewport-fit-sides" content="cover">
+<meta name="layout" content="slides">
 <style>
 :root {
   color-scheme: light;
@@ -159,6 +160,9 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .toc-sec li { font-size: 13px; line-height: 1.6; color: var(--fg-3); }
 .toc-sec li a { color: var(--fg-2); text-decoration: none; }
 .toc a:hover { color: var(--accent); }
+.page .pg.sec-start { margin-top: 56px; padding-top: 8px; border-top: 1px solid var(--line); }
+.page .pg { scroll-margin-top: 16px; }
+.page .pg-inner > h3:first-child { margin-top: 32px; }
 .toc-lead { margin: 6px 0 0; font-size: 13px; line-height: 1.6; color: var(--fg-3); }
 @media (max-width: 560px) { .deck-title { display: none; } }
 /* ---- term notes ---- */
@@ -929,19 +933,22 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 
 <div class="tip" id="term-tip" hidden></div>
 <script>
-// Slide deck: the title header is slide 1; each section starts a slide at its h2 and a new slide at every h3.
+// Layout: the title header is unit 1; each section starts a unit at its h2 and a new unit at every h3.
+// <meta name="layout" content="slides"> shows one unit per screen; content="page" lays the units out as one long page.
 (function () {
+  var PAGE = !!document.querySelector('meta[name="layout"][content="page"]');
   var tip = document.getElementById('term-tip');
   var wrap = document.querySelector('.wrap');
   var header = wrap.querySelector('header');
   var sections = Array.prototype.slice.call(wrap.querySelectorAll(':scope > section'));
   var footer = wrap.querySelector('footer');
   var deck = document.createElement('div');
-  deck.className = 'deck';
+  deck.className = PAGE ? 'wrap page' : 'deck';
   var slides = [];
   function newSlide(title, sectionId) {
-    var sl = document.createElement('div'); sl.className = 'slide';
-    var inner = document.createElement('div'); inner.className = 'slide-inner';
+    var sl = document.createElement('div'); sl.className = PAGE ? 'pg' : 'slide';
+    if (PAGE) sl.id = 's' + (slides.length + 1);
+    var inner = document.createElement('div'); inner.className = PAGE ? 'pg-inner' : 'slide-inner';
     sl.appendChild(inner); deck.appendChild(sl);
     slides.push({ el: sl, inner: inner, title: title, section: sectionId, label: '', joins: [], lead: '' });
     return inner;
@@ -956,6 +963,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     var nodes = Array.prototype.slice.call(sec.childNodes);
     var inner = newSlide(name, sec.id);
     slides[slides.length - 1].label = no;
+    slides[slides.length - 1].el.classList.add('sec-start');
     var lead = sec.querySelector(':scope > .lead');
     var chain = sec.querySelectorAll(':scope > .chain .step b');
     if (chain.length) slides[slides.length - 1].lead = Array.prototype.map.call(chain, function (b) { return b.textContent.replace(/^\d+\s*/, ''); }).join(' → ');
@@ -964,9 +972,11 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
       if (n.nodeType === 1 && n.tagName === 'H3' && n.classList.contains('join')) slides[slides.length - 1].joins.push(n.textContent);
       if (n.nodeType === 1 && n.tagName === 'H3' && !n.classList.contains('join')) {
         inner = newSlide(n.textContent, sec.id);
-        var k = document.createElement('p'); k.className = 'kicker';
-        k.innerHTML = '<b>' + no + '</b>' + name;
-        inner.appendChild(k);
+        if (!PAGE) {
+          var k = document.createElement('p'); k.className = 'kicker';
+          k.innerHTML = '<b>' + no + '</b>' + name;
+          inner.appendChild(k);
+        }
       }
       inner.appendChild(n);
     });
@@ -978,7 +988,10 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   var box = null, list = null;
   function link(i, html) {
     var a = document.createElement('a'); a.href = '#s' + (i + 1); a.innerHTML = html;
-    a.addEventListener('click', function (e) { e.preventDefault(); go(i); });
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (PAGE) slides[i].el.scrollIntoView({ behavior: 'smooth', block: 'start' }); else go(i);
+    });
     return a;
   }
   function item(i, t) {
@@ -1002,17 +1015,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   });
   header.appendChild(toc);
   wrap.replaceWith(deck);
-  document.body.classList.add('deck-on');
-  // controls
-  var bar = document.createElement('div'); bar.className = 'deck-bar';
-  bar.innerHTML = '<button type="button" data-d="-1" aria-label="上一页">‹ 上一页</button>' +
-    '<span class="deck-count"></span><span class="deck-title"></span>' +
-    '<button type="button" data-d="1" aria-label="下一页">下一页 ›</button>';
-  document.body.appendChild(bar);
-  var prog = document.createElement('div'); prog.className = 'deck-progress'; document.body.appendChild(prog);
-  var btnPrev = bar.querySelector('[data-d="-1"]'), btnNext = bar.querySelector('[data-d="1"]');
-  var count = bar.querySelector('.deck-count'), title = bar.querySelector('.deck-title');
-  var cur = 0;
+  var cur = 0, bar, prog, btnPrev, btnNext, count, title;
   function go(i) {
     i = Math.max(0, Math.min(slides.length - 1, i));
     slides[cur].el.classList.remove('active');
@@ -1025,6 +1028,21 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     prog.style.width = ((cur + 1) / slides.length * 100) + '%';
     hideTip();
   }
+  var m = /^#s(\d+)$/.exec(location.hash || '');
+  if (PAGE) {
+    if (m && slides[Number(m[1]) - 1]) slides[Number(m[1]) - 1].el.scrollIntoView();
+    window.addEventListener('scroll', hideTip, { passive: true });
+  } else {
+  document.body.classList.add('deck-on');
+  // controls
+  bar = document.createElement('div'); bar.className = 'deck-bar';
+  bar.innerHTML = '<button type="button" data-d="-1" aria-label="上一页">‹ 上一页</button>' +
+    '<span class="deck-count"></span><span class="deck-title"></span>' +
+    '<button type="button" data-d="1" aria-label="下一页">下一页 ›</button>';
+  document.body.appendChild(bar);
+  prog = document.createElement('div'); prog.className = 'deck-progress'; document.body.appendChild(prog);
+  btnPrev = bar.querySelector('[data-d="-1"]'); btnNext = bar.querySelector('[data-d="1"]');
+  count = bar.querySelector('.deck-count'); title = bar.querySelector('.deck-title');
   bar.addEventListener('click', function (e) {
     var b = e.target.closest('button'); if (b) go(cur + Number(b.getAttribute('data-d')));
   });
@@ -1043,9 +1061,9 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy) && !e.target.closest('.tablebox, .fig')) go(cur + (dx < 0 ? 1 : -1));
     tx = null;
   });
-  var m = /^#s(\d+)$/.exec(location.hash || '');
   slides[0].el.classList.add('active');
   go(m ? Number(m[1]) - 1 : 0);
+  }
 
   // ---- term notes: dotted underline on the first occurrence per slide; hover, focus or tap shows the note ----
   var TERMS = [
