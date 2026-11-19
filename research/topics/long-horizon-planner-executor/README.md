@@ -33,6 +33,8 @@ long-horizon manipulation, hierarchical VLA, planner–executor, dual-system, as
 | [summary_1111.html](summary_1111.html) | 11/05–11/11 进展汇报：按场景动机、Thor 上的 challenge、解决方向三个问题组织（论文证据卡片、challenge 排序、Thor 实测、闭环视频） |
 | [findings_1112.html](findings_1112.html) | 六个发现，每条一张由 Thor 原始日志画出的图：Thor 与 RTX 5090 的规划器延迟、瓶颈阶段随 harness 变化、共置时静态划分顾不了两头、干扰随规划器阶段变化、SM 分区共享芯片级吞吐上限、执行器的 GPU 时间占比 |
 | `reports/` | 汇报材料（尚无） |
+| [survey_call_latency/](survey_call_latency/brief.md) | 调研方向一：多帧上下文下规划器单次调用怎么变快。立项（`brief.md`）与论文卡片（`papers.md`） |
+| [survey_thor_scheduling/](survey_thor_scheduling/brief.md) | 调研方向二：Thor 上两模型的推理速度与调度，含 Apple 同类硬件与快慢双模型系统。立项与论文卡片 |
 
 ## 相关记录
 
