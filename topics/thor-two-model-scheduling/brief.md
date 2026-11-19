@@ -1,10 +1,10 @@
 # 立项：Thor 上两模型的推理速度与调度
 
-快照 2026-11-19。范围：一块统一内存 SoC 上，周期执行器（约 4B 的 VLA/WAM，200 ms 时限）与 VLM 规划器（Qwen3.8-27B）共置时的推理速度与调度；包括同类硬件（Apple M 系列等）上的系统工作，以及机器人以外的快慢双模型系统。单个规划器调用本身的加速见 [../survey_call_latency/brief.md](../survey_call_latency/brief.md)。
+快照 2026-11-19。范围：一块统一内存 SoC 上，周期执行器（约 4B 的 VLA/WAM，200 ms 时限）与 VLM 规划器（Qwen3.8-27B）共置时的推理速度与调度；包括同类硬件（Apple M 系列等）上的系统工作，以及机器人以外的快慢双模型系统。单个规划器调用本身的加速见 [planner-call-latency/brief.md](../planner-call-latency/brief.md)。
 
 ## 1. 为什么做，和主线的关系
 
-主线问题：异步下规划器的决策延迟 L 怎样影响任务质量（[tasks_robocerebra.md](../tasks_robocerebra.md)）。共置时，L 还受另一个模型的干扰。
+主线问题：异步下规划器的决策延迟 L 怎样影响任务质量（[tasks_robocerebra.md](../long-horizon-planner-executor/tasks_robocerebra.md)）。共置时，L 还受另一个模型的干扰。
 
 - 已实测（Jetson AGX Thor，B27 / B28）：执行器单独 p99 37.5 ms；共置（MPS 客户端优先级）p99 70 ms，0 % 错过 200 ms；CPU 满载访存时规划器 decode 慢约 2.2 倍，执行器 p99 约翻倍。
 - 执行器余量大（约 60–160 ms），规划器余量为负（MemER 节奏下 L ≈ 2 s > 1 s）。
@@ -25,8 +25,8 @@
 
 本方向大半已有调研，不重做：
 
-- [../../edge-colocation-scheduling/survey.md](../../edge-colocation-scheduling/survey.md)：略读 30 篇，精读 5 篇，分 GPU 共享与抢占、LLM 阶段调度、边缘 SoC 带宽争用、机器人双系统部署四类。
-- [../../edge-colocation-scheduling/unified_memory_inference.md](../../edge-colocation-scheduling/unified_memory_inference.md)：统一内存设备上的推理框架与系统 16 篇，含 MLX、LLM in a flash、EdgeAgent（M4）、Agent.xpu（按优先级让出带宽）。
+- [../../edge-colocation-scheduling/survey.md](../edge-colocation-scheduling/survey.md)：略读 30 篇，精读 5 篇，分 GPU 共享与抢占、LLM 阶段调度、边缘 SoC 带宽争用、机器人双系统部署四类。
+- [../../edge-colocation-scheduling/unified_memory_inference.md](../edge-colocation-scheduling/unified_memory_inference.md)：统一内存设备上的推理框架与系统 16 篇，含 MLX、LLM in a flash、EdgeAgent（M4）、Agent.xpu（按优先级让出带宽）。
 
 本轮只补三个缺口（论文卡片见 [papers.md](papers.md)）：
 

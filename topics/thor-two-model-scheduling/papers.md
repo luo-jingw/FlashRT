@@ -1,7 +1,7 @@
 # Thor 两模型调度：三个缺口的论文卡片
 
 快照 2026-11-19。补 [brief.md](brief.md) 第 3 节列出的三个缺口：Apple 自家系统工作、Jetson Orin/Thor 上的 VLA/VLM 实测、机器人操作以外的快慢双模型系统。每个缺口精读 3 篇，共 9 篇；略读 12 篇，未收的见第 5 节。
-选取方法：arXiv / 会议页检索，排除 [edge-colocation-scheduling/survey.md](../../edge-colocation-scheduling/survey.md)、[unified_memory_inference.md](../../edge-colocation-scheduling/unified_memory_inference.md)、[papers.md](../../edge-colocation-scheduling/papers.md) 已收的工作（MLX、LLM in a flash、EdgeAgent、DualVLN on Thor、OxyGen、FiS-VLA、RTC、PR #193 等）。数字均来自论文正文并注明位置；† 表示不是从论文正文核实的。
+选取方法：arXiv / 会议页检索，排除 [edge-colocation-scheduling/survey.md](../edge-colocation-scheduling/survey.md)、[unified_memory_inference.md](../edge-colocation-scheduling/unified_memory_inference.md)、[papers.md](../edge-colocation-scheduling/papers.md) 已收的工作（MLX、LLM in a flash、EdgeAgent、DualVLN on Thor、OxyGen、FiS-VLA、RTC、PR #193 等）。数字均来自论文正文并注明位置；† 表示不是从论文正文核实的。
 
 ## 1. 总表
 
