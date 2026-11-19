@@ -1,0 +1,88 @@
+{
+ "frontend": "thor",
+ "ckpt": "/home/jingwu/thor_val/ckpt/qwen38-27b-nvfp4-official-5090",
+ "cap": 4096,
+ "spec_k": 6,
+ "torch": "2.9.1+cu130",
+ "device": "NVIDIA Thor",
+ "cells": [
+  {
+   "question": "next_subtask",
+   "thinking": false,
+   "context_tokens": 768,
+   "prefill_ms": 391.85391552746296,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 111,
+   "decode_ms": 2941.870156675577,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.264705882352941,
+   "answer": "{\n  \"subtask\": \"close the drawer\",\n  \"reason\": \"The subtasks follow a repeating cycle of 8 steps: pick up red block, place in bowl, open drawer, move can, press bell, lift pot, put hammer, close drawer. The last executed step (176) was 'put the hammer on the block', which is the 7th subtask in the s"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": false,
+   "context_tokens": 768,
+   "prefill_ms": 392.1397775411606,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 14,
+   "decode_ms": 346.804590895772,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.5,
+   "answer": "{\"count\": 3, \"last_status\": \"next\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": false,
+   "context_tokens": 768,
+   "prefill_ms": 391.3982976227999,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 10,
+   "decode_ms": 344.20421719551086,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.5,
+   "answer": "{\"subtasks\": [\"press the bell\"]}"
+  },
+  {
+   "question": "next_subtask",
+   "thinking": true,
+   "context_tokens": 768,
+   "prefill_ms": 392.1685013920069,
+   "think_tokens": 703,
+   "think_ms": 21761.544182896614,
+   "answer_tokens": 106,
+   "decode_ms": 24273.679358884692,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.8892857142857142,
+   "answer": "{\n  \"subtask\": \"put the hammer on the block\",\n  \"reason\": \"The subtasks repeat in a fixed 8-step cycle: pick up the red block, place it in the bowl, open the drawer, move the can next to the pot, press the bell, lift the pot, put the hammer on the block, close the drawer. Since step 168 is 'lift the"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": true,
+   "context_tokens": 768,
+   "prefill_ms": 391.66088588535786,
+   "think_tokens": 405,
+   "think_ms": 10556.212726980448,
+   "answer_tokens": 15,
+   "decode_ms": 10901.813322678208,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.3333333333333335,
+   "answer": "{\"count\": 3, \"last_status\": \"next\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": true,
+   "context_tokens": 768,
+   "prefill_ms": 391.83092676103115,
+   "think_tokens": 2717,
+   "think_ms": 82911.50980070233,
+   "answer_tokens": 35,
+   "decode_ms": 83697.6785119623,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.8666666666666667,
+   "answer": "{\"subtasks\": [\"press the bell\", \"place it in the bowl\", \"put the hammer on the block\", \"move the can next to the pot\"]}"
+  }
+ ]
+}

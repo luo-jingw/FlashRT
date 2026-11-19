@@ -352,11 +352,11 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
       <g id="timechart"></g>
     </svg>
   </div>
-  <p class="cap">2026-11-18 Thor 实测，HF 官方 Qwen3.8-27B，合成的机器人日志 + 一个规划器式问题。蓝线：整段 prefill；点：整次调用（prefill + 解码到 EOS），每个长度 3 个问题；开思考上限 4 096 token，空心点为到上限仍未想完。graph 缓存上限 8 192。悬停看数值。</p>
+  <p class="cap">2026-11-19 Thor 实测，HF 官方 Qwen3.8-27B，合成的机器人日志 + 一个规划器式问题，7 个长度在同一轮里测完。蓝线：整段 prefill；点：整次调用（prefill + 解码到 EOS），每个长度 3 个问题；开思考上限 4 096 token，空心点为到上限仍未想完。graph 缓存上限 8 192。悬停看数值。</p>
   <div class="grid" style="margin-top:12px">
-    <div class="card"><h4>关思考：瓶颈是 prefill</h4><p>回复 15–650 token，1k 上下文时整次调用 1–5 s；4k 以上主要是 prefill，16k 约 11–28 s，32k 约 27–30 s。约 9k token 时单是 prefill 就超过 Δ。</p></div>
-    <div class="card"><h4>开思考：一次调用要 1–3 分钟</h4><p>思考长度 1 100–3 300 token，12 次里有 5 次到 4 096 上限仍未想完。即使 1k 上下文，整次调用也要 61–101 s，是 Δ 的 11–19 倍。解码 25–44 ms/token，随上下文变长。</p></div>
-    <div class="card"><h4>Thor 上长解码的一个坑：graph 缓存上限</h4><p>FlashRT 按解码位置录制 CUDA graph，默认最多缓存 256 张。解码超过约 750 token 后旧 graph 被挤掉、反复重录，每 token 从约 30 ms 变成约 100 ms。把上限调到 8 192 后恢复。64k 以上 decode 约 100 ms/token 是另一个问题（ISSUE-117），调大缓存无效。</p></div>
+    <div class="card"><h4>关思考：整次调用基本在 Δ 以内</h4><p>3k 以内 prefill 只要 0.16–1.67 s，几乎随长度线性增长。回复 10–176 token，整次调用 0.4–5.7 s；21 次里只有 3k 的"下一步"一次（5.67 s）超过 Δ。</p></div>
+    <div class="card"><h4>开思考：一次调用要 8–150 s</h4><p>思考长度 275 到 4 096 以上，随问题变化远大于随上下文变化；21 次里 2 次到上限仍未想完。整次调用是 Δ 的 1.4–28 倍，瓶颈是解码而不是上下文。</p></div>
+    <div class="card"><h4>解码速度与上下文长度基本无关</h4><p>3k 以内每 token 24–36 ms。FlashRT 按解码位置录制 CUDA graph，默认最多缓存 256 张，解码超过约 750 token 后反复重录、每 token 变成约 100 ms；本图把上限调到 8 192。</p></div>
 
   </div>
   <h3>规划器实际需要多长的上下文：输入 token 数与 SR</h3>
@@ -716,55 +716,51 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   })();
 
 
-  // Planner call time vs context (log-log), Thor measurements
+  // Planner call time vs context (log-log), Thor measurements 2026-11-19, 256-3k tokens
   (function () {
     var tg = document.getElementById('timechart');
     var X0 = 70, X1 = 560, Y0 = 270, Y1 = 20;
-    var lmin = Math.log2(1024), lmax = Math.log2(131072);
-    var vmin = Math.log10(0.3), vmax = Math.log10(400);
+    var lmin = Math.log2(220), lmax = Math.log2(3400);
+    var vmin = Math.log10(0.1), vmax = Math.log10(300);
     function px(n) { return X0 + (Math.log2(n) - lmin) / (lmax - lmin) * (X1 - X0); }
     function py(v) { return Y0 - (Math.log10(v) - vmin) / (vmax - vmin) * (Y0 - Y1); }
     el('line', { x1: X0, y1: Y0, x2: X1, y2: Y0, 'class': 'ax' }, tg);
     el('line', { x1: X0, y1: Y0, x2: X0, y2: Y1, 'class': 'ax' }, tg);
-    [1, 10, 100].forEach(function (v) {
-      el('line', { x1: X0, y1: py(v), x2: X1, y2: py(v), 'class': 'grid' }, tg);
-      text(X0 - 6, py(v) + 4, v + ' s', 't3', tg, 'end');
+    [[0.1, '0.1 s'], [1, '1 s'], [10, '10 s'], [100, '100 s']].forEach(function (v) {
+      el('line', { x1: X0, y1: py(v[0]), x2: X1, y2: py(v[0]), 'class': 'grid' }, tg);
+      text(X0 - 6, py(v[0]) + 4, v[1], 't3', tg, 'end');
     });
-    [[1024, '1k'], [4096, '4k'], [16384, '16k'], [65536, '64k'], [131072, '128k']].forEach(function (t) {
+    [[256, '256'], [512, '512'], [768, '768'], [1024, '1k'], [1536, '1.5k'], [2048, '2k'], [3072, '3k']].forEach(function (t) {
       text(px(t[0]), Y0 + 16, t[1], 't3', tg, 'middle');
     });
-    text((X0 + X1) / 2, Y0 + 36, '规划器上下文长度（token）', '', tg, 'middle');
+    text((X0 + X1) / 2, Y0 + 36, '规划器上下文长度（token，对数）', '', tg, 'middle');
     el('line', { x1: X0, y1: py(5.33), x2: X1, y2: py(5.33), 'class': 'dash' }, tg);
-    text(X0 + 6, py(5.33) - 6, 'Δ = 5.33 s', 't1', tg);
-    // context_sweep: prefill alone
-    var P = [[1024, 0.534], [2048, 1.118], [4096, 2.285], [8192, 4.858], [16384, 10.87], [32768, 26.36], [65536, 71.2], [131072, 216.5]];
+    text(X1 + 8, py(5.33) + 4, 'Δ = 5.33 s', 't1', tg);
+    var P = [[256, 0.162], [511, 0.264], [768, 0.392], [1024, 0.536], [1536, 0.818], [2048, 1.121], [3072, 1.669]];
     el('polyline', { points: P.map(function (m) { return px(m[0]) + ',' + py(m[1]); }).join(' '), 'class': 'ln1' }, tg, '整段 prefill');
-    P.forEach(function (m) { el('circle', { cx: px(m[0]), cy: py(m[1]), r: 9, fill: 'transparent' }, tg, '整段 prefill：' + m[0] + ' token，' + m[1].toFixed(2) + ' s'); });
-    text(X1 + 8, py(216.5) + 4, '整段 prefill', 't1', tg);
-    // thinking_sweep (graph cache 8192): whole call = prefill + decode to EOS; [ctx, seconds, question, tokens, capped]
-    var OFF = [[1024, 3.75, '下一步', 128], [1024, 5.09, '计数', 176], [1024, 0.98, '重规划', 15],
-               [4096, 12.07, '下一步', 323], [4096, 2.73, '计数', 15], [4096, 2.64, '重规划', 15],
-               [16384, 12.51, '下一步', 51], [16384, 11.32, '计数', 15], [16384, 28.09, '重规划', 651],
-               [32768, 30.07, '下一步', 94], [32768, 26.92, '计数', 21], [32768, 28.27, '重规划', 61]];
-    var ON = [[1024, 63.5, '下一步', 2066, 0], [1024, 61.1, '计数', 1138, 0], [1024, 100.6, '重规划', 3270, 0],
-              [4096, 109.4, '下一步', 4096, 1], [4096, 44.4, '计数', 1542, 0], [4096, 135.3, '重规划', 4096, 1],
-              [16384, 165.7, '下一步', 4096, 1], [16384, 118.6, '计数', 2809, 0], [16384, 187.9, '重规划', 4096, 1],
-              [32768, 208.3, '下一步', 4096, 1], [32768, 153.1, '计数', 3039, 0], [32768, 123.6, '重规划', 2671, 0]];
-    var jit = { '下一步': -7, '计数': 0, '重规划': 7 };
+    P.forEach(function (m) {
+      el('circle', { cx: px(m[0]), cy: py(m[1]), r: 3, 'class': 'bar' }, tg);
+      el('circle', { cx: px(m[0]), cy: py(m[1]), r: 9, fill: 'transparent' }, tg, '整段 prefill：' + m[0] + ' token，' + m[1].toFixed(2) + ' s');
+    });
+    text(X1 + 8, py(1.0) + 4, '整段 prefill', 't1', tg);
+    // whole call = prefill + decode to EOS; [ctx, seconds, question, output tokens, capped]
+    var OFF = [[256, 0.42, "重规划", 10], [256, 0.51, "计数", 14], [256, 2.94, "下一步", 89], [512, 0.61, "计数", 14], [512, 0.78, "重规划", 18], [512, 3.29, "下一步", 117], [768, 0.74, "计数", 14], [768, 0.74, "重规划", 10], [768, 3.33, "下一步", 111], [1024, 0.97, "重规划", 15], [1024, 3.75, "下一步", 128], [1024, 5.05, "计数", 176], [1536, 1.14, "重规划", 10], [1536, 1.25, "计数", 14], [1536, 4.76, "下一步", 151], [2048, 1.55, "计数", 14], [2048, 1.55, "重规划", 12], [2048, 4.0, "下一步", 94], [3072, 2.02, "计数", 15], [3072, 2.19, "重规划", 15], [3072, 5.67, "下一步", 146]];
+    var ON = [[256, 7.52, "计数", 290, 0], [256, 22.63, "重规划", 725, 0], [256, 128.16, "下一步", 3872, 0], [512, 13.06, "计数", 537, 0], [512, 124.35, "下一步", 4043, 0], [512, 149.13, "重规划", 4096, 1], [768, 11.29, "计数", 420, 0], [768, 24.67, "下一步", 809, 0], [768, 84.09, "重规划", 2752, 0], [1024, 29.11, "计数", 1136, 0], [1024, 63.33, "下一步", 2066, 0], [1024, 97.7, "重规划", 3270, 0], [1536, 25.99, "计数", 933, 0], [1536, 53.11, "下一步", 1632, 0], [1536, 99.12, "重规划", 2811, 0], [2048, 33.41, "计数", 1038, 0], [2048, 75.44, "下一步", 2240, 0], [2048, 122.69, "重规划", 3497, 0], [3072, 32.93, "计数", 1207, 0], [3072, 58.85, "重规划", 1917, 0], [3072, 145.65, "下一步", 4096, 1]];
+    var jit = { '下一步': -6, '计数': 0, '重规划': 6 };
     OFF.forEach(function (m) {
       el('circle', { cx: px(m[0]) + jit[m[2]], cy: py(m[1]), r: 4, 'class': 'bar2' }, tg,
-         '关思考 · ' + m[2] + '：' + m[0] + ' token 上下文，整次 ' + m[1].toFixed(1) + ' s，输出 ' + m[3] + ' token');
+         '关思考 · ' + m[2] + '：' + m[0] + ' token 上下文，整次 ' + m[1].toFixed(2) + ' s，输出 ' + m[3] + ' token');
     });
     ON.forEach(function (m) {
       var c = el('circle', { cx: px(m[0]) + jit[m[2]], cy: py(m[1]), r: 4.5, 'class': 'bar3' }, tg,
          '开思考 · ' + m[2] + '：' + m[0] + ' token 上下文，整次 ' + (m[4] ? '≥ ' : '') + m[1].toFixed(1) + ' s，输出 ' + (m[4] ? '≥ ' : '') + m[3] + ' token' + (m[4] ? '（到 4 096 上限仍未想完）' : ''));
       if (m[4]) { c.style.fill = 'var(--surface)'; c.style.stroke = 'var(--s3)'; c.style.strokeWidth = '2px'; }
     });
-    el('circle', { cx: X1 + 2, cy: py(70), r: 4, 'class': 'bar3' }, tg);
-    text(X1 + 10, py(70) + 4, '开思考整次调用', 't1', tg);
-    text(X1 + 10, py(70) + 20, '（空心：到上限未想完）', 't3', tg);
-    el('circle', { cx: X1 + 2, cy: py(8), r: 4, 'class': 'bar2' }, tg);
-    text(X1 + 10, py(8) + 4, '关思考整次调用', 't1', tg);
+    el('circle', { cx: X1 + 2, cy: py(60), r: 4, 'class': 'bar3' }, tg);
+    text(X1 + 10, py(60) + 4, '开思考整次调用', 't1', tg);
+    text(X1 + 10, py(60) + 20, '（空心：到上限未想完）', 't3', tg);
+    el('circle', { cx: X1 + 2, cy: py(2.6), r: 4, 'class': 'bar2' }, tg);
+    text(X1 + 10, py(2.6) + 4, '关思考整次调用', 't1', tg);
   })();
 
 

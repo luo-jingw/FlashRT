@@ -1,0 +1,88 @@
+{
+ "frontend": "thor",
+ "ckpt": "/home/jingwu/thor_val/ckpt/qwen38-27b-nvfp4-official-5090",
+ "cap": 4096,
+ "spec_k": 6,
+ "torch": "2.9.1+cu130",
+ "device": "NVIDIA Thor",
+ "cells": [
+  {
+   "question": "next_subtask",
+   "thinking": false,
+   "context_tokens": 1536,
+   "prefill_ms": 816.2672221660614,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 151,
+   "decode_ms": 3941.5438938885927,
+   "hit_cap": false,
+   "tokens_per_attempt": 4.081081081081081,
+   "answer": "{\"subtask\": \"close the drawer\", \"reason\": \"The subtasks follow a fixed repeating cycle of 8 actions: 1. pick up the red block, 2. place it in the bowl, 3. open the drawer, 4. move the can next to the pot, 5. press the bell, 6. lift the pot, 7. put the hammer on the block, 8. close the drawer. The la"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": false,
+   "context_tokens": 1536,
+   "prefill_ms": 820.9873735904694,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 14,
+   "decode_ms": 424.539627507329,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.5,
+   "answer": "{\"count\": 5, \"last_status\": \"continue\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": false,
+   "context_tokens": 1536,
+   "prefill_ms": 819.8208566755056,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 10,
+   "decode_ms": 320.6180967390537,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.3333333333333335,
+   "answer": "{\"subtasks\": [\"press the bell\"]}"
+  },
+  {
+   "question": "next_subtask",
+   "thinking": true,
+   "context_tokens": 1536,
+   "prefill_ms": 814.8339353501797,
+   "think_tokens": 1573,
+   "think_ms": 50909.435626119375,
+   "answer_tokens": 59,
+   "decode_ms": 52296.008199453354,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.330612244897959,
+   "answer": "{\n  \"subtask\": \"put the hammer on the block\",\n  \"reason\": \"The log follows a repeating cycle of subtasks, and after 'lift the pot' the next subtask in the sequence is 'put the hammer on the block'.\"\n}"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": true,
+   "context_tokens": 1536,
+   "prefill_ms": 820.4959500581026,
+   "think_tokens": 918,
+   "think_ms": 24848.562721163034,
+   "answer_tokens": 15,
+   "decode_ms": 25169.164814054966,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.9533898305084745,
+   "answer": "{\"count\": 6, \"last_status\": \"continue\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": true,
+   "context_tokens": 1536,
+   "prefill_ms": 821.8140192329884,
+   "think_tokens": 2785,
+   "think_ms": 97758.17909277976,
+   "answer_tokens": 26,
+   "decode_ms": 98298.50345663726,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.0620915032679736,
+   "answer": "{\"subtasks\": [\"lift the pot\", \"open the drawer\", \"close the drawer\", \"press the bell\"]}"
+  }
+ ]
+}

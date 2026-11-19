@@ -1,0 +1,88 @@
+{
+ "frontend": "thor",
+ "ckpt": "/home/jingwu/thor_val/ckpt/qwen38-27b-nvfp4-official-5090",
+ "cap": 4096,
+ "spec_k": 6,
+ "torch": "2.9.1+cu130",
+ "device": "NVIDIA Thor",
+ "cells": [
+  {
+   "question": "next_subtask",
+   "thinking": false,
+   "context_tokens": 3072,
+   "prefill_ms": 1668.2482995092869,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 146,
+   "decode_ms": 4000.4868134856224,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.1739130434782608,
+   "answer": "{\"subtask\": \"put the hammer on the block\", \"reason\": \"The subtasks follow a fixed repeating cycle of 8 actions: 'pick up the red block', 'place it in the bowl', 'open the drawer', 'move the can next to the pot', 'press the bell', 'lift the pot', 'put the hammer on the block', 'close the drawer'. Ste"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": false,
+   "context_tokens": 3072,
+   "prefill_ms": 1669.496076181531,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 15,
+   "decode_ms": 347.7123249322176,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.75,
+   "answer": "{\"count\": 10, \"last_status\": \"continue\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": false,
+   "context_tokens": 3072,
+   "prefill_ms": 1668.6340644955635,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 15,
+   "decode_ms": 521.8488853424788,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.5,
+   "answer": "```json\n{\"subtasks\": [\"press the bell\"]}\n```"
+  },
+  {
+   "question": "next_subtask",
+   "thinking": true,
+   "context_tokens": 3072,
+   "prefill_ms": 1667.3808302730322,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 4096,
+   "decode_ms": 143987.52038739622,
+   "hit_cap": true,
+   "tokens_per_attempt": 2.4930006086427268,
+   "answer": "We need answer user's question. Need infer next subtask from log. Need output JSON {\"subtask\": ..., \"reason\": ...}. Need analyze pattern.\n\nWe have log steps every 8 from 0 to 736. Each line: Step N: subtask 'X', gripper state, object at (x,y), status continue/next/replan. Need determine which subtas"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": true,
+   "context_tokens": 3072,
+   "prefill_ms": 1666.9487450271845,
+   "think_tokens": 1191,
+   "think_ms": 30918.464824557304,
+   "answer_tokens": 16,
+   "decode_ms": 31267.586164176464,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.362116991643454,
+   "answer": "{\"count\": 12, \"last_status\": \"continue\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": true,
+   "context_tokens": 3072,
+   "prefill_ms": 1678.2410964369774,
+   "think_tokens": 1889,
+   "think_ms": 56544.99650746584,
+   "answer_tokens": 28,
+   "decode_ms": 57172.0615029335,
+   "hit_cap": false,
+   "tokens_per_attempt": 2.953775038520801,
+   "answer": "{\"subtasks\": [\"open the drawer\", \"close the drawer\", \"press the bell\", \"place it in the bowl\"]}"
+  }
+ ]
+}

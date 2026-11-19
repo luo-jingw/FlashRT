@@ -1,0 +1,70 @@
+gpu_lock: waiting 2026-11-19T00:26:39-05:00
+gpu_lock: acquired 2026-11-19T00:26:39-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=   256 think=off next_subtask  prefill      163 ms  think     0 tok         0 ms  answer   89 tok  decode      2774 ms
+S=   256 think=off drawer_count  prefill      163 ms  think     0 tok         0 ms  answer   14 tok  decode       345 ms
+S=   256 think=off replan_check  prefill      163 ms  think     0 tok         0 ms  answer   10 tok  decode       258 ms
+S=   256 think=on  next_subtask  prefill      163 ms  think  3829 tok    127030 ms  answer   43 tok  decode    127993 ms
+S=   256 think=on  drawer_count  prefill      163 ms  think   275 tok      7007 ms  answer   15 tok  decode      7355 ms
+S=   256 think=on  replan_check  prefill      162 ms  think   714 tok     22204 ms  answer   11 tok  decode     22466 ms
+gpu_lock: released 2026-11-19T00:38:28-05:00 rc=0
+gpu_lock: waiting 2026-11-19T00:38:28-05:00
+gpu_lock: acquired 2026-11-19T00:38:28-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=   512 think=off next_subtask  prefill      263 ms  think     0 tok         0 ms  answer  117 tok  decode      3030 ms
+S=   512 think=off drawer_count  prefill      264 ms  think     0 tok         0 ms  answer   14 tok  decode       347 ms
+S=   512 think=off replan_check  prefill      264 ms  think     0 tok         0 ms  answer   18 tok  decode       519 ms
+S=   512 think=on  next_subtask  prefill      264 ms  think  3941 tok    121720 ms  answer  102 tok  decode    124090 ms
+S=   512 think=on  drawer_count  prefill      265 ms  think   522 tok     12451 ms  answer   15 tok  decode     12798 ms
+S=   512 think=on  replan_check  prefill      263 ms  think     0 tok         0 ms  answer 4096 tok  decode    148867 ms  CAP
+gpu_lock: released 2026-11-19T00:57:31-05:00 rc=0
+gpu_lock: waiting 2026-11-19T00:57:31-05:00
+gpu_lock: acquired 2026-11-19T00:57:31-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=   768 think=off next_subtask  prefill      392 ms  think     0 tok         0 ms  answer  111 tok  decode      2942 ms
+S=   768 think=off drawer_count  prefill      392 ms  think     0 tok         0 ms  answer   14 tok  decode       347 ms
+S=   768 think=off replan_check  prefill      391 ms  think     0 tok         0 ms  answer   10 tok  decode       344 ms
+S=   768 think=on  next_subtask  prefill      392 ms  think   703 tok     21762 ms  answer  106 tok  decode     24274 ms
+S=   768 think=on  drawer_count  prefill      392 ms  think   405 tok     10556 ms  answer   15 tok  decode     10902 ms
+S=   768 think=on  replan_check  prefill      392 ms  think  2717 tok     82912 ms  answer   35 tok  decode     83698 ms
+gpu_lock: released 2026-11-19T01:06:27-05:00 rc=0
+gpu_lock: waiting 2026-11-19T01:06:27-05:00
+gpu_lock: acquired 2026-11-19T01:06:27-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=  1023 think=off next_subtask  prefill      537 ms  think     0 tok         0 ms  answer  128 tok  decode      3209 ms
+S=  1024 think=off drawer_count  prefill      536 ms  think     0 tok         0 ms  answer  176 tok  decode      4509 ms
+S=  1023 think=off replan_check  prefill      538 ms  think     0 tok         0 ms  answer   15 tok  decode       435 ms
+S=  1024 think=on  next_subtask  prefill      538 ms  think  2006 tok     61217 ms  answer   60 tok  decode     62788 ms
+S=  1024 think=on  drawer_count  prefill      536 ms  think  1121 tok     28228 ms  answer   15 tok  decode     28578 ms
+S=  1024 think=on  replan_check  prefill      538 ms  think  3240 tok     96461 ms  answer   30 tok  decode     97160 ms
+gpu_lock: released 2026-11-19T01:19:44-05:00 rc=0
+gpu_lock: waiting 2026-11-19T01:19:44-05:00
+gpu_lock: acquired 2026-11-19T01:19:44-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=  1536 think=off next_subtask  prefill      816 ms  think     0 tok         0 ms  answer  151 tok  decode      3942 ms
+S=  1536 think=off drawer_count  prefill      821 ms  think     0 tok         0 ms  answer   14 tok  decode       425 ms
+S=  1536 think=off replan_check  prefill      820 ms  think     0 tok         0 ms  answer   10 tok  decode       321 ms
+S=  1536 think=on  next_subtask  prefill      815 ms  think  1573 tok     50909 ms  answer   59 tok  decode     52296 ms
+S=  1536 think=on  drawer_count  prefill      820 ms  think   918 tok     24849 ms  answer   15 tok  decode     25169 ms
+S=  1536 think=on  replan_check  prefill      822 ms  think  2785 tok     97758 ms  answer   26 tok  decode     98299 ms
+gpu_lock: released 2026-11-19T01:32:20-05:00 rc=0
+gpu_lock: waiting 2026-11-19T01:32:20-05:00
+gpu_lock: acquired 2026-11-19T01:32:20-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=  2048 think=off next_subtask  prefill     1120 ms  think     0 tok         0 ms  answer   94 tok  decode      2879 ms
+S=  2048 think=off drawer_count  prefill     1122 ms  think     0 tok         0 ms  answer   14 tok  decode       428 ms
+S=  2048 think=off replan_check  prefill     1121 ms  think     0 tok         0 ms  answer   12 tok  decode       429 ms
+S=  2048 think=on  next_subtask  prefill     1120 ms  think  2177 tok     72913 ms  answer   63 tok  decode     74318 ms
+S=  2048 think=on  drawer_count  prefill     1120 ms  think  1023 tok     32072 ms  answer   15 tok  decode     32287 ms
+S=  2048 think=on  replan_check  prefill     1124 ms  think  3462 tok    120890 ms  answer   35 tok  decode    121562 ms
+gpu_lock: released 2026-11-19T01:48:13-05:00 rc=0
+gpu_lock: waiting 2026-11-19T01:48:13-05:00
+gpu_lock: acquired 2026-11-19T01:48:13-05:00
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (307985 > 262144). Running this sequence through the model will result in indexing errors
+S=  3072 think=off next_subtask  prefill     1668 ms  think     0 tok         0 ms  answer  146 tok  decode      4000 ms
+S=  3072 think=off drawer_count  prefill     1669 ms  think     0 tok         0 ms  answer   15 tok  decode       348 ms
+S=  3072 think=off replan_check  prefill     1669 ms  think     0 tok         0 ms  answer   15 tok  decode       522 ms
+S=  3072 think=on  next_subtask  prefill     1667 ms  think     0 tok         0 ms  answer 4096 tok  decode    143988 ms  CAP
+S=  3072 think=on  drawer_count  prefill     1667 ms  think  1191 tok     30918 ms  answer   16 tok  decode     31268 ms
+S=  3072 think=on  replan_check  prefill     1678 ms  think  1889 tok     56545 ms  answer   28 tok  decode     57172 ms
+gpu_lock: released 2026-11-19T02:04:16-05:00 rc=0

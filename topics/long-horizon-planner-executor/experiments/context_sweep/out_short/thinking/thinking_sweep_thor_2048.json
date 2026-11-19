@@ -1,0 +1,88 @@
+{
+ "frontend": "thor",
+ "ckpt": "/home/jingwu/thor_val/ckpt/qwen38-27b-nvfp4-official-5090",
+ "cap": 4096,
+ "spec_k": 6,
+ "torch": "2.9.1+cu130",
+ "device": "NVIDIA Thor",
+ "cells": [
+  {
+   "question": "next_subtask",
+   "thinking": false,
+   "context_tokens": 2048,
+   "prefill_ms": 1119.8481433093548,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 94,
+   "decode_ms": 2878.5056676715612,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.4814814814814814,
+   "answer": "```json\n{\"subtask\": \"put the hammer on the block\", \"reason\": \"The log ends at Step 496 with the subtask 'put the hammer on the block' currently in progress. The status is not explicitly marked as 'next' or 'replan' to a different task, implying the current subtask is the one being executed or needs "
+  },
+  {
+   "question": "drawer_count",
+   "thinking": false,
+   "context_tokens": 2048,
+   "prefill_ms": 1122.015830129385,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 14,
+   "decode_ms": 428.32593247294426,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.5,
+   "answer": "{\"count\": 6, \"last_status\": \"next\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": false,
+   "context_tokens": 2048,
+   "prefill_ms": 1120.6037197262049,
+   "think_tokens": 0,
+   "think_ms": 0.0,
+   "answer_tokens": 12,
+   "decode_ms": 429.488368332386,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.0,
+   "answer": "```json\n{\"subtasks\": []}\n```"
+  },
+  {
+   "question": "next_subtask",
+   "thinking": true,
+   "context_tokens": 2048,
+   "prefill_ms": 1120.3792933374643,
+   "think_tokens": 2177,
+   "think_ms": 72913.17007131875,
+   "answer_tokens": 63,
+   "decode_ms": 74317.6659848541,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.2323232323232323,
+   "answer": "{\n  \"subtask\": \"lift the pot\",\n  \"reason\": \"The subtasks repeat in a fixed 8-step cycle, and step 480 is 'press the bell', so the next step, 488, is 'lift the pot'.\"\n}"
+  },
+  {
+   "question": "drawer_count",
+   "thinking": true,
+   "context_tokens": 2048,
+   "prefill_ms": 1119.515961036086,
+   "think_tokens": 1023,
+   "think_ms": 32071.856072172523,
+   "answer_tokens": 15,
+   "decode_ms": 32287.45591081679,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.437086092715232,
+   "answer": "{\"count\": 8, \"last_status\": \"next\"}"
+  },
+  {
+   "question": "replan_check",
+   "thinking": true,
+   "context_tokens": 2048,
+   "prefill_ms": 1123.8655745983124,
+   "think_tokens": 3462,
+   "think_ms": 120889.81721922755,
+   "answer_tokens": 35,
+   "decode_ms": 121561.75764277577,
+   "hit_cap": false,
+   "tokens_per_attempt": 3.0974313551815764,
+   "answer": "{\"subtasks\": [\"press the bell\", \"place it in the bowl\", \"put the hammer on the block\", \"move the can next to the pot\"]}"
+  }
+ ]
+}
