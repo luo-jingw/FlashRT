@@ -356,18 +356,18 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     <div class="card"><h4>Thor 上长解码的一个坑：graph 缓存上限</h4><p>FlashRT 按解码位置录制 CUDA graph，默认最多缓存 256 张。解码超过约 750 token 后旧 graph 被挤掉、反复重录，每 token 从约 30 ms 变成约 100 ms。把上限调到 8 192 后恢复。64k 以上 decode 约 100 ms/token 是另一个问题（ISSUE-117），调大缓存无效。</p></div>
 
   </div>
-  <h3>规划器实际需要多长的上下文：文献里的上下文长度与 SR</h3>
+  <h3>规划器实际需要多长的上下文：输入 token 数与 SR</h3>
   <div class="fig">
-    <svg viewBox="0 0 900 470" role="img" aria-label="四篇论文中上下文长度与成功率" style="max-width:900px;margin:0 auto">
+    <svg viewBox="0 0 860 400" role="img" aria-label="单次调用的视觉 token 数与成功率" style="max-width:860px;margin:0 auto">
       <g id="ctxsr"></g>
     </svg>
   </div>
-  <p class="cap">都取自原文表格：MemER 表 1（真机，每任务 20 次）；Hi-VLA 编排研究表 7（MuJoCo ALOHA，每任务 200 次）；StreamVLN 表 IV（R2R-CE，每帧 196 token）；NavGPT-3 表 5（R2R-CE 子集 100 回合，横轴是每回合累计 token）。各图单位不同，只比形状。悬停看数值。</p>
+  <p class="cap">横轴：单次调用里图像部分的 token 数（对数），刻度下是 Thor 上同长度整段 prefill 的实测时间。StreamVLN 每帧 196 token、Uni-NaVid 当前帧 64 token 加短期记忆每帧 4 token × 64 帧，均为原文所给；MemER 原文未给，按其发布模型 Qwen3-VL 的处理器推算，两路 320×180 拼成一张约 112 token（虚线）。SR 取自 MemER 表 1（擦拭 / 放回 4 任务，各 20 次）、StreamVLN 表 IV（R2R-CE）、Uni-NaVid 表 X（VLN）。悬停看数值。</p>
   <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-top:12px">
-    <div class="card"><h4>几帧到十几帧就够</h4><p>Hi-VLA 从 1 步到整个回合，SR 相差不到 2 个点；NaVILA 8–64 帧 SR 48.6–50.1 %；StreamVLN 8 帧最好。</p></div>
-    <div class="card"><h4>挑关键帧比加长更有效</h4><p>MemER 上 32 帧原始历史不比 8 帧好（擦拭 / 放回 57.5 % 对 63.8 %），换成关键帧记忆到 96 %。</p></div>
-    <div class="card"><h4>无界增长：代价大、收益小</h4><p>StreamVLN 用全部记忆反而降到 40.0 %；NavGPT-3 累计 token 涨 13 倍，SR 只多 6 个点。</p></div>
-    <div class="card"><h4>对 Thor 的含义（判断）</h4><p>MemER 式输入 16 帧约 2k token（本组实测 8 帧拼图 1 207 token），Thor 上 prefill 约 1 s。瓶颈不在上下文长度，而在思考和解码。</p></div>
+    <div class="card"><h4>几百到两千 token 就够</h4><p>StreamVLN 在 1 568 token 时最好（45.5 %）；MemER 896 token 的近期画面已到 64 %。</p></div>
+    <div class="card"><h4>挑关键帧比加长更有效</h4><p>MemER 3 584 token 的原始历史不如 896 token（57.5 % 对 63.8 %）；不超过 1 792 token 的关键帧记忆到 96 %。</p></div>
+    <div class="card"><h4>无界增长：代价大、收益小</h4><p>StreamVLN 保留全部记忆降到 40.0 %；NavGPT-3 每回合累计 token 涨 13 倍，SR 只多 6 个点；Hi-VLA 历史从 1 步到整个回合，SR 差不到 2 个点（后两篇给不出单次序列长度，不在图里）。</p></div>
+    <div class="card"><h4>对 Thor 的含义（判断）</h4><p>需要的 1–2k token 在 Thor 上 prefill 0.5–1.1 s（实测）。规划器慢在思考和解码，不在上下文长度。</p></div>
   </div>
   <h3>同类统一内存 SoC 的带宽对比</h3>
   <div class="fig">
@@ -800,44 +800,56 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   })();
 
 
-  // Context length vs SR, four papers (table values only)
+  // Visual tokens per call vs SR (table values; MemER tokens estimated)
   (function () {
     var g = document.getElementById('ctxsr');
-    function panel(ox, oy, title, sub, xl, yr, yt, series) {
-      var W = 300, H = 140;
-      var gg = el('g', { transform: 'translate(' + ox + ',' + oy + ')' }, g);
-      function fx(i) { return 20 + i * (W - 40) / (xl.length - 1); }
-      function fy(v) { return H - (v - yr[0]) / (yr[1] - yr[0]) * H; }
-      text(W / 2, -28, title, 't1', gg, 'middle');
-      text(W / 2, -12, sub, 't3', gg, 'middle');
-      yt.forEach(function (v) { el('line', { x1: 0, y1: fy(v), x2: W, y2: fy(v), 'class': 'grid' }, gg); text(-6, fy(v) + 4, v + '%', 't3', gg, 'end'); });
-      el('line', { x1: 0, y1: H, x2: W, y2: H, 'class': 'ax' }, gg);
-      xl.forEach(function (l, i) {
-        var parts = l.split('|');
-        parts.forEach(function (p, k) { text(fx(i), H + 16 + k * 13, p, 't3', gg, 'middle'); });
+    var X0 = 80, X1 = 620, Y0 = 320, Y1 = 30;
+    var lmin = Math.log2(48), lmax = Math.log2(5000);
+    function px(n) { return X0 + (Math.log2(n) - lmin) / (lmax - lmin) * (X1 - X0); }
+    function py(v) { return Y0 - v / 100 * (Y0 - Y1); }
+    el('line', { x1: X0, y1: Y0, x2: X1, y2: Y0, 'class': 'ax' }, g);
+    el('line', { x1: X0, y1: Y0, x2: X0, y2: Y1, 'class': 'ax' }, g);
+    [0, 25, 50, 75, 100].forEach(function (v) {
+      el('line', { x1: X0, y1: py(v), x2: X1, y2: py(v), 'class': 'grid' }, g);
+      text(X0 - 6, py(v) + 4, v + '%', 't3', g, 'end');
+    });
+    [[64, '64', ''], [256, '256', ''], [1024, '1k', 'prefill 0.5 s'], [2048, '2k', '1.1 s'], [4096, '4k', '2.3 s']].forEach(function (t) {
+      text(px(t[0]), Y0 + 16, t[1], 't3', g, 'middle');
+      if (t[2]) text(px(t[0]), Y0 + 30, t[2], 't3', g, 'middle');
+    });
+    text((X0 + X1) / 2, Y0 + 52, '单次调用的图像 token 数（Thor 实测 prefill 时间）', '', g, 'middle');
+    text(X0 - 6, Y1 - 12, 'SR', 't3', g, 'end');
+    var S = [
+      { n: 'MemER 原始历史（推算）', c: 'ln1', f: 'bar', dash: true, p: [[112, 26.3, '1 帧'], [896, 63.8, '8 帧'], [3584, 57.5, '32 帧']] },
+      { n: 'StreamVLN', c: 'ln2', f: 'bar2', p: [[392, 37.3, '记忆 2 帧'], [784, 38.9, '记忆 4 帧'], [1568, 45.5, '记忆 8 帧']] },
+      { n: 'Uni-NaVid', c: 'ln3', f: 'bar3', p: [[64, 9.61, '只有当前帧'], [320, 39.7, '加短期记忆']] }
+    ];
+    S.forEach(function (sr) {
+      var line = el('polyline', { points: sr.p.map(function (q) { return px(q[0]) + ',' + py(q[1]); }).join(' '), 'class': sr.c }, g, sr.n);
+      if (sr.dash) line.setAttribute('stroke-dasharray', '5 4');
+      sr.p.forEach(function (q) {
+        el('circle', { cx: px(q[0]), cy: py(q[1]), r: 4.5, 'class': sr.f }, g);
+        el('circle', { cx: px(q[0]), cy: py(q[1]), r: 10, fill: 'transparent' }, g, sr.n + '：' + q[0] + ' token（' + q[2] + '），SR ' + q[1] + ' %');
       });
-      series.forEach(function (sr) {
-        el('polyline', { points: sr.v.map(function (v, i) { return v === null ? null : fx(i) + ',' + fy(v); }).filter(Boolean).join(' '), 'class': sr.c }, gg, sr.n);
-        sr.v.forEach(function (v, i) {
-          if (v === null) return;
-          el('circle', { cx: fx(i), cy: fy(v), r: 4, 'class': sr.f }, gg);
-          el('circle', { cx: fx(i), cy: fy(v), r: 10, fill: 'transparent' }, gg, sr.n + '：' + xl[i].replace('|', ' ') + '，' + v + ' %');
-        });
-        if (sr.lab) text(fx(sr.lab[0]) + (sr.lab[2] || 8), fy(sr.v[sr.lab[0]]) + (sr.lab[1] || 4), sr.n, 't3', gg, sr.lab[3] || 'start');
-      });
-    }
-    panel(70, 50, 'MemER', '真机 · 表 1', ['1 帧', '8 帧', '32 帧', '关键帧记忆|≤ 16 帧'], [0, 100], [0, 50, 100],
-      [{ n: '擦拭 / 放回 4 任务', c: 'ln1', f: 'bar', v: [26.3, 63.8, 57.5, 96.3], lab: [0, 18, 0, 'start'] },
-       { n: '找物', c: 'ln2', f: 'bar2', v: [53.3, 63.3, 78.3, 98.3], lab: [0, -10, 0, 'start'] }]);
-    panel(530, 50, 'Hi-VLA 编排研究', 'MuJoCo ALOHA · 表 7', ['1 步', '3 步', '5 步', '整个回合'], [40, 100], [40, 70, 100],
-      [{ n: '短时程', c: 'ln1', f: 'bar', v: [76.76, 75.81, 76.09, 76.53], lab: [3, -10, 0, 'end'] },
-       { n: '推理', c: 'ln3', f: 'bar3', v: [74.27, 72.62, 72.20, 72.77], lab: [3, 16, 0, 'end'] },
-       { n: '长时程', c: 'ln2', f: 'bar2', v: [59.89, 58.21, 57.76, 58.98], lab: [3, 16, 0, 'end'] }]);
-    panel(70, 290, 'StreamVLN', 'R2R-CE · 表 IV', ['2 帧|392 token', '4 帧|784', '8 帧|1 568', '全部'], [20, 60], [20, 40, 60],
-      [{ n: 'SR', c: 'ln1', f: 'bar', v: [37.3, 38.9, 45.5, 40.0] }]);
-    panel(530, 290, 'NavGPT-3', 'R2R-CE 子集 · 表 5', ['不检查|179k', '每 32 步|1.53M', '每 16 步|2.32M'], [60, 90], [60, 75, 90],
-      [{ n: 'SR', c: 'ln1', f: 'bar', v: [77, 78, 83] }]);
+    });
+    // MemER keyframe memory: at most 1 792 tokens
+    var kx = px(1792), ky = py(96.3);
+    el('rect', { x: kx - 5, y: ky - 5, width: 10, height: 10, transform: 'rotate(45 ' + kx + ' ' + ky + ')', 'class': 'bar' }, g);
+    el('circle', { cx: kx, cy: ky, r: 10, fill: 'transparent' }, g, 'MemER 关键帧记忆：不超过 1 792 token（近期 8 帧 + 至多 8 张关键帧），SR 96.3 %');
+    text(kx - 10, ky + 4, 'MemER 关键帧记忆', 't1', g, 'end');
+    // legend
+    var ly = 60;
+    [['ln1', 'bar', 'MemER 原始历史（推算）', true], ['ln2', 'bar2', 'StreamVLN（R2R-CE）', false], ['ln3', 'bar3', 'Uni-NaVid（VLN）', false]].forEach(function (l, i) {
+      var y = ly + i * 24;
+      var ln = el('line', { x1: 650, y1: y, x2: 674, y2: y, 'class': l[0] }, g);
+      if (l[3]) ln.setAttribute('stroke-dasharray', '5 4');
+      el('circle', { cx: 662, cy: y, r: 4, 'class': l[1] }, g);
+      text(682, y + 4, l[2], '', g);
+    });
+    el('rect', { x: 657, y: ly + 72 - 5, width: 10, height: 10, transform: 'rotate(45 662 ' + (ly + 72) + ')', 'class': 'bar' }, g);
+    text(682, ly + 76, 'MemER 关键帧记忆', '', g);
   })();
+
   // LOC bars: [label, low, high, lang]
   var loc = [
     ['按帧缓存 ViT + 记忆帧前缀', 200, 300, 'py', '低到中'],
