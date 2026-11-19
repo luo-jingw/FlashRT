@@ -45,12 +45,6 @@ header .sub { color: var(--fg-2); margin: 0; }
   background: var(--accent-soft); border-radius: 0 8px 8px 0;
 }
 .mainline b { color: var(--fg); }
-nav.toc { display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 20px 0 0; font-size: 13.5px; }
-nav.toc a {
-  color: var(--fg-2); text-decoration: none; padding: 3px 10px;
-  border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
-}
-nav.toc a:hover { color: var(--accent); border-color: var(--accent); }
 section { margin-top: 48px; }
 h2 { font-size: 21px; margin: 0 0 4px; text-wrap: balance; }
 h2 .no { color: var(--accent); margin-right: 8px; font-variant-numeric: tabular-nums; }
@@ -156,7 +150,16 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .title-slide .slide-inner { min-height: 100%; display: flex; flex-direction: column; justify-content: center; }
 .title-slide h1 { font-size: 38px; margin-bottom: 12px; }
 .title-slide .sub { font-size: 16px; }
-.title-slide .mainline { font-size: 16.5px; margin-top: 28px; padding: 18px 22px; }
+.title-slide .mainline { font-size: 16.5px; margin-top: 20px; padding: 18px 22px; }
+.toc { display: grid; gap: 10px 14px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); align-items: start; margin-top: 22px; }
+.toc-sec { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 10px 14px; min-width: 0; }
+.toc-sec > a { color: var(--fg); font-weight: 600; text-decoration: none; font-size: 14.5px; }
+.toc-sec > a span { color: var(--accent); margin-right: 8px; font-variant-numeric: tabular-nums; }
+.toc-sec ul { margin: 4px 0 0; padding-left: 18px; }
+.toc-sec li { font-size: 13px; line-height: 1.6; color: var(--fg-3); }
+.toc-sec li a { color: var(--fg-2); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+.toc-lead { margin: 6px 0 0; font-size: 13px; line-height: 1.6; color: var(--fg-3); }
 @media (max-width: 560px) { .deck-title { display: none; } }
 /* ---- term notes ---- */
 .term { text-decoration: underline dotted var(--accent); text-decoration-thickness: 1.5px; text-underline-offset: 3px;
@@ -945,7 +948,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     var sl = document.createElement('div'); sl.className = 'slide';
     var inner = document.createElement('div'); inner.className = 'slide-inner';
     sl.appendChild(inner); deck.appendChild(sl);
-    slides.push({ el: sl, inner: inner, title: title, section: sectionId, label: '' });
+    slides.push({ el: sl, inner: inner, title: title, section: sectionId, label: '', joins: [], lead: '' });
     return inner;
   }
   var first = newSlide(header.querySelector('h1').textContent, 'top');
@@ -958,12 +961,14 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     var nodes = Array.prototype.slice.call(sec.childNodes);
     var inner = newSlide(name, sec.id);
     slides[slides.length - 1].label = no;
-    var sub = 0;
+    var lead = sec.querySelector(':scope > .lead');
+    var chain = sec.querySelectorAll(':scope > .chain .step b');
+    if (chain.length) slides[slides.length - 1].lead = Array.prototype.map.call(chain, function (b) { return b.textContent.replace(/^\d+\s*/, ''); }).join(' → ');
+    else if (lead) slides[slides.length - 1].lead = lead.textContent.split(/[；。]/)[0];
     nodes.forEach(function (n) {
+      if (n.nodeType === 1 && n.tagName === 'H3' && n.classList.contains('join')) slides[slides.length - 1].joins.push(n.textContent);
       if (n.nodeType === 1 && n.tagName === 'H3' && !n.classList.contains('join')) {
         inner = newSlide(n.textContent, sec.id);
-        sub += 1;
-        slides[slides.length - 1].label = no + '.' + sub;
         var k = document.createElement('p'); k.className = 'kicker';
         k.innerHTML = '<b>' + no + '</b>' + name;
         inner.appendChild(k);
@@ -973,6 +978,34 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     sec.remove();
   });
   if (footer) slides[slides.length - 1].inner.appendChild(footer);
+  // contents on the title slide: one card per section, its later pages listed beneath
+  var toc = document.createElement('nav'); toc.className = 'toc';
+  var box = null, list = null;
+  function link(i, html) {
+    var a = document.createElement('a'); a.href = '#s' + (i + 1); a.innerHTML = html;
+    a.addEventListener('click', function (e) { e.preventDefault(); go(i); });
+    return a;
+  }
+  function item(i, t) {
+    if (!list) { list = document.createElement('ul'); box.appendChild(list); }
+    var li = document.createElement('li'); li.appendChild(link(i, t)); list.appendChild(li);
+  }
+  slides.forEach(function (s, i) {
+    if (i === 0) return;
+    if (s.label) {
+      box = document.createElement('div'); box.className = 'toc-sec';
+      box.appendChild(link(i, '<span>' + s.label + '</span>' + s.title));
+      list = null; toc.appendChild(box);
+      var nextIsSec = i + 1 >= slides.length || slides[i + 1].label;
+      if (!s.joins.length && nextIsSec && s.lead) {
+        var p = document.createElement('p'); p.className = 'toc-lead'; p.textContent = s.lead; box.appendChild(p);
+      }
+    } else {
+      item(i, s.title);
+    }
+    s.joins.forEach(function (t) { item(i, t); });
+  });
+  header.appendChild(toc);
   wrap.replaceWith(deck);
   document.body.classList.add('deck-on');
   // controls
