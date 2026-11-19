@@ -19,6 +19,6 @@ FlashRT 相关的调研与实验材料。每个研究方向（topic）一个目�
 | `papers.md` | 论文目录，元数据经检索核实 |
 | `notes/` | 精读笔记 |
 | `reports/` | 报告与汇报材料 |
-| `experiments/` | 实验脚本、结果与日志 |
+| `experiments/` | 实验脚本、结果与日志；每个实验的 `README.md` 开头是实验说明的六项（`.claude/skills/brief/SKILL.md`） |
 
 论文 PDF 与文本抽取（各 topic 的 `papers/*/`）只保存在本地，不纳入仓库（`.gitignore`）。
