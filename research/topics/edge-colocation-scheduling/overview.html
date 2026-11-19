@@ -125,6 +125,46 @@ footer { margin-top: 56px; color: var(--fg-3); font-size: 12.5px; border-top: 1p
 .t-flash td:nth-child(4) { min-width: 14em; }
 .tag { white-space: nowrap; }
 td, .card p, .lead, .cap, .note, .mainline { text-wrap: pretty; }
+
+/* ---- slide deck ---- */
+html, body { height: 100%; }
+body.deck-on { overflow: hidden; }
+.deck { position: fixed; inset: 0; }
+.slide { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; display: none;
+  padding-top: calc(28px + env(safe-area-inset-top, 0px)); padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.slide.active { display: block; }
+.slide-inner { max-width: 1080px; margin: 0 auto; }
+.slide-inner > section, .slide-inner > header { margin-top: 0; }
+.kicker { font-size: 12.5px; letter-spacing: .06em; color: var(--fg-3); margin: 0 0 6px; }
+.kicker b { color: var(--accent); margin-right: 6px; }
+.slide h3 { font-size: 19px; margin: 0 0 12px; }
+.slide h2 + .lead { margin-top: 6px; }
+.deck-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; align-items: center; gap: 10px;
+  justify-content: center; background: var(--bg); border-top: 1px solid var(--line);
+  padding: 8px max(16px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+.deck-bar button { font: inherit; font-size: 14px; color: var(--fg); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 14px; cursor: pointer; }
+.deck-bar button:hover { border-color: var(--accent); color: var(--accent); }
+.deck-bar button:disabled { opacity: .35; cursor: default; }
+.deck-count { font-variant-numeric: tabular-nums; color: var(--fg-2); font-size: 13.5px; min-width: 64px; text-align: center; }
+.deck-title { color: var(--fg-3); font-size: 12.5px; max-width: 40vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deck-progress { position: fixed; top: env(safe-area-inset-top, 0px); left: 0; height: 3px; background: var(--accent); z-index: 31; transition: width .2s; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bg); }
+.toc-slides { display: grid; gap: 6px 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-top: 18px; }
+.toc-slides a { color: var(--fg-2); text-decoration: none; font-size: 13.5px; padding: 6px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface); }
+.toc-slides a:hover { color: var(--accent); border-color: var(--accent); }
+.toc-slides a.toc-sec { color: var(--fg); font-weight: 600; }
+.toc-slides a span { color: var(--fg-3); margin-right: 6px; font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) { .deck-title { display: none; } }
+/* ---- term notes ---- */
+.term { text-decoration: underline dotted var(--accent); text-decoration-thickness: 1.5px; text-underline-offset: 3px;
+  cursor: help; border-radius: 2px; }
+.term:focus { outline: 2px solid var(--accent-soft); }
+.tip { position: fixed; z-index: 40; max-width: min(320px, calc(100vw - 32px)); background: var(--fg); color: var(--bg);
+  font-size: 12.5px; line-height: 1.55; padding: 8px 10px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.18); }
+.tip b { display: block; margin-bottom: 2px; }
 </style>
 <div class="wrap" lang="zh-CN">
 
@@ -135,15 +175,6 @@ td, .card p, .lead, .cap, .note, .mainline { text-wrap: pretty; }
     <b>主线：</b>一块统一内存 SoC（Jetson AGX Thor）上，长时程规划器（HF 原版 Qwen3.8-27B）与周期执行器（约 4B 的 VLA/WAM）异步共置，同步协议作基线。
     <b>核心问题：</b>两个时限都满足之后，规划器的决策延迟 L 怎样影响任务质量（SR、完成时间）？
   </div>
-  <nav class="toc">
-    <a href="#classics">0 经典论文怎么立贡献</a>
-    <a href="#scenes">1 long horizon 的场景</a>
-    <a href="#harness">2 harness 与 agent</a>
-    <a href="#thor">3 Thor 与同类 SoC</a>
-    <a href="#opt">4 Thor 特有的优化</a>
-    <a href="#flashrt">5 FlashRT 现状与工作量</a>
-    <a href="#metric">6 怎样给系统排序</a>
-  </nav>
 </header>
 
 <!-- 0 -->
@@ -214,7 +245,7 @@ td, .card p, .lead, .cap, .note, .mainline { text-wrap: pretty; }
 <!-- 2 -->
 <section id="harness">
   <h2><span class="no">2</span>long horizon 的 harness 与 agent</h2>
-  <p class="lead">引用数取自 Semantic Scholar（2026-11-18）。我们选的两个：<b>MemER</b>（Jingwu）、<b>RoboCerebra</b>（Chenwei）。</p>
+  <p class="lead">引用数取自 Semantic Scholar（2026-11-18）。我们的方案：在同一套 RoboCerebra 任务上，比较 <b>MemER</b> 与 RoboCerebra 自带的 HPE 基线。</p>
   <div class="tablebox">
   <table class="t-harness">
     <thead><tr><th>系统</th><th>发表</th><th class="num">引用</th><th>规划器与执行器怎么配合</th><th>上下文</th></tr></thead>
@@ -492,7 +523,7 @@ td, .card p, .lead, .cap, .note, .mainline { text-wrap: pretty; }
     <tbody>
       <tr><td>执行器：200 ms − p99</td><td class="num">162 ms（37.5 ms）</td><td class="num">130 ms（p99 70 ms）</td><td class="num">约 60 ms（p99 约翻倍）</td><td>ImageWAM 动作模型，Chenwei B27 / B28</td></tr>
       <tr><td>规划器：Δ − L，VoLo 节奏（Δ = 5.33 s）</td><td class="num">3.56 s（L = 1.77 s）</td><td class="num">2.8 / 0.3 s（p95 2.5 / 5.0 s，腕部 224 / 720）</td><td>decode 慢约 2.2 倍</td><td>本组 Thor 实测；B27 / B28</td></tr>
-      <tr><td>规划器：Δ − L，MemER 节奏（Δ ≈ 1 s）</td><td class="num">&lt; 0（L ≥ 1.77 s）</td><td>&lt; 0</td><td>&lt; 0</td><td>推算：MemER 约 1 Hz 调用</td></tr>
+      <tr><td>规划器：Δ − L，MemER 节奏（Δ ≈ 1 s）</td><td class="num">约 −1 s（L ≈ 2 s）</td><td>&lt; 0</td><td>&lt; 0</td><td>推算：MemER 约 1 Hz 调用；2k token 的 prefill 约 1.1 s，加约 30 token 的解码约 0.9 s（均为 Thor 实测）</td></tr>
     </tbody>
   </table>
   </div>
@@ -573,7 +604,7 @@ td, .card p, .lead, .cap, .note, .mainline { text-wrap: pretty; }
   </div>
   <h3>我们的排序思路（判断）</h3>
   <div class="grid">
-    <div class="card"><h4>第一步：画出 SR 与完成时间随 L 的曲线</h4><p>在 5090 上固定调用周期，注入不同的 L，异步与同步各一条。曲线的形状决定用哪种指标。</p></div>
+    <div class="card"><h4>第一步：画出 SR 与完成时间随 L 的曲线</h4><p>在 RoboCerebra 上按仿真时间，固定调用周期，注入不同的 L，异步与同步各一条。曲线的形状决定用哪种指标。</p></div>
     <div class="card"><h4>门槛型 → 比能力</h4><p>比在两个余量都 &gt; 0、且 SR 不低于目标时，能支持的最小 Δ、最长上下文或最大 CPU 负载。这是 goodput 的直接翻译。</p></div>
     <div class="card"><h4>连续型 → 比 SCT</h4><p>用 SCT 或 throughput 这类"成功率 × 时间效率"的单一分数。系统优化把 L 降下来，分数就应该升。</p></div>
     <div class="card"><h4>评估要对齐</h4><p>主指标就是"实际 vs 理想"图里的那个量。理想值：规划器独占时的 L，执行器独占时的时延。</p></div>
@@ -833,5 +864,191 @@ td, .card p, .lead, .cap, .note, .mainline { text-wrap: pretty; }
   panel(550, '门槛：A2C2（Kinetix）', '推理延迟 → 成功率', [1, 4], [40, 100], [1, 2, 3, 4], [40, 70, 100], '推理延迟 d（控制步）', '成功率 %',
     [{ name: '朴素异步', cls: 'ln2', dot: 'bar2', label: [2.6, 47], pts: [[1, 78.1, 'd=1：78.1 %'], [2, 75.7, 'd=2：75.7 %'], [3, 59.3, 'd=3：59.3 %'], [4, 51.2, 'd=4：51.2 %']] },
      { name: 'A2C2', cls: 'ln1', dot: 'bar', label: [2.4, 93], pts: [[1, 89.5, 'd=1：89.5 %'], [2, 87.4, 'd=2：87.4 %'], [3, 87.4, 'd=3：87.4 %'], [4, 86.5, 'd=4：86.5 %']] }]);
+})();
+</script>
+
+<div class="tip" id="term-tip" hidden></div>
+<script>
+// Slide deck: the title header is slide 1; each section starts a slide at its h2 and a new slide at every h3.
+(function () {
+  var tip = document.getElementById('term-tip');
+  var wrap = document.querySelector('.wrap');
+  var header = wrap.querySelector('header');
+  var sections = Array.prototype.slice.call(wrap.querySelectorAll(':scope > section'));
+  var footer = wrap.querySelector('footer');
+  var deck = document.createElement('div');
+  deck.className = 'deck';
+  var slides = [];
+  function newSlide(title, sectionId) {
+    var sl = document.createElement('div'); sl.className = 'slide';
+    var inner = document.createElement('div'); inner.className = 'slide-inner';
+    sl.appendChild(inner); deck.appendChild(sl);
+    slides.push({ el: sl, inner: inner, title: title, section: sectionId, label: '' });
+    return inner;
+  }
+  var first = newSlide(header.querySelector('h1').textContent, 'top');
+  first.appendChild(header);
+  sections.forEach(function (sec) {
+    var h2 = sec.querySelector('h2');
+    var no = h2.querySelector('.no') ? h2.querySelector('.no').textContent : '';
+    var name = h2.textContent.replace(no, '').trim();
+    var nodes = Array.prototype.slice.call(sec.childNodes);
+    var inner = newSlide(name, sec.id);
+    slides[slides.length - 1].label = no;
+    var sub = 0;
+    nodes.forEach(function (n) {
+      if (n.nodeType === 1 && n.tagName === 'H3') {
+        inner = newSlide(n.textContent, sec.id);
+        sub += 1;
+        slides[slides.length - 1].label = no + '.' + sub;
+        var k = document.createElement('p'); k.className = 'kicker';
+        k.innerHTML = '<b>' + no + '</b>' + name;
+        inner.appendChild(k);
+      }
+      inner.appendChild(n);
+    });
+    sec.remove();
+  });
+  if (footer) slides[slides.length - 1].inner.appendChild(footer);
+  // contents on the title slide
+  var toc = document.createElement('div'); toc.className = 'toc-slides';
+  slides.forEach(function (s, i) {
+    if (i === 0) return;
+    var a = document.createElement('a'); a.href = '#s' + (i + 1);
+    a.innerHTML = '<span>' + s.label + '</span>' + s.title;
+    if (s.label.indexOf('.') < 0) a.className = 'toc-sec';
+    a.addEventListener('click', function (e) { e.preventDefault(); go(i); });
+    toc.appendChild(a);
+  });
+  header.appendChild(toc);
+  wrap.replaceWith(deck);
+  document.body.classList.add('deck-on');
+  // controls
+  var bar = document.createElement('div'); bar.className = 'deck-bar';
+  bar.innerHTML = '<button type="button" data-d="-1" aria-label="上一页">‹ 上一页</button>' +
+    '<span class="deck-count"></span><span class="deck-title"></span>' +
+    '<button type="button" data-d="1" aria-label="下一页">下一页 ›</button>';
+  document.body.appendChild(bar);
+  var prog = document.createElement('div'); prog.className = 'deck-progress'; document.body.appendChild(prog);
+  var btnPrev = bar.querySelector('[data-d="-1"]'), btnNext = bar.querySelector('[data-d="1"]');
+  var count = bar.querySelector('.deck-count'), title = bar.querySelector('.deck-title');
+  var cur = 0;
+  function go(i) {
+    i = Math.max(0, Math.min(slides.length - 1, i));
+    slides[cur].el.classList.remove('active');
+    cur = i;
+    slides[cur].el.classList.add('active');
+    slides[cur].el.scrollTop = 0;
+    count.textContent = (cur + 1) + ' / ' + slides.length;
+    title.textContent = slides[cur].title;
+    btnPrev.disabled = cur === 0; btnNext.disabled = cur === slides.length - 1;
+    prog.style.width = ((cur + 1) / slides.length * 100) + '%';
+    hideTip();
+  }
+  bar.addEventListener('click', function (e) {
+    var b = e.target.closest('button'); if (b) go(cur + Number(b.getAttribute('data-d')));
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.target.closest && e.target.closest('input, textarea')) return;
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey)) { e.preventDefault(); go(cur + 1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp' || (e.key === ' ' && e.shiftKey)) { e.preventDefault(); go(cur - 1); }
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(slides.length - 1);
+  });
+  var tx = null, ty = null;
+  deck.addEventListener('touchstart', function (e) { tx = e.touches[0].clientX; ty = e.touches[0].clientY; }, { passive: true });
+  deck.addEventListener('touchend', function (e) {
+    if (tx === null) return;
+    var dx = e.changedTouches[0].clientX - tx, dy = e.changedTouches[0].clientY - ty;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy) && !e.target.closest('.tablebox, .fig')) go(cur + (dx < 0 ? 1 : -1));
+    tx = null;
+  });
+  var m = /^#s(\d+)$/.exec(location.hash || '');
+  slides[0].el.classList.add('active');
+  go(m ? Number(m[1]) - 1 : 0);
+
+  // ---- term notes: dotted underline on the first occurrence per slide; hover, focus or tap shows the note ----
+  var TERMS = [
+    ['带延迟补偿的异步', '异步之上专门处理推理延迟：冻结推理期间已承诺的动作（RTC）、用最新观测修正（A2C2），或预测执行时刻的状态再推理（VLASH）。'],
+    ['朴素异步', '推理期间机器人照旧执行，结果一到就直接替换，不处理"结果依据的是 L 之前的状态"。'],
+    ['异步', '规划器推理时执行器不停，继续按旧指令执行；新决策生效后才换。'],
+    ['同步', '规划器推理时执行器停下等待，结果到了再继续。'],
+    ['L', '规划器的决策延迟：从取观测快照，到执行器第一次用上这个决策的时间。'],
+    ['Δ', '检查间隔：周期调用规划器的间隔；VoLo 节奏为 5.33 s。MemER 上一次结束就发下一次，Δ 约等于 L。'],
+    ['余量', '时限减去实际时延，大于 0 才算满足时限：执行器为 200 ms − 推理时延，规划器为 Δ − L。'],
+    ['prefill', '把整段输入一次算过模型，生成 KV 和线性注意力的状态；计算密集。'],
+    ['decode', '逐 token 生成输出；每一步都要读一遍权重，带宽密集。'],
+    ['MTP', '多 token 预测头：先草拟几个 token，再用主模型一次验证，接受的越多越快（推测解码）。'],
+    ['SCT', '成功 × 最短用时 / 实际用时：把成功率和用时合成一个分数，越慢扣得越多。'],
+    ['goodput', '满足时延要求（SLO）的前提下能承受的最大请求率（DistServe）。'],
+    ['SM', 'GPU 的流式多处理器，分配计算的基本单位；Thor 有 20 个。'],
+    ['MPS', 'NVIDIA 多进程服务：多个进程共用 GPU，可以限制每个进程用的 SM 比例，并设两档客户端优先级。'],
+    ['green context', 'CUDA 12.4 起的接口：把 SM 划成几份，每份绑定一条 stream，发到哪条 stream 就用哪份 SM。'],
+    ['MIG', '把 GPU 切成独立实例；Thor 上只切计算，不切内存。'],
+    ['capsule', '把固定前缀算完后的模型状态（KV 与线性注意力的递归状态）存下来，下次调用直接恢复，省掉这段 prefill。'],
+    ['CUDA graph', '把一串 kernel 录成一张图，之后一次发射，省掉逐个发射的 CPU 开销；FlashRT 按解码位置分别录制。'],
+    ['统一内存', 'CPU 和 GPU 共用同一块物理内存和同一条带宽，没有独立显存。'],
+    ['零拷贝', 'GPU 直接读 CPU 写的内存，不经过 memcpy。'],
+    ['HPE', 'RoboCerebra 论文自带的分层基线：开始时把任务拆成子目标，之后周期监控、遇到完成或偏离就更新。'],
+    ['harness', '把规划器、执行器、调用节奏和记忆组织起来的运行框架，例如 MemER、VoLo、HPE。'],
+    ['NVFP4', 'NVIDIA 的 4 bit 浮点权重格式，每 16 个值共用一个缩放因子。'],
+    ['线性注意力', '用固定大小的递归状态代替随长度增长的 KV；Qwen3.8-27B 有 3/4 的层是这种。'],
+    ['MemER', '用关键帧记忆的分层策略（ICLR 2026）：高层每次看最近帧和检索出的关键帧，输出当前子任务。'],
+    ['RoboCerebra', '长时程操作基准：平均 9.1 个子任务、约 2 972 步，含记忆和扰动类任务，搭在 LIBERO 平台上。']
+  ];
+  function rx(term) {
+    var esc = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return /^[A-Za-z0-9 ]+$/.test(term) ? new RegExp('(^|[^A-Za-z0-9_])(' + esc + ')(?![A-Za-z0-9_])') : new RegExp('()(' + esc + ')');
+  }
+  var COMPILED = TERMS.map(function (t) { return { t: t[0], note: t[1], re: rx(t[0]) }; });
+  var SKIP = { SCRIPT: 1, STYLE: 1, A: 1, CODE: 1, BUTTON: 1, H1: 1, H2: 1, H3: 1 };
+  function textNodes(root) {
+    var out = [], w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        for (var p = n.parentNode; p && p !== root; p = p.parentNode) {
+          if (SKIP[p.tagName] || p.namespaceURI === 'http://www.w3.org/2000/svg' || (p.classList && (p.classList.contains('term') || p.classList.contains('kicker')))) return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      } });
+    while (w.nextNode()) out.push(w.currentNode);
+    return out;
+  }
+  slides.forEach(function (s) {
+    COMPILED.forEach(function (c) {
+      var nodes = textNodes(s.inner);
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i], mm = c.re.exec(n.nodeValue);
+        if (!mm) continue;
+        var start = mm.index + mm[1].length;
+        var after = n.splitText(start);
+        after.splitText(c.t.length);
+        var span = document.createElement('span');
+        span.className = 'term'; span.tabIndex = 0; span.setAttribute('data-term', c.t); span.setAttribute('data-note', c.note);
+        span.textContent = c.t;
+        after.parentNode.replaceChild(span, after);
+        break;
+      }
+    });
+  });
+  function showTip(el) {
+    tip.innerHTML = '<b></b><span></span>';
+    tip.firstChild.textContent = el.getAttribute('data-term');
+    tip.lastChild.textContent = el.getAttribute('data-note');
+    tip.hidden = false;
+    var r = el.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+    var left = Math.min(Math.max(8, r.left), window.innerWidth - tw - 8);
+    var top = r.bottom + 6 + th > window.innerHeight - 60 ? r.top - th - 6 : r.bottom + 6;
+    tip.style.left = left + 'px'; tip.style.top = Math.max(8, top) + 'px';
+  }
+  function hideTip() { tip.hidden = true; }
+  document.addEventListener('mouseover', function (e) { var t = e.target.closest && e.target.closest('.term'); if (t) showTip(t); });
+  document.addEventListener('mouseout', function (e) { if (e.target.closest && e.target.closest('.term')) hideTip(); });
+  document.addEventListener('focusin', function (e) { if (e.target.classList && e.target.classList.contains('term')) showTip(e.target); });
+  document.addEventListener('focusout', function (e) { if (e.target.classList && e.target.classList.contains('term')) hideTip(); });
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest && e.target.closest('.term');
+    if (t) showTip(t); else hideTip();
+  });
+  deck.addEventListener('scroll', hideTip, true);
 })();
 </script>
