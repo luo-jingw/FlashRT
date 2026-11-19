@@ -313,7 +313,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   <table>
     <thead><tr><th>量</th><th class="num">Thor</th><th class="num">RTX 5090</th><th>说明</th></tr></thead>
     <tbody>
-      <tr><td>规划器 monitor 调用：前缀复用 + 决策闭合即停</td><td class="num">1.77 s</td><td class="num">0.34 s</td><td>低于检查间隔 Δ = 5.33 s；原始做法 Thor 6.40 s</td></tr>
+      <tr><td>规划器 monitor 调用：前缀复用 + 决策闭合即停</td><td class="num">1.77 s</td><td class="num">0.34 s</td><td>VoLo 式 monitor 调用；原始做法 Thor 6.40 s</td></tr>
       <tr><td>规划器 decode 每 token</td><td class="num">31.5 ms</td><td class="num">—</td><td>线性 MTP，每次验证接受约 1.77 个 token</td></tr>
       <tr><td>π0.5 单次推理</td><td class="num">41.0 ms</td><td class="num">—</td><td>独占，两路相机；执行器时限 200 ms</td></tr>
     </tbody>
@@ -354,8 +354,8 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   </div>
   <p class="cap">2026-11-19 Thor 实测，HF 官方 Qwen3.8-27B，合成的机器人日志 + 一个规划器式问题，7 个长度在同一轮里测完。蓝线：整段 prefill；点：整次调用（prefill + 解码到 EOS），每个长度 3 个问题；开思考上限 4 096 token，空心点为到上限仍未想完。graph 缓存上限 8 192。悬停看数值。</p>
   <div class="grid" style="margin-top:12px">
-    <div class="card"><h4>关思考：整次调用基本在 Δ 以内</h4><p>3k 以内 prefill 只要 0.16–1.67 s，几乎随长度线性增长。回复 10–176 token，整次调用 0.4–5.7 s；21 次里只有 3k 的"下一步"一次（5.67 s）超过 Δ。</p></div>
-    <div class="card"><h4>开思考：一次调用要 8–150 s</h4><p>思考长度 275 到 4 096 以上，随问题变化远大于随上下文变化；21 次里 2 次到上限仍未想完。整次调用是 Δ 的 1.4–28 倍，瓶颈是解码而不是上下文。</p></div>
+    <div class="card"><h4>关思考：能否在 1 s 内看回复长度</h4><p>3k 以内 prefill 只要 0.16–1.67 s，几乎随长度线性增长。回复 10–18 token 的调用 0.4–2.2 s，1k 以内都不到 1 s；回复 89–176 token 的要 2.9–5.7 s，多出的是解码。</p></div>
+    <div class="card"><h4>开思考：一次调用要 8–150 s</h4><p>思考长度 275 到 4 096 以上，随问题变化远大于随上下文变化；21 次里 2 次到上限仍未想完。约是 MemER 1 s 周期的 8–150 倍，瓶颈是解码而不是上下文。</p></div>
     <div class="card"><h4>解码速度与上下文长度基本无关</h4><p>3k 以内每 token 24–36 ms。FlashRT 按解码位置录制 CUDA graph，默认最多缓存 256 张，解码超过约 750 token 后反复重录、每 token 变成约 100 ms；本图把上限调到 8 192。</p></div>
 
   </div>
@@ -528,7 +528,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
       <text class="t3" x="10" y="158">执行器</text><text class="t3" x="10" y="188">规划器</text>
       <g id="tl"></g>
       <line class="dash" x1="120" y1="20" x2="120" y2="225"/><line class="dash" x1="560" y1="20" x2="560" y2="225"/>
-      <text class="t3" x="340" y="254" text-anchor="middle">检查间隔 Δ = 5.33 s</text>
+      <text class="t3" x="340" y="254" text-anchor="middle">检查间隔 Δ</text>
       <path class="brace" d="M120 232 L120 236 L560 236 L560 232"/>
     </svg>
   </div>
@@ -539,14 +539,13 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     <thead><tr><th>余量</th><th>单独运行</th><th>共置（MPS 客户端优先级）</th><th>再加 CPU 内存负载</th><th>来源</th></tr></thead>
     <tbody>
       <tr><td>执行器：200 ms − p99</td><td class="num">162 ms（37.5 ms）</td><td class="num">130 ms（p99 70 ms）</td><td class="num">约 60 ms（p99 约翻倍）</td><td>ImageWAM 动作模型，Chenwei B27 / B28</td></tr>
-      <tr><td>规划器：Δ − L，VoLo 节奏（Δ = 5.33 s）</td><td class="num">3.56 s（L = 1.77 s）</td><td class="num">2.8 / 0.3 s（p95 2.5 / 5.0 s，腕部 224 / 720）</td><td>decode 慢约 2.2 倍</td><td>本组 Thor 实测；B27 / B28</td></tr>
       <tr><td>规划器：Δ − L，MemER 节奏（Δ ≈ 1 s）</td><td class="num">约 −1 s（L ≈ 2 s）</td><td>&lt; 0</td><td>&lt; 0</td><td>推算：MemER 约 1 Hz；2k token prefill 1.1 s + 30 token 解码 0.9 s</td></tr>
     </tbody>
   </table>
   </div>
   <div class="grid" style="margin-top:12px">
     <div class="card"><h4>执行器的余量很大</h4><p>即使共置再加 CPU 内存负载，ImageWAM 动作模型的 p99 仍离 200 ms 有约 60 ms。单纯"保护执行器"不是紧约束。</p></div>
-    <div class="card"><h4>规划器的余量小，甚至为负</h4><p>VoLo 节奏下腕部 720 只剩 0.3 s；换成 MemER 的约 1 Hz，现有 L 已经超过 Δ，开思考更远。紧的是规划器这一侧。</p></div>
+    <div class="card"><h4>规划器的余量为负</h4><p>按 MemER 的约 1 Hz，现有 L（约 2 s）已经超过 Δ，开思考更远。紧的是规划器这一侧。</p></div>
     <div class="card"><h4>所以目标是：在执行器余量 &gt; 0 的前提下压低规划器的 L</h4><p>执行器用不完的余量，应该通过 SM 和带宽让给规划器。这也是动态调 SM 的意义。</p></div>
   </div>
 
@@ -734,15 +733,15 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
       text(px(t[0]), Y0 + 16, t[1], 't3', tg, 'middle');
     });
     text((X0 + X1) / 2, Y0 + 36, '规划器上下文长度（token，对数）', '', tg, 'middle');
-    el('line', { x1: X0, y1: py(5.33), x2: X1, y2: py(5.33), 'class': 'dash' }, tg);
-    text(X1 + 8, py(5.33) + 4, 'Δ = 5.33 s', 't1', tg);
+    el('line', { x1: X0, y1: py(1), x2: X1, y2: py(1), 'class': 'dash' }, tg);
+    text(X1 + 8, py(1) + 4, 'MemER 约 1 s（论文值）', 't1', tg);
     var P = [[256, 0.162], [511, 0.264], [768, 0.392], [1024, 0.536], [1536, 0.818], [2048, 1.121], [3072, 1.669]];
     el('polyline', { points: P.map(function (m) { return px(m[0]) + ',' + py(m[1]); }).join(' '), 'class': 'ln1' }, tg, '整段 prefill');
     P.forEach(function (m) {
       el('circle', { cx: px(m[0]), cy: py(m[1]), r: 3, 'class': 'bar' }, tg);
       el('circle', { cx: px(m[0]), cy: py(m[1]), r: 9, fill: 'transparent' }, tg, '整段 prefill：' + m[0] + ' token，' + m[1].toFixed(2) + ' s');
     });
-    text(X1 + 8, py(1.0) + 4, '整段 prefill', 't1', tg);
+    text(X1 + 8, py(0.55) + 4, '整段 prefill', 't1', tg);
     // whole call = prefill + decode to EOS; [ctx, seconds, question, output tokens, capped]
     var OFF = [[256, 0.42, "重规划", 10], [256, 0.51, "计数", 14], [256, 2.94, "下一步", 89], [512, 0.61, "计数", 14], [512, 0.78, "重规划", 18], [512, 3.29, "下一步", 117], [768, 0.74, "计数", 14], [768, 0.74, "重规划", 10], [768, 3.33, "下一步", 111], [1024, 0.97, "重规划", 15], [1024, 3.75, "下一步", 128], [1024, 5.05, "计数", 176], [1536, 1.14, "重规划", 10], [1536, 1.25, "计数", 14], [1536, 4.76, "下一步", 151], [2048, 1.55, "计数", 14], [2048, 1.55, "重规划", 12], [2048, 4.0, "下一步", 94], [3072, 2.02, "计数", 15], [3072, 2.19, "重规划", 15], [3072, 5.67, "下一步", 146]];
     var ON = [[256, 7.52, "计数", 290, 0], [256, 22.63, "重规划", 725, 0], [256, 128.16, "下一步", 3872, 0], [512, 13.06, "计数", 537, 0], [512, 124.35, "下一步", 4043, 0], [512, 149.13, "重规划", 4096, 1], [768, 11.29, "计数", 420, 0], [768, 24.67, "下一步", 809, 0], [768, 84.09, "重规划", 2752, 0], [1024, 29.11, "计数", 1136, 0], [1024, 63.33, "下一步", 2066, 0], [1024, 97.7, "重规划", 3270, 0], [1536, 25.99, "计数", 933, 0], [1536, 53.11, "下一步", 1632, 0], [1536, 99.12, "重规划", 2811, 0], [2048, 33.41, "计数", 1038, 0], [2048, 75.44, "下一步", 2240, 0], [2048, 122.69, "重规划", 3497, 0], [3072, 32.93, "计数", 1207, 0], [3072, 58.85, "重规划", 1917, 0], [3072, 145.65, "下一步", 4096, 1]];
@@ -1055,7 +1054,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
     ['异步', '规划器推理时执行器不停，继续按旧指令执行；新决策生效后才换。'],
     ['同步', '规划器推理时执行器停下等待，结果到了再继续。'],
     ['L', '规划器的决策延迟：从取观测快照，到执行器第一次用上这个决策的时间。'],
-    ['Δ', '检查间隔：周期调用规划器的间隔；VoLo 节奏为 5.33 s。MemER 上一次结束就发下一次，Δ 约等于 L。'],
+    ['Δ', '检查间隔：周期调用规划器的间隔，是 HPE 这类周期触发的参数，RoboCerebra 论文没有给出取值。MemER 上一次结束就发下一次，Δ 约等于 L；论文中高层约 1 Hz。'],
     ['余量', '时限减去实际时延，大于 0 才算满足时限：执行器为 200 ms − 推理时延，规划器为 Δ − L。'],
     ['prefill', '把整段输入一次算过模型，生成 KV 和线性注意力的状态；计算密集。'],
     ['decode', '逐 token 生成输出；每一步都要读一遍权重，带宽密集。'],
